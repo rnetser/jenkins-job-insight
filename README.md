@@ -1,0 +1,384 @@
+# Jenkins Job Insight
+
+A containerized webhook service that analyzes Jenkins job failures, classifies them as code issues or product bugs, and provides actionable suggestions. This service operates without a UI, receiving requests via webhooks and delivering results through callbacks or Slack notifications.
+
+## Overview
+
+Jenkins Job Insight uses AI to analyze failed Jenkins builds and determine whether failures are caused by:
+
+- **Code Issues**: Problems in test code such as incorrect assertions, setup issues, or flaky tests
+- **Product Bugs**: Actual bugs in the product being tested that the tests correctly identified
+
+For each failure, the service provides detailed explanations and either fix suggestions (for code issues) or structured bug reports (for product bugs).
+
+## Features
+
+- **Async and sync analysis modes**: Submit jobs for background processing or wait for immediate results
+- **AI-powered classification**: Distinguishes between test code issues and product bugs
+- **Multiple AI providers**: Supports Google Gemini API or Claude via Vertex AI
+- **SQLite result storage**: Persists analysis results for later retrieval
+- **Callback webhooks**: Delivers results to your specified endpoint with custom headers
+- **Slack notifications**: Sends formatted analysis summaries to Slack channels
+
+## Quick Start
+
+> **Note:** The `data` directory must exist on the host before starting the container. Docker creates mounted directories as root, but the container runs as a non-root user for security.
+
+```bash
+# Create data directory for SQLite persistence (required)
+mkdir -p data
+
+docker run -d \
+  -p 8000:8000 \
+  -v ./data:/data \
+  -e JENKINS_URL=https://jenkins.example.com \
+  -e JENKINS_USER=your-username \
+  -e JENKINS_PASSWORD=your-api-token \
+  -e GEMINI_API_KEY=your-gemini-key \
+  jenkins-job-insight
+```
+
+## Configuration
+
+Configure the service using environment variables. The service is tied to a single Jenkins instance via `JENKINS_URL`.
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| **Jenkins** | | | |
+| `JENKINS_URL` | Yes | - | Jenkins server URL (service is tied to this instance) |
+| `JENKINS_USER` | Yes | - | Jenkins username |
+| `JENKINS_PASSWORD` | Yes | - | Jenkins password or API token |
+| `JENKINS_SSL_VERIFY` | No | `true` | Enable SSL certificate verification (set to `false` for self-signed certs) |
+| **AI Provider** | | | |
+| `GEMINI_API_KEY` | No | - | Google Gemini API key |
+| `GEMINI_MODEL` | No | `gemini-2.5-pro` | Gemini model to use for analysis |
+| `GOOGLE_PROJECT_ID` | No | - | GCP project ID for Claude Vertex AI |
+| `GOOGLE_REGION` | No | `us-east5` | Vertex AI region |
+| `GOOGLE_CREDENTIALS_JSON` | No | - | GCP service account credentials JSON |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-5` | Claude model to use for analysis |
+| **Notifications** | | | |
+| `SLACK_WEBHOOK_URL` | No | - | Default Slack incoming webhook URL |
+| `CALLBACK_URL` | No | - | Default callback URL for results (can be overridden per-request) |
+| `CALLBACK_HEADERS` | No | - | Default callback headers as JSON (can be overridden per-request) |
+| **Other** | | | |
+| `TESTS_REPO_URL` | No | - | Default tests repository URL (can be overridden per-request) |
+| `PROMPT_FILE` | No | `/app/PROMPT.md` | Path to custom analysis prompt file |
+| `DEBUG` | No | `false` | Enable debug mode with hot reload for development |
+
+### Jenkins Configuration
+
+The `JENKINS_URL` environment variable defines which Jenkins instance the service connects to. API requests specify only the job name and build number; the service constructs the full URL internally.
+
+### AI Provider Configuration
+
+You must configure either Gemini OR Claude Vertex AI. The service checks for Gemini first.
+
+**Option A: Google Gemini API**
+
+```bash
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-2.5-pro  # optional, this is the default
+```
+
+**Option B: Claude via Vertex AI**
+
+Both `GOOGLE_PROJECT_ID` and `GOOGLE_CREDENTIALS_JSON` are required.
+
+```bash
+GOOGLE_PROJECT_ID=your-gcp-project
+GOOGLE_REGION=us-east5  # optional, this is the default
+GOOGLE_CREDENTIALS_JSON=/path/to/credentials.json
+CLAUDE_MODEL=claude-sonnet-4-5  # optional, this is the default
+```
+
+### Request Override Priority
+
+The following fields can be configured via environment variables as defaults, but can be overridden per-request in the webhook payload:
+
+| Environment Variable | Request Field | Description |
+|----------------------|---------------|-------------|
+| `TESTS_REPO_URL` | `tests_repo_url` | Repository URL for test context |
+| `CALLBACK_URL` | `callback_url` | Callback webhook URL for results |
+| `CALLBACK_HEADERS` | `callback_headers` | Headers for callback requests |
+| `SLACK_WEBHOOK_URL` | `slack_webhook_url` | Slack notification URL |
+
+**Priority**: Request values take precedence over environment variable defaults. If a field is provided in the request, it overrides the environment variable. If not provided in the request, the environment variable default is used.
+
+### SSL Verification
+
+For Jenkins servers with self-signed SSL certificates, disable certificate verification:
+
+```bash
+JENKINS_SSL_VERIFY=false
+```
+
+This allows the service to connect to Jenkins instances that use self-signed or untrusted certificates. In production, it is recommended to use properly signed certificates and keep `JENKINS_SSL_VERIFY=true` (the default).
+
+### Custom Analysis Prompt
+
+You can customize the AI analysis behavior by mounting a custom `PROMPT.md` file. The service looks for the prompt at the path specified by `PROMPT_FILE` (default: `/app/PROMPT.md`). If the file exists, its content is used as the system prompt for AI analysis; otherwise, the built-in default prompt is used.
+
+**Docker run example:**
+
+```bash
+docker run -d \
+  -p 8000:8000 \
+  -v ./data:/data \
+  -v ./my-prompt.md:/app/PROMPT.md:ro \
+  -e JENKINS_URL=https://jenkins.example.com \
+  -e JENKINS_USER=your-username \
+  -e JENKINS_PASSWORD=your-api-token \
+  -e GEMINI_API_KEY=your-gemini-key \
+  jenkins-job-insight
+```
+
+**Docker Compose example:**
+
+```yaml
+services:
+  jenkins-job-insight:
+    image: jenkins-job-insight
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+      - ./PROMPT.md:/app/PROMPT.md:ro  # Mount custom prompt (read-only)
+    env_file:
+      - .env
+```
+
+The custom prompt should include instructions for the AI on how to analyze Jenkins failures and format the JSON response. Refer to the built-in default prompt as a starting point.
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/analyze` | POST | Submit analysis job with job name and build number (async, returns 202) |
+| `/analyze?sync=true` | POST | Submit and wait for result |
+| `/results/{job_id}` | GET | Retrieve stored result by job ID |
+| `/results` | GET | List recent analysis jobs (default: 50, max: 100) |
+| `/health` | GET | Health check endpoint |
+
+The service connects to the Jenkins instance configured via the `JENKINS_URL` environment variable. All analysis requests specify only the job name and build number.
+
+## Request/Response Examples
+
+### Submit Analysis (Async)
+
+**Request:**
+
+```bash
+curl -X POST http://localhost:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_name": "my-project",
+    "build_number": 123,
+    "tests_repo_url": "https://github.com/org/my-project",
+    "callback_url": "https://my-service.example.com/webhook",
+    "callback_headers": {"Authorization": "Bearer my-token"},
+    "slack_webhook_url": "https://hooks.slack.com/services/xxx/yyy/zzz"
+  }'
+```
+
+For jobs inside folders, use the folder path: `"job_name": "folder/subfolder/my-project"`
+
+**Response (202 Accepted):**
+
+```json
+{
+  "status": "queued",
+  "message": "Analysis job queued. Results will be delivered to callback/slack."
+}
+```
+
+### Submit Analysis (Sync)
+
+**Request:**
+
+```bash
+curl -X POST "http://localhost:8000/analyze?sync=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_name": "my-project",
+    "build_number": 123,
+    "tests_repo_url": "https://github.com/org/my-project"
+  }'
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "job_name": "my-project",
+  "build_number": 123,
+  "status": "completed",
+  "summary": "Found 2 failures: 1 code issue and 1 product bug",
+  "failures": [
+    {
+      "test_name": "test_user_login",
+      "error": "AssertionError: expected 200 but got 401",
+      "classification": "product_bug",
+      "explanation": "The authentication endpoint returns 401 for valid credentials",
+      "fix_suggestion": null,
+      "bug_report": {
+        "title": "Login endpoint returns 401 for valid credentials",
+        "description": "The /api/login endpoint rejects valid username/password combinations...",
+        "severity": "critical",
+        "component": "Authentication",
+        "evidence": "Console log shows: POST /api/login 401 Unauthorized"
+      }
+    },
+    {
+      "test_name": "test_timeout_handling",
+      "error": "TimeoutError: operation timed out after 5s",
+      "classification": "code_issue",
+      "explanation": "The test timeout is too short for CI environments",
+      "fix_suggestion": "Increase timeout in tests/test_api.py:45 from 5s to 30s",
+      "bug_report": null
+    }
+  ]
+}
+```
+
+### Get Stored Result
+
+**Request:**
+
+```bash
+curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000
+```
+
+**Response:**
+
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "job_name": "my-project",
+  "build_number": 123,
+  "status": "completed",
+  "result": { ... },
+  "created_at": "2024-01-15T10:30:00"
+}
+```
+
+### List Recent Jobs
+
+**Request:**
+
+```bash
+curl "http://localhost:8000/results?limit=10"
+```
+
+**Response:**
+
+```json
+[
+  {
+    "job_id": "550e8400-e29b-41d4-a716-446655440000",
+    "job_name": "my-project",
+    "build_number": 123,
+    "status": "completed",
+    "created_at": "2024-01-15T10:30:00"
+  }
+]
+```
+
+## Development
+
+### Prerequisites
+
+- Python 3.11 or higher
+- Git
+
+### Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/your-org/jenkins-job-insight.git
+cd jenkins-job-insight
+
+# Install with development dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Run locally with hot reload
+DEBUG=true jenkins-job-insight
+```
+
+### Environment File
+
+Create a `.env` file for local development:
+
+```bash
+JENKINS_URL=https://jenkins.example.com
+JENKINS_USER=your-username
+JENKINS_PASSWORD=your-api-token
+GEMINI_API_KEY=your-gemini-key
+```
+
+## Docker Build
+
+```bash
+# Build the image
+docker build -t jenkins-job-insight .
+
+# Create data directory for SQLite persistence (required)
+mkdir -p data
+
+# Run with volume mount for persistent storage
+docker run -d \
+  -p 8000:8000 \
+  -v ./data:/data \
+  -e JENKINS_URL=https://jenkins.example.com \
+  -e JENKINS_USER=your-username \
+  -e JENKINS_PASSWORD=your-api-token \
+  -e GEMINI_API_KEY=your-gemini-key \
+  jenkins-job-insight
+```
+
+> **Note:** The `data` directory must exist on the host before starting the container. Docker creates mounted directories as root, but the container runs as a non-root user for security.
+
+The `/data` volume mount ensures SQLite database persistence across container restarts.
+
+## Architecture
+
+```
+┌─────────────────┐     ┌──────────────────────────────────────────────┐
+│  Jenkins        │     │  Jenkins Job Insight                         │
+│  Webhook/       │────▶│                                              │
+│  API Request    │     │  1. Receive request with job name + build #  │
+└─────────────────┘     │  2. Fetch console log and build info         │
+                        │  3. Optionally clone repo for context        │
+                        │  4. Send to AI for classification            │
+                        │  5. Store result in SQLite                   │
+                        │  6. Deliver via callback webhook / Slack     │
+                        └──────────────────────────────────────────────┘
+                                         │
+                                         ▼
+                        ┌────────────────┴────────────────┐
+                        │                                 │
+                        ▼                                 ▼
+                ┌───────────────┐                 ┌───────────────┐
+                │  Callback     │                 │  Slack        │
+                │  Webhook      │                 │  Notification │
+                └───────────────┘                 └───────────────┘
+```
+
+### Analysis Flow
+
+1. **Receive request**: Accept webhook or API request containing the job name and build number
+2. **Fetch Jenkins data**: Retrieve console output and build information from the configured Jenkins instance
+3. **Clone repository** (optional): Clone the source repository for additional context
+4. **AI analysis**: Send collected data to configured AI provider (Gemini or Claude)
+5. **Classify failures**: AI determines if each failure is a code issue or product bug
+6. **Store result**: Save analysis to SQLite database for retrieval
+7. **Deliver result**: Send to callback URL and/or Slack webhook
+
+## License
+
+MIT

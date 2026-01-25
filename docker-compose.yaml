@@ -1,0 +1,100 @@
+# Docker Compose configuration for Jenkins Job Insight
+# A FastAPI service that analyzes Jenkins job failures using AI
+#
+# Usage:
+#   1. Copy .env.example to .env and configure your values
+#   2. Run: docker compose up -d
+#
+# Configuration options:
+#   - Replace placeholder values directly in this file, OR
+#   - Use a .env file (recommended for sensitive values)
+
+services:
+  jenkins-job-insight:
+    # Build from local Dockerfile
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    # Container name for easier management
+    container_name: jenkins-job-insight
+
+    # Port mapping: host:container
+    ports:
+      - "8000:8000"
+
+    # Persist SQLite database across container restarts
+    # The ./data directory on host maps to /data in container
+    volumes:
+      - ./data:/data
+      # Optional: mount custom analysis prompt
+      # - ./PROMPT.md:/app/PROMPT.md:ro
+
+    # Restart policy: container restarts unless explicitly stopped
+    restart: unless-stopped
+
+    # Health check configuration
+    # Verifies the service is responding on /health endpoint
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Environment variables
+    # Option 1: Use .env file (recommended)
+    env_file:
+      - .env
+
+    # Option 2: Define variables directly (shown as examples/defaults)
+    # Uncomment and configure if not using .env file
+    environment:
+      # ===================
+      # Jenkins Configuration (Required)
+      # ===================
+      - JENKINS_URL=${JENKINS_URL:-https://jenkins.example.com}
+      - JENKINS_USER=${JENKINS_USER:-your-username}
+      - JENKINS_PASSWORD=${JENKINS_PASSWORD:-your-api-token}
+
+      # ===================
+      # AI Provider Configuration
+      # Configure ONE of the following options:
+      # ===================
+
+      # Option A: Google Gemini API
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+
+      # Option B: Claude via Vertex AI
+      # Requires Google Cloud credentials
+      - GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID:-}
+      - GOOGLE_REGION=${GOOGLE_REGION:-us-east5}
+      # For Vertex AI authentication, mount credentials or use environment variable
+      - GOOGLE_CREDENTIALS_JSON=${GOOGLE_CREDENTIALS_JSON:-}
+
+      # AI Model Configuration
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-pro}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-5}
+
+      # ===================
+      # Optional Configuration
+      # ===================
+
+      # Slack notifications webhook URL
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+
+      # Enable debug mode for verbose logging
+      - DEBUG=${DEBUG:-false}
+
+      # ===================
+      # Optional Defaults (can be overridden per-request)
+      # ===================
+      - TESTS_REPO_URL=${TESTS_REPO_URL:-}
+      - CALLBACK_URL=${CALLBACK_URL:-}
+      - CALLBACK_HEADERS=${CALLBACK_HEADERS:-}
+
+      # Custom prompt file (mount your own PROMPT.md)
+      - PROMPT_FILE=${PROMPT_FILE:-/app/PROMPT.md}
+
+      # SSL verification for Jenkins (set to false for self-signed certs)
+      - JENKINS_SSL_VERIFY=${JENKINS_SSL_VERIFY:-true}
