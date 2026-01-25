@@ -476,7 +476,7 @@ The `/data` volume mount ensures SQLite database persistence across container re
 1. **Receive request**: Accept webhook or API request containing the job name and build number
 2. **Fetch Jenkins data**: Retrieve console output and build information from the configured Jenkins instance
 3. **Clone repository** (optional): Clone the source repository for additional context
-4. **AI analysis**: Send collected data to configured AI provider (Gemini or Claude)
+4. **AI analysis**: Send collected data to configured AI provider (Claude, Gemini, or Cursor)
 5. **Classify failures**: AI determines if each failure is a code issue or product bug
 6. **Store result**: Save analysis to SQLite database for retrieval
 7. **Deliver result**: Send to callback URL and/or Slack webhook

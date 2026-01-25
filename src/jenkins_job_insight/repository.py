@@ -40,7 +40,7 @@ class RepositoryManager:
         """
         # Validate URL scheme to prevent SSRF and local file access
         url_str = str(repo_url).lower()
-        if not (url_str.startswith("https://") or url_str.startswith("git://")):
+        if not url_str.startswith(("https://", "git://")):
             raise ValueError(
                 f"Invalid repository URL scheme. Only https:// and git:// are allowed, got: {repo_url}"
             )

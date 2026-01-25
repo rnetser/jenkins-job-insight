@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import hashlib
 import os
 import re
@@ -14,6 +15,8 @@ from simple_logger.logger import get_logger
 
 from jenkins_job_insight.config import Settings
 from jenkins_job_insight.jenkins import JenkinsClient
+from pydantic import HttpUrl
+
 from jenkins_job_insight.models import (
     AnalysisResult,
     AnalyzeRequest,
@@ -769,7 +772,7 @@ async def analyze_job(
     if build_result == "SUCCESS":
         return AnalysisResult(
             job_id=job_id,
-            jenkins_url=jenkins_build_url,
+            jenkins_url=HttpUrl(jenkins_build_url),
             status="completed",
             summary="Build passed successfully. No failures to analyze.",
             failures=[],
@@ -802,10 +805,10 @@ async def analyze_job(
     repo_path: Path | None = None
 
     # Use RepositoryManager context for entire analysis (child jobs and main job)
-    repo_manager = RepositoryManager() if tests_repo_url else None
-    try:
-        if repo_manager:
-            repo_manager.__enter__()
+    async with contextlib.AsyncExitStack() as stack:
+        if tests_repo_url:
+            repo_manager = RepositoryManager()
+            stack.enter_context(repo_manager)
             try:
                 logger.info(f"Cloning repository: {tests_repo_url}")
                 repo_path = await asyncio.to_thread(
@@ -867,7 +870,7 @@ async def analyze_job(
 
             return AnalysisResult(
                 job_id=job_id,
-                jenkins_url=jenkins_build_url,
+                jenkins_url=HttpUrl(jenkins_build_url),
                 status="completed",
                 summary=summary,
                 failures=[],  # Pipeline has no direct failures
@@ -965,12 +968,9 @@ Respond with:
         logger.info(f"Analysis complete: {len(failures)} failures analyzed")
         return AnalysisResult(
             job_id=job_id,
-            jenkins_url=jenkins_build_url,
+            jenkins_url=HttpUrl(jenkins_build_url),
             status="completed",
             summary=summary,
             failures=failures,
             child_job_analyses=child_job_analyses,
         )
-    finally:
-        if repo_manager:
-            repo_manager.__exit__(None, None, None)

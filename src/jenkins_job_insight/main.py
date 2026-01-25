@@ -4,7 +4,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
-from fastapi.responses import PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.analyzer import analyze_job
@@ -34,14 +34,14 @@ async def deliver_results(
     callback_headers = request.callback_headers or settings.callback_headers
     if callback_url:
         try:
-            await send_callback(callback_url, result, callback_headers)
+            await send_callback(str(callback_url), result, callback_headers)
         except Exception:
             logger.exception("Failed to send callback to %s", callback_url)
 
     slack_url = request.slack_webhook_url or settings.slack_webhook_url
     if slack_url:
         try:
-            await send_slack(slack_url, result)
+            await send_slack(str(slack_url), result)
         except Exception:
             logger.exception("Failed to send Slack notification to %s", slack_url)
 
@@ -110,7 +110,7 @@ async def process_analysis_with_id(
         await deliver_results(result, request, settings)
 
     except Exception as e:
-        logger.exception(f"Analysis failed for job {job_id}: {e}")
+        logger.exception(f"Analysis failed for job {job_id}")
         await save_result(job_id, jenkins_url, "failed", {"error": str(e)})
 
 
@@ -147,8 +147,8 @@ async def analyze(
         await deliver_results(result, request, settings)
 
         if output == "text":
-            return PlainTextResponse(format_result_as_text(result))
-        return result
+            return PlainTextResponse(format_result_as_text(result), status_code=200)
+        return JSONResponse(content=result.model_dump(mode="json"), status_code=200)
 
     # Async mode - queue background task
     # Generate job_id here so we can return it to the client for polling

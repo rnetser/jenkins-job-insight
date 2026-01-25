@@ -4,7 +4,7 @@ FROM python:3.12-slim AS builder
 WORKDIR /app
 
 # Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.5.14 /uv /usr/local/bin/uv
 
 # Install git (needed for gitpython dependency)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -44,7 +44,7 @@ COPY --from=builder /app/pyproject.toml /app/uv.lock ./
 COPY --from=builder /app/src /app/src
 
 # Copy uv for runtime
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.5.14 /uv /usr/local/bin/uv
 
 # Create data directory for SQLite persistence
 RUN mkdir -p /data && chown appuser:appuser /data

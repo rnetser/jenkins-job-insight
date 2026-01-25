@@ -100,8 +100,8 @@ class TestAnalyzeEndpoint:
                         "tests_repo_url": "https://github.com/example/repo",
                     },
                 )
-                # Should return 202 with result
-                assert response.status_code == 202
+                # Sync mode returns 200 (completed), not 202 (accepted)
+                assert response.status_code == 200
                 data = response.json()
                 assert data["status"] == "completed"
                 assert data["job_id"] == "test-123"
@@ -184,7 +184,7 @@ class TestAnalyzeEndpoint:
                             "callback_url": "https://callback.example.com/webhook",
                         },
                     )
-                    assert response.status_code == 202
+                    assert response.status_code == 200
                     mock_callback.assert_called_once()
 
     def test_analyze_sync_sends_slack(self, test_client) -> None:
@@ -215,7 +215,7 @@ class TestAnalyzeEndpoint:
                             "slack_webhook_url": "https://hooks.slack.com/services/xxx",
                         },
                     )
-                    assert response.status_code == 202
+                    assert response.status_code == 200
                     mock_slack.assert_called_once()
 
 
