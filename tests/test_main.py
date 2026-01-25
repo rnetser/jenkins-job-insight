@@ -58,7 +58,7 @@ class TestAnalyzeEndpoint:
 
     def test_analyze_async_returns_queued(self, test_client) -> None:
         """Test that async analyze returns queued status."""
-        with patch("jenkins_job_insight.main.process_analysis"):
+        with patch("jenkins_job_insight.main.process_analysis_with_id"):
             response = test_client.post(
                 "/analyze",
                 json={
@@ -142,7 +142,7 @@ class TestAnalyzeEndpoint:
 
     def test_analyze_with_optional_fields(self, test_client) -> None:
         """Test analyze with optional callback and Slack fields."""
-        with patch("jenkins_job_insight.main.process_analysis"):
+        with patch("jenkins_job_insight.main.process_analysis_with_id"):
             response = test_client.post(
                 "/analyze",
                 json={

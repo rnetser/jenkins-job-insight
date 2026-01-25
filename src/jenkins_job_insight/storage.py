@@ -53,7 +53,12 @@ async def save_result(
             INSERT OR REPLACE INTO results (job_id, jenkins_url, status, result_json)
             VALUES (?, ?, ?, ?)
             """,
-            (job_id, jenkins_url, status, json.dumps(result) if result else None),
+            (
+                job_id,
+                jenkins_url,
+                status,
+                json.dumps(result) if result is not None else None,
+            ),
         )
         await db.commit()
 

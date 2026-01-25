@@ -34,7 +34,16 @@ class RepositoryManager:
 
         Returns:
             Path to the cloned repository.
+
+        Raises:
+            ValueError: If repo_url uses an unsafe scheme (not https:// or git://).
         """
+        # Validate URL scheme to prevent SSRF and local file access
+        url_str = str(repo_url).lower()
+        if not (url_str.startswith("https://") or url_str.startswith("git://")):
+            raise ValueError(
+                f"Invalid repository URL scheme. Only https:// and git:// are allowed, got: {repo_url}"
+            )
         clone_id = str(uuid.uuid4())[:8]
         repo_name = str(repo_url).rstrip("/").split("/")[-1].replace(".git", "")
         clone_dir = self.base_path / f"{repo_name}-{clone_id}"

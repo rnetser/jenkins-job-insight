@@ -18,7 +18,7 @@ dependencies = [
 jenkins-job-insight = "jenkins_job_insight.main:run"
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "httpx"]
+dev = ["pytest", "pytest-asyncio"]
 
 [build-system]
 requires = ["hatchling"]

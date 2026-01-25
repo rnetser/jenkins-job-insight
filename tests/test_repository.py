@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import git.exc
 import pytest
 
 from jenkins_job_insight.repository import RepositoryManager
@@ -48,7 +49,7 @@ class TestRepositoryManager:
         manager.cleanup()
 
     @patch("jenkins_job_insight.repository.Repo")
-    def test_clone_multiple_repos(self, _mock_repo: MagicMock) -> None:
+    def test_clone_multiple_repos(self, mock_repo: MagicMock) -> None:
         """Test cloning multiple repositories."""
         manager = RepositoryManager()
 
@@ -59,6 +60,7 @@ class TestRepositoryManager:
         assert path1 != path2
         assert path1 in manager.temp_dirs
         assert path2 in manager.temp_dirs
+        assert mock_repo.clone_from.call_count == 2
 
         # Cleanup
         manager.cleanup()
@@ -144,11 +146,13 @@ class TestRepositoryManager:
         # Cleanup
         manager.cleanup()
 
-    def test_clone_real_failure_handling(self) -> None:
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_real_failure_handling(self, mock_repo: MagicMock) -> None:
         """Test that clone raises error for invalid repository."""
+        mock_repo.clone_from.side_effect = git.exc.GitCommandError("clone", 128)
         manager = RepositoryManager()
 
-        with pytest.raises(Exception):
+        with pytest.raises(git.exc.GitCommandError):
             manager.clone("https://invalid-url-that-does-not-exist.example.com/repo")
 
         # Even on failure, cleanup should work

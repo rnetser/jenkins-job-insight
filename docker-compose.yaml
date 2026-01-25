@@ -29,8 +29,9 @@ services:
       - ./data:/data
       # Optional: mount custom analysis prompt
       # - ./PROMPT.md:/app/PROMPT.md:ro
-      # Mount gcloud credentials for Vertex AI auth
-      - ~/.config/gcloud:/home/appuser/.config/gcloud:ro
+      # Optional: Mount gcloud credentials for Vertex AI authentication
+      # Uncomment if using CLAUDE_CODE_USE_VERTEX=1 with Application Default Credentials
+      # - ~/.config/gcloud:/home/appuser/.config/gcloud:ro
       # Cursor Agent CLI: Mount auth file (alternative to CURSOR_API_KEY env var)
       # Uncomment if using `agent login` authentication instead of API key
       # - ~/.config/cursor/auth.json:/home/appuser/.config/cursor/auth.json:ro

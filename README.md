@@ -74,14 +74,14 @@ The service uses AI CLI tools for analysis. Set `AI_PROVIDER` to choose your pro
 
 #### Claude CLI
 
-**Option 1: API Key (simplest)**
+##### Option 1: API Key (simplest)
 
 ```bash
 AI_PROVIDER=claude
 ANTHROPIC_API_KEY=your-anthropic-api-key
 ```
 
-**Option 2: Vertex AI**
+##### Option 2: Vertex AI
 
 ```bash
 AI_PROVIDER=claude
@@ -92,14 +92,14 @@ ANTHROPIC_VERTEX_PROJECT_ID=your-project-id
 
 #### Gemini CLI
 
-**Option 1: API Key**
+##### Option 1: API Key
 
 ```bash
 AI_PROVIDER=gemini
 GEMINI_API_KEY=your-gemini-api-key
 ```
 
-**Option 2: OAuth**
+##### Option 2: OAuth
 
 ```bash
 AI_PROVIDER=gemini
@@ -110,7 +110,7 @@ AI_PROVIDER=gemini
 
 The CLI command is `agent`. Choose **one** of the following authentication methods:
 
-**Option 1: API Key (environment variable)**
+##### Option 1: API Key (environment variable)
 
 ```bash
 AI_PROVIDER=cursor
@@ -120,7 +120,7 @@ CURSOR_API_KEY=your-cursor-api-key
 CURSOR_MODEL=claude-3.5-sonnet
 ```
 
-**Option 2: Auth File Mount (for users who authenticated via `agent login`)**
+##### Option 2: Auth File Mount (for users who authenticated via `agent login`)
 
 ```bash
 AI_PROVIDER=cursor
@@ -449,7 +449,7 @@ The `/data` volume mount ensures SQLite database persistence across container re
 
 ## Architecture
 
-```
+```text
 ┌─────────────────┐     ┌──────────────────────────────────────────────┐
 │  Jenkins        │     │  Jenkins Job Insight                         │
 │  Webhook/       │────▶│                                              │

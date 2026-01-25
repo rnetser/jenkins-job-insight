@@ -5,7 +5,7 @@ exclude =
     doc,
     .tox,
     .git,
-    .yml,
+    *.yml,
     Pipfile.*,
     docs/*,
     .cache/*

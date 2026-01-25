@@ -268,7 +268,6 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -279,7 +278,6 @@ requires-dist = [
     { name = "fastapi" },
     { name = "gitpython" },
     { name = "httpx" },
-    { name = "httpx", marker = "extra == 'dev'" },
     { name = "pydantic-settings" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },

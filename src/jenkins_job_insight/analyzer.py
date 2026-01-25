@@ -23,11 +23,15 @@ from jenkins_job_insight.models import (
 )
 from jenkins_job_insight.repository import RepositoryManager
 
-# AI CLI provider: "claude", "gemini", or "cursor"
-AI_PROVIDER = os.getenv("AI_PROVIDER", "claude").lower()
-CURSOR_MODEL = os.getenv("CURSOR_MODEL", "")
-
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+
+# AI CLI provider: "claude", "gemini", or "cursor"
+VALID_AI_PROVIDERS = {"claude", "gemini", "cursor"}
+AI_PROVIDER = os.getenv("AI_PROVIDER", "claude").lower()
+if AI_PROVIDER not in VALID_AI_PROVIDERS:
+    logger.warning(f"Invalid AI_PROVIDER '{AI_PROVIDER}', falling back to 'claude'")
+    AI_PROVIDER = "claude"
+CURSOR_MODEL = os.getenv("CURSOR_MODEL", "")
 
 FALLBACK_TAIL_LINES = 200
 MAX_CONCURRENT_AI_CALLS = 10
@@ -49,12 +53,12 @@ def get_failure_signature(failure: TestFailure) -> str:
         failure: The test failure to create a signature for.
 
     Returns:
-        MD5 hash string representing the failure signature.
+        SHA-256 hash string representing the failure signature.
     """
     # Use error message and first 5 lines of stack trace
     stack_lines = failure.stack_trace.split("\n")[:5]
     signature_text = f"{failure.error_message}|{'|'.join(stack_lines)}"
-    return hashlib.md5(signature_text.encode()).hexdigest()
+    return hashlib.sha256(signature_text.encode()).hexdigest()
 
 
 async def run_parallel_with_limit(

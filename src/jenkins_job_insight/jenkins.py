@@ -70,13 +70,24 @@ class JenkinsClient(jenkins.Jenkins):
 
         Returns:
             Test report dictionary if available, None if no test report exists.
+
+        Raises:
+            jenkins.JenkinsException: If there's an error other than 404 (not found).
         """
         logger.debug(f"Fetching test report: {job_name} #{build_number}")
         try:
             return self.get_build_test_report(job_name, build_number)
-        except Exception:
-            # No test report available (404 or other error)
+        except jenkins.NotFoundException:
+            # No test report available (404)
             return None
+        except jenkins.JenkinsException as err:
+            logger.warning(
+                "Failed to fetch test report: %s #%s - %s",
+                job_name,
+                build_number,
+                err,
+            )
+            raise
 
     @staticmethod
     def parse_jenkins_url(url: str | HttpUrl) -> tuple[str, int]:

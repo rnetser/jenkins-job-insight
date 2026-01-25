@@ -1,4 +1,5 @@
 import os
+import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
 
@@ -56,8 +57,10 @@ def build_jenkins_url(base_url: str, job_name: str, build_number: int) -> str:
     Returns:
         Full Jenkins build URL.
     """
-    # Handle folder-style job names by replacing '/' with '/job/'
-    job_path = "/job/".join(job_name.split("/"))
+    # Handle folder-style job names by URL-encoding each segment and joining with '/job/'
+    segments = job_name.split("/")
+    encoded_segments = [urllib.parse.quote(segment, safe="") for segment in segments]
+    job_path = "/job/".join(encoded_segments)
     return f"{base_url.rstrip('/')}/job/{job_path}/{build_number}/"
 
 
@@ -75,9 +78,16 @@ app = FastAPI(
 )
 
 
-async def process_analysis(request: AnalyzeRequest, settings: Settings) -> None:
-    """Background task to process analysis and deliver results."""
-    job_id = str(uuid.uuid4())
+async def process_analysis_with_id(
+    job_id: str, request: AnalyzeRequest, settings: Settings
+) -> None:
+    """Background task to process analysis with a pre-generated job_id.
+
+    Args:
+        job_id: Pre-generated job ID for tracking.
+        request: The analysis request.
+        settings: Application settings.
+    """
     jenkins_url = build_jenkins_url(
         settings.jenkins_url, request.job_name, request.build_number
     )
@@ -85,7 +95,6 @@ async def process_analysis(request: AnalyzeRequest, settings: Settings) -> None:
         f"Analysis request received for {request.job_name} #{request.build_number} "
         f"(job_id: {job_id})"
     )
-    await save_result(job_id, jenkins_url, "pending", None)
     try:
         result = await analyze_job(request, settings, job_id)
 
@@ -142,10 +151,18 @@ async def analyze(
         return result
 
     # Async mode - queue background task
-    background_tasks.add_task(process_analysis, request, settings)
+    # Generate job_id here so we can return it to the client for polling
+    job_id = str(uuid.uuid4())
+    jenkins_url = build_jenkins_url(
+        settings.jenkins_url, request.job_name, request.build_number
+    )
+    # Save initial pending state before queueing background task
+    await save_result(job_id, jenkins_url, "pending", None)
+    background_tasks.add_task(process_analysis_with_id, job_id, request, settings)
     return {
         "status": "queued",
         "message": "Analysis job queued. Results will be delivered to callback/slack.",
+        "job_id": job_id,
     }
 
 

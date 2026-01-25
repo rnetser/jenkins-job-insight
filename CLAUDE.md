@@ -36,12 +36,12 @@
 
 ### CLI-Based AI Integration
 
-This project uses AI CLI tools (Claude CLI, Gemini CLI) instead of direct SDK integrations:
+This project uses AI CLI tools (Claude CLI, Gemini CLI, Cursor Agent CLI) instead of direct SDK integrations:
 
 - **No SDK dependencies**: AI providers are called via subprocess
 - **Provider-agnostic**: Easy to add new AI CLIs (see README)
 - **Auth handled externally**: CLIs manage their own authentication
-- **Environment-driven**: `AI_PROVIDER` env var selects the provider
+- **Environment-driven**: `AI_PROVIDER` env var selects the provider (`claude`, `gemini`, or `cursor`)
 
 ### Key Components
 
