@@ -156,9 +156,7 @@ QODO_API_KEY=your-qodo-api-key
 QODO_MODEL=claude-4.5-sonnet
 ```
 
-**Tip:** Run `qodo models` to see all available models for your account.
-
-**Available models:** Run `qodo models` to see available models in your environment. Model availability depends on your Qodo configuration.
+**Available models:** Run `qodo models` to see available models for your account. Model availability depends on your Qodo configuration.
 
 **Note:** Qodo uses a custom agent configuration (`qodo/agent.toml`) that enables:
 - Multi-step reasoning with `execution_strategy = "plan"`

@@ -7,7 +7,13 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from simple_logger.logger import get_logger
 
-from jenkins_job_insight.analyzer import analyze_job, call_ai_cli
+from jenkins_job_insight.analyzer import (
+    AI_PROVIDER,
+    CURSOR_MODEL,
+    QODO_MODEL,
+    analyze_job,
+    call_ai_cli,
+)
 from jenkins_job_insight.config import Settings, get_settings
 from jenkins_job_insight.models import AnalysisResult, AnalyzeRequest
 from jenkins_job_insight.output import format_result_as_text, send_callback, send_slack
@@ -76,12 +82,12 @@ async def validate_ai_provider() -> None:
         logger.info("Skipping AI provider validation (SKIP_AI_VALIDATION is set)")
         return
 
-    provider = os.getenv("AI_PROVIDER", "claude").lower()
+    provider = AI_PROVIDER
     model = ""
     if provider == "qodo":
-        model = os.getenv("QODO_MODEL", "")
+        model = QODO_MODEL
     elif provider == "cursor":
-        model = os.getenv("CURSOR_MODEL", "")
+        model = CURSOR_MODEL
 
     provider_info = f"{provider.upper()}" + (f" ({model})" if model else "")
 

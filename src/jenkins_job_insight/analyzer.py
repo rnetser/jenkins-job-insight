@@ -36,7 +36,23 @@ if AI_PROVIDER not in VALID_AI_PROVIDERS:
     AI_PROVIDER = "claude"
 CURSOR_MODEL = os.getenv("CURSOR_MODEL", "")
 QODO_MODEL = os.getenv("QODO_MODEL", "")
-AI_CLI_TIMEOUT = int(os.getenv("AI_CLI_TIMEOUT", "10"))  # Default 10 minutes
+
+
+def _get_ai_cli_timeout() -> int:
+    """Parse AI_CLI_TIMEOUT with fallback for invalid values."""
+    raw = os.getenv("AI_CLI_TIMEOUT", "10")
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(f"Invalid AI_CLI_TIMEOUT={raw}; defaulting to 10")
+        return 10
+    if value <= 0:
+        logger.warning(f"Non-positive AI_CLI_TIMEOUT={raw}; defaulting to 10")
+        return 10
+    return value
+
+
+AI_CLI_TIMEOUT = _get_ai_cli_timeout()  # minutes
 
 FALLBACK_TAIL_LINES = 200
 MAX_CONCURRENT_AI_CALLS = 10
