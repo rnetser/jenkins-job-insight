@@ -35,6 +35,7 @@ docker run -d \
   -e JENKINS_USER=your-username \
   -e JENKINS_PASSWORD=your-api-token \
   -e AI_PROVIDER=claude \
+  -e AI_MODEL=your-model-name \
   jenkins-job-insight
 ```
 
@@ -168,13 +169,25 @@ The CLI-based architecture makes it easy to add new AI providers. To add a new C
 
 #### 1. Update `analyzer.py`
 
-Add a new branch in the `call_ai_cli()` function:
+Add a command builder function and register it in the `PROVIDER_CONFIG` dictionary:
 
 ```python
-elif AI_PROVIDER == "openai":
-    cmd = ["openai", "-p", prompt]
-elif AI_PROVIDER == "mistral":
-    cmd = ["mistral", "chat", prompt]
+def _build_openai_cmd(
+    binary: str, model: str, prompt: str, _cwd: Path | None
+) -> list[str]:
+    return [binary, "--model", model, "-p", prompt]
+
+PROVIDER_CONFIG["openai"] = ProviderConfig(
+    binary="openai", build_cmd=_build_openai_cmd
+)
+```
+
+If the CLI manages its own working directory (like Cursor or Qodo), set `uses_own_cwd=True`:
+
+```python
+PROVIDER_CONFIG["openai"] = ProviderConfig(
+    binary="openai", uses_own_cwd=True, build_cmd=_build_openai_cmd
+)
 ```
 
 #### 2. Update Dockerfile
@@ -219,18 +232,18 @@ Control log verbosity with `LOG_LEVEL`:
 
 ### Request Override Priority
 
-The following fields can be configured via environment variables as defaults, but can be overridden per-request in the webhook payload:
+All configuration fields can be overridden per-request in the webhook payload. Required fields (`AI_PROVIDER`, `AI_MODEL`) must be set via environment variable or per-request:
 
-| Environment Variable | Request Field | Description |
-|----------------------|---------------|-------------|
-| `AI_PROVIDER` | `ai_provider` | AI provider to use (`claude`, `gemini`, `cursor`, or `qodo`) |
-| `AI_MODEL` | `ai_model` | Model for the AI provider |
-| `TESTS_REPO_URL` | `tests_repo_url` | Repository URL for test context |
-| `CALLBACK_URL` | `callback_url` | Callback webhook URL for results |
-| `CALLBACK_HEADERS` | `callback_headers` | Headers for callback requests |
-| `SLACK_WEBHOOK_URL` | `slack_webhook_url` | Slack notification URL |
+| Environment Variable | Request Field | Required | Description |
+|----------------------|---------------|----------|-------------|
+| `AI_PROVIDER` | `ai_provider` | Yes | AI provider to use (`claude`, `gemini`, `cursor`, or `qodo`) |
+| `AI_MODEL` | `ai_model` | Yes | Model for the AI provider |
+| `TESTS_REPO_URL` | `tests_repo_url` | No | Repository URL for test context |
+| `CALLBACK_URL` | `callback_url` | No | Callback webhook URL for results |
+| `CALLBACK_HEADERS` | `callback_headers` | No | Headers for callback requests |
+| `SLACK_WEBHOOK_URL` | `slack_webhook_url` | No | Slack notification URL |
 
-**Priority**: Request values take precedence over environment variable defaults. If a field is provided in the request, it overrides the environment variable. If not provided in the request, the environment variable default is used.
+**Priority**: Request values take precedence over environment variable defaults. Required fields must be configured in at least one place (environment variable or request body).
 
 ### SSL Verification
 
@@ -301,6 +314,8 @@ curl -X POST http://localhost:8000/analyze \
   -d '{
     "job_name": "my-project",
     "build_number": 123,
+    "ai_provider": "claude",
+    "ai_model": "sonnet",
     "tests_repo_url": "https://github.com/org/my-project",
     "callback_url": "https://my-service.example.com/webhook",
     "callback_headers": {"Authorization": "Bearer my-token"},
@@ -329,6 +344,8 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
   -d '{
     "job_name": "my-project",
     "build_number": 123,
+    "ai_provider": "claude",
+    "ai_model": "sonnet",
     "tests_repo_url": "https://github.com/org/my-project"
   }'
 ```
@@ -445,6 +462,7 @@ JENKINS_URL=https://jenkins.example.com
 JENKINS_USER=your-username
 JENKINS_PASSWORD=your-api-token
 AI_PROVIDER=claude
+AI_MODEL=your-model-name
 LOG_LEVEL=INFO
 ```
 
@@ -465,6 +483,7 @@ docker run -d \
   -e JENKINS_USER=your-username \
   -e JENKINS_PASSWORD=your-api-token \
   -e AI_PROVIDER=claude \
+  -e AI_MODEL=your-model-name \
   jenkins-job-insight
 ```
 
