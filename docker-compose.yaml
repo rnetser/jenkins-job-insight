@@ -32,9 +32,7 @@ services:
       # Optional: Mount gcloud credentials for Vertex AI authentication
       # Uncomment if using CLAUDE_CODE_USE_VERTEX=1 with Application Default Credentials
       # - ~/.config/gcloud:/home/appuser/.config/gcloud:ro
-      # Cursor Agent CLI: Mount auth file (alternative to CURSOR_API_KEY env var)
-      # Uncomment if using `agent login` authentication instead of API key
-      # - ~/.config/cursor/auth.json:/home/appuser/.config/cursor/auth.json:ro
+
 
     # Restart policy: container restarts unless explicitly stopped
     restart: unless-stopped
@@ -81,10 +79,8 @@ services:
       # Gemini CLI - API Key
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
 
-      # Cursor Agent CLI - Choose ONE authentication method:
-      # Option 1: API key (uncomment and set CURSOR_API_KEY in .env)
+      # Cursor Agent CLI - API key
       # - CURSOR_API_KEY=${CURSOR_API_KEY:-}
-      # Option 2: Mount auth file (see volumes section above)
 
       # AI CLI timeout in minutes (default: 10)
       - AI_CLI_TIMEOUT=${AI_CLI_TIMEOUT:-10}

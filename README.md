@@ -110,9 +110,7 @@ AI_PROVIDER=gemini
 
 #### Cursor Agent CLI
 
-The CLI command is `agent`. Choose **one** of the following authentication methods:
-
-##### Option 1: API Key (environment variable)
+The CLI command is `agent`.
 
 ```bash
 AI_PROVIDER=cursor
@@ -121,25 +119,6 @@ CURSOR_API_KEY=your-cursor-api-key
 # Specify the model
 AI_MODEL=claude-3.5-sonnet
 ```
-
-##### Option 2: Auth File Mount (for users who authenticated via `agent login`)
-
-```bash
-AI_PROVIDER=cursor
-# No API key needed - uses mounted auth file
-
-# Specify the model
-AI_MODEL=claude-3.5-sonnet
-```
-
-Mount the Cursor auth file in Docker:
-
-```yaml
-volumes:
-  - ~/.config/cursor/auth.json:/home/appuser/.config/cursor/auth.json:ro
-```
-
-**Note:** You need only ONE of these methods, not both. Use the API key method for simplicity, or the auth file mount if you have already authenticated via `agent login` on your host machine.
 
 ### Adding a New AI CLI Provider
 
