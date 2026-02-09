@@ -77,6 +77,11 @@ USER root
 # Make appuser home accessible by OpenShift arbitrary UID
 # OpenShift runs containers as arbitrary UID in root group (GID 0)
 # g=u means "group gets same permissions as user"
+# Pre-create config directories for CLI tools
+# Docker volume mounts (e.g., gcloud) can create ~/.config as root,
+# so we ensure CLI-specific subdirectories exist with correct ownership
+RUN mkdir -p /home/appuser/.config/cursor
+
 RUN chown -R appuser:0 /home/appuser && \
     chmod -R g=u /home/appuser
 
