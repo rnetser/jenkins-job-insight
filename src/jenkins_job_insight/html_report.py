@@ -1049,42 +1049,7 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     parts.append('<h2 class="section-title">Root Cause Analysis</h2>')
 
     for group in groups:
-        parsed = group["parsed"]
-        bug_id = group["bug_id"]
-        cls_class = _classification_css_class(parsed["classification"])
-        sev_class = parsed["severity"]
-        test_count = len(group["failures"])
-        test_label = f"{test_count} test{'s' if test_count != 1 else ''}"
-
-        parts.append(f"""<details class="bug-card">
-  <summary class="bug-summary">
-    <span class="bug-id">{e(bug_id)}</span>
-    <span class="bug-title">{e(parsed["bug_title"])}</span>
-    <span class="bug-count">{e(test_label)}</span>
-    <span class="classification-tag {e(cls_class)}">{e(parsed["classification"])}</span>
-    <span class="severity-tag-inline {e(sev_class)}">{e(parsed["severity"].upper())}</span>
-  </summary>
-  <div class="bug-body">
-    <div class="bug-analysis">
-      <h4>AI Analysis</h4>
-      <pre class="analysis-pre">{e(group["analysis_text"])}</pre>
-    </div>
-    <div class="bug-tests">
-      <h4>Affected Tests ({test_count})</h4>
-      <ul>
-""")
-        for f in group["failures"]:
-            parts.append(f"        <li><code>{e(f.test_name)}</code></li>\n")
-
-        parts.append(f"""      </ul>
-    </div>
-    <div class="bug-error">
-      <h4>Error</h4>
-      <pre class="error-pre">{e(group["failures"][0].error)}</pre>
-    </div>
-  </div>
-</details>
-""")
+        _render_bug_card(parts, group, e)
 
     # --- DETAIL TABLE ---
     parts.append("""
@@ -1150,6 +1115,61 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     return "\n".join(parts)
 
 
+def _render_bug_card(
+    parts: list[str],
+    group: dict,
+    e: Callable[[str], str],
+    indent: str = "",
+    extra_style: str = "",
+) -> None:
+    """Render a single collapsible bug card.
+
+    Args:
+        parts: List of HTML string parts to append to.
+        group: Root cause group dict with keys analysis_text, failures, parsed, bug_id.
+        e: HTML escape function reference.
+        indent: HTML indentation prefix for nested cards.
+        extra_style: Additional inline style for the details element.
+    """
+    parsed = group["parsed"]
+    bug_id = group["bug_id"]
+    cls_class = _classification_css_class(parsed["classification"])
+    sev_class = parsed["severity"]
+    test_count = len(group["failures"])
+    test_label = f"{test_count} test{'s' if test_count != 1 else ''}"
+    style_attr = f' style="{extra_style}"' if extra_style else ""
+
+    parts.append(f"""{indent}<details class="bug-card"{style_attr}>
+{indent}  <summary class="bug-summary">
+{indent}    <span class="bug-id">{e(bug_id)}</span>
+{indent}    <span class="bug-title">{e(parsed["bug_title"])}</span>
+{indent}    <span class="bug-count">{e(test_label)}</span>
+{indent}    <span class="classification-tag {e(cls_class)}">{e(parsed["classification"])}</span>
+{indent}    <span class="severity-tag-inline {e(sev_class)}">{e(parsed["severity"].upper())}</span>
+{indent}  </summary>
+{indent}  <div class="bug-body">
+{indent}    <div class="bug-analysis">
+{indent}      <h4>AI Analysis</h4>
+{indent}      <pre class="analysis-pre">{e(group["analysis_text"])}</pre>
+{indent}    </div>
+{indent}    <div class="bug-tests">
+{indent}      <h4>Affected Tests ({test_count})</h4>
+{indent}      <ul>
+""")
+    for f in group["failures"]:
+        parts.append(f"{indent}        <li><code>{e(f.test_name)}</code></li>\n")
+
+    parts.append(f"""{indent}      </ul>
+{indent}    </div>
+{indent}    <div class="bug-error">
+{indent}      <h4>Error</h4>
+{indent}      <pre class="error-pre">{e(group["failures"][0].error)}</pre>
+{indent}    </div>
+{indent}  </div>
+{indent}</details>
+""")
+
+
 def _render_child_jobs(
     parts: list[str],
     children: list[ChildJobAnalysis],
@@ -1191,42 +1211,9 @@ def _render_child_jobs(
         if child.failures:
             child_groups = _group_failures_by_root_cause(child.failures)
             for group in child_groups:
-                parsed = group["parsed"]
-                test_count = len(group["failures"])
-                cls_class = _classification_css_class(parsed["classification"])
-                sev_class = parsed["severity"]
-
-                parts.append(f"""    <details class="bug-card" style="margin-top:12px">
-      <summary class="bug-summary">
-        <span class="bug-id">{e(group["bug_id"])}</span>
-        <span class="bug-title">{e(parsed["bug_title"])}</span>
-        <span class="bug-count">{test_count} test{"s" if test_count != 1 else ""}</span>
-        <span class="classification-tag {e(cls_class)}">{e(parsed["classification"])}</span>
-        <span class="severity-tag-inline {e(sev_class)}">{e(parsed["severity"].upper())}</span>
-      </summary>
-      <div class="bug-body">
-        <div class="bug-analysis">
-          <h4>AI Analysis</h4>
-          <pre class="analysis-pre">{e(group["analysis_text"])}</pre>
-        </div>
-        <div class="bug-tests">
-          <h4>Affected Tests ({test_count})</h4>
-          <ul>
-""")
-                for f in group["failures"]:
-                    parts.append(
-                        f"            <li><code>{e(f.test_name)}</code></li>\n"
-                    )
-
-                parts.append(f"""          </ul>
-        </div>
-        <div class="bug-error">
-          <h4>Error</h4>
-          <pre class="error-pre">{e(group["failures"][0].error)}</pre>
-        </div>
-      </div>
-    </details>
-""")
+                _render_bug_card(
+                    parts, group, e, indent="    ", extra_style="margin-top:12px"
+                )
 
         # Recurse into nested children
         if child.failed_children:

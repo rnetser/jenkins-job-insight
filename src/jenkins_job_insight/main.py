@@ -246,9 +246,12 @@ async def get_job_result(
                 status_code=422,
                 detail=f"Cannot render HTML: stored result data is malformed for job '{job_id}': {exc}",
             )
+        # Use query params as overrides, fall back to stored values
+        resolved_provider = ai_provider or analysis_result.ai_provider
+        resolved_model = ai_model or analysis_result.ai_model
         return HTMLResponse(
             format_result_as_html(
-                analysis_result, ai_provider=ai_provider, ai_model=ai_model
+                analysis_result, ai_provider=resolved_provider, ai_model=resolved_model
             ),
             status_code=200,
         )

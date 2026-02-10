@@ -90,6 +90,8 @@ class AnalysisResult(BaseModel):
         description="Current status of the analysis"
     )
     summary: str = Field(description="Summary of the analysis findings")
+    ai_provider: str = Field(default="", description="AI provider used for analysis")
+    ai_model: str = Field(default="", description="AI model used for analysis")
     failures: list[FailureAnalysis] = Field(
         default_factory=list, description="List of analyzed failures"
     )

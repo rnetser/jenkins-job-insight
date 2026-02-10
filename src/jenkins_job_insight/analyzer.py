@@ -844,6 +844,8 @@ async def analyze_job(
             jenkins_url=HttpUrl(jenkins_build_url),
             status="completed",
             summary="Build passed successfully. No failures to analyze.",
+            ai_provider=ai_provider,
+            ai_model=ai_model,
             failures=[],
         )
 
@@ -896,6 +898,8 @@ async def analyze_job(
                 jenkins_url=HttpUrl(jenkins_build_url),
                 status="failed",
                 summary=err,
+                ai_provider=ai_provider,
+                ai_model=ai_model,
                 failures=[],
             )
 
@@ -955,6 +959,8 @@ async def analyze_job(
                 jenkins_url=HttpUrl(jenkins_build_url),
                 status="completed",
                 summary=summary,
+                ai_provider=ai_provider,
+                ai_model=ai_model,
                 failures=[],  # Pipeline has no direct failures
                 child_job_analyses=child_job_analyses,
             )
@@ -1032,6 +1038,8 @@ Respond with:
                     jenkins_url=HttpUrl(jenkins_build_url),
                     status="failed",
                     summary=analysis_output,
+                    ai_provider=ai_provider,
+                    ai_model=ai_model,
                     failures=[],
                     child_job_analyses=child_job_analyses,
                 )
@@ -1067,6 +1075,8 @@ Respond with:
             jenkins_url=HttpUrl(jenkins_build_url),
             status="completed",
             summary=summary,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
             failures=failures,
             child_job_analyses=child_job_analyses,
         )
