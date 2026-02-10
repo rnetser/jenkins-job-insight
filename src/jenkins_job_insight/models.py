@@ -85,6 +85,15 @@ class ChildJobAnalysis(BaseModel):
     )
 
 
+class ResultMessage(BaseModel):
+    """A pre-built result message for hierarchical output."""
+
+    type: Literal["summary", "failure_detail", "child_job"] = Field(
+        description="Message type: summary overview, failure detail, or child job analysis"
+    )
+    text: str = Field(description="Plain text content for this message section")
+
+
 class AnalysisResult(BaseModel):
     """Complete analysis result for a Jenkins job."""
 
@@ -100,6 +109,10 @@ class AnalysisResult(BaseModel):
     child_job_analyses: list[ChildJobAnalysis] = Field(
         default_factory=list,
         description="Analyses of failed child jobs in pipeline",
+    )
+    messages: list[ResultMessage] = Field(
+        default_factory=list,
+        description="Pre-built result messages for hierarchical output",
     )
 
 
