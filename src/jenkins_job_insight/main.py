@@ -1,10 +1,12 @@
+import json
 import os
 import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.analyzer import (
@@ -13,6 +15,7 @@ from jenkins_job_insight.analyzer import (
 )
 from jenkins_job_insight.config import Settings, get_settings
 from jenkins_job_insight.models import AnalysisResult, AnalyzeRequest
+from jenkins_job_insight.html_report import format_result_as_html
 from jenkins_job_insight.output import format_result_as_text, send_callback, send_slack
 from jenkins_job_insight.storage import get_result, init_db, list_results, save_result
 
@@ -162,7 +165,9 @@ async def analyze(
     request: AnalyzeRequest,
     background_tasks: BackgroundTasks,
     sync: bool = Query(False, description="If true, wait for result and return it"),
-    output: str = Query("json", description="Output format: json or text"),
+    output: Literal["json", "text", "html"] = Query(
+        "json", description="Output format: json, text, or html"
+    ),
     settings: Settings = Depends(get_settings),
 ) -> dict | AnalysisResult | Response:
     """Submit a Jenkins job for analysis.
@@ -203,6 +208,13 @@ async def analyze(
                 ),
                 status_code=200,
             )
+        elif output == "html":
+            return HTMLResponse(
+                format_result_as_html(
+                    result, ai_provider=ai_provider, ai_model=ai_model
+                ),
+                status_code=200,
+            )
         return JSONResponse(content=result.model_dump(mode="json"), status_code=200)
 
     # Async mode - queue background task
@@ -221,12 +233,31 @@ async def analyze(
     }
 
 
-@app.get("/results/{job_id}")
-async def get_job_result(job_id: str) -> dict:
+@app.get("/results/{job_id}", response_model=None)
+async def get_job_result(
+    job_id: str,
+    format: Literal["json", "html"] = Query(
+        "json", description="Response format: json or html"
+    ),
+) -> dict | Response:
     """Retrieve stored result by job_id."""
     result = await get_result(job_id)
     if not result:
         raise HTTPException(status_code=404, detail="Job not found")
+    if format == "html":
+        if not result.get("result"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"HTML format is not available: job '{job_id}' has no result data (status: {result.get('status', 'unknown')})",
+            )
+        result_data = result["result"]
+        if isinstance(result_data, str):
+            result_data = json.loads(result_data)
+        analysis_result = AnalysisResult(**result_data)
+        return HTMLResponse(
+            format_result_as_html(analysis_result),
+            status_code=200,
+        )
     return result
 
 

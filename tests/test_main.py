@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from jenkins_job_insight import storage
-from jenkins_job_insight.models import AnalysisResult
+from jenkins_job_insight.models import AnalysisResult, FailureAnalysis
 
 
 @pytest.fixture
@@ -252,6 +252,70 @@ class TestAnalyzeEndpoint:
                     assert response.status_code == 200
                     mock_slack.assert_called_once()
 
+    def test_analyze_sync_html_output(self, test_client) -> None:
+        """Test that sync analyze with output=html returns an HTML response."""
+        with patch(
+            "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+        ) as mock_analyze:
+            with patch("jenkins_job_insight.main.save_result", new_callable=AsyncMock):
+                mock_result = AnalysisResult(
+                    job_id="test-123",
+                    jenkins_url="https://jenkins.example.com/job/test/123/",
+                    status="completed",
+                    summary="Analysis complete",
+                    failures=[
+                        FailureAnalysis(
+                            test_name="test_example",
+                            error="AssertionError: expected True",
+                            analysis="=== CLASSIFICATION ===\nCODE ISSUE\n\n=== ANALYSIS ===\nTest assertion failed",
+                        )
+                    ],
+                )
+                mock_analyze.return_value = mock_result
+
+                response = test_client.post(
+                    "/analyze?sync=true&output=html",
+                    json={
+                        "job_name": "test",
+                        "build_number": 123,
+                        "tests_repo_url": "https://github.com/example/repo",
+                        "ai_provider": "claude",
+                        "ai_model": "test-model",
+                    },
+                )
+                assert response.status_code == 200
+                assert response.headers["content-type"].startswith("text/html")
+                assert "<!DOCTYPE html>" in response.text
+                assert "test_example" in response.text
+
+    def test_analyze_sync_html_empty_failures(self, test_client) -> None:
+        """Test that sync analyze with output=html works with no failures."""
+        with patch(
+            "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+        ) as mock_analyze:
+            with patch("jenkins_job_insight.main.save_result", new_callable=AsyncMock):
+                mock_result = AnalysisResult(
+                    job_id="test-123",
+                    jenkins_url="https://jenkins.example.com/job/test/123/",
+                    status="completed",
+                    summary="Analysis complete",
+                    failures=[],
+                )
+                mock_analyze.return_value = mock_result
+
+                response = test_client.post(
+                    "/analyze?sync=true&output=html",
+                    json={
+                        "job_name": "test",
+                        "build_number": 123,
+                        "tests_repo_url": "https://github.com/example/repo",
+                        "ai_provider": "claude",
+                        "ai_model": "test-model",
+                    },
+                )
+                assert response.status_code == 200
+                assert response.headers["content-type"].startswith("text/html")
+
 
 class TestResultsEndpoints:
     """Tests for the /results endpoints."""
@@ -322,6 +386,47 @@ class TestResultsEndpoints:
         response = test_client.get("/results")
         assert response.status_code == 200
         assert response.json() == []
+
+    async def test_get_result_html_format(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """Test retrieving a result in HTML format."""
+        result_data = AnalysisResult(
+            job_id="html-job-123",
+            jenkins_url="https://jenkins.example.com/job/test/1/",
+            status="completed",
+            summary="Test complete",
+            failures=[],
+        )
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            await storage.save_result(
+                job_id="html-job-123",
+                jenkins_url="https://jenkins.example.com/job/test/1/",
+                status="completed",
+                result=result_data.model_dump(mode="json"),
+            )
+            response = test_client.get("/results/html-job-123?format=html")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert "<!DOCTYPE html>" in response.text
+
+    async def test_get_result_json_format_default(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """Test that default format returns JSON."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            await storage.save_result(
+                job_id="json-job-456",
+                jenkins_url="https://jenkins.example.com/job/test/2/",
+                status="completed",
+                result={"summary": "Done"},
+            )
+            response = test_client.get("/results/json-job-456")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["job_id"] == "json-job-456"
 
 
 class TestAppLifespan:

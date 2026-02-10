@@ -18,6 +18,7 @@ For each failure, the service provides detailed explanations and either fix sugg
 - **Multiple AI providers**: Supports Claude CLI, Gemini CLI, Cursor Agent CLI, and Qodo CLI
 - **SQLite result storage**: Persists analysis results for later retrieval
 - **Callback webhooks**: Delivers results to your specified endpoint with custom headers
+- **HTML report output**: Generate self-contained, dark-themed HTML failure reports viewable in any browser
 - **Slack notifications**: Sends formatted analysis summaries to Slack channels
 
 ## Quick Start
@@ -294,9 +295,12 @@ The custom prompt should include instructions for the AI on how to analyze Jenki
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/analyze` | POST | Submit analysis job with job name and build number (async, returns 202) |
-| `/analyze?sync=true` | POST | Submit and wait for result |
-| `/results/{job_id}` | GET | Retrieve stored result by job ID |
+| `/analyze` | POST | Submit analysis job (async, returns 202) |
+| `/analyze?sync=true` | POST | Submit and wait for result (default: JSON) |
+| `/analyze?sync=true&output=text` | POST | Submit and wait for plain text result |
+| `/analyze?sync=true&output=html` | POST | Submit and wait for HTML report |
+| `/results/{job_id}` | GET | Retrieve stored result (JSON) |
+| `/results/{job_id}?format=html` | GET | Retrieve stored result as HTML report |
 | `/results` | GET | List recent analysis jobs (default: 50, max: 100) |
 | `/health` | GET | Health check endpoint |
 
@@ -407,6 +411,12 @@ curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000
 }
 ```
 
+To retrieve the result as an HTML report:
+
+```bash
+curl "http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000?format=html" -o report.html
+```
+
 ### List Recent Jobs
 
 **Request:**
@@ -428,6 +438,60 @@ curl "http://localhost:8000/results?limit=10"
   }
 ]
 ```
+
+## Output Formats
+
+The service supports three output formats for analysis results.
+
+### JSON (default)
+
+```bash
+curl -X POST "http://localhost:8000/analyze?sync=true" \
+  -H "Content-Type: application/json" \
+  -d '{"job_name": "my-project", "build_number": 123, "ai_provider": "claude", "ai_model": "sonnet"}'
+```
+
+### Plain Text
+
+```bash
+curl -X POST "http://localhost:8000/analyze?sync=true&output=text" \
+  -H "Content-Type: application/json" \
+  -d '{"job_name": "my-project", "build_number": 123, "ai_provider": "claude", "ai_model": "sonnet"}'
+```
+
+### HTML Report
+
+Generate a self-contained HTML report with a dark theme, interactive charts, and collapsible failure details:
+
+```bash
+# Sync mode — get HTML report directly
+curl -X POST "http://localhost:8000/analyze?sync=true&output=html" \
+  -H "Content-Type: application/json" \
+  -d '{"job_name": "my-project", "build_number": 123, "ai_provider": "claude", "ai_model": "sonnet"}' \
+  -o report.html
+
+# Open in browser
+open report.html  # macOS
+xdg-open report.html  # Linux
+```
+
+You can also retrieve a previously stored result as HTML:
+
+```bash
+curl "http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000?format=html" -o report.html
+```
+
+The HTML report includes:
+
+- **Sticky header** with job name, build number, and failure count badge
+- **Stats overview** with animated SVG donut chart (setup vs execution failures)
+- **Root cause banner** when the majority of failures share the same root cause
+- **Severity assessment** badge and module distribution bar chart
+- **Collapsible bug cards** with full AI analysis, affected tests, and error details
+- **Detail table** listing all failures with test name, module, stage, and severity
+- **Key takeaway** callout summarizing the analysis
+
+The report is fully self-contained (no external CSS/JS) and can be shared as a single file.
 
 ## Development
 
