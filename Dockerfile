@@ -44,9 +44,6 @@ COPY --from=builder /app/pyproject.toml /app/uv.lock ./
 # Copy source code
 COPY --from=builder /app/src /app/src
 
-# Copy Qodo agent configuration
-COPY qodo/ /app/qodo/
-
 # Copy uv for runtime
 COPY --from=ghcr.io/astral-sh/uv:0.5.14 /uv /usr/local/bin/uv
 
@@ -74,15 +71,17 @@ RUN mkdir -p /home/appuser/.npm-global \
     && npm config set prefix '/home/appuser/.npm-global' \
     && npm install -g @google/gemini-cli@0.25.0
 
-# Install Qodo CLI
-RUN npm install -g @qodo/command
-
 # Switch back to root to fix permissions for OpenShift compatibility
 USER root
 
 # Make appuser home accessible by OpenShift arbitrary UID
 # OpenShift runs containers as arbitrary UID in root group (GID 0)
 # g=u means "group gets same permissions as user"
+# Pre-create config directories for CLI tools
+# Docker volume mounts (e.g., gcloud) can create ~/.config as root,
+# so we ensure CLI-specific subdirectories exist with correct ownership
+RUN mkdir -p /home/appuser/.config/cursor
+
 RUN chown -R appuser:0 /home/appuser && \
     chmod -R g=u /home/appuser
 
