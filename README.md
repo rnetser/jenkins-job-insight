@@ -283,6 +283,7 @@ curl -X POST http://localhost:8000/analyze \
     "callback_headers": {"Authorization": "Bearer my-token"},
     "slack_webhook_url": "https://hooks.slack.com/services/xxx/yyy/zzz"
   }'
+  -o outputfile.json
 ```
 
 For jobs inside folders, use the folder path: `"job_name": "folder/subfolder/my-project"`
@@ -371,11 +372,6 @@ curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000
 }
 ```
 
-To retrieve the result as an HTML report:
-
-```bash
-curl "http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000?format=html" -o report.html
-```
 
 ### List Recent Jobs
 
