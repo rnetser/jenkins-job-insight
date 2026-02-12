@@ -151,18 +151,19 @@ async def process_analysis_with_id(
             body, settings, ai_provider=ai_provider, ai_model=ai_model, job_id=job_id
         )
 
-        # Save to storage
-        await save_result(
-            job_id, jenkins_url, "completed", result.model_dump(mode="json")
-        )
-        logger.info(
-            f"Analysis completed for {body.job_name} #{body.build_number} "
-            f"(job_id: {job_id})"
-        )
+        result_data = result.model_dump(mode="json")
 
         # Generate HTML report if enabled
         if _resolve_html_report(body):
             await _generate_html_report(result)
+            result_data["html_report_url"] = f"/results/{job_id}.html"
+
+        # Save to storage
+        await save_result(job_id, jenkins_url, "completed", result_data)
+        logger.info(
+            f"Analysis completed for {body.job_name} #{body.build_number} "
+            f"(job_id: {job_id})"
+        )
 
         await deliver_results(result, body, settings)
 
