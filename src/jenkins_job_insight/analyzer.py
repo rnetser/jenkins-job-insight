@@ -82,7 +82,8 @@ If PRODUCT BUG:
     "severity": "critical/high/medium/low",
     "component": "affected component",
     "description": "what product behavior is broken",
-    "evidence": "relevant log snippets"
+    "evidence": "relevant log snippets",
+    "jira_search_keywords": ["keyword1", "keyword2", "keyword3"]
   }
 }"""
 

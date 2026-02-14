@@ -17,10 +17,13 @@ from jenkins_job_insight.analyzer import (
     run_parallel_with_limit,
 )
 from jenkins_job_insight.config import Settings, get_settings
+from jenkins_job_insight.jira import enrich_with_jira_matches
 from jenkins_job_insight.models import (
     AnalysisResult,
     AnalyzeFailuresRequest,
     AnalyzeRequest,
+    ChildJobAnalysis,
+    FailureAnalysis,
     FailureAnalysisResult,
 )
 from jenkins_job_insight.html_report import format_result_as_html
@@ -147,6 +150,38 @@ async def _generate_html_report(result: AnalysisResult) -> None:
     logger.info(f"HTML report saved for job_id: {result.job_id}")
 
 
+async def _enrich_result_with_jira(
+    failures: list[FailureAnalysis | ChildJobAnalysis],
+    settings: Settings,
+) -> None:
+    """Enrich PRODUCT BUG failures with Jira matches.
+
+    Collects all FailureAnalysis objects from the provided list,
+    recursing into ChildJobAnalysis objects, then searches Jira
+    for matching issues. Results are attached in-place.
+
+    Args:
+        failures: Mixed list of FailureAnalysis and ChildJobAnalysis objects.
+        settings: Application settings with Jira configuration.
+    """
+    if not settings.jira_enabled:
+        return
+
+    all_failures: list[FailureAnalysis] = []
+
+    def _collect(items: list) -> None:
+        for item in items:
+            if isinstance(item, FailureAnalysis):
+                all_failures.append(item)
+            if isinstance(item, ChildJobAnalysis):
+                _collect(item.failures)
+                _collect(item.failed_children)
+
+    _collect(failures)
+
+    await enrich_with_jira_matches(all_failures, settings)
+
+
 async def process_analysis_with_id(
     job_id: str, body: AnalyzeRequest, settings: Settings
 ) -> None:
@@ -168,6 +203,11 @@ async def process_analysis_with_id(
 
         result = await analyze_job(
             body, settings, ai_provider=ai_provider, ai_model=ai_model, job_id=job_id
+        )
+
+        # Enrich PRODUCT BUG failures with Jira matches
+        await _enrich_result_with_jira(
+            result.failures + list(result.child_job_analyses), settings
         )
 
         result_data = result.model_dump(mode="json")
@@ -213,6 +253,12 @@ async def analyze(
         result = await analyze_job(
             body, settings, ai_provider=ai_provider, ai_model=ai_model
         )
+
+        # Enrich PRODUCT BUG failures with Jira matches
+        await _enrich_result_with_jira(
+            result.failures + list(result.child_job_analyses), settings
+        )
+
         jenkins_url = build_jenkins_url(
             settings.jenkins_url, body.job_name, body.build_number
         )
@@ -260,7 +306,10 @@ async def analyze(
 
 
 @app.post("/analyze-failures", response_model=FailureAnalysisResult)
-async def analyze_failures(body: AnalyzeFailuresRequest) -> FailureAnalysisResult:
+async def analyze_failures(
+    body: AnalyzeFailuresRequest,
+    settings: Settings = Depends(get_settings),
+) -> FailureAnalysisResult:
     """Analyze raw test failures directly without Jenkins.
 
     Accepts test failure data and returns AI analysis. Sync only.
@@ -325,6 +374,9 @@ async def analyze_failures(body: AnalyzeFailuresRequest) -> FailureAnalysisResul
 
         unique_errors = len(groups)
         summary = f"Analyzed {len(body.failures)} test failures ({unique_errors} unique errors). {len(all_analyses)} analyzed successfully."
+
+        # Enrich PRODUCT BUG failures with Jira matches
+        await enrich_with_jira_matches(all_analyses, settings)
 
         analysis_result = FailureAnalysisResult(
             job_id=job_id,

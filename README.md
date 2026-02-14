@@ -66,6 +66,14 @@ Configure the service using environment variables. The service is tied to a sing
 | `PROMPT_FILE` | No | `/app/PROMPT.md` | Path to custom analysis prompt file |
 | `HTML_REPORT` | No | `true` | Generate HTML reports (set to `false` to disable) |
 | `DEBUG` | No | `false` | Enable debug mode with hot reload for development |
+| **Jira (Optional)** | | | |
+| `JIRA_URL` | No | - | Jira instance URL (enables Jira integration) |
+| `JIRA_EMAIL` | No | - | Email for Jira Cloud authentication |
+| `JIRA_API_TOKEN` | No | - | API token for Jira Cloud |
+| `JIRA_PAT` | No | - | Personal Access Token for Jira Server/DC |
+| `JIRA_PROJECT_KEY` | No | - | Scope Jira searches to a specific project |
+| `JIRA_SSL_VERIFY` | No | `true` | SSL certificate verification for Jira |
+| `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
 
 ### Jenkins Configuration
 
@@ -212,6 +220,55 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `HTML_REPORT`        | `html_report`      | No       | Generate HTML report (default: true)                                       |
 
 **Priority**: Request values take precedence over environment variable defaults. Required fields must be configured in at least one place (environment variable or request body).
+
+### Jira Integration (Optional)
+
+When the AI classifies a failure as **PRODUCT BUG**, the service can optionally search Jira for existing matching bugs. This helps teams avoid filing duplicate bug reports.
+
+#### How It Works
+
+1. The AI analysis includes `jira_search_keywords` in the product bug report
+2. After analysis completes, the service searches Jira using those keywords
+3. Matching Jira issues are attached to the response as `jira_matches`
+4. HTML reports render matches as clickable links
+5. JUnit XML reports include matches as properties
+
+#### Configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `JIRA_URL` | Yes* | - | Jira instance URL (Cloud or Server/DC) |
+| `JIRA_EMAIL` | Cloud | - | Email for Jira Cloud authentication |
+| `JIRA_API_TOKEN` | Cloud | - | API token for Jira Cloud |
+| `JIRA_PAT` | Server | - | Personal Access Token for Jira Server/DC |
+| `JIRA_PROJECT_KEY` | No | - | Scope searches to a specific project |
+| `JIRA_SSL_VERIFY` | No | `true` | SSL certificate verification |
+| `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
+
+*Required only if you want to enable Jira integration. The feature is completely optional.
+
+**Jira Cloud:**
+
+```bash
+JIRA_URL=https://your-org.atlassian.net
+JIRA_EMAIL=your-email@example.com
+JIRA_API_TOKEN=your-jira-api-token
+```
+
+**Jira Server/DC:**
+
+```bash
+JIRA_URL=https://jira.your-company.com
+JIRA_PAT=your-personal-access-token
+```
+
+#### Error Handling
+
+Jira failures never crash the analysis pipeline:
+- **Not configured** — feature is silently disabled
+- **Auth failure** — warning logged, empty matches returned
+- **Network error** — error logged, empty matches returned
+- **No keywords from AI** — Jira search skipped for that failure
 
 ### SSL Verification
 

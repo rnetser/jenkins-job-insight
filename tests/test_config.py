@@ -147,3 +147,103 @@ class TestGetSettings:
         settings1 = get_settings()
         settings2 = get_settings()
         assert settings1 is settings2
+
+
+class TestJiraSettings:
+    """Tests for Jira configuration fields."""
+
+    def test_jira_disabled_by_default(self) -> None:
+        """Jira is disabled when no Jira env vars are set."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert not settings.jira_enabled
+            assert settings.jira_url is None
+
+    def test_jira_enabled_with_cloud_auth(self) -> None:
+        """Jira is enabled with URL + email + API token."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+            "JIRA_URL": "https://jira.example.com",
+            "JIRA_EMAIL": "user@example.com",
+            "JIRA_API_TOKEN": "token-123",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert settings.jira_enabled
+
+    def test_jira_enabled_with_server_pat(self) -> None:
+        """Jira is enabled with URL + PAT."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+            "JIRA_URL": "https://jira-server.example.com",
+            "JIRA_PAT": "pat-token-456",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert settings.jira_enabled
+
+    def test_jira_disabled_without_url(self) -> None:
+        """Jira is disabled when URL is missing even with credentials."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+            "JIRA_EMAIL": "user@example.com",
+            "JIRA_API_TOKEN": "token-123",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert not settings.jira_enabled
+
+    def test_jira_disabled_without_credentials(self) -> None:
+        """Jira is disabled when URL is set but no credentials."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+            "JIRA_URL": "https://jira.example.com",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert not settings.jira_enabled
+
+    def test_jira_default_values(self) -> None:
+        """Test default values for optional Jira fields."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert settings.jira_ssl_verify is True
+            assert settings.jira_max_results == 5
+            assert settings.jira_project_key is None
+
+    def test_jira_custom_values(self) -> None:
+        """Test custom values for Jira fields."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+            "JIRA_URL": "https://jira.example.com",
+            "JIRA_EMAIL": "user@example.com",
+            "JIRA_API_TOKEN": "token",
+            "JIRA_PROJECT_KEY": "MYPROJ",
+            "JIRA_SSL_VERIFY": "false",
+            "JIRA_MAX_RESULTS": "10",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert settings.jira_project_key == "MYPROJ"
+            assert settings.jira_ssl_verify is False
+            assert settings.jira_max_results == 10

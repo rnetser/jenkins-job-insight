@@ -53,6 +53,19 @@ class TestFailure(BaseModel):
     )
 
 
+class JiraMatch(BaseModel):
+    """A Jira issue that potentially matches a product bug."""
+
+    key: str = Field(description="Jira issue key (e.g., PROJ-123)")
+    summary: str = Field(description="Issue summary/title")
+    status: str = Field(
+        default="", description="Issue status (e.g., Open, In Progress)"
+    )
+    priority: str = Field(default="", description="Issue priority (e.g., High, Medium)")
+    url: str = Field(default="", description="Full URL to the Jira issue")
+    score: float = Field(default=0.0, description="Relevance score (0.0-1.0)")
+
+
 class ProductBugReport(BaseModel):
     """Structured product bug report from AI analysis."""
 
@@ -63,6 +76,13 @@ class ProductBugReport(BaseModel):
     component: str = Field(default="", description="Affected component")
     description: str = Field(default="", description="What product behavior is broken")
     evidence: str = Field(default="", description="Relevant log snippets")
+    jira_search_keywords: list[str] = Field(
+        default_factory=list, description="AI-suggested keywords for Jira search"
+    )
+    jira_matches: list[JiraMatch] = Field(
+        default_factory=list,
+        description="Matched Jira issues (populated in post-processing)",
+    )
 
 
 class CodeFix(BaseModel):

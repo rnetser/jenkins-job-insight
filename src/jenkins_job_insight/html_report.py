@@ -14,6 +14,7 @@ from jenkins_job_insight.models import (
     ChildJobAnalysis,
     CodeFix,
     FailureAnalysis,
+    JiraMatch,
     ProductBugReport,
 )
 
@@ -273,6 +274,25 @@ body {{
 .severity-tag-inline.medium {{ background: rgba(210,153,34,0.15); color: var(--accent-yellow); }}
 .severity-tag-inline.low {{ background: rgba(63,185,80,0.15); color: var(--accent-green); }}
 .severity-tag-inline.unknown {{ background: var(--bg-tertiary); color: var(--text-muted); }}
+/* Jira matches */
+.jira-matches {{ margin-top: 12px; }}
+.jira-match-link {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    margin: 3px 4px 3px 0;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--accent-blue);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    text-decoration: none;
+    transition: background 0.15s;
+}}
+.jira-match-link:hover {{ background: var(--bg-hover); text-decoration: underline; }}
+.jira-match-status {{ color: var(--text-muted); font-size: 11px; }}
 .failure-body {{
     padding: 0 20px 20px;
     border-top: 1px solid var(--border);
@@ -734,6 +754,9 @@ def _render_failure_card(
 {indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>
 {indent}    </div>
 """)
+        # Jira matches
+        if bug.jira_matches:
+            _render_jira_matches(parts, bug.jira_matches, e, indent)
 
     # Affected tests
     if detail.affected_tests:
@@ -834,6 +857,9 @@ def _render_group_card(
 {indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>
 {indent}    </div>
 """)
+        # Jira matches
+        if bug.jira_matches:
+            _render_jira_matches(parts, bug.jira_matches, e, indent)
 
     # Affected Tests
     parts.append(f"""{indent}    <div class="bug-tests">
@@ -856,6 +882,33 @@ def _render_group_card(
     parts.append(f"""{indent}  </div>
 {indent}</details>
 """)
+
+
+def _render_jira_matches(
+    parts: list[str],
+    matches: list[JiraMatch],
+    e: Callable[[str], str],
+    indent: str = "",
+) -> None:
+    """Render Jira match links.
+
+    Args:
+        parts: List of HTML string parts to append to.
+        matches: List of JiraMatch objects to render.
+        e: HTML escape function reference.
+        indent: HTML indentation prefix.
+    """
+    parts.append(f"{indent}    <h4>Possible Jira Matches ({len(matches)})</h4>\n")
+    parts.append(f'{indent}    <div class="jira-matches">\n')
+    for match in matches:
+        parts.append(
+            f'{indent}      <a class="jira-match-link" href="{e(match.url)}" '
+            f'target="_blank" rel="noopener">'
+            f"{e(match.key)}: {e(match.summary)} "
+            f'<span class="jira-match-status">[{e(match.status)}]</span>'
+            f"</a>\n"
+        )
+    parts.append(f"{indent}    </div>\n")
 
 
 def _render_child_jobs(

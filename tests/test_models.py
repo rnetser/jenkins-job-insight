@@ -11,6 +11,7 @@ from jenkins_job_insight.models import (
     AnalyzeRequest,
     CodeFix,
     FailureAnalysis,
+    JiraMatch,
     JobStatus,
     ProductBugReport,
 )
@@ -299,3 +300,74 @@ class TestJobStatus:
             )
         errors = exc_info.value.errors()
         assert any("status" in str(e) for e in errors)
+
+
+class TestJiraMatch:
+    """Tests for the JiraMatch model."""
+
+    def test_creation_with_required_fields(self) -> None:
+        """Test creating with only required fields."""
+        match = JiraMatch(key="PROJ-123", summary="Bug title")
+        assert match.key == "PROJ-123"
+        assert match.summary == "Bug title"
+        assert match.status == ""
+        assert match.priority == ""
+        assert match.url == ""
+        assert match.score == 0.0
+
+    def test_creation_with_all_fields(self) -> None:
+        """Test creating with all fields."""
+        match = JiraMatch(
+            key="PROJ-456",
+            summary="Login fails",
+            status="Open",
+            priority="High",
+            url="https://jira.example.com/browse/PROJ-456",
+            score=0.85,
+        )
+        assert match.key == "PROJ-456"
+        assert match.status == "Open"
+        assert match.score == 0.85
+
+
+class TestProductBugReportJiraFields:
+    """Tests for Jira-related fields on ProductBugReport."""
+
+    def test_defaults_to_empty_lists(self) -> None:
+        """Jira fields default to empty lists for backward compatibility."""
+        report = ProductBugReport()
+        assert report.jira_search_keywords == []
+        assert report.jira_matches == []
+
+    def test_with_search_keywords(self) -> None:
+        """Test creating with search keywords."""
+        report = ProductBugReport(
+            title="Bug",
+            jira_search_keywords=["login", "auth"],
+        )
+        assert report.jira_search_keywords == ["login", "auth"]
+
+    def test_with_jira_matches(self) -> None:
+        """Test creating with Jira matches."""
+        matches = [
+            JiraMatch(key="PROJ-1", summary="Match 1"),
+            JiraMatch(key="PROJ-2", summary="Match 2"),
+        ]
+        report = ProductBugReport(
+            title="Bug",
+            jira_matches=matches,
+        )
+        assert len(report.jira_matches) == 2
+        assert report.jira_matches[0].key == "PROJ-1"
+
+    def test_serialization_includes_jira_fields(self) -> None:
+        """Test that Jira fields are included in serialization."""
+        report = ProductBugReport(
+            title="Bug",
+            jira_search_keywords=["kw1"],
+            jira_matches=[JiraMatch(key="PROJ-1", summary="Match")],
+        )
+        data = report.model_dump()
+        assert "jira_search_keywords" in data
+        assert "jira_matches" in data
+        assert len(data["jira_matches"]) == 1
