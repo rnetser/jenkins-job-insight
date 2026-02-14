@@ -229,10 +229,13 @@ When the AI classifies a failure as **PRODUCT BUG**, the service can optionally 
 #### How It Works
 
 1. The AI analysis includes `jira_search_keywords` in the product bug report
-2. After analysis completes, the service searches Jira using those keywords
-3. Matching Jira issues are attached to the response as `jira_matches`
-4. HTML reports render matches as clickable links
-5. JUnit XML reports include matches as properties
+2. After analysis completes, the service searches Jira for Bug-type issues using those keywords
+3. AI evaluates each Jira candidate by reading its summary and description to determine actual relevance
+4. Only relevant matches are attached to the response as `jira_matches`
+5. HTML reports render matches as clickable links
+6. JUnit XML reports include matches as properties
+
+Jira integration works with all analysis endpoints: `/analyze`, `/analyze?sync=true`, and `/analyze-failures`.
 
 #### Configuration
 
@@ -573,7 +576,7 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
 
 ### HTML Report
 
-Retrieve a completed analysis as a self-contained HTML report with a dark theme and collapsible failure details:
+Retrieve an analysis as a self-contained HTML report with a dark theme and collapsible failure details. While the analysis is still running, the HTML endpoint serves a status page that auto-refreshes every 10 seconds:
 
 ```bash
 curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000.html -o report.html
