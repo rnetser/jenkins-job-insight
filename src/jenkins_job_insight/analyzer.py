@@ -25,7 +25,9 @@ from jenkins_job_insight.models import (
     AnalysisResult,
     AnalyzeRequest,
     ChildJobAnalysis,
+    CodeFix,
     FailureAnalysis,
+    ProductBugReport,
     TestFailure,
 )
 from jenkins_job_insight.repository import RepositoryManager
@@ -58,7 +60,7 @@ ERROR_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_JSON_RESPONSE_SCHEMA = """Respond with a JSON object using this EXACT schema (no markdown, no extra text, just the JSON):
+_JSON_RESPONSE_SCHEMA = """CRITICAL: Your response must be ONLY a valid JSON object. No text before or after. No markdown code blocks. No explanation.
 
 If CODE ISSUE:
 {
@@ -185,7 +187,7 @@ def _parse_json_response(raw_text: str) -> AnalysisDetail:
     1. Try parsing the raw text directly as JSON
     2. Try extracting JSON from brace-matching ({...})
     3. Try extracting from markdown code blocks
-    4. Fallback: store raw text in details
+    4. Fallback: store raw text in details, then attempt recovery
 
     Args:
         raw_text: The raw text output from the AI CLI.
@@ -215,8 +217,112 @@ def _parse_json_response(raw_text: str) -> AnalysisDetail:
     if result is not None:
         return result
 
-    # Fallback: store raw text in details
-    return AnalysisDetail(details=raw_text)
+    # Fallback: store raw text in details, then attempt recovery
+    fallback = AnalysisDetail(details=raw_text)
+    return _recover_from_details(fallback)
+
+
+def _recover_from_details(result: AnalysisDetail) -> AnalysisDetail:
+    """Attempt to recover structured fields from a fallback result.
+
+    When the main parsing strategies fail and raw text is stored in
+    the details field, this function checks if that text contains
+    JSON field patterns and extracts them via regex.
+
+    This handles cases where the AI returned JSON with formatting
+    issues (unescaped newlines, embedded code blocks) that broke
+    standard JSON parsing.
+
+    Args:
+        result: An AnalysisDetail with raw text in the details field.
+
+    Returns:
+        Either a recovered AnalysisDetail with populated fields,
+        or the original fallback result unchanged.
+    """
+    if result.classification:
+        return result
+
+    details = result.details
+    if not details or '"classification"' not in details:
+        return result
+
+    # Extract classification
+    class_match = re.search(r'"classification"\s*:\s*"([^"]+)"', details)
+    if not class_match:
+        return result
+
+    classification = class_match.group(1)
+
+    # Extract affected_tests
+    affected_tests: list[str] = []
+    tests_match = re.search(r'"affected_tests"\s*:\s*\[([^\]]*)\]', details)
+    if tests_match:
+        affected_tests = re.findall(r'"([^"]+)"', tests_match.group(1))
+
+    # Extract details text from within the JSON
+    details_match = re.search(
+        r'"details"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
+    )
+    analysis_text = (
+        details_match.group(1).replace("\\n", "\n") if details_match else details
+    )
+
+    # Extract code_fix if present
+    code_fix: CodeFix | bool | None = False
+    file_match = re.search(r'"file"\s*:\s*"([^"]*)"', details)
+    change_match = re.search(r'"change"\s*:\s*"((?:[^"\\]|\\.)*)"', details)
+    if file_match and change_match:
+        line_match = re.search(r'"line"\s*:\s*"([^"]*)"', details)
+        code_fix = CodeFix(
+            file=file_match.group(1),
+            line=line_match.group(1) if line_match else "",
+            change=change_match.group(1).replace("\\n", "\n"),
+        )
+
+    # Extract product_bug_report if present
+    product_bug_report: ProductBugReport | bool | None = False
+    title_match = re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', details)
+    if title_match and "PRODUCT BUG" in classification.upper():
+        severity_match = re.search(r'"severity"\s*:\s*"([^"]*)"', details)
+        component_match = re.search(r'"component"\s*:\s*"([^"]*)"', details)
+        desc_match = re.search(
+            r'"description"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
+        )
+        evidence_match = re.search(
+            r'"evidence"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
+        )
+        keywords_match = re.search(
+            r'"jira_search_keywords"\s*:\s*\[([^\]]*)\]', details
+        )
+        jira_keywords = (
+            re.findall(r'"([^"]+)"', keywords_match.group(1)) if keywords_match else []
+        )
+
+        product_bug_report = ProductBugReport(
+            title=title_match.group(1),
+            severity=severity_match.group(1) if severity_match else "",
+            component=component_match.group(1) if component_match else "",
+            description=(
+                desc_match.group(1).replace("\\n", "\n") if desc_match else ""
+            ),
+            evidence=(
+                evidence_match.group(1).replace("\\n", "\n") if evidence_match else ""
+            ),
+            jira_search_keywords=jira_keywords,
+        )
+
+    logger.warning(
+        "Recovered classification '%s' from unparseable AI response via regex extraction",
+        classification,
+    )
+    return AnalysisDetail(
+        classification=classification,
+        affected_tests=affected_tests,
+        details=analysis_text,
+        code_fix=code_fix,
+        product_bug_report=product_bug_report,
+    )
 
 
 def _extract_json_by_braces(text: str) -> AnalysisDetail | None:
