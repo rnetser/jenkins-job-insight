@@ -270,6 +270,31 @@ def _inject_analysis(testcase: Element, analysis: dict[str, Any]) -> None:
             properties, "ai_bug_description", bug_report.get("description", "")
         )
 
+        # Jira match properties
+        jira_matches = bug_report.get("jira_matches", [])
+        for idx, match in enumerate(jira_matches):
+            if isinstance(match, dict):
+                _add_property(
+                    properties, f"ai_jira_match_{idx}_key", match.get("key", "")
+                )
+                _add_property(
+                    properties, f"ai_jira_match_{idx}_summary", match.get("summary", "")
+                )
+                _add_property(
+                    properties, f"ai_jira_match_{idx}_status", match.get("status", "")
+                )
+                _add_property(
+                    properties, f"ai_jira_match_{idx}_url", match.get("url", "")
+                )
+                _add_property(
+                    properties,
+                    f"ai_jira_match_{idx}_priority",
+                    match.get("priority", ""),
+                )
+                score = match.get("score")
+                if score is not None:
+                    _add_property(properties, f"ai_jira_match_{idx}_score", str(score))
+
     # Add human-readable system-out
     text = _format_analysis_text(analysis)
     if text:
@@ -319,5 +344,16 @@ def _format_analysis_text(analysis: dict[str, Any]) -> str:
         parts.append(f"  Severity: {bug_report.get('severity', '')}")
         parts.append(f"  Component: {bug_report.get('component', '')}")
         parts.append(f"  Description: {bug_report.get('description', '')}")
+
+        jira_matches = bug_report.get("jira_matches", [])
+        if jira_matches:
+            parts.append("\nPossible Jira Matches:")
+            for match in jira_matches:
+                if isinstance(match, dict):
+                    key = match.get("key", "")
+                    summary = match.get("summary", "")
+                    status = match.get("status", "")
+                    url = match.get("url", "")
+                    parts.append(f"  {key}: {summary} [{status}] {url}")
 
     return "\n".join(parts) if parts else ""

@@ -108,3 +108,15 @@ services:
 
       # SSL verification for Jenkins (set to false for self-signed certs)
       - JENKINS_SSL_VERIFY=${JENKINS_SSL_VERIFY:-true}
+
+      # ===================
+      # Jira Integration (Optional)
+      # ===================
+      # Uncomment to enable Jira bug deduplication
+      # - JIRA_URL=${JIRA_URL:-}
+      # - JIRA_EMAIL=${JIRA_EMAIL:-}
+      # - JIRA_API_TOKEN=${JIRA_API_TOKEN:-}
+      # - JIRA_PAT=${JIRA_PAT:-}
+      # - JIRA_PROJECT_KEY=${JIRA_PROJECT_KEY:-}
+      # - JIRA_SSL_VERIFY=${JIRA_SSL_VERIFY:-true}
+      # - JIRA_MAX_RESULTS=${JIRA_MAX_RESULTS:-5}

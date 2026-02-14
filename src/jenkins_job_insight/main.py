@@ -17,13 +17,17 @@ from jenkins_job_insight.analyzer import (
     run_parallel_with_limit,
 )
 from jenkins_job_insight.config import Settings, get_settings
+from jenkins_job_insight.jira import enrich_with_jira_matches
 from jenkins_job_insight.models import (
     AnalysisResult,
     AnalyzeFailuresRequest,
     AnalyzeRequest,
+    BaseAnalysisRequest,
+    ChildJobAnalysis,
+    FailureAnalysis,
     FailureAnalysisResult,
 )
-from jenkins_job_insight.html_report import format_result_as_html
+from jenkins_job_insight.html_report import format_result_as_html, format_status_page
 from jenkins_job_insight.output import send_callback
 from jenkins_job_insight.repository import RepositoryManager
 from jenkins_job_insight.storage import (
@@ -140,11 +144,62 @@ def _resolve_html_report(body: AnalyzeRequest) -> bool:
     return HTML_REPORT
 
 
+def _resolve_enable_jira(body: BaseAnalysisRequest, settings: Settings) -> bool:
+    """Resolve enable_jira flag from request or config default.
+
+    Args:
+        body: The analysis request (AnalyzeRequest or AnalyzeFailuresRequest).
+        settings: Application settings with Jira configuration.
+
+    Returns:
+        True if Jira enrichment should run, False otherwise.
+    """
+    if body.enable_jira is not None:
+        return body.enable_jira
+    return settings.jira_enabled
+
+
 async def _generate_html_report(result: AnalysisResult) -> None:
     """Generate and save HTML report to disk."""
     html_content = format_result_as_html(result)
     await save_html_report(result.job_id, html_content)
     logger.info(f"HTML report saved for job_id: {result.job_id}")
+
+
+async def _enrich_result_with_jira(
+    failures: list[FailureAnalysis | ChildJobAnalysis],
+    settings: Settings,
+    ai_provider: str = "",
+    ai_model: str = "",
+) -> None:
+    """Enrich PRODUCT BUG failures with Jira matches.
+
+    Collects all FailureAnalysis objects from the provided list,
+    recursing into ChildJobAnalysis objects, then searches Jira
+    for matching issues. Results are attached in-place.
+
+    Args:
+        failures: Mixed list of FailureAnalysis and ChildJobAnalysis objects.
+        settings: Application settings with Jira configuration.
+        ai_provider: AI provider for Jira relevance filtering.
+        ai_model: AI model for Jira relevance filtering.
+    """
+    if not settings.jira_enabled:
+        return
+
+    all_failures: list[FailureAnalysis] = []
+
+    def _collect(items: list) -> None:
+        for item in items:
+            if isinstance(item, FailureAnalysis):
+                all_failures.append(item)
+            elif isinstance(item, ChildJobAnalysis):
+                _collect(item.failures)
+                _collect(item.failed_children)
+
+    _collect(failures)
+
+    await enrich_with_jira_matches(all_failures, settings, ai_provider, ai_model)
 
 
 async def process_analysis_with_id(
@@ -169,6 +224,15 @@ async def process_analysis_with_id(
         result = await analyze_job(
             body, settings, ai_provider=ai_provider, ai_model=ai_model, job_id=job_id
         )
+
+        # Enrich PRODUCT BUG failures with Jira matches
+        if _resolve_enable_jira(body, settings):
+            await _enrich_result_with_jira(
+                result.failures + list(result.child_job_analyses),
+                settings,
+                ai_provider,
+                ai_model,
+            )
 
         result_data = result.model_dump(mode="json")
 
@@ -213,6 +277,16 @@ async def analyze(
         result = await analyze_job(
             body, settings, ai_provider=ai_provider, ai_model=ai_model
         )
+
+        # Enrich PRODUCT BUG failures with Jira matches
+        if _resolve_enable_jira(body, settings):
+            await _enrich_result_with_jira(
+                result.failures + list(result.child_job_analyses),
+                settings,
+                ai_provider,
+                ai_model,
+            )
+
         jenkins_url = build_jenkins_url(
             settings.jenkins_url, body.job_name, body.build_number
         )
@@ -260,7 +334,10 @@ async def analyze(
 
 
 @app.post("/analyze-failures", response_model=FailureAnalysisResult)
-async def analyze_failures(body: AnalyzeFailuresRequest) -> FailureAnalysisResult:
+async def analyze_failures(
+    body: AnalyzeFailuresRequest,
+    settings: Settings = Depends(get_settings),
+) -> FailureAnalysisResult:
     """Analyze raw test failures directly without Jenkins.
 
     Accepts test failure data and returns AI analysis. Sync only.
@@ -326,6 +403,12 @@ async def analyze_failures(body: AnalyzeFailuresRequest) -> FailureAnalysisResul
         unique_errors = len(groups)
         summary = f"Analyzed {len(body.failures)} test failures ({unique_errors} unique errors). {len(all_analyses)} analyzed successfully."
 
+        # Enrich PRODUCT BUG failures with Jira matches
+        if _resolve_enable_jira(body, settings):
+            await enrich_with_jira_matches(
+                all_analyses, settings, ai_provider, ai_model
+            )
+
         analysis_result = FailureAnalysisResult(
             job_id=job_id,
             status="completed",
@@ -357,14 +440,31 @@ async def analyze_failures(body: AnalyzeFailuresRequest) -> FailureAnalysisResul
 
 @app.get("/results/{job_id}.html", response_class=HTMLResponse)
 async def get_job_report(job_id: str) -> HTMLResponse:
-    """Serve a saved HTML report."""
+    """Serve a saved HTML report or a status page if still processing."""
     html_content = await get_html_report(job_id)
-    if not html_content:
+    if html_content:
+        return HTMLResponse(html_content)
+
+    # Check if the job exists and show a status page
+    result = await get_result(job_id)
+    if not result:
         raise HTTPException(
             status_code=404,
-            detail=f"HTML report not found for job '{job_id}'. The report may not have been generated.",
+            detail=f"Job '{job_id}' not found.",
         )
-    return HTMLResponse(html_content)
+
+    status = result.get("status", "unknown")
+    if status in ("pending", "running"):
+        return HTMLResponse(
+            format_status_page(job_id, status, result),
+            headers={"Refresh": "10"},
+        )
+
+    # Job completed/failed but no HTML report was generated
+    raise HTTPException(
+        status_code=404,
+        detail=f"HTML report not found for job '{job_id}'. The report may not have been generated.",
+    )
 
 
 @app.get("/results/{job_id}", response_model=None)

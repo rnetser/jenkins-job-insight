@@ -14,6 +14,7 @@ from jenkins_job_insight.models import (
     ChildJobAnalysis,
     CodeFix,
     FailureAnalysis,
+    JiraMatch,
     ProductBugReport,
 )
 
@@ -273,6 +274,25 @@ body {{
 .severity-tag-inline.medium {{ background: rgba(210,153,34,0.15); color: var(--accent-yellow); }}
 .severity-tag-inline.low {{ background: rgba(63,185,80,0.15); color: var(--accent-green); }}
 .severity-tag-inline.unknown {{ background: var(--bg-tertiary); color: var(--text-muted); }}
+/* Jira matches */
+.jira-matches {{ margin-top: 12px; }}
+.jira-match-link {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    margin: 3px 4px 3px 0;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--accent-blue);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    text-decoration: none;
+    transition: background 0.15s;
+}}
+.jira-match-link:hover {{ background: var(--bg-hover); text-decoration: underline; }}
+.jira-match-status {{ color: var(--text-muted); font-size: 11px; }}
 .failure-body {{
     padding: 0 20px 20px;
     border-top: 1px solid var(--border);
@@ -734,6 +754,9 @@ def _render_failure_card(
 {indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>
 {indent}    </div>
 """)
+        # Jira matches
+        if bug.jira_matches:
+            _render_jira_matches(parts, bug.jira_matches, e, indent)
 
     # Affected tests
     if detail.affected_tests:
@@ -834,6 +857,9 @@ def _render_group_card(
 {indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>
 {indent}    </div>
 """)
+        # Jira matches
+        if bug.jira_matches:
+            _render_jira_matches(parts, bug.jira_matches, e, indent)
 
     # Affected Tests
     parts.append(f"""{indent}    <div class="bug-tests">
@@ -856,6 +882,33 @@ def _render_group_card(
     parts.append(f"""{indent}  </div>
 {indent}</details>
 """)
+
+
+def _render_jira_matches(
+    parts: list[str],
+    matches: list[JiraMatch],
+    e: Callable[[str], str],
+    indent: str = "",
+) -> None:
+    """Render Jira match links.
+
+    Args:
+        parts: List of HTML string parts to append to.
+        matches: List of JiraMatch objects to render.
+        e: HTML escape function reference.
+        indent: HTML indentation prefix.
+    """
+    parts.append(f"{indent}    <h4>Possible Jira Matches ({len(matches)})</h4>\n")
+    parts.append(f'{indent}    <div class="jira-matches">\n')
+    for match in matches:
+        parts.append(
+            f'{indent}      <a class="jira-match-link" href="{e(match.url)}" '
+            f'target="_blank" rel="noopener">'
+            f"{e(match.key)}: {e(match.summary)} "
+            f'<span class="jira-match-status">[{e(match.status)}]</span>'
+            f"</a>\n"
+        )
+    parts.append(f"{indent}    </div>\n")
 
 
 def _render_child_jobs(
@@ -963,3 +1016,160 @@ def _append_footer(
   <a href="{e(jenkins_url)}" target="_blank" rel="noopener">View in Jenkins</a>
 </div>
 """)
+
+
+def format_status_page(job_id: str, status: str, result: dict) -> str:
+    """Generate a status page for a job that is still processing.
+
+    Uses the same dark theme as the full report, with auto-refresh
+    and a simple status indicator.
+
+    Args:
+        job_id: The analysis job identifier.
+        status: Current job status (pending/running).
+        result: The job result dict from storage.
+
+    Returns:
+        A complete HTML document as a string.
+    """
+    e = html.escape
+
+    jenkins_url = result.get("jenkins_url", "")
+    created_at = result.get("created_at", "")
+
+    status_icon = "&#9203;" if status == "running" else "&#8987;"
+    status_label = "Analyzing..." if status == "running" else "Queued"
+    status_detail = (
+        "AI is analyzing the Jenkins build failures. This page will auto-refresh."
+        if status == "running"
+        else "Job is queued and waiting to start. This page will auto-refresh."
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Analysis {e(status_label)} - {e(job_id)}</title>
+<style>
+:root {{
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --accent-blue: #58a6ff;
+    --accent-yellow: #d29922;
+    --font-mono: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --radius: 8px;
+}}
+*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{
+    font-family: var(--font-sans);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}}
+.status-container {{
+    max-width: 520px;
+    width: 100%;
+    padding: 40px;
+    text-align: center;
+}}
+.status-icon {{
+    font-size: 48px;
+    margin-bottom: 20px;
+    animation: pulse 2s ease-in-out infinite;
+}}
+@keyframes pulse {{
+    0%, 100% {{ opacity: 1; }}
+    50% {{ opacity: 0.5; }}
+}}
+.status-label {{
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--accent-yellow);
+}}
+.status-detail {{
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 32px;
+}}
+.info-card {{
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    text-align: left;
+}}
+.info-row {{
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+}}
+.info-row:last-child {{ border-bottom: none; }}
+.info-label {{ color: var(--text-muted); font-weight: 600; }}
+.info-value {{ color: var(--text-primary); font-family: var(--font-mono); font-size: 12px; }}
+.info-value a {{ color: var(--accent-blue); text-decoration: none; }}
+.info-value a:hover {{ text-decoration: underline; }}
+.spinner {{
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent-yellow);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+}}
+@keyframes spin {{
+    to {{ transform: rotate(360deg); }}
+}}
+.refresh-note {{
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+}}
+</style>
+</head>
+<body>
+<div class="status-container">
+    <div class="status-icon">{status_icon}</div>
+    <div class="status-label"><span class="spinner"></span>{e(status_label)}</div>
+    <div class="status-detail">{e(status_detail)}</div>
+    <div class="info-card">
+        <div class="info-row">
+            <span class="info-label">Job ID</span>
+            <span class="info-value">{e(job_id)}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Status</span>
+            <span class="info-value">{e(status)}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Created</span>
+            <span class="info-value">{e(created_at)}</span>
+        </div>
+        {
+        ""
+        if not jenkins_url
+        else f'''<div class="info-row">
+            <span class="info-label">Jenkins</span>
+            <span class="info-value"><a href="{e(jenkins_url)}" target="_blank" rel="noopener">View Build</a></span>
+        </div>'''
+    }
+    </div>
+    <div class="refresh-note">Auto-refreshing every 10 seconds</div>
+</div>
+</body>
+</html>"""

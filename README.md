@@ -16,6 +16,7 @@ For each failure, the service provides detailed explanations and either fix sugg
 - **Async and sync analysis modes**: Submit jobs for background processing or wait for immediate results
 - **AI-powered classification**: Distinguishes between test code issues and product bugs
 - **Multiple AI providers**: Supports Claude CLI, Gemini CLI, and Cursor Agent CLI
+- **Optional Jira integration**: Searches Jira for matching bugs on PRODUCT BUG failures with AI-powered relevance filtering
 - **SQLite result storage**: Persists analysis results for later retrieval
 - **Callback webhooks**: Delivers results to your specified endpoint with custom headers
 - **HTML report output**: Generate self-contained, dark-themed HTML failure reports viewable in any browser
@@ -66,6 +67,14 @@ Configure the service using environment variables. The service is tied to a sing
 | `PROMPT_FILE` | No | `/app/PROMPT.md` | Path to custom analysis prompt file |
 | `HTML_REPORT` | No | `true` | Generate HTML reports (set to `false` to disable) |
 | `DEBUG` | No | `false` | Enable debug mode with hot reload for development |
+| **Jira (Optional)** | | | |
+| `JIRA_URL` | No | - | Jira instance URL (enables Jira integration) |
+| `JIRA_EMAIL` | No | - | Email for Jira Cloud authentication |
+| `JIRA_API_TOKEN` | No | - | API token for Jira Cloud |
+| `JIRA_PAT` | No | - | Personal Access Token for Jira Server/DC |
+| `JIRA_PROJECT_KEY` | No | - | Scope Jira searches to a specific project |
+| `JIRA_SSL_VERIFY` | No | `true` | SSL certificate verification for Jira |
+| `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
 
 ### Jenkins Configuration
 
@@ -212,6 +221,58 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `HTML_REPORT`        | `html_report`      | No       | Generate HTML report (default: true)                                       |
 
 **Priority**: Request values take precedence over environment variable defaults. Required fields must be configured in at least one place (environment variable or request body).
+
+### Jira Integration (Optional)
+
+When the AI classifies a failure as **PRODUCT BUG**, the service can optionally search Jira for existing matching bugs. This helps teams avoid filing duplicate bug reports.
+
+#### How It Works
+
+1. The AI analysis includes `jira_search_keywords` in the product bug report
+2. After analysis completes, the service searches Jira for Bug-type issues using those keywords
+3. AI evaluates each Jira candidate by reading its summary and description to determine actual relevance
+4. Only relevant matches are attached to the response as `jira_matches`
+5. HTML reports render matches as clickable links
+6. JUnit XML reports include matches as properties
+
+Jira integration works with all analysis endpoints: `/analyze`, `/analyze?sync=true`, and `/analyze-failures`.
+
+#### Jira Configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `JIRA_URL` | Yes* | - | Jira instance URL (Cloud or Server/DC) |
+| `JIRA_EMAIL` | Cloud | - | Email for Jira Cloud authentication |
+| `JIRA_API_TOKEN` | Cloud | - | API token for Jira Cloud |
+| `JIRA_PAT` | Server | - | Personal Access Token for Jira Server/DC |
+| `JIRA_PROJECT_KEY` | No | - | Scope searches to a specific project |
+| `JIRA_SSL_VERIFY` | No | `true` | SSL certificate verification |
+| `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
+
+*Required only if you want to enable Jira integration. The feature is completely optional.
+
+**Jira Cloud:**
+
+```bash
+JIRA_URL=https://your-org.atlassian.net
+JIRA_EMAIL=your-email@example.com
+JIRA_API_TOKEN=your-jira-api-token
+```
+
+**Jira Server/DC:**
+
+```bash
+JIRA_URL=https://jira.your-company.com
+JIRA_PAT=your-personal-access-token
+```
+
+#### Error Handling
+
+Jira failures never crash the analysis pipeline:
+- **Not configured** — feature is silently disabled
+- **Auth failure** — warning logged, empty matches returned
+- **Network error** — error logged, empty matches returned
+- **No keywords from AI** — Jira search skipped for that failure
 
 ### SSL Verification
 
@@ -515,7 +576,7 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
 
 ### HTML Report
 
-Retrieve a completed analysis as a self-contained HTML report with a dark theme and collapsible failure details:
+Retrieve an analysis as a self-contained HTML report with a dark theme and collapsible failure details. While the analysis is still running, the HTML endpoint serves a status page that auto-refreshes every 10 seconds:
 
 ```bash
 curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000.html -o report.html

@@ -6,24 +6,12 @@ from typing import Literal
 from pydantic import BaseModel, Field, HttpUrl, model_serializer, model_validator
 
 
-class AnalyzeRequest(BaseModel):
-    """Request payload for analysis endpoint."""
+class BaseAnalysisRequest(BaseModel):
+    """Shared fields for all analysis request types."""
 
-    job_name: str = Field(
-        description="Jenkins job name (can include folders like 'folder/job-name')"
-    )
-    build_number: int = Field(description="Build number to analyze")
     tests_repo_url: HttpUrl | None = Field(
         default=None,
         description="URL of the tests repository (overrides env var default)",
-    )
-    callback_url: HttpUrl | None = Field(
-        default=None,
-        description="Optional callback URL for async results (overrides env var default)",
-    )
-    callback_headers: dict[str, str] | None = Field(
-        default=None,
-        description="Optional headers to include in callback request (overrides env var default)",
     )
     ai_provider: Literal["claude", "gemini", "cursor"] | None = Field(
         default=None,
@@ -32,6 +20,27 @@ class AnalyzeRequest(BaseModel):
     ai_model: str | None = Field(
         default=None,
         description="AI model to use (overrides env var default)",
+    )
+    enable_jira: bool | None = Field(
+        default=None,
+        description="Enable Jira bug search (default: true when Jira is configured, set false to skip)",
+    )
+
+
+class AnalyzeRequest(BaseAnalysisRequest):
+    """Request payload for analysis endpoint."""
+
+    job_name: str = Field(
+        description="Jenkins job name (can include folders like 'folder/job-name')"
+    )
+    build_number: int = Field(description="Build number to analyze")
+    callback_url: HttpUrl | None = Field(
+        default=None,
+        description="Optional callback URL for async results (overrides env var default)",
+    )
+    callback_headers: dict[str, str] | None = Field(
+        default=None,
+        description="Optional headers to include in callback request (overrides env var default)",
     )
     html_report: bool | None = Field(
         default=None,
@@ -53,6 +62,19 @@ class TestFailure(BaseModel):
     )
 
 
+class JiraMatch(BaseModel):
+    """A Jira issue that potentially matches a product bug."""
+
+    key: str = Field(description="Jira issue key (e.g., PROJ-123)")
+    summary: str = Field(description="Issue summary/title")
+    status: str = Field(
+        default="", description="Issue status (e.g., Open, In Progress)"
+    )
+    priority: str = Field(default="", description="Issue priority (e.g., High, Medium)")
+    url: str = Field(default="", description="Full URL to the Jira issue")
+    score: float = Field(default=0.0, description="Relevance score (0.0-1.0)")
+
+
 class ProductBugReport(BaseModel):
     """Structured product bug report from AI analysis."""
 
@@ -63,6 +85,13 @@ class ProductBugReport(BaseModel):
     component: str = Field(default="", description="Affected component")
     description: str = Field(default="", description="What product behavior is broken")
     evidence: str = Field(default="", description="Relevant log snippets")
+    jira_search_keywords: list[str] = Field(
+        default_factory=list, description="AI-suggested keywords for Jira search"
+    )
+    jira_matches: list[JiraMatch] = Field(
+        default_factory=list,
+        description="Matched Jira issues (populated in post-processing)",
+    )
 
 
 class CodeFix(BaseModel):
@@ -166,22 +195,10 @@ class JobStatus(BaseModel):
     created_at: datetime = Field(description="Timestamp when the job was created")
 
 
-class AnalyzeFailuresRequest(BaseModel):
+class AnalyzeFailuresRequest(BaseAnalysisRequest):
     """Request payload for direct failure analysis (no Jenkins)."""
 
     failures: list[TestFailure] = Field(description="Raw test failures to analyze")
-    tests_repo_url: HttpUrl | None = Field(
-        default=None,
-        description="Optional repo URL for AI code context",
-    )
-    ai_provider: Literal["claude", "gemini", "cursor"] | None = Field(
-        default=None,
-        description="AI provider to use (overrides env var default)",
-    )
-    ai_model: str | None = Field(
-        default=None,
-        description="AI model to use (overrides env var default)",
-    )
 
 
 class FailureAnalysisResult(BaseModel):

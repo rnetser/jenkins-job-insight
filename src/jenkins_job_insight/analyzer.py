@@ -25,7 +25,9 @@ from jenkins_job_insight.models import (
     AnalysisResult,
     AnalyzeRequest,
     ChildJobAnalysis,
+    CodeFix,
     FailureAnalysis,
+    ProductBugReport,
     TestFailure,
 )
 from jenkins_job_insight.repository import RepositoryManager
@@ -58,7 +60,7 @@ ERROR_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_JSON_RESPONSE_SCHEMA = """Respond with a JSON object using this EXACT schema (no markdown, no extra text, just the JSON):
+_JSON_RESPONSE_SCHEMA = """CRITICAL: Your response must be ONLY a valid JSON object. No text before or after. No markdown code blocks. No explanation.
 
 If CODE ISSUE:
 {
@@ -82,9 +84,18 @@ If PRODUCT BUG:
     "severity": "critical/high/medium/low",
     "component": "affected component",
     "description": "what product behavior is broken",
-    "evidence": "relevant log snippets"
+    "evidence": "relevant log snippets",
+    "jira_search_keywords": ["specific error symptom", "component + behavior", "error type"]
   }
-}"""
+}
+
+jira_search_keywords rules:
+- Generate 3-5 SHORT specific keywords for finding matching bugs in Jira
+- Focus on the specific error symptom and broken behavior, NOT test infrastructure
+- Combine component name with the specific failure (e.g. "VM start failure migration", "API timeout authentication")
+- AVOID generic/broad terms alone like "vSphere", "OpenShift", "timeout", "failure", "error"
+- Each keyword should be specific enough to narrow Jira search results to relevant bugs
+- Think: "what would someone title a Jira bug for this exact issue?\""""
 
 
 @dataclass(frozen=True)
@@ -169,8 +180,14 @@ def _parse_json_response(raw_text: str) -> AnalysisDetail:
     """Parse AI CLI JSON response into an AnalysisDetail.
 
     Attempts to extract a JSON object from the AI response text.
-    The AI may wrap the JSON in markdown code blocks or add
-    surrounding text.
+    The AI may wrap the JSON in markdown code blocks, add
+    surrounding text, or embed code blocks inside JSON string values.
+
+    Uses a multi-strategy approach:
+    1. Try parsing the raw text directly as JSON
+    2. Try extracting JSON from brace-matching ({...})
+    3. Try extracting from markdown code blocks
+    4. Fallback: store raw text in details, then attempt recovery
 
     Args:
         raw_text: The raw text output from the AI CLI.
@@ -179,32 +196,231 @@ def _parse_json_response(raw_text: str) -> AnalysisDetail:
         An AnalysisDetail instance parsed from the JSON, or a
         fallback instance with the raw text stored in details.
     """
-    # Try to find JSON in the response
     text = raw_text.strip()
 
-    # Strip markdown code block wrapper if present
-    if "```json" in text:
-        start = text.index("```json") + len("```json")
-        end = text.index("```", start)
-        text = text[start:end].strip()
-    elif "```" in text:
-        start = text.index("```") + len("```")
-        end = text.index("```", start)
-        text = text[start:end].strip()
-
-    # Try to find a JSON object in the text
-    json_start = text.find("{")
-    json_end = text.rfind("}")
-    if json_start != -1 and json_end != -1 and json_end > json_start:
-        json_str = text[json_start : json_end + 1]
+    # Strategy 1: Try parsing the entire text as JSON directly
+    if text.startswith("{"):
         try:
-            data = json.loads(json_str)
+            data = json.loads(text)
             return AnalysisDetail(**data)
         except Exception:
             pass
 
-    # Fallback: store raw text in details
-    return AnalysisDetail(details=raw_text)
+    # Strategy 2: Find the outermost JSON object using brace matching
+    result = _extract_json_by_braces(text)
+    if result is not None:
+        return result
+
+    # Strategy 3: Try markdown code block extraction
+    # Find ALL ```json or ``` blocks and try each one
+    result = _extract_json_from_code_blocks(text)
+    if result is not None:
+        return result
+
+    # Fallback: store raw text in details, then attempt recovery
+    fallback = AnalysisDetail(details=raw_text)
+    return _recover_from_details(fallback)
+
+
+def _recover_from_details(result: AnalysisDetail) -> AnalysisDetail:
+    """Attempt to recover structured fields from a fallback result.
+
+    When the main parsing strategies fail and raw text is stored in
+    the details field, this function checks if that text contains
+    JSON field patterns and extracts them via regex.
+
+    This handles cases where the AI returned JSON with formatting
+    issues (unescaped newlines, embedded code blocks) that broke
+    standard JSON parsing.
+
+    Args:
+        result: An AnalysisDetail with raw text in the details field.
+
+    Returns:
+        Either a recovered AnalysisDetail with populated fields,
+        or the original fallback result unchanged.
+    """
+    if result.classification:
+        return result
+
+    details = result.details
+    if not details or '"classification"' not in details:
+        return result
+
+    # Extract classification
+    class_match = re.search(r'"classification"\s*:\s*"([^"]+)"', details)
+    if not class_match:
+        return result
+
+    classification = class_match.group(1)
+
+    # Extract affected_tests
+    affected_tests: list[str] = []
+    tests_match = re.search(r'"affected_tests"\s*:\s*\[([^\]]*)\]', details)
+    if tests_match:
+        affected_tests = re.findall(r'"([^"]+)"', tests_match.group(1))
+
+    # Extract details text from within the JSON
+    details_match = re.search(
+        r'"details"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
+    )
+    analysis_text = (
+        details_match.group(1).replace("\\n", "\n") if details_match else details
+    )
+
+    # Extract code_fix if present
+    code_fix: CodeFix | bool | None = False
+    file_match = re.search(r'"file"\s*:\s*"([^"]*)"', details)
+    change_match = re.search(r'"change"\s*:\s*"((?:[^"\\]|\\.)*)"', details)
+    if file_match and change_match:
+        line_match = re.search(r'"line"\s*:\s*"([^"]*)"', details)
+        code_fix = CodeFix(
+            file=file_match.group(1),
+            line=line_match.group(1) if line_match else "",
+            change=change_match.group(1).replace("\\n", "\n"),
+        )
+
+    # Extract product_bug_report if present
+    product_bug_report: ProductBugReport | bool | None = False
+    title_match = re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', details)
+    if title_match and "PRODUCT BUG" in classification.upper():
+        severity_match = re.search(r'"severity"\s*:\s*"([^"]*)"', details)
+        component_match = re.search(r'"component"\s*:\s*"([^"]*)"', details)
+        desc_match = re.search(
+            r'"description"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
+        )
+        evidence_match = re.search(
+            r'"evidence"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
+        )
+        keywords_match = re.search(
+            r'"jira_search_keywords"\s*:\s*\[([^\]]*)\]', details
+        )
+        jira_keywords = (
+            re.findall(r'"([^"]+)"', keywords_match.group(1)) if keywords_match else []
+        )
+
+        product_bug_report = ProductBugReport(
+            title=title_match.group(1),
+            severity=severity_match.group(1) if severity_match else "",
+            component=component_match.group(1) if component_match else "",
+            description=(
+                desc_match.group(1).replace("\\n", "\n") if desc_match else ""
+            ),
+            evidence=(
+                evidence_match.group(1).replace("\\n", "\n") if evidence_match else ""
+            ),
+            jira_search_keywords=jira_keywords,
+        )
+
+    logger.warning(
+        "Recovered classification '%s' from unparseable AI response via regex extraction",
+        classification,
+    )
+    return AnalysisDetail(
+        classification=classification,
+        affected_tests=affected_tests,
+        details=analysis_text,
+        code_fix=code_fix,
+        product_bug_report=product_bug_report,
+    )
+
+
+def _extract_json_by_braces(text: str) -> AnalysisDetail | None:
+    """Extract JSON by finding matching outermost braces.
+
+    Handles cases where JSON values contain embedded code blocks
+    or other special characters by tracking brace nesting depth
+    and string boundaries.
+
+    Args:
+        text: Text potentially containing a JSON object.
+
+    Returns:
+        Parsed AnalysisDetail or None if extraction fails.
+    """
+    first_brace = text.find("{")
+    if first_brace == -1:
+        return None
+
+    # Track brace depth to find the matching closing brace
+    depth = 0
+    in_string = False
+    escape_next = False
+    end_pos = -1
+
+    for i in range(first_brace, len(text)):
+        char = text[i]
+
+        if escape_next:
+            escape_next = False
+            continue
+
+        if char == "\\":
+            if in_string:
+                escape_next = True
+            continue
+
+        if char == '"':
+            in_string = not in_string
+            continue
+
+        if in_string:
+            continue
+
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                end_pos = i
+                break
+
+    if end_pos == -1:
+        return None
+
+    json_str = text[first_brace : end_pos + 1]
+    try:
+        data = json.loads(json_str)
+        return AnalysisDetail(**data)
+    except Exception:
+        return None
+
+
+def _extract_json_from_code_blocks(text: str) -> AnalysisDetail | None:
+    """Extract JSON from markdown code blocks in the text.
+
+    Finds code blocks (```json or ```) and attempts to parse
+    each one as JSON. Uses brace matching within each block
+    to handle embedded code blocks in JSON string values.
+
+    Args:
+        text: Text containing markdown code blocks.
+
+    Returns:
+        Parsed AnalysisDetail or None if no valid JSON found.
+    """
+    # Find all code block positions using a pattern that matches
+    # opening ``` markers (with optional language tag)
+    blocks = re.findall(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+
+    for block_content in blocks:
+        block_content = block_content.strip()
+        if not block_content or "{" not in block_content:
+            continue
+
+        # Try parsing the block content directly
+        try:
+            data = json.loads(block_content)
+            return AnalysisDetail(**data)
+        except Exception:
+            pass
+
+        # Try brace matching within the block
+        result = _extract_json_by_braces(block_content)
+        if result is not None:
+            return result
+
+    return None
 
 
 async def check_ai_cli_available(ai_provider: str, ai_model: str) -> tuple[bool, str]:
