@@ -479,7 +479,11 @@ async def check_ai_cli_available(ai_provider: str, ai_model: str) -> tuple[bool,
 
 
 async def call_ai_cli(
-    prompt: str, cwd: Path | None = None, ai_provider: str = "", ai_model: str = ""
+    prompt: str,
+    cwd: Path | None = None,
+    ai_provider: str = "",
+    ai_model: str = "",
+    ai_cli_timeout: int | None = None,
 ) -> tuple[bool, str]:
     """Call AI CLI (Claude, Gemini, or Cursor) with given prompt.
 
@@ -488,6 +492,7 @@ async def call_ai_cli(
         cwd: Working directory for AI to explore (typically repo path).
         ai_provider: AI provider to use.
         ai_model: AI model to use.
+        ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
 
     Returns:
         Tuple of (success, output). success is True with AI output, False with error message.
@@ -510,6 +515,9 @@ async def call_ai_cli(
 
     subprocess_cwd = None if config.uses_own_cwd else cwd
 
+    effective_timeout = ai_cli_timeout or AI_CLI_TIMEOUT
+    timeout = effective_timeout * 60  # Convert minutes to seconds
+
     logger.info("Calling %s CLI", provider_info)
 
     try:
@@ -519,13 +527,13 @@ async def call_ai_cli(
             cwd=subprocess_cwd,
             capture_output=True,
             text=True,
-            timeout=AI_CLI_TIMEOUT * 60,  # Convert minutes to seconds
+            timeout=timeout,
             input=prompt,
         )
     except subprocess.TimeoutExpired:
         return (
             False,
-            f"{provider_info} CLI error: Analysis timed out after {AI_CLI_TIMEOUT} minutes",
+            f"{provider_info} CLI error: Analysis timed out after {effective_timeout} minutes",
         )
 
     if result.returncode != 0:
@@ -776,6 +784,7 @@ async def analyze_failure_group(
     repo_path: Path | None,
     ai_provider: str = "",
     ai_model: str = "",
+    ai_cli_timeout: int | None = None,
 ) -> list[FailureAnalysis]:
     """Analyze a group of failures with the same error signature.
 
@@ -786,6 +795,9 @@ async def analyze_failure_group(
         failures: List of test failures with the same error signature.
         console_context: Relevant console lines for context.
         repo_path: Path to cloned test repo (optional).
+        ai_provider: AI provider to use.
+        ai_model: AI model to use.
+        ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
 
     Returns:
         List of FailureAnalysis objects, one per failure in the group.
@@ -817,7 +829,11 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
         f"Calling {ai_provider.upper()} CLI for failure group ({len(failures)} tests with same error)"
     )
     success, analysis_output = await call_ai_cli(
-        prompt, cwd=repo_path, ai_provider=ai_provider, ai_model=ai_model
+        prompt,
+        cwd=repo_path,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        ai_cli_timeout=ai_cli_timeout,
     )
 
     # Parse the AI response into structured data
@@ -847,6 +863,7 @@ async def analyze_child_job(
     repo_path: Path | None = None,
     ai_provider: str = "",
     ai_model: str = "",
+    ai_cli_timeout: int | None = None,
 ) -> ChildJobAnalysis:
     """Analyze a single child job, recursively analyzing its failed children.
 
@@ -860,6 +877,9 @@ async def analyze_child_job(
         depth: Current recursion depth (0 = direct child of main job).
         max_depth: Maximum recursion depth to prevent infinite loops.
         repo_path: Path to cloned test repository for source code lookup.
+        ai_provider: AI provider to use.
+        ai_model: AI model to use.
+        ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
 
     Returns:
         ChildJobAnalysis with analysis results or nested child analyses.
@@ -923,6 +943,7 @@ async def analyze_child_job(
                 repo_path,
                 ai_provider,
                 ai_model,
+                ai_cli_timeout,
             )
             for child_name, child_num in failed_children
         ]
@@ -994,6 +1015,7 @@ async def analyze_child_job(
                 repo_path=repo_path,
                 ai_provider=ai_provider,
                 ai_model=ai_model,
+                ai_cli_timeout=ai_cli_timeout,
             )
             for group in failure_groups.values()
         ]
@@ -1052,7 +1074,11 @@ You have access to the repository if one was cloned. Explore to understand the f
 {_JSON_RESPONSE_SCHEMA}
 """
     success, analysis_output = await call_ai_cli(
-        prompt, cwd=repo_path, ai_provider=ai_provider, ai_model=ai_model
+        prompt,
+        cwd=repo_path,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        ai_cli_timeout=ai_cli_timeout,
     )
 
     if success:
@@ -1197,6 +1223,7 @@ async def analyze_job(
                     repo_path=repo_path,
                     ai_provider=ai_provider,
                     ai_model=ai_model,
+                    ai_cli_timeout=settings.ai_cli_timeout,
                 )
                 for child_name, child_num in failed_child_jobs
             ]
@@ -1273,6 +1300,7 @@ async def analyze_job(
                     repo_path=repo_path,
                     ai_provider=ai_provider,
                     ai_model=ai_model,
+                    ai_cli_timeout=settings.ai_cli_timeout,
                 )
                 for group in failure_groups.values()
             ]
@@ -1311,7 +1339,11 @@ You have access to the repository if one was cloned. Explore to understand the f
 {_JSON_RESPONSE_SCHEMA}
 """
             success, analysis_output = await call_ai_cli(
-                prompt, cwd=repo_path, ai_provider=ai_provider, ai_model=ai_model
+                prompt,
+                cwd=repo_path,
+                ai_provider=ai_provider,
+                ai_model=ai_model,
+                ai_cli_timeout=settings.ai_cli_timeout,
             )
 
             if not success:

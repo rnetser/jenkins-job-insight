@@ -78,3 +78,20 @@ Uses `python-simple-logger`:
 - INFO: Milestones (job started, AI calls, completed)
 - DEBUG: Detailed operations (response lengths, extracted data)
 - Configured via `LOG_LEVEL` environment variable
+
+## API Design
+
+### Environment Variable / Payload Parity
+
+Every environment variable that configures the service must also be available as a per-request field in the API payload. This allows callers to override any configuration on a per-request basis without changing the server environment.
+
+When adding a new environment variable:
+1. Add the field to `Settings` in `config.py`
+2. Add the corresponding request field to `BaseAnalysisRequest` (or `AnalyzeRequest` if endpoint-specific) in `models.py`
+3. Add the field to `_merge_settings()` in `main.py` so request values override env defaults
+4. Update the Request Override Priority table in `README.md`
+
+Exceptions (server-level only, no payload equivalent):
+- `DEBUG` — server reload toggle
+- `LOG_LEVEL` — server log verbosity
+- `PROMPT_FILE` — server-local file path

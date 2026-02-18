@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import SecretStr
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.analyzer import (
@@ -145,11 +146,16 @@ def _resolve_html_report(body: AnalyzeRequest) -> bool:
 
 
 def _resolve_enable_jira(body: BaseAnalysisRequest, settings: Settings) -> bool:
-    """Resolve enable_jira flag from request or config default.
+    """Resolve enable_jira flag from request, env var, or auto-detection.
+
+    Priority order:
+    1. Request body field (highest)
+    2. ENABLE_JIRA env var (via settings)
+    3. Auto-detect from Jira credentials (lowest)
 
     Args:
         body: The analysis request (AnalyzeRequest or AnalyzeFailuresRequest).
-        settings: Application settings with Jira configuration.
+        settings: Application settings (should be merged settings).
 
     Returns:
         True if Jira enrichment should run, False otherwise.
@@ -157,6 +163,69 @@ def _resolve_enable_jira(body: BaseAnalysisRequest, settings: Settings) -> bool:
     if body.enable_jira is not None:
         return body.enable_jira
     return settings.jira_enabled
+
+
+def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
+    """Create a copy of settings with per-request overrides applied.
+
+    Request values take precedence over environment variable defaults.
+    Only non-None request values are applied as overrides.
+
+    Args:
+        body: The analysis request with optional override fields.
+        settings: Base application settings from environment.
+
+    Returns:
+        Settings instance with overrides applied (or original if no overrides).
+    """
+    overrides: dict = {}
+
+    # Direct field mappings (request field name == settings field name).
+    # Keep in sync with BaseAnalysisRequest and Settings when adding new overrides.
+    # Fields intentionally NOT listed here are handled by their own resolvers:
+    #   tests_repo_url   - HttpUrl vs str type mismatch; resolved in endpoint code
+    #   ai_provider      - resolved + validated by _resolve_ai_config()
+    #   ai_model         - resolved + validated by _resolve_ai_config()
+    #   callback_url     - resolved in deliver_results()
+    #   callback_headers - resolved in deliver_results()
+    #   html_report      - resolved by _resolve_html_report()
+    direct_fields = [
+        "jira_url",
+        "jira_email",
+        "jira_project_key",
+        "jira_ssl_verify",
+        "jira_max_results",
+        "ai_cli_timeout",
+        "enable_jira",
+    ]
+    for field in direct_fields:
+        value = getattr(body, field, None)
+        if value is not None:
+            overrides[field] = value
+
+    # SecretStr fields need wrapping
+    if body.jira_api_token is not None:
+        overrides["jira_api_token"] = SecretStr(body.jira_api_token)
+    if body.jira_pat is not None:
+        overrides["jira_pat"] = SecretStr(body.jira_pat)
+
+    # AnalyzeRequest-specific fields (Jenkins overrides)
+    if isinstance(body, AnalyzeRequest):
+        jenkins_fields = [
+            "jenkins_url",
+            "jenkins_user",
+            "jenkins_password",
+            "jenkins_ssl_verify",
+        ]
+        for field in jenkins_fields:
+            value = getattr(body, field, None)
+            if value is not None:
+                overrides[field] = value
+
+    if overrides:
+        merged_data = settings.model_dump(mode="python") | overrides
+        return Settings.model_validate(merged_data)
+    return settings
 
 
 async def _generate_html_report(result: AnalysisResult) -> None:
@@ -272,23 +341,24 @@ async def analyze(
             f"Sync analysis request received for {body.job_name} #{body.build_number}"
         )
 
+        merged = _merge_settings(body, settings)
         ai_provider, ai_model = _resolve_ai_config(body)
 
         result = await analyze_job(
-            body, settings, ai_provider=ai_provider, ai_model=ai_model
+            body, merged, ai_provider=ai_provider, ai_model=ai_model
         )
 
         # Enrich PRODUCT BUG failures with Jira matches
-        if _resolve_enable_jira(body, settings):
+        if _resolve_enable_jira(body, merged):
             await _enrich_result_with_jira(
                 result.failures + list(result.child_job_analyses),
-                settings,
+                merged,
                 ai_provider,
                 ai_model,
             )
 
         jenkins_url = build_jenkins_url(
-            settings.jenkins_url, body.job_name, body.build_number
+            merged.jenkins_url, body.job_name, body.build_number
         )
         await save_result(
             result.job_id, jenkins_url, "completed", result.model_dump(mode="json")
@@ -298,7 +368,7 @@ async def analyze(
             f"(job_id: {result.job_id})"
         )
 
-        await deliver_results(result, body, settings)
+        await deliver_results(result, body, merged)
 
         content = result.model_dump(mode="json")
 
@@ -311,13 +381,14 @@ async def analyze(
     # Async mode - queue background task
     # Generate job_id here so we can return it to the client for polling
     job_id = str(uuid.uuid4())
+    merged = _merge_settings(body, settings)
     jenkins_url = build_jenkins_url(
-        settings.jenkins_url, body.job_name, body.build_number
+        merged.jenkins_url, body.job_name, body.build_number
     )
     # Save initial pending state before queueing background task
     await save_result(job_id, jenkins_url, "pending", None)
-    background_tasks.add_task(process_analysis_with_id, job_id, body, settings)
-    callback_url = body.callback_url or settings.callback_url
+    background_tasks.add_task(process_analysis_with_id, job_id, body, merged)
+    callback_url = body.callback_url or merged.callback_url
     message = "Analysis job queued."
     if callback_url:
         message += " Results will be delivered to callback."
@@ -346,6 +417,7 @@ async def analyze_failures(
     if not body.failures:
         raise HTTPException(status_code=400, detail="No failures provided")
 
+    merged = _merge_settings(body, settings)
     ai_provider, ai_model = _resolve_ai_config_values(body.ai_provider, body.ai_model)
 
     job_id = str(uuid.uuid4())
@@ -369,7 +441,7 @@ async def analyze_failures(
     # Optionally clone repo for AI code context
     repo_manager = RepositoryManager()
     repo_path = None
-    tests_repo_url = body.tests_repo_url or os.getenv("TESTS_REPO_URL")
+    tests_repo_url = body.tests_repo_url or merged.tests_repo_url
     try:
         await update_status(job_id, "running")
 
@@ -384,6 +456,7 @@ async def analyze_failures(
                 repo_path=repo_path,
                 ai_provider=ai_provider,
                 ai_model=ai_model,
+                ai_cli_timeout=merged.ai_cli_timeout,
             )
             for group_failures in groups.values()
         ]
@@ -404,10 +477,8 @@ async def analyze_failures(
         summary = f"Analyzed {len(body.failures)} test failures ({unique_errors} unique errors). {len(all_analyses)} analyzed successfully."
 
         # Enrich PRODUCT BUG failures with Jira matches
-        if _resolve_enable_jira(body, settings):
-            await enrich_with_jira_matches(
-                all_analyses, settings, ai_provider, ai_model
-            )
+        if _resolve_enable_jira(body, merged):
+            await enrich_with_jira_matches(all_analyses, merged, ai_provider, ai_model)
 
         analysis_result = FailureAnalysisResult(
             job_id=job_id,

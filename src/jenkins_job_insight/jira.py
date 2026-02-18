@@ -198,6 +198,7 @@ async def _filter_matches_with_ai(
     candidates: list[dict],
     ai_provider: str,
     ai_model: str,
+    ai_cli_timeout: int | None = None,
 ) -> list[JiraMatch]:
     """Use AI to determine which Jira candidates are relevant to the bug.
 
@@ -211,6 +212,7 @@ async def _filter_matches_with_ai(
         candidates: List of candidate dicts from Jira search.
         ai_provider: AI provider name.
         ai_model: AI model identifier.
+        ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
 
     Returns:
         List of JiraMatch objects for relevant candidates only.
@@ -252,7 +254,10 @@ Example: [{{"key": "PROJ-123", "relevant": true, "score": 0.9}}, {{"key": "PROJ-
 Respond with ONLY the JSON array, no other text."""
 
     success, output = await call_ai_cli(
-        prompt, ai_provider=ai_provider, ai_model=ai_model
+        prompt,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        ai_cli_timeout=ai_cli_timeout,
     )
 
     if not success:
@@ -408,6 +413,7 @@ async def enrich_with_jira_matches(
                         candidates=candidates,
                         ai_provider=ai_provider,
                         ai_model=ai_model,
+                        ai_cli_timeout=settings.ai_cli_timeout,
                     )
                 else:
                     # No AI config — fall back to returning all candidates as matches
