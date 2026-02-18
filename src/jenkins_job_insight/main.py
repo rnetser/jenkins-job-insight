@@ -215,7 +215,8 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
                 overrides[field] = value
 
     if overrides:
-        return settings.model_copy(update=overrides)
+        merged_data = settings.model_dump(mode="python") | overrides
+        return Settings.model_validate(merged_data)
     return settings
 
 

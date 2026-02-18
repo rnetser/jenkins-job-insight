@@ -41,10 +41,12 @@ class BaseAnalysisRequest(BaseModel):
     jira_api_token: str | None = Field(
         default=None,
         description="Jira Cloud API token (overrides JIRA_API_TOKEN env var)",
+        json_schema_extra={"format": "password"},
     )
     jira_pat: str | None = Field(
         default=None,
         description="Jira Server/DC personal access token (overrides JIRA_PAT env var)",
+        json_schema_extra={"format": "password"},
     )
     jira_project_key: str | None = Field(
         default=None,
@@ -90,6 +92,7 @@ class AnalyzeRequest(BaseAnalysisRequest):
     jenkins_password: str | None = Field(
         default=None,
         description="Jenkins password or API token (overrides JENKINS_PASSWORD env var)",
+        json_schema_extra={"format": "password"},
     )
     jenkins_ssl_verify: bool | None = Field(
         default=None,
