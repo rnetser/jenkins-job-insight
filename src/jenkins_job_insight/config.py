@@ -1,9 +1,13 @@
 """Configuration settings from environment variables."""
 
+import os
 from functools import lru_cache
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from simple_logger.logger import get_logger
+
+logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 
 class Settings(BaseSettings):
@@ -44,15 +48,31 @@ class Settings(BaseSettings):
     jira_ssl_verify: bool = True
     jira_max_results: int = 5
 
+    # Explicit Jira toggle (optional)
+    enable_jira: bool | None = None
+
+    # AI CLI timeout in minutes
+    ai_cli_timeout: int = Field(default=10, gt=0)
+
     @property
     def jira_enabled(self) -> bool:
-        """Check if Jira integration is configured with valid credentials."""
+        """Check if Jira integration is enabled and configured with valid credentials."""
+        if self.enable_jira is False:
+            return False
         if not self.jira_url:
+            if self.enable_jira is True:
+                logger.warning("enable_jira is True but JIRA_URL is not configured")
             return False
         # Cloud auth: email + API token
         has_cloud_auth = bool(self.jira_email and self.jira_api_token)
         # Server/DC auth: PAT
         has_server_auth = bool(self.jira_pat)
+        if not (has_cloud_auth or has_server_auth):
+            if self.enable_jira is True:
+                logger.warning(
+                    "enable_jira is True but no Jira credentials are configured"
+                )
+            return False
         return has_cloud_auth or has_server_auth
 
 

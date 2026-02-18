@@ -25,6 +25,39 @@ class BaseAnalysisRequest(BaseModel):
         default=None,
         description="Enable Jira bug search (default: true when Jira is configured, set false to skip)",
     )
+    ai_cli_timeout: int | None = Field(
+        default=None,
+        gt=0,
+        description="AI CLI timeout in minutes (overrides AI_CLI_TIMEOUT env var)",
+    )
+    jira_url: str | None = Field(
+        default=None,
+        description="Jira instance URL (overrides JIRA_URL env var)",
+    )
+    jira_email: str | None = Field(
+        default=None,
+        description="Jira Cloud email (overrides JIRA_EMAIL env var)",
+    )
+    jira_api_token: str | None = Field(
+        default=None,
+        description="Jira Cloud API token (overrides JIRA_API_TOKEN env var)",
+    )
+    jira_pat: str | None = Field(
+        default=None,
+        description="Jira Server/DC personal access token (overrides JIRA_PAT env var)",
+    )
+    jira_project_key: str | None = Field(
+        default=None,
+        description="Jira project key to scope searches (overrides JIRA_PROJECT_KEY env var)",
+    )
+    jira_ssl_verify: bool | None = Field(
+        default=None,
+        description="Jira SSL verification (overrides JIRA_SSL_VERIFY env var)",
+    )
+    jira_max_results: int | None = Field(
+        default=None,
+        description="Max Jira search results (overrides JIRA_MAX_RESULTS env var)",
+    )
 
 
 class AnalyzeRequest(BaseAnalysisRequest):
@@ -45,6 +78,22 @@ class AnalyzeRequest(BaseAnalysisRequest):
     html_report: bool | None = Field(
         default=None,
         description="Generate HTML report (default: true, overrides HTML_REPORT env var)",
+    )
+    jenkins_url: str | None = Field(
+        default=None,
+        description="Jenkins server URL (overrides JENKINS_URL env var)",
+    )
+    jenkins_user: str | None = Field(
+        default=None,
+        description="Jenkins username (overrides JENKINS_USER env var)",
+    )
+    jenkins_password: str | None = Field(
+        default=None,
+        description="Jenkins password or API token (overrides JENKINS_PASSWORD env var)",
+    )
+    jenkins_ssl_verify: bool | None = Field(
+        default=None,
+        description="Jenkins SSL verification (overrides JENKINS_SSL_VERIFY env var)",
     )
 
 

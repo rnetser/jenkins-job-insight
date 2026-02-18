@@ -68,6 +68,7 @@ Configure the service using environment variables. The service is tied to a sing
 | `HTML_REPORT` | No | `true` | Generate HTML reports (set to `false` to disable) |
 | `DEBUG` | No | `false` | Enable debug mode with hot reload for development |
 | **Jira (Optional)** | | | |
+| `ENABLE_JIRA` | No | *(auto-detect)* | Explicitly enable/disable Jira integration (overrides auto-detection) |
 | `JIRA_URL` | No | - | Jira instance URL (enables Jira integration) |
 | `JIRA_EMAIL` | No | - | Email for Jira Cloud authentication |
 | `JIRA_API_TOKEN` | No | - | API token for Jira Cloud |
@@ -211,16 +212,35 @@ Control log verbosity with `LOG_LEVEL`:
 
 All configuration fields can be overridden per-request in the webhook payload. Required fields (`AI_PROVIDER`, `AI_MODEL`) must be set via environment variable or per-request:
 
-| Environment Variable | Request Field      | Required | Description                                                                |
-|----------------------|--------------------|----------|----------------------------------------------------------------------------|
-| `AI_PROVIDER`        | `ai_provider`      | Yes      | AI provider to use (`claude`, `gemini`, or `cursor`)                       |
-| `AI_MODEL`           | `ai_model`         | Yes      | Model for the AI provider                                                  |
-| `TESTS_REPO_URL`     | `tests_repo_url`   | No       | Repository URL for test context                                            |
-| `CALLBACK_URL`       | `callback_url`     | No       | Callback webhook URL for results                                           |
-| `CALLBACK_HEADERS`   | `callback_headers` | No       | Headers for callback requests                                              |
-| `HTML_REPORT`        | `html_report`      | No       | Generate HTML report (default: true)                                       |
+| Environment Variable | Request Field        | Required | Endpoints              | Description                                                    |
+|----------------------|----------------------|----------|------------------------|----------------------------------------------------------------|
+| **AI Provider**      |                      |          |                        |                                                                |
+| `AI_PROVIDER`        | `ai_provider`        | Yes      | Both                   | AI provider to use (`claude`, `gemini`, or `cursor`)           |
+| `AI_MODEL`           | `ai_model`           | Yes      | Both                   | Model for the AI provider                                      |
+| `AI_CLI_TIMEOUT`     | `ai_cli_timeout`     | No       | Both                   | AI CLI timeout in minutes (default: 10)                        |
+| **General**          |                      |          |                        |                                                                |
+| `TESTS_REPO_URL`     | `tests_repo_url`     | No       | Both                   | Repository URL for test context                                |
+| `CALLBACK_URL`       | `callback_url`       | No       | `/analyze`             | Callback webhook URL for results                               |
+| `CALLBACK_HEADERS`   | `callback_headers`   | No       | `/analyze`             | Headers for callback requests                                  |
+| `HTML_REPORT`        | `html_report`        | No       | `/analyze`             | Generate HTML report (default: true)                           |
+| **Jenkins**          |                      |          |                        |                                                                |
+| `JENKINS_URL`        | `jenkins_url`        | Yes*     | `/analyze`             | Jenkins server URL                                             |
+| `JENKINS_USER`       | `jenkins_user`       | Yes*     | `/analyze`             | Jenkins username                                               |
+| `JENKINS_PASSWORD`   | `jenkins_password`   | Yes*     | `/analyze`             | Jenkins password or API token                                  |
+| `JENKINS_SSL_VERIFY` | `jenkins_ssl_verify` | No       | `/analyze`             | Jenkins SSL certificate verification (default: true)           |
+| **Jira**             |                      |          |                        |                                                                |
+| `ENABLE_JIRA`        | `enable_jira`        | No       | Both                   | Enable/disable Jira bug search (default: auto-detect)          |
+| `JIRA_URL`           | `jira_url`           | No       | Both                   | Jira instance URL                                              |
+| `JIRA_EMAIL`         | `jira_email`         | No       | Both                   | Email for Jira Cloud authentication                            |
+| `JIRA_API_TOKEN`     | `jira_api_token`     | No       | Both                   | API token for Jira Cloud                                       |
+| `JIRA_PAT`           | `jira_pat`           | No       | Both                   | Personal Access Token for Jira Server/DC                       |
+| `JIRA_PROJECT_KEY`   | `jira_project_key`   | No       | Both                   | Scope Jira searches to a specific project                      |
+| `JIRA_SSL_VERIFY`    | `jira_ssl_verify`    | No       | Both                   | SSL certificate verification for Jira (default: true)          |
+| `JIRA_MAX_RESULTS`   | `jira_max_results`   | No       | Both                   | Maximum Jira results per search (default: 5)                   |
 
-**Priority**: Request values take precedence over environment variable defaults. Required fields must be configured in at least one place (environment variable or request body).
+*Jenkins fields are required for `/analyze` but must be configured in at least one place (environment variable or request body).
+
+**Priority**: Request values take precedence over environment variable defaults. "Both" means the field works with `/analyze` and `/analyze-failures` endpoints.
 
 ### Jira Integration (Optional)
 
@@ -273,6 +293,57 @@ Jira failures never crash the analysis pipeline:
 - **Auth failure** — warning logged, empty matches returned
 - **Network error** — error logged, empty matches returned
 - **No keywords from AI** — Jira search skipped for that failure
+
+#### Jira in API Requests
+
+To control Jira integration per-request, use the `enable_jira` field:
+
+```bash
+# Enable Jira search for this request
+curl -X POST "http://localhost:8000/analyze?sync=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_name": "my-project",
+    "build_number": 123,
+    "ai_provider": "claude",
+    "ai_model": "sonnet",
+    "enable_jira": true
+  }'
+```
+
+When Jira finds matching bugs, the response includes `jira_matches` in the product bug report:
+
+```json
+{
+  "analysis": {
+    "classification": "PRODUCT BUG",
+    "product_bug_report": {
+      "title": "Authentication endpoint rejects valid credentials",
+      "severity": "high",
+      "component": "auth-service",
+      "description": "...",
+      "evidence": "...",
+      "jira_search_keywords": ["authentication", "401", "valid credentials"],
+      "jira_matches": [
+        {
+          "key": "AUTH-456",
+          "summary": "Login fails with valid credentials after session timeout",
+          "status": "Open",
+          "priority": "High",
+          "url": "https://jira.example.com/browse/AUTH-456",
+          "score": 0.85
+        }
+      ]
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enable_jira` | bool or null | `true` to enable, `false` to disable, omit to auto-detect from environment |
+
+When omitted, Jira integration is automatically enabled if `JIRA_URL` and authentication are configured via environment variables.
 
 ### SSL Verification
 
@@ -349,7 +420,9 @@ curl -X POST http://localhost:8000/analyze \
     "ai_model": "sonnet",
     "tests_repo_url": "https://github.com/org/my-project",
     "callback_url": "https://my-service.example.com/webhook",
-    "callback_headers": {"Authorization": "Bearer my-token"}
+    "callback_headers": {"Authorization": "Bearer my-token"},
+    "enable_jira": true,
+    "jira_project_key": "MYPROJ"
   }'
 ```
 
@@ -506,7 +579,9 @@ curl -X POST http://localhost:8000/analyze-failures \
       }
     ],
     "ai_provider": "claude",
-    "ai_model": "sonnet"
+    "ai_model": "sonnet",
+    "enable_jira": true,
+    "ai_cli_timeout": 15
   }'
 ```
 
