@@ -180,7 +180,15 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
     """
     overrides: dict = {}
 
-    # Direct field mappings (request field name == settings field name)
+    # Direct field mappings (request field name == settings field name).
+    # Keep in sync with BaseAnalysisRequest and Settings when adding new overrides.
+    # Fields intentionally NOT listed here are handled by their own resolvers:
+    #   tests_repo_url   - HttpUrl vs str type mismatch; resolved in endpoint code
+    #   ai_provider      - resolved + validated by _resolve_ai_config()
+    #   ai_model         - resolved + validated by _resolve_ai_config()
+    #   callback_url     - resolved in deliver_results()
+    #   callback_headers - resolved in deliver_results()
+    #   html_report      - resolved by _resolve_html_report()
     direct_fields = [
         "jira_url",
         "jira_email",

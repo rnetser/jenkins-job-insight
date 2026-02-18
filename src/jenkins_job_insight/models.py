@@ -1,7 +1,7 @@
 """Pydantic request and response models."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, model_serializer, model_validator
 
@@ -25,9 +25,8 @@ class BaseAnalysisRequest(BaseModel):
         default=None,
         description="Enable Jira bug search (default: true when Jira is configured, set false to skip)",
     )
-    ai_cli_timeout: int | None = Field(
+    ai_cli_timeout: Annotated[int, Field(gt=0)] | None = Field(
         default=None,
-        gt=0,
         description="AI CLI timeout in minutes (overrides AI_CLI_TIMEOUT env var)",
     )
     jira_url: str | None = Field(
@@ -56,7 +55,7 @@ class BaseAnalysisRequest(BaseModel):
         default=None,
         description="Jira SSL verification (overrides JIRA_SSL_VERIFY env var)",
     )
-    jira_max_results: int | None = Field(
+    jira_max_results: Annotated[int, Field(gt=0)] | None = Field(
         default=None,
         description="Max Jira search results (overrides JIRA_MAX_RESULTS env var)",
     )

@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     jira_pat: SecretStr | None = None
     jira_project_key: str | None = None
     jira_ssl_verify: bool = True
-    jira_max_results: int = 5
+    jira_max_results: int = Field(default=5, gt=0)
 
     # Explicit Jira toggle (optional)
     enable_jira: bool | None = None
