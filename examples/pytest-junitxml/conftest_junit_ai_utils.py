@@ -88,11 +88,15 @@ def enrich_junit_xml(session) -> None:
         "ai_model": ai_model,
     }
 
-    analysis_map = _fetch_analysis_from_server(server_url=server_url, payload=payload)
+    analysis_map, html_report_url = _fetch_analysis_from_server(
+        server_url=server_url, payload=payload
+    )
     if not analysis_map:
         return
 
-    _apply_analysis_to_xml(xml_path=xml_path, analysis_map=analysis_map)
+    _apply_analysis_to_xml(
+        xml_path=xml_path, analysis_map=analysis_map, html_report_url=html_report_url
+    )
 
 
 def _extract_failures_from_xml(xml_path: Path) -> list[dict[str, str]]:
@@ -138,7 +142,7 @@ def _extract_failures_from_xml(xml_path: Path) -> list[dict[str, str]]:
 
 def _fetch_analysis_from_server(
     server_url: str, payload: dict[str, Any]
-) -> dict[tuple[str, str], dict[str, Any]]:
+) -> tuple[dict[tuple[str, str], dict[str, Any]], str]:
     """Send collected failures to the JJI server and return the analysis map.
 
     Args:
@@ -146,8 +150,10 @@ def _fetch_analysis_from_server(
         payload: Request payload containing failures and AI config.
 
     Returns:
-        Mapping of (classname, test_name) to analysis results.
-        Returns empty dict on request failure.
+        Tuple of (analysis_map, html_report_url).
+        analysis_map: Mapping of (classname, test_name) to analysis results.
+        html_report_url: The HTML report URL from the server response, empty string if unavailable.
+        Returns ({}, "") on request failure.
     """
     try:
         timeout_value = int(os.environ.get("JJI_TIMEOUT", "600"))
@@ -171,7 +177,9 @@ def _fetch_analysis_from_server(
             except Exception as detail_exc:
                 logger.debug("Could not extract response detail: %s", detail_exc)
         logger.error("Server request failed: %s%s", exc, error_detail)
-        return {}
+        return {}, ""
+
+    html_report_url = result.get("html_report_url", "")
 
     analysis_map: dict[tuple[str, str], dict[str, Any]] = {}
     for failure in result.get("failures", []):
@@ -185,11 +193,13 @@ def _fetch_analysis_from_server(
             else:
                 analysis_map[("", test_name)] = analysis
 
-    return analysis_map
+    return analysis_map, html_report_url
 
 
 def _apply_analysis_to_xml(
-    xml_path: Path, analysis_map: dict[tuple[str, str], dict[str, Any]]
+    xml_path: Path,
+    analysis_map: dict[tuple[str, str], dict[str, Any]],
+    html_report_url: str = "",
 ) -> None:
     """Apply AI analysis results to JUnit XML testcase elements.
 
@@ -200,6 +210,7 @@ def _apply_analysis_to_xml(
     Args:
         xml_path: Path to the JUnit XML report file.
         analysis_map: Mapping of (classname, test_name) to analysis results.
+        html_report_url: URL to the HTML report, added as a testsuite-level property.
     """
     backup_path = xml_path.with_suffix(".xml.bak")
     shutil.copy2(xml_path, backup_path)
@@ -221,6 +232,17 @@ def _apply_analysis_to_xml(
                 len(unmatched),
                 unmatched,
             )
+
+        # Add html_report_url as a testsuite-level property
+        if html_report_url:
+            for testsuite in tree.iter("testsuite"):
+                ts_props = testsuite.find("properties")
+                if ts_props is None:
+                    ts_props = ET.SubElement(testsuite, "properties")
+                    # Move it to be the first child of testsuite
+                    testsuite.remove(ts_props)
+                    testsuite.insert(0, ts_props)
+                _add_property(ts_props, "html_report_url", html_report_url)
 
         tree.write(str(xml_path), encoding="unicode", xml_declaration=True)
         backup_path.unlink()  # Success - remove backup

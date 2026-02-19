@@ -114,7 +114,10 @@ class TestAnalyzeEndpoint:
                     assert data["status"] == "completed"
                     assert data["job_id"] == "test-123"
                     # html_report defaults to True via env
-                    assert data["html_report_url"] == "/results/test-123.html"
+                    assert (
+                        data["html_report_url"]
+                        == "http://testserver/results/test-123.html"
+                    )
 
     def test_analyze_sync_no_html_report(self, test_client) -> None:
         """Test that html_report=false omits html_report_url from response."""
