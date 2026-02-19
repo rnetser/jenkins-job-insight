@@ -220,7 +220,10 @@ class AnalysisResult(BaseModel):
     job_id: str = Field(description="Unique identifier for the analysis job")
     job_name: str = Field(default="", description="Jenkins job name")
     build_number: int = Field(default=0, description="Jenkins build number")
-    jenkins_url: HttpUrl = Field(description="URL of the analyzed Jenkins job")
+    jenkins_url: HttpUrl | None = Field(
+        default=None,
+        description="URL of the analyzed Jenkins job (None for non-Jenkins analysis)",
+    )
     status: Literal["pending", "running", "completed", "failed"] = Field(
         description="Current status of the analysis"
     )

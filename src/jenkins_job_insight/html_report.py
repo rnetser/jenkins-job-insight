@@ -37,7 +37,7 @@ def format_result_as_html(result: AnalysisResult) -> str:
     job_name = result.job_name or "Unknown"
     build_number = str(result.build_number) if result.build_number else ""
     provider_info = _format_provider(result.ai_provider, result.ai_model)
-    jenkins_url_str = str(result.jenkins_url)
+    jenkins_url_str = str(result.jenkins_url) if result.jenkins_url else ""
     total_failures = len(result.failures)
 
     parts: list[str] = []
@@ -461,7 +461,7 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
       <span class="env-chip">Build: #{e(build_number)}</span>
       <span class="env-chip">Status: {e(result.status)}</span>
       <span class="env-chip">AI: {e(provider_info)}</span>
-      <span class="env-chip"><a href="{e(jenkins_url_str)}" target="_blank" rel="noopener">Jenkins</a></span>
+      {f'<span class="env-chip"><a href="{e(jenkins_url_str)}" target="_blank" rel="noopener">Jenkins</a></span>' if jenkins_url_str else ""}
     </div>
   </div>
 </div>
@@ -1010,10 +1010,15 @@ def _append_footer(
         jenkins_url: Full Jenkins build URL.
         e: HTML escape function reference.
     """
+    jenkins_link = (
+        f'<a href="{e(jenkins_url)}" target="_blank" rel="noopener">View in Jenkins</a>'
+        if jenkins_url
+        else ""
+    )
     parts.append(f"""
 <div class="report-footer">
   <span>{e(job_name)} #{e(build_number)} | Job ID: {e(job_id)} | Analyzed by {e(provider_info)}</span>
-  <a href="{e(jenkins_url)}" target="_blank" rel="noopener">View in Jenkins</a>
+  {jenkins_link}
 </div>
 """)
 

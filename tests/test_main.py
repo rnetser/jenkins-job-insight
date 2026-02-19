@@ -428,7 +428,7 @@ class TestAnalyzeFailuresEndpoint:
                     with patch(
                         "jenkins_job_insight.main._generate_html_report",
                         new_callable=AsyncMock,
-                    ):
+                    ) as mock_html_report:
                         response = test_client.post(
                             "/analyze-failures",
                             json={
@@ -459,6 +459,7 @@ class TestAnalyzeFailuresEndpoint:
                             "http://testserver/results/"
                         )
                         assert data["html_report_url"].endswith(".html")
+                        mock_html_report.assert_called_once()
 
     def test_analyze_failures_empty_failures(self, test_client) -> None:
         """Test that empty failures list returns 400."""
@@ -587,7 +588,7 @@ class TestAnalyzeFailuresEndpoint:
                             with patch(
                                 "jenkins_job_insight.main._generate_html_report",
                                 new_callable=AsyncMock,
-                            ):
+                            ) as mock_html_report:
                                 response = test_client.post(
                                     "/analyze-failures",
                                     json={
@@ -615,6 +616,7 @@ class TestAnalyzeFailuresEndpoint:
                                 assert "2 test failures" in data["summary"]
                                 assert "2 unique errors" in data["summary"]
                                 assert "1 analyzed successfully" in data["summary"]
+                                mock_html_report.assert_called_once()
 
     def test_analyze_failures_deduplication(self, test_client) -> None:
         """Test that failures sharing the same signature are deduplicated.
@@ -676,7 +678,7 @@ class TestAnalyzeFailuresEndpoint:
                         with patch(
                             "jenkins_job_insight.main._generate_html_report",
                             new_callable=AsyncMock,
-                        ):
+                        ) as mock_html_report:
                             response = test_client.post(
                                 "/analyze-failures",
                                 json={
@@ -706,6 +708,7 @@ class TestAnalyzeFailuresEndpoint:
                             assert data["status"] == "completed"
                             # analyze_failure_group called twice: once for sig-a group, once for sig-b
                             assert mock_analyze_group.call_count == 2
+                            mock_html_report.assert_called_once()
 
 
 class TestResultsEndpoints:
