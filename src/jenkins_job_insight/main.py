@@ -183,7 +183,7 @@ def _resolve_ai_config(body: AnalyzeRequest) -> tuple[str, str]:
     return _resolve_ai_config_values(body.ai_provider, body.ai_model)
 
 
-def _resolve_html_report(body: AnalyzeRequest) -> bool:
+def _resolve_html_report(body: BaseAnalysisRequest) -> bool:
     """Resolve html_report flag from request or env var default."""
     if body.html_report is not None:
         return body.html_report
@@ -550,7 +550,7 @@ async def analyze_failures(
         )
 
         # Generate HTML report if enabled
-        if HTML_REPORT:
+        if _resolve_html_report(body):
             html_result = AnalysisResult(
                 job_id=job_id,
                 job_name="Direct Failure Analysis",
@@ -570,7 +570,7 @@ async def analyze_failures(
         content = analysis_result.model_dump(mode="json")
         content["base_url"] = base_url
         content["result_url"] = f"{base_url}/results/{job_id}"
-        if HTML_REPORT:
+        if _resolve_html_report(body):
             content["html_report_url"] = f"{base_url}/results/{job_id}.html"
         return JSONResponse(content=content)
 

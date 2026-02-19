@@ -59,6 +59,10 @@ class BaseAnalysisRequest(BaseModel):
         default=None,
         description="Max Jira search results (overrides JIRA_MAX_RESULTS env var)",
     )
+    html_report: bool | None = Field(
+        default=None,
+        description="Generate HTML report (default: true, overrides HTML_REPORT env var)",
+    )
 
 
 class AnalyzeRequest(BaseAnalysisRequest):
@@ -75,10 +79,6 @@ class AnalyzeRequest(BaseAnalysisRequest):
     callback_headers: dict[str, str] | None = Field(
         default=None,
         description="Optional headers to include in callback request (overrides env var default)",
-    )
-    html_report: bool | None = Field(
-        default=None,
-        description="Generate HTML report (default: true, overrides HTML_REPORT env var)",
     )
     jenkins_url: str | None = Field(
         default=None,
