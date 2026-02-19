@@ -152,7 +152,9 @@ def _fetch_analysis_from_server(
     Returns:
         Tuple of (analysis_map, html_report_url).
         analysis_map: Mapping of (classname, test_name) to analysis results.
-        html_report_url: The HTML report URL from the server response, empty string if unavailable.
+        html_report_url: The HTML report URL, extracted from the server response
+            or constructed from job_id and server_url when the response omits it.
+            Empty string if neither is available.
         Returns ({}, "") on request failure.
     """
     try:
@@ -179,7 +181,10 @@ def _fetch_analysis_from_server(
         logger.error("Server request failed: %s%s", exc, error_detail)
         return {}, ""
 
-    html_report_url = result.get("html_report_url", "")
+    job_id = result.get("job_id", "")
+    html_report_url = result.get("html_report_url") or (
+        f"{server_url.rstrip('/')}/results/{job_id}.html" if job_id else ""
+    )
 
     analysis_map: dict[tuple[str, str], dict[str, Any]] = {}
     for failure in result.get("failures", []):

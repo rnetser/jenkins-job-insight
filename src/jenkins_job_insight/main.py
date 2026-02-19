@@ -554,6 +554,7 @@ async def analyze_failures(
         content = analysis_result.model_dump(mode="json")
         content["base_url"] = base_url
         content["result_url"] = f"{base_url}/results/{job_id}"
+        content["html_report_url"] = f"{base_url}/results/{job_id}.html"
         return JSONResponse(content=content)
 
     except Exception as e:
