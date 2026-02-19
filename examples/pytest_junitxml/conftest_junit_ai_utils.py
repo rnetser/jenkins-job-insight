@@ -129,7 +129,8 @@ def _extract_failures_from_xml(xml_path: Path) -> list[dict[str, str]]:
         failures.append(
             {
                 "test_name": test_name,
-                "error_message": result_elem.get("message", ""),
+                "error_message": result_elem.get("message", "")
+                or ((result_elem.text or "").split("\n")[0].strip()),
                 "stack_trace": result_elem.text or "",
                 "status": "ERROR"
                 if error_elem is not None and failure_elem is None
