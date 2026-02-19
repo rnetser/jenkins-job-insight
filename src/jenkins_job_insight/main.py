@@ -44,6 +44,12 @@ from jenkins_job_insight.storage import (
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
+_HOST_RE = re.compile(
+    r"^([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)"  # first label
+    r"(\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"  # additional labels
+    r"(:\d+)?$"  # optional port
+)
+
 AI_PROVIDER = os.getenv("AI_PROVIDER", "").lower()
 AI_MODEL = os.getenv("AI_MODEL", "")
 HTML_REPORT = os.getenv("HTML_REPORT", "true").lower() == "true"
@@ -112,14 +118,13 @@ def _extract_base_url(request: Request) -> str:
         proto = forwarded_proto.split(",")[0].strip().lower()
         host = forwarded_host.split(",")[0].strip()
         scheme = proto if proto in ("http", "https") else "https"
-        # Validate host format (hostname with optional port)
-        if re.match(r"^[A-Za-z0-9._-]+(:\d+)?$", host):
+        if _HOST_RE.match(host):
             base_url = f"{scheme}://{host}".rstrip("/")
             logger.debug("Base URL from X-Forwarded headers: %s", base_url)
             return base_url
 
     host = request.headers.get("host")
-    if host:
+    if host and _HOST_RE.match(host):
         base_url = f"{request.url.scheme}://{host}".rstrip("/")
         logger.debug("Base URL from Host header: %s", base_url)
         return base_url
