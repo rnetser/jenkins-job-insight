@@ -74,6 +74,8 @@ class TestAnalyzeEndpoint:
             assert response.status_code == 202
             data = response.json()
             assert data["status"] == "queued"
+            assert data["base_url"] == "http://testserver"
+            assert data["result_url"].startswith("http://testserver/results/")
 
     def test_analyze_sync_accepts_sync_param(self, test_client) -> None:
         """Test that sync parameter is accepted (validation test only).
@@ -118,6 +120,8 @@ class TestAnalyzeEndpoint:
                         data["html_report_url"]
                         == "http://testserver/results/test-123.html"
                     )
+                    assert data["base_url"] == "http://testserver"
+                    assert data["result_url"] == "http://testserver/results/test-123"
 
     def test_analyze_sync_no_html_report(self, test_client) -> None:
         """Test that html_report=false omits html_report_url from response."""
@@ -314,6 +318,8 @@ class TestAnalyzeFailuresEndpoint:
                     assert "job_id" in data
                     assert len(data["failures"]) == 1
                     assert data["failures"][0]["test_name"] == "test_foo"
+                    assert data["base_url"] == "http://testserver"
+                    assert data["result_url"].startswith("http://testserver/results/")
 
     def test_analyze_failures_empty_failures(self, test_client) -> None:
         """Test that empty failures list returns 400."""
@@ -573,6 +579,8 @@ class TestResultsEndpoints:
             assert response.status_code == 200
             data = response.json()
             assert data["job_id"] == "job-123"
+            assert data["base_url"] == "http://testserver"
+            assert data["result_url"] == "http://testserver/results/job-123"
 
     def test_get_result_not_found(self, test_client) -> None:
         """Test retrieving non-existent result returns 404."""

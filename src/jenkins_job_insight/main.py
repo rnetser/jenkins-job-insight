@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import urllib.parse
 import uuid
 from collections import defaultdict
@@ -107,14 +108,15 @@ def _extract_base_url(request: Request) -> str:
     forwarded_host = request.headers.get("x-forwarded-host")
 
     if forwarded_proto and forwarded_host:
-        scheme = (
-            forwarded_proto.lower()
-            if forwarded_proto.lower() in ("http", "https")
-            else "https"
-        )
-        base_url = f"{scheme}://{forwarded_host}".rstrip("/")
-        logger.debug("Base URL from X-Forwarded headers: %s", base_url)
-        return base_url
+        # Take first value from comma-separated list (multi-hop proxies)
+        proto = forwarded_proto.split(",")[0].strip().lower()
+        host = forwarded_host.split(",")[0].strip()
+        scheme = proto if proto in ("http", "https") else "https"
+        # Validate host format (hostname with optional port)
+        if re.match(r"^[A-Za-z0-9._-]+(:\d+)?$", host):
+            base_url = f"{scheme}://{host}".rstrip("/")
+            logger.debug("Base URL from X-Forwarded headers: %s", base_url)
+            return base_url
 
     host = request.headers.get("host")
     if host:
@@ -547,7 +549,6 @@ async def analyze_failures(
         content = analysis_result.model_dump(mode="json")
         content["base_url"] = base_url
         content["result_url"] = f"{base_url}/results/{job_id}"
-        content["html_report_url"] = f"{base_url}/results/{job_id}.html"
         return JSONResponse(content=content)
 
     except Exception as e:
@@ -607,10 +608,13 @@ async def get_job_result(request: Request, job_id: str) -> dict:
     base_url = _extract_base_url(request)
     result["base_url"] = base_url
     result["result_url"] = f"{base_url}/results/{job_id}"
-    if "html_report_url" in result:
+    result_data = result.get("result")
+    if isinstance(result_data, dict) and "html_report_url" in result_data:
         # Ensure it's a full URL (update legacy relative paths)
-        if result["html_report_url"].startswith("/"):
-            result["html_report_url"] = f"{base_url}{result['html_report_url']}"
+        if result_data["html_report_url"].startswith("/"):
+            result_data["html_report_url"] = (
+                f"{base_url}{result_data['html_report_url']}"
+            )
     return result
 
 

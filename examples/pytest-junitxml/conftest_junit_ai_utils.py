@@ -238,9 +238,7 @@ def _apply_analysis_to_xml(
             for testsuite in tree.iter("testsuite"):
                 ts_props = testsuite.find("properties")
                 if ts_props is None:
-                    ts_props = ET.SubElement(testsuite, "properties")
-                    # Move it to be the first child of testsuite
-                    testsuite.remove(ts_props)
+                    ts_props = ET.Element("properties")
                     testsuite.insert(0, ts_props)
                 _add_property(ts_props, "html_report_url", html_report_url)
 
