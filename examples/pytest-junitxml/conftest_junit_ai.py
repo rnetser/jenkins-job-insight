@@ -58,10 +58,8 @@ def pytest_sessionfinish(session, exitstatus):
 
     Uses trylast to run AFTER the junitxml plugin writes the XML file.
     """
-    if not session.config.option.analyze_with_ai:
-        return
-
-    try:
-        enrich_junit_xml(session)
-    except Exception:
-        logger.exception("Failed to enrich JUnit XML, original preserved")
+    if session.config.option.analyze_with_ai:
+        try:
+            enrich_junit_xml(session)
+        except Exception:
+            logger.exception("Failed to enrich JUnit XML, original preserved")
