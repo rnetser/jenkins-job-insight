@@ -74,6 +74,10 @@ class TestAnalyzeEndpoint:
             assert response.status_code == 202
             data = response.json()
             assert data["status"] == "queued"
+            assert data["base_url"] == "http://testserver"
+            assert data["result_url"].startswith("http://testserver/results/")
+            assert data["html_report_url"].startswith("http://testserver/results/")
+            assert data["html_report_url"].endswith(".html")
 
     def test_analyze_sync_accepts_sync_param(self, test_client) -> None:
         """Test that sync parameter is accepted (validation test only).
@@ -114,7 +118,12 @@ class TestAnalyzeEndpoint:
                     assert data["status"] == "completed"
                     assert data["job_id"] == "test-123"
                     # html_report defaults to True via env
-                    assert data["html_report_url"] == "/results/test-123.html"
+                    assert (
+                        data["html_report_url"]
+                        == "http://testserver/results/test-123.html"
+                    )
+                    assert data["base_url"] == "http://testserver"
+                    assert data["result_url"] == "http://testserver/results/test-123"
 
     def test_analyze_sync_no_html_report(self, test_client) -> None:
         """Test that html_report=false omits html_report_url from response."""
@@ -257,6 +266,133 @@ class TestAnalyzeEndpoint:
                         assert response.status_code == 200
                         mock_callback.assert_called_once()
 
+    def test_analyze_async_no_html_report(self, test_client) -> None:
+        """Test that async analyze with html_report=false omits html_report_url."""
+        with patch("jenkins_job_insight.main.process_analysis_with_id"):
+            response = test_client.post(
+                "/analyze",
+                json={
+                    "job_name": "test",
+                    "build_number": 123,
+                    "html_report": False,
+                },
+            )
+            assert response.status_code == 202
+            data = response.json()
+            assert "html_report_url" not in data
+            assert data["base_url"] == "http://testserver"
+            assert data["result_url"].startswith("http://testserver/results/")
+
+
+class TestBaseUrlDetection:
+    """Tests for base URL detection from request headers."""
+
+    def test_base_url_from_forwarded_headers(self, test_client) -> None:
+        """Test base URL detection from X-Forwarded-Proto and X-Forwarded-Host."""
+        with patch("jenkins_job_insight.main.process_analysis_with_id"):
+            response = test_client.post(
+                "/analyze",
+                json={"job_name": "test", "build_number": 1},
+                headers={
+                    "X-Forwarded-Proto": "https",
+                    "X-Forwarded-Host": "myapp.example.com",
+                },
+            )
+            assert response.status_code == 202
+            data = response.json()
+            assert data["base_url"] == "https://myapp.example.com"
+            assert data["result_url"].startswith("https://myapp.example.com/results/")
+
+    def test_base_url_from_forwarded_headers_with_port(self, test_client) -> None:
+        """Test base URL detection with forwarded host including port."""
+        with patch("jenkins_job_insight.main.process_analysis_with_id"):
+            response = test_client.post(
+                "/analyze",
+                json={"job_name": "test", "build_number": 1},
+                headers={
+                    "X-Forwarded-Proto": "https",
+                    "X-Forwarded-Host": "myapp.example.com:8443",
+                },
+            )
+            assert response.status_code == 202
+            data = response.json()
+            assert data["base_url"] == "https://myapp.example.com:8443"
+
+    def test_base_url_comma_separated_forwarded_headers(self, test_client) -> None:
+        """Test that only the first value is used from comma-separated forwarded headers."""
+        with patch("jenkins_job_insight.main.process_analysis_with_id"):
+            response = test_client.post(
+                "/analyze",
+                json={"job_name": "test", "build_number": 1},
+                headers={
+                    "X-Forwarded-Proto": "https, http",
+                    "X-Forwarded-Host": "external.example.com, internal.proxy",
+                },
+            )
+            assert response.status_code == 202
+            data = response.json()
+            assert data["base_url"] == "https://external.example.com"
+
+    def test_base_url_invalid_proto_defaults_to_https(self, test_client) -> None:
+        """Test that invalid X-Forwarded-Proto defaults to https."""
+        with patch("jenkins_job_insight.main.process_analysis_with_id"):
+            response = test_client.post(
+                "/analyze",
+                json={"job_name": "test", "build_number": 1},
+                headers={
+                    "X-Forwarded-Proto": "ftp",
+                    "X-Forwarded-Host": "myapp.example.com",
+                },
+            )
+            assert response.status_code == 202
+            data = response.json()
+            assert data["base_url"] == "https://myapp.example.com"
+
+    def test_base_url_invalid_forwarded_host_falls_back(self, test_client) -> None:
+        """Test that invalid X-Forwarded-Host (with special chars) falls back to Host header."""
+        with patch("jenkins_job_insight.main.process_analysis_with_id"):
+            response = test_client.post(
+                "/analyze",
+                json={"job_name": "test", "build_number": 1},
+                headers={
+                    "X-Forwarded-Proto": "https",
+                    "X-Forwarded-Host": "evil.com/<script>alert(1)</script>",
+                },
+            )
+            assert response.status_code == 202
+            data = response.json()
+            # Should NOT contain the malicious host
+            assert "evil.com/<script>" not in data["base_url"]
+            # Should fall back to testserver
+            assert data["base_url"] == "http://testserver"
+
+    def test_base_url_leading_dot_hostname_rejected(self, test_client) -> None:
+        """Test that leading dot in hostname is rejected by RFC-1123 validation."""
+        with patch("jenkins_job_insight.main.process_analysis_with_id"):
+            response = test_client.post(
+                "/analyze",
+                json={"job_name": "test", "build_number": 1},
+                headers={
+                    "X-Forwarded-Proto": "https",
+                    "X-Forwarded-Host": ".evil.com",
+                },
+            )
+            assert response.status_code == 202
+            data = response.json()
+            assert data["base_url"] == "http://testserver"
+
+    def test_base_url_default_from_host_header(self, test_client) -> None:
+        """Test base URL from Host header when no forwarded headers present."""
+        with patch("jenkins_job_insight.main.process_analysis_with_id"):
+            # TestClient always sends Host: testserver
+            response = test_client.post(
+                "/analyze",
+                json={"job_name": "test", "build_number": 1},
+            )
+            assert response.status_code == 202
+            data = response.json()
+            assert data["base_url"] == "http://testserver"
+
 
 class TestAnalyzeFailuresEndpoint:
     """Tests for the POST /analyze-failures endpoint."""
@@ -311,6 +447,12 @@ class TestAnalyzeFailuresEndpoint:
                     assert "job_id" in data
                     assert len(data["failures"]) == 1
                     assert data["failures"][0]["test_name"] == "test_foo"
+                    assert data["base_url"] == "http://testserver"
+                    assert data["result_url"].startswith("http://testserver/results/")
+                    assert data["html_report_url"].startswith(
+                        "http://testserver/results/"
+                    )
+                    assert data["html_report_url"].endswith(".html")
 
     def test_analyze_failures_empty_failures(self, test_client) -> None:
         """Test that empty failures list returns 400."""
@@ -570,6 +712,8 @@ class TestResultsEndpoints:
             assert response.status_code == 200
             data = response.json()
             assert data["job_id"] == "job-123"
+            assert data["base_url"] == "http://testserver"
+            assert data["result_url"] == "http://testserver/results/job-123"
 
     def test_get_result_not_found(self, test_client) -> None:
         """Test retrieving non-existent result returns 404."""
@@ -658,6 +802,31 @@ class TestResultsEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["job_id"] == "json-job-456"
+
+    async def test_get_result_upgrades_legacy_relative_html_report_url(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """Test that legacy relative html_report_url is upgraded to absolute."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            await storage.save_result(
+                job_id="legacy-job",
+                jenkins_url="https://jenkins.example.com/job/test/1/",
+                status="completed",
+                result={
+                    "summary": "Done",
+                    "html_report_url": "/results/legacy-job.html",
+                },
+            )
+
+            response = test_client.get("/results/legacy-job")
+            assert response.status_code == 200
+            data = response.json()
+            result_data = data.get("result", {})
+            assert (
+                result_data["html_report_url"]
+                == "http://testserver/results/legacy-job.html"
+            )
 
 
 class TestAppLifespan:

@@ -1,11 +1,12 @@
 import asyncio
 import os
+import re
 import urllib.parse
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import SecretStr
 from simple_logger.logger import get_logger
@@ -42,6 +43,12 @@ from jenkins_job_insight.storage import (
 )
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+
+_HOST_RE = re.compile(
+    r"^([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)"  # first label
+    r"(\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"  # additional labels
+    r"(:\d+)?$"  # optional port
+)
 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "").lower()
 AI_MODEL = os.getenv("AI_MODEL", "")
@@ -87,6 +94,44 @@ def build_jenkins_url(base_url: str, job_name: str, build_number: int) -> str:
     encoded_segments = [urllib.parse.quote(segment, safe="") for segment in segments]
     job_path = "/job/".join(encoded_segments)
     return f"{base_url.rstrip('/')}/job/{job_path}/{build_number}/"
+
+
+def _extract_base_url(request: Request) -> str:
+    """Extract the external base URL from incoming request headers.
+
+    Priority:
+        1. X-Forwarded-Proto + X-Forwarded-Host (reverse proxy scenario)
+        2. Host header + request scheme (direct access)
+        3. Fallback to request.url components
+
+    Args:
+        request: The incoming FastAPI/Starlette request.
+
+    Returns:
+        Base URL without trailing slash (e.g. "https://example.com").
+    """
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host")
+
+    if forwarded_proto and forwarded_host:
+        # Take first value from comma-separated list (multi-hop proxies)
+        proto = forwarded_proto.split(",")[0].strip().lower()
+        host = forwarded_host.split(",")[0].strip()
+        scheme = proto if proto in ("http", "https") else "https"
+        if _HOST_RE.match(host):
+            base_url = f"{scheme}://{host}".rstrip("/")
+            logger.debug("Base URL from X-Forwarded headers: %s", base_url)
+            return base_url
+
+    host = request.headers.get("host")
+    if host and _HOST_RE.match(host):
+        base_url = f"{request.url.scheme}://{host}".rstrip("/")
+        logger.debug("Base URL from Host header: %s", base_url)
+        return base_url
+
+    base_url = f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
+    logger.debug("Base URL from request URL fallback: %s", base_url)
+    return base_url
 
 
 @asynccontextmanager
@@ -272,7 +317,7 @@ async def _enrich_result_with_jira(
 
 
 async def process_analysis_with_id(
-    job_id: str, body: AnalyzeRequest, settings: Settings
+    job_id: str, body: AnalyzeRequest, settings: Settings, base_url: str = ""
 ) -> None:
     """Background task to process analysis with a pre-generated job_id.
 
@@ -280,6 +325,7 @@ async def process_analysis_with_id(
         job_id: Pre-generated job ID for tracking.
         body: The analysis request.
         settings: Application settings.
+        base_url: External base URL for constructing absolute result URLs.
     """
     logger.info(
         f"Analysis request received for {body.job_name} #{body.build_number} "
@@ -304,11 +350,13 @@ async def process_analysis_with_id(
             )
 
         result_data = result.model_dump(mode="json")
+        result_data["base_url"] = base_url
+        result_data["result_url"] = f"{base_url}/results/{job_id}"
 
         # Generate HTML report if enabled
         if _resolve_html_report(body):
             await _generate_html_report(result)
-            result_data["html_report_url"] = f"/results/{job_id}.html"
+            result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
 
         # Save to storage
         await update_status(job_id, "completed", result_data)
@@ -326,6 +374,7 @@ async def process_analysis_with_id(
 
 @app.post("/analyze", status_code=202, response_model=None)
 async def analyze(
+    request: Request,
     body: AnalyzeRequest,
     background_tasks: BackgroundTasks,
     sync: bool = Query(False, description="If true, wait for result and return it"),
@@ -336,6 +385,8 @@ async def analyze(
     By default (async mode), returns immediately with a job_id.
     With ?sync=true, blocks until analysis is complete and returns the full result.
     """
+    base_url = _extract_base_url(request)
+
     if sync:
         logger.info(
             f"Sync analysis request received for {body.job_name} #{body.build_number}"
@@ -371,10 +422,12 @@ async def analyze(
         await deliver_results(result, body, merged)
 
         content = result.model_dump(mode="json")
+        content["base_url"] = base_url
+        content["result_url"] = f"{base_url}/results/{result.job_id}"
 
         if _resolve_html_report(body):
             await _generate_html_report(result)
-            content["html_report_url"] = f"/results/{result.job_id}.html"
+            content["html_report_url"] = f"{base_url}/results/{result.job_id}.html"
 
         return JSONResponse(content=content, status_code=200)
 
@@ -387,7 +440,7 @@ async def analyze(
     )
     # Save initial pending state before queueing background task
     await save_result(job_id, jenkins_url, "pending", None)
-    background_tasks.add_task(process_analysis_with_id, job_id, body, merged)
+    background_tasks.add_task(process_analysis_with_id, job_id, body, merged, base_url)
     callback_url = body.callback_url or merged.callback_url
     message = "Analysis job queued."
     if callback_url:
@@ -399,21 +452,28 @@ async def analyze(
         "status": "queued",
         "job_id": job_id,
         "message": message,
+        "base_url": base_url,
+        "result_url": f"{base_url}/results/{job_id}",
     }
+    if _resolve_html_report(body):
+        response["html_report_url"] = f"{base_url}/results/{job_id}.html"
 
     return response
 
 
-@app.post("/analyze-failures", response_model=FailureAnalysisResult)
+@app.post("/analyze-failures", response_model=None)
 async def analyze_failures(
+    request: Request,
     body: AnalyzeFailuresRequest,
     settings: Settings = Depends(get_settings),
-) -> FailureAnalysisResult:
+) -> JSONResponse:
     """Analyze raw test failures directly without Jenkins.
 
     Accepts test failure data and returns AI analysis. Sync only.
     Reuses the same deduplication and analysis logic as Jenkins-based analysis.
     """
+    base_url = _extract_base_url(request)
+
     if not body.failures:
         raise HTTPException(status_code=400, detail="No failures provided")
 
@@ -491,7 +551,11 @@ async def analyze_failures(
         await update_status(
             job_id, "completed", analysis_result.model_dump(mode="json")
         )
-        return analysis_result
+        content = analysis_result.model_dump(mode="json")
+        content["base_url"] = base_url
+        content["result_url"] = f"{base_url}/results/{job_id}"
+        content["html_report_url"] = f"{base_url}/results/{job_id}.html"
+        return JSONResponse(content=content)
 
     except Exception as e:
         logger.exception(f"Direct failure analysis failed for job {job_id}")
@@ -503,7 +567,10 @@ async def analyze_failures(
             ai_model=ai_model,
         )
         await update_status(job_id, "failed", analysis_result.model_dump(mode="json"))
-        return analysis_result
+        content = analysis_result.model_dump(mode="json")
+        content["base_url"] = base_url
+        content["result_url"] = f"{base_url}/results/{job_id}"
+        return JSONResponse(content=content)
 
     finally:
         repo_manager.cleanup()
@@ -539,11 +606,21 @@ async def get_job_report(job_id: str) -> HTMLResponse:
 
 
 @app.get("/results/{job_id}", response_model=None)
-async def get_job_result(job_id: str) -> dict:
+async def get_job_result(request: Request, job_id: str) -> dict:
     """Retrieve stored result by job_id."""
     result = await get_result(job_id)
     if not result:
         raise HTTPException(status_code=404, detail="Job not found")
+    base_url = _extract_base_url(request)
+    result["base_url"] = base_url
+    result["result_url"] = f"{base_url}/results/{job_id}"
+    result_data = result.get("result")
+    if isinstance(result_data, dict) and "html_report_url" in result_data:
+        # Ensure it's a full URL (update legacy relative paths)
+        if result_data["html_report_url"].startswith("/"):
+            result_data["html_report_url"] = (
+                f"{base_url}{result_data['html_report_url']}"
+            )
     return result
 
 
