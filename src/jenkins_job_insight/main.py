@@ -549,19 +549,20 @@ async def analyze_failures(
             failures=all_analyses,
         )
 
-        # Generate HTML report using AnalysisResult wrapper
-        html_result = AnalysisResult(
-            job_id=job_id,
-            job_name="Direct Failure Analysis",
-            build_number=0,
-            jenkins_url=HttpUrl("https://n-a/"),
-            status="completed",
-            summary=summary,
-            ai_provider=ai_provider,
-            ai_model=ai_model,
-            failures=all_analyses,
-        )
-        await _generate_html_report(html_result)
+        # Generate HTML report if enabled
+        if HTML_REPORT:
+            html_result = AnalysisResult(
+                job_id=job_id,
+                job_name="Direct Failure Analysis",
+                build_number=0,
+                jenkins_url=HttpUrl("https://n-a/"),
+                status="completed",
+                summary=summary,
+                ai_provider=ai_provider,
+                ai_model=ai_model,
+                failures=all_analyses,
+            )
+            await _generate_html_report(html_result)
 
         await update_status(
             job_id, "completed", analysis_result.model_dump(mode="json")
@@ -569,7 +570,8 @@ async def analyze_failures(
         content = analysis_result.model_dump(mode="json")
         content["base_url"] = base_url
         content["result_url"] = f"{base_url}/results/{job_id}"
-        content["html_report_url"] = f"{base_url}/results/{job_id}.html"
+        if HTML_REPORT:
+            content["html_report_url"] = f"{base_url}/results/{job_id}.html"
         return JSONResponse(content=content)
 
     except Exception as e:
