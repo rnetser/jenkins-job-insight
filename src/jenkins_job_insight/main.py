@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import SecretStr
+from pydantic import HttpUrl, SecretStr
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.analyzer import (
@@ -548,6 +548,21 @@ async def analyze_failures(
             ai_model=ai_model,
             failures=all_analyses,
         )
+
+        # Generate HTML report using AnalysisResult wrapper
+        html_result = AnalysisResult(
+            job_id=job_id,
+            job_name="Direct Failure Analysis",
+            build_number=0,
+            jenkins_url=HttpUrl("https://n-a/"),
+            status="completed",
+            summary=summary,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            failures=all_analyses,
+        )
+        await _generate_html_report(html_result)
+
         await update_status(
             job_id, "completed", analysis_result.model_dump(mode="json")
         )

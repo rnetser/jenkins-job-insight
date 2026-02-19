@@ -425,34 +425,40 @@ class TestAnalyzeFailuresEndpoint:
                 ) as mock_parallel:
                     mock_parallel.return_value = [[mock_analysis]]
 
-                    response = test_client.post(
-                        "/analyze-failures",
-                        json={
-                            "failures": [
-                                {
-                                    "test_name": "test_foo",
-                                    "error_message": "assert False",
-                                    "stack_trace": "File test.py, line 10",
-                                }
-                            ],
-                            "ai_provider": "claude",
-                            "ai_model": "test-model",
-                        },
-                    )
-                    assert response.status_code == 200
-                    data = response.json()
-                    assert data["status"] == "completed"
-                    assert data["ai_provider"] == "claude"
-                    assert data["ai_model"] == "test-model"
-                    assert "job_id" in data
-                    assert len(data["failures"]) == 1
-                    assert data["failures"][0]["test_name"] == "test_foo"
-                    assert data["base_url"] == "http://testserver"
-                    assert data["result_url"].startswith("http://testserver/results/")
-                    assert data["html_report_url"].startswith(
-                        "http://testserver/results/"
-                    )
-                    assert data["html_report_url"].endswith(".html")
+                    with patch(
+                        "jenkins_job_insight.main._generate_html_report",
+                        new_callable=AsyncMock,
+                    ):
+                        response = test_client.post(
+                            "/analyze-failures",
+                            json={
+                                "failures": [
+                                    {
+                                        "test_name": "test_foo",
+                                        "error_message": "assert False",
+                                        "stack_trace": "File test.py, line 10",
+                                    }
+                                ],
+                                "ai_provider": "claude",
+                                "ai_model": "test-model",
+                            },
+                        )
+                        assert response.status_code == 200
+                        data = response.json()
+                        assert data["status"] == "completed"
+                        assert data["ai_provider"] == "claude"
+                        assert data["ai_model"] == "test-model"
+                        assert "job_id" in data
+                        assert len(data["failures"]) == 1
+                        assert data["failures"][0]["test_name"] == "test_foo"
+                        assert data["base_url"] == "http://testserver"
+                        assert data["result_url"].startswith(
+                            "http://testserver/results/"
+                        )
+                        assert data["html_report_url"].startswith(
+                            "http://testserver/results/"
+                        )
+                        assert data["html_report_url"].endswith(".html")
 
     def test_analyze_failures_empty_failures(self, test_client) -> None:
         """Test that empty failures list returns 400."""
@@ -578,33 +584,37 @@ class TestAnalyzeFailuresEndpoint:
                             "jenkins_job_insight.main.update_status",
                             new_callable=AsyncMock,
                         ):
-                            response = test_client.post(
-                                "/analyze-failures",
-                                json={
-                                    "failures": [
-                                        {
-                                            "test_name": "test_a",
-                                            "error_message": "err",
-                                            "stack_trace": "File a.py, line 1",
-                                        },
-                                        {
-                                            "test_name": "test_b",
-                                            "error_message": "different err",
-                                            "stack_trace": "File b.py, line 2",
-                                        },
-                                    ],
-                                    "ai_provider": "claude",
-                                    "ai_model": "test-model",
-                                },
-                            )
-                            assert response.status_code == 200
-                            data = response.json()
-                            assert data["status"] == "completed"
-                            assert len(data["failures"]) == 1
-                            assert data["failures"][0]["test_name"] == "test_a"
-                            assert "2 test failures" in data["summary"]
-                            assert "2 unique errors" in data["summary"]
-                            assert "1 analyzed successfully" in data["summary"]
+                            with patch(
+                                "jenkins_job_insight.main._generate_html_report",
+                                new_callable=AsyncMock,
+                            ):
+                                response = test_client.post(
+                                    "/analyze-failures",
+                                    json={
+                                        "failures": [
+                                            {
+                                                "test_name": "test_a",
+                                                "error_message": "err",
+                                                "stack_trace": "File a.py, line 1",
+                                            },
+                                            {
+                                                "test_name": "test_b",
+                                                "error_message": "different err",
+                                                "stack_trace": "File b.py, line 2",
+                                            },
+                                        ],
+                                        "ai_provider": "claude",
+                                        "ai_model": "test-model",
+                                    },
+                                )
+                                assert response.status_code == 200
+                                data = response.json()
+                                assert data["status"] == "completed"
+                                assert len(data["failures"]) == 1
+                                assert data["failures"][0]["test_name"] == "test_a"
+                                assert "2 test failures" in data["summary"]
+                                assert "2 unique errors" in data["summary"]
+                                assert "1 analyzed successfully" in data["summary"]
 
     def test_analyze_failures_deduplication(self, test_client) -> None:
         """Test that failures sharing the same signature are deduplicated.
@@ -663,35 +673,39 @@ class TestAnalyzeFailuresEndpoint:
 
                         mock_parallel.side_effect = run_coroutines
 
-                        response = test_client.post(
-                            "/analyze-failures",
-                            json={
-                                "failures": [
-                                    {
-                                        "test_name": "test_foo",
-                                        "error_message": "assert False",
-                                        "stack_trace": "File test.py, line 10",
-                                    },
-                                    {
-                                        "test_name": "test_baz",
-                                        "error_message": "assert False",
-                                        "stack_trace": "File test.py, line 10",
-                                    },
-                                    {
-                                        "test_name": "test_bar",
-                                        "error_message": "KeyError: x",
-                                        "stack_trace": "File test.py, line 20",
-                                    },
-                                ],
-                                "ai_provider": "claude",
-                                "ai_model": "test-model",
-                            },
-                        )
-                        assert response.status_code == 200
-                        data = response.json()
-                        assert data["status"] == "completed"
-                        # analyze_failure_group called twice: once for sig-a group, once for sig-b
-                        assert mock_analyze_group.call_count == 2
+                        with patch(
+                            "jenkins_job_insight.main._generate_html_report",
+                            new_callable=AsyncMock,
+                        ):
+                            response = test_client.post(
+                                "/analyze-failures",
+                                json={
+                                    "failures": [
+                                        {
+                                            "test_name": "test_foo",
+                                            "error_message": "assert False",
+                                            "stack_trace": "File test.py, line 10",
+                                        },
+                                        {
+                                            "test_name": "test_baz",
+                                            "error_message": "assert False",
+                                            "stack_trace": "File test.py, line 10",
+                                        },
+                                        {
+                                            "test_name": "test_bar",
+                                            "error_message": "KeyError: x",
+                                            "stack_trace": "File test.py, line 20",
+                                        },
+                                    ],
+                                    "ai_provider": "claude",
+                                    "ai_model": "test-model",
+                                },
+                            )
+                            assert response.status_code == 200
+                            data = response.json()
+                            assert data["status"] == "completed"
+                            # analyze_failure_group called twice: once for sig-a group, once for sig-b
+                            assert mock_analyze_group.call_count == 2
 
 
 class TestResultsEndpoints:
