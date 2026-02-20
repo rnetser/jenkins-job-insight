@@ -52,7 +52,6 @@ _HOST_RE = re.compile(
 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "").lower()
 AI_MODEL = os.getenv("AI_MODEL", "")
-HTML_REPORT = os.getenv("HTML_REPORT", "true").lower() == "true"
 
 
 async def deliver_results(
@@ -183,13 +182,6 @@ def _resolve_ai_config(body: AnalyzeRequest) -> tuple[str, str]:
     return _resolve_ai_config_values(body.ai_provider, body.ai_model)
 
 
-def _resolve_html_report(body: BaseAnalysisRequest) -> bool:
-    """Resolve html_report flag from request or env var default."""
-    if body.html_report is not None:
-        return body.html_report
-    return HTML_REPORT
-
-
 def _resolve_enable_jira(body: BaseAnalysisRequest, settings: Settings) -> bool:
     """Resolve enable_jira flag from request, env var, or auto-detection.
 
@@ -233,7 +225,6 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
     #   ai_model         - resolved + validated by _resolve_ai_config()
     #   callback_url     - resolved in deliver_results()
     #   callback_headers - resolved in deliver_results()
-    #   html_report      - resolved by _resolve_html_report()
     direct_fields = [
         "jira_url",
         "jira_email",
@@ -271,13 +262,6 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         merged_data = settings.model_dump(mode="python") | overrides
         return Settings.model_validate(merged_data)
     return settings
-
-
-async def _generate_html_report(result: AnalysisResult) -> None:
-    """Generate and save HTML report to disk."""
-    html_content = format_result_as_html(result)
-    await save_html_report(result.job_id, html_content)
-    logger.info(f"HTML report saved for job_id: {result.job_id}")
 
 
 async def _enrich_result_with_jira(
@@ -352,11 +336,7 @@ async def process_analysis_with_id(
         result_data = result.model_dump(mode="json")
         result_data["base_url"] = base_url
         result_data["result_url"] = f"{base_url}/results/{job_id}"
-
-        # Generate HTML report if enabled
-        if _resolve_html_report(body):
-            await _generate_html_report(result)
-            result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
+        result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
 
         # Save to storage
         await update_status(job_id, "completed", result_data)
@@ -424,10 +404,7 @@ async def analyze(
         content = result.model_dump(mode="json")
         content["base_url"] = base_url
         content["result_url"] = f"{base_url}/results/{result.job_id}"
-
-        if _resolve_html_report(body):
-            await _generate_html_report(result)
-            content["html_report_url"] = f"{base_url}/results/{result.job_id}.html"
+        content["html_report_url"] = f"{base_url}/results/{result.job_id}.html"
 
         return JSONResponse(content=content, status_code=200)
 
@@ -454,9 +431,8 @@ async def analyze(
         "message": message,
         "base_url": base_url,
         "result_url": f"{base_url}/results/{job_id}",
+        "html_report_url": f"{base_url}/results/{job_id}.html",
     }
-    if _resolve_html_report(body):
-        response["html_report_url"] = f"{base_url}/results/{job_id}.html"
 
     return response
 
@@ -549,29 +525,13 @@ async def analyze_failures(
             failures=all_analyses,
         )
 
-        # Generate HTML report if enabled
-        if _resolve_html_report(body):
-            html_result = AnalysisResult(
-                job_id=job_id,
-                job_name="Direct Failure Analysis",
-                build_number=0,
-                jenkins_url=None,
-                status="completed",
-                summary=summary,
-                ai_provider=ai_provider,
-                ai_model=ai_model,
-                failures=all_analyses,
-            )
-            await _generate_html_report(html_result)
-
         await update_status(
             job_id, "completed", analysis_result.model_dump(mode="json")
         )
         content = analysis_result.model_dump(mode="json")
         content["base_url"] = base_url
         content["result_url"] = f"{base_url}/results/{job_id}"
-        if _resolve_html_report(body):
-            content["html_report_url"] = f"{base_url}/results/{job_id}.html"
+        content["html_report_url"] = f"{base_url}/results/{job_id}.html"
         return JSONResponse(content=content)
 
     except Exception as e:
@@ -593,14 +553,50 @@ async def analyze_failures(
         repo_manager.cleanup()
 
 
+def _build_analysis_result(job_id: str, result_data: dict) -> AnalysisResult:
+    """Reconstruct an AnalysisResult from stored result JSON.
+
+    Handles both Jenkins analysis results (which have jenkins_url) and
+    direct failure analysis results (which don't).
+
+    Args:
+        job_id: The job identifier.
+        result_data: The stored result JSON dict.
+
+    Returns:
+        AnalysisResult suitable for HTML report generation.
+    """
+    if "jenkins_url" in result_data and result_data["jenkins_url"]:
+        return AnalysisResult.model_validate(result_data)
+
+    # Direct failure analysis — wrap in AnalysisResult
+    return AnalysisResult(
+        job_id=job_id,
+        job_name=result_data.get("job_name", "Direct Failure Analysis"),
+        build_number=result_data.get("build_number", 0),
+        jenkins_url=None,
+        status="completed",
+        summary=result_data.get("summary", ""),
+        ai_provider=result_data.get("ai_provider", ""),
+        ai_model=result_data.get("ai_model", ""),
+        failures=[
+            FailureAnalysis.model_validate(f) for f in result_data.get("failures", [])
+        ],
+    )
+
+
 @app.get("/results/{job_id}.html", response_class=HTMLResponse)
 async def get_job_report(job_id: str) -> HTMLResponse:
-    """Serve a saved HTML report or a status page if still processing."""
+    """Serve an HTML report, generating it on-demand if needed.
+
+    Reports are generated lazily from stored results and cached to disk.
+    """
+    # Try disk cache first
     html_content = await get_html_report(job_id)
     if html_content:
         return HTMLResponse(html_content)
 
-    # Check if the job exists and show a status page
+    # Check if the job exists
     result = await get_result(job_id)
     if not result:
         raise HTTPException(
@@ -615,10 +611,18 @@ async def get_job_report(job_id: str) -> HTMLResponse:
             headers={"Refresh": "10"},
         )
 
-    # Job completed/failed but no HTML report was generated
+    # Generate HTML on-demand from stored result data
+    result_data = result.get("result")
+    if result_data and status == "completed":
+        analysis_result = _build_analysis_result(job_id, result_data)
+        html_content = format_result_as_html(analysis_result)
+        await save_html_report(job_id, html_content)
+        logger.info("HTML report generated on-demand for job_id: %s", job_id)
+        return HTMLResponse(html_content)
+
     raise HTTPException(
         status_code=404,
-        detail=f"HTML report not found for job '{job_id}'. The report may not have been generated.",
+        detail=f"No report available for job '{job_id}'.",
     )
 
 

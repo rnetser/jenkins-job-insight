@@ -59,10 +59,6 @@ class BaseAnalysisRequest(BaseModel):
         default=None,
         description="Max Jira search results (overrides JIRA_MAX_RESULTS env var)",
     )
-    html_report: bool | None = Field(
-        default=None,
-        description="Generate HTML report (default: true, overrides HTML_REPORT env var)",
-    )
 
 
 class AnalyzeRequest(BaseAnalysisRequest):
