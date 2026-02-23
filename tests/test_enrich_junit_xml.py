@@ -1,7 +1,7 @@
 """Tests for the standalone JUnit XML AI enrichment CLI."""
 
 import importlib.util
-import logging
+import io
 import os
 import sys
 from pathlib import Path
@@ -136,13 +136,27 @@ class TestDryRun:
     """Tests for dry-run mode."""
 
     def test_dry_run_shows_failures_and_exits_success(
-        self, junit_xml_with_failures: Path, caplog: pytest.LogCaptureFixture
+        self, junit_xml_with_failures: Path
     ) -> None:
-        with caplog.at_level(logging.INFO, logger="jji-enricher"):
+        # simple_logger writes to stderr via its own StreamHandler;
+        # capture by temporarily redirecting the handler's stream.
+        enricher_logger = _enricher.logger
+        buf = io.StringIO()
+        original_streams = []
+        for handler in enricher_logger.handlers:
+            if hasattr(handler, "stream"):
+                original_streams.append((handler, handler.stream))
+                handler.stream = buf
+
+        try:
             with patch("sys.argv", ["prog", str(junit_xml_with_failures), "--dry-run"]):
                 result = main()
+        finally:
+            for handler, stream in original_streams:
+                handler.stream = stream
+
         assert result == EXIT_SUCCESS
-        log_output = caplog.text
+        log_output = buf.getvalue()
         assert "2 failure(s)" in log_output
         assert "test_fail_with_message" in log_output
         assert "test_fail_no_message" in log_output
@@ -326,7 +340,7 @@ class TestConfigResolution:
                     "enrich_junit_xml._fetch_analysis_from_server",
                     return_value=({}, ""),
                 ) as mock_fetch:
-                    main()
+                    assert main() == EXIT_SERVER_ERROR
 
                 # Verify the CLI values were used in the payload
                 assert mock_fetch.call_args.kwargs["payload"]["ai_provider"] == "claude"
@@ -355,9 +369,13 @@ class TestConfigResolution:
                     "enrich_junit_xml._fetch_analysis_from_server",
                     return_value=({}, ""),
                 ) as mock_fetch:
-                    main()
+                    assert main() == EXIT_SERVER_ERROR
 
                 assert mock_fetch.call_args.kwargs["payload"]["ai_provider"] == "gemini"
                 assert (
                     mock_fetch.call_args.kwargs["payload"]["ai_model"] == "gemini-model"
+                )
+                assert (
+                    mock_fetch.call_args.kwargs["server_url"]
+                    == "http://env-server:8000"
                 )

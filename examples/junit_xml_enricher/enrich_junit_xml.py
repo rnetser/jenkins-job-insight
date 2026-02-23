@@ -45,7 +45,6 @@ Exit codes:
 """
 
 import argparse
-import logging
 import os
 import sys
 
@@ -54,6 +53,7 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 from dotenv import load_dotenv
+from simple_logger.logger import get_logger
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -68,7 +68,7 @@ EXIT_NO_FAILURES = 1
 EXIT_SERVER_ERROR = 2
 EXIT_INVALID_INPUT = 3
 
-logger = logging.getLogger("jji-enricher")
+logger = get_logger(name="jji-enricher", level=os.environ.get("LOG_LEVEL", "INFO"))
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ def main() -> int:
     parser.add_argument(
         "--ai-model",
         default=None,
-        help='AI model name (env: JJI_AI_MODEL, default: "claude-opus-4-6[1m]")',
+        help='AI model name (env: JJI_AI_MODEL, default: "claude-opus-4-6")',
     )
     parser.add_argument(
         "--timeout",
@@ -147,18 +147,11 @@ def main() -> int:
     # Load .env file first so LOG_LEVEL and other env vars are available
     load_dotenv()
 
-    # Configure logging (--verbose > LOG_LEVEL env var > INFO default)
+    # Configure logging (--verbose overrides LOG_LEVEL env var)
     if args.verbose:
-        log_level = logging.DEBUG
-    else:
-        log_level = getattr(
-            logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO
-        )
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-        datefmt="%H:%M:%S",
-    )
+        import logging as _logging
+
+        logger.setLevel(_logging.DEBUG)
 
     # Validate XML path
     xml_path: Path = args.xml_path
@@ -197,7 +190,7 @@ def main() -> int:
         return EXIT_INVALID_INPUT
 
     ai_provider = args.ai_provider or os.environ.get("JJI_AI_PROVIDER", "claude")
-    ai_model = args.ai_model or os.environ.get("JJI_AI_MODEL", "claude-opus-4-6[1m]")
+    ai_model = args.ai_model or os.environ.get("JJI_AI_MODEL", "claude-opus-4-6")
 
     # Resolve timeout (CLI arg > env var > default)
     timeout_raw = args.timeout
