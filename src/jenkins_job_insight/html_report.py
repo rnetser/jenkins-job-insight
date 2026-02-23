@@ -40,11 +40,10 @@ def _common_css() -> str:
     by each caller.
 
     Returns:
-        A CSS string (without ``<style>`` tags) using doubled braces for
-        use inside an f-string.
+        A CSS string (without ``<style>`` tags) ready to embed directly.
     """
     return """\
-:root {{
+:root {
     --bg-primary: #0d1117;
     --bg-secondary: #161b22;
     --bg-tertiary: #21262d;
@@ -65,19 +64,19 @@ def _common_css() -> str:
     --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
     --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     --radius: 8px;
-}}
-*,*::before,*::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{
+}
+*,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
     font-family: var(--font-sans);
     background: var(--bg-primary);
     color: var(--text-primary);
     line-height: 1.6;
     min-height: 100vh;
-}}
-.container {{ max-width: 1200px; margin: 0 auto; padding: 0 24px 60px; }}
+}
+.container { max-width: 1200px; margin: 0 auto; padding: 0 24px 60px; }
 
 /* Header */
-.sticky-header {{
+.sticky-header {
     position: sticky;
     top: 0;
     z-index: 100;
@@ -85,12 +84,12 @@ body {{
     border-bottom: 1px solid var(--border);
     padding: 16px 24px;
     margin: 0 -24px 32px;
-}}
-.header-content {{ max-width: 1200px; margin: 0 auto; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }}
-.header-content h1 {{ font-size: 20px; font-weight: 700; flex-shrink: 0; }}
+}
+.header-content { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.header-content h1 { font-size: 20px; font-weight: 700; flex-shrink: 0; }
 
 /* Footer */
-.report-footer {{
+.report-footer {
     margin-top: 48px;
     padding: 24px 0;
     border-top: 1px solid var(--border);
@@ -100,14 +99,14 @@ body {{
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 12px;
-}}
-.report-footer a {{ color: var(--accent-blue); text-decoration: none; }}
-.report-footer a:hover {{ text-decoration: underline; }}
+}
+.report-footer a { color: var(--accent-blue); text-decoration: none; }
+.report-footer a:hover { text-decoration: underline; }
 
 /* Responsive */
-@media (max-width: 768px) {{
-    .header-content {{ flex-direction: column; align-items: flex-start; }}
-}}"""
+@media (max-width: 768px) {
+    .header-content { flex-direction: column; align-items: flex-start; }
+}"""
 
 
 def format_result_as_html(result: AnalysisResult) -> str:
