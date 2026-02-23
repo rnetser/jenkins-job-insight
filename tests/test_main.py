@@ -750,6 +750,122 @@ class TestResultsEndpoints:
             response = test_client.get("/results/non-existent.html")
         assert response.status_code == 404
 
+    def test_get_report_on_demand_generation(self, test_client) -> None:
+        """Test on-demand HTML generation when cache misses but completed result exists."""
+        stored_result = {
+            "job_id": "on-demand-job",
+            "status": "completed",
+            "result": {
+                "job_id": "on-demand-job",
+                "status": "completed",
+                "summary": "Analyzed 3 failures",
+                "ai_provider": "claude",
+                "ai_model": "test-model",
+                "failures": [
+                    {
+                        "test_name": "test_example",
+                        "error": "assert False",
+                        "analysis": {
+                            "classification": "CODE ISSUE",
+                            "details": "Test assertion failed",
+                        },
+                    }
+                ],
+            },
+            "created_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
+        ) as mock_get_html:
+            mock_get_html.return_value = None
+
+            with patch(
+                "jenkins_job_insight.main.get_result", new_callable=AsyncMock
+            ) as mock_get_result:
+                mock_get_result.return_value = stored_result
+
+                with patch(
+                    "jenkins_job_insight.main.format_result_as_html"
+                ) as mock_format:
+                    mock_format.return_value = (
+                        "<html><body>Generated Report</body></html>"
+                    )
+
+                    with patch(
+                        "jenkins_job_insight.main.save_html_report",
+                        new_callable=AsyncMock,
+                    ) as mock_save:
+                        response = test_client.get("/results/on-demand-job.html")
+
+                        assert response.status_code == 200
+                        assert response.headers["content-type"].startswith("text/html")
+                        assert "Generated Report" in response.text
+
+                        # Verify format_result_as_html was called with correct AnalysisResult
+                        mock_format.assert_called_once()
+                        analysis_arg = mock_format.call_args[0][0]
+                        assert analysis_arg.jenkins_url is None
+                        assert analysis_arg.job_name == "Direct Failure Analysis"
+                        assert analysis_arg.job_id == "on-demand-job"
+
+                        # Verify disk caching was attempted
+                        mock_save.assert_called_once_with(
+                            "on-demand-job",
+                            "<html><body>Generated Report</body></html>",
+                        )
+
+    def test_get_report_on_demand_generation_cache_failure(self, test_client) -> None:
+        """Test that disk cache failure does not prevent serving the generated report."""
+        stored_result = {
+            "job_id": "cache-fail-job",
+            "status": "completed",
+            "result": {
+                "job_id": "cache-fail-job",
+                "status": "completed",
+                "summary": "Analyzed 1 failure",
+                "ai_provider": "claude",
+                "ai_model": "test-model",
+                "failures": [
+                    {
+                        "test_name": "test_example",
+                        "error": "assert False",
+                        "analysis": {
+                            "classification": "CODE ISSUE",
+                            "details": "Test assertion failed",
+                        },
+                    }
+                ],
+            },
+            "created_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
+        ) as mock_get_html:
+            mock_get_html.return_value = None
+
+            with patch(
+                "jenkins_job_insight.main.get_result", new_callable=AsyncMock
+            ) as mock_get_result:
+                mock_get_result.return_value = stored_result
+
+                with patch(
+                    "jenkins_job_insight.main.format_result_as_html"
+                ) as mock_format:
+                    mock_format.return_value = "<html><body>Report</body></html>"
+
+                    with patch(
+                        "jenkins_job_insight.main.save_html_report",
+                        new_callable=AsyncMock,
+                        side_effect=OSError("Disk full"),
+                    ):
+                        response = test_client.get("/results/cache-fail-job.html")
+
+                        assert response.status_code == 200
+                        assert response.headers["content-type"].startswith("text/html")
+                        assert "Report" in response.text
+
     async def test_get_result_json_format_default(
         self, test_client, temp_db_path: Path
     ) -> None:

@@ -525,14 +525,13 @@ async def analyze_failures(
             failures=all_analyses,
         )
 
-        await update_status(
-            job_id, "completed", analysis_result.model_dump(mode="json")
-        )
-        content = analysis_result.model_dump(mode="json")
-        content["base_url"] = base_url
-        content["result_url"] = f"{base_url}/results/{job_id}"
-        content["html_report_url"] = f"{base_url}/results/{job_id}.html"
-        return JSONResponse(content=content)
+        result_data = analysis_result.model_dump(mode="json")
+        result_data["base_url"] = base_url
+        result_data["result_url"] = f"{base_url}/results/{job_id}"
+        result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
+
+        await update_status(job_id, "completed", result_data)
+        return JSONResponse(content=result_data)
 
     except Exception as e:
         logger.exception(f"Direct failure analysis failed for job {job_id}")
@@ -566,7 +565,7 @@ def _build_analysis_result(job_id: str, result_data: dict) -> AnalysisResult:
     Returns:
         AnalysisResult suitable for HTML report generation.
     """
-    if "jenkins_url" in result_data and result_data["jenkins_url"]:
+    if result_data.get("jenkins_url"):
         return AnalysisResult.model_validate(result_data)
 
     # Direct failure analysis — wrap in AnalysisResult
@@ -616,7 +615,12 @@ async def get_job_report(job_id: str) -> HTMLResponse:
     if result_data and status == "completed":
         analysis_result = _build_analysis_result(job_id, result_data)
         html_content = format_result_as_html(analysis_result)
-        await save_html_report(job_id, html_content)
+        try:
+            await save_html_report(job_id, html_content)
+        except Exception:
+            logger.warning(
+                "Failed to cache HTML report for job_id: %s", job_id, exc_info=True
+            )
         logger.info("HTML report generated on-demand for job_id: %s", job_id)
         return HTMLResponse(html_content)
 
