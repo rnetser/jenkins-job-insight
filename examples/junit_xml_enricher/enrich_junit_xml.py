@@ -243,11 +243,12 @@ def main() -> int:
         timeout=timeout,
     )
 
-    if not analysis_map:
+    if not analysis_map and not html_report_url:
         logger.error("Server returned no analysis results.")
         return EXIT_SERVER_ERROR
 
-    logger.info("Received analysis for %d failure(s)", len(analysis_map))
+    if analysis_map:
+        logger.info("Received analysis for %d failure(s)", len(analysis_map))
 
     # Apply analysis to XML
     try:
@@ -264,8 +265,10 @@ def main() -> int:
 
     # Print summary
     print(f"Successfully enriched {xml_path} with AI analysis.")
+    logger.info("Successfully enriched %s with AI analysis.", xml_path)
     if html_report_url:
         print(f"HTML report: {html_report_url}")
+        logger.info("HTML report: %s", html_report_url)
 
     return EXIT_SUCCESS
 
