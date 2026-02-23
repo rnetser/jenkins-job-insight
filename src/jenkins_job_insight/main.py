@@ -7,7 +7,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import SecretStr
 from simple_logger.logger import get_logger
 
@@ -29,7 +29,12 @@ from jenkins_job_insight.models import (
     FailureAnalysis,
     FailureAnalysisResult,
 )
-from jenkins_job_insight.html_report import format_result_as_html, format_status_page
+from jenkins_job_insight.html_report import (
+    FAVICON_SVG,
+    format_result_as_html,
+    format_status_page,
+    generate_dashboard_html,
+)
 from jenkins_job_insight.output import send_callback
 from jenkins_job_insight.repository import RepositoryManager
 from jenkins_job_insight.storage import (
@@ -37,6 +42,7 @@ from jenkins_job_insight.storage import (
     get_result,
     init_db,
     list_results,
+    list_results_for_dashboard,
     save_html_report,
     save_result,
     update_status,
@@ -655,10 +661,37 @@ async def list_job_results(limit: int = Query(50, le=100)) -> list[dict]:
     return await list_results(limit)
 
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(
+    request: Request,
+    limit: int = Query(500, ge=1, le=10000),
+) -> HTMLResponse:
+    """Serve the dashboard page listing analysis reports.
+
+    Args:
+        request: The incoming request (used for base URL detection).
+        limit: Maximum number of jobs to load from the database.
+    """
+    base_url = _extract_base_url(request)
+    jobs = await list_results_for_dashboard(limit)
+    html_content = generate_dashboard_html(jobs, base_url, limit=limit)
+    return HTMLResponse(html_content)
+
+
 @app.get("/health")
 async def health_check() -> dict:
     """Health check endpoint."""
     return {"status": "healthy"}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    """Serve the application favicon as an SVG image."""
+    return Response(
+        content=FAVICON_SVG,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 def run() -> None:
