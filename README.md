@@ -398,8 +398,10 @@ The custom prompt should include instructions for the AI on how to analyze Jenki
 | `/analyze?sync=true`     | POST   | Submit and wait for result (returns JSON)         |
 | `/results/{job_id}`      | GET    | Retrieve stored result (JSON)                     |
 | `/results/{job_id}.html` | GET    | Retrieve stored result as an HTML report          |
+| `/dashboard`             | GET    | HTML dashboard listing all analysis reports       |
 | `/results`               | GET    | List recent analysis jobs (default: 50, max: 100) |
 | `/health`                | GET    | Health check endpoint                             |
+| `/favicon.ico`           | GET    | Application favicon (SVG)                         |
 | `/analyze-failures`      | POST   | Analyze raw test failures directly (no Jenkins)   |
 
 The service connects to the Jenkins instance configured via the `JENKINS_URL` environment variable. All analysis requests specify only the job name and build number.

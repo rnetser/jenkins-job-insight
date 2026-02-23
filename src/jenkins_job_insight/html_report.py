@@ -5,6 +5,7 @@ All CSS is inlined so the report can be opened directly in any browser
 without external dependencies.
 """
 
+import base64
 import html
 from collections.abc import Callable
 
@@ -16,6 +17,18 @@ from jenkins_job_insight.models import (
     FailureAnalysis,
     JiraMatch,
     ProductBugReport,
+)
+
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="6" fill="#0d1117"/>
+  <circle cx="13" cy="13" r="7" fill="none" stroke="#58a6ff" stroke-width="2.5"/>
+  <line x1="18" y1="18" x2="26" y2="26" stroke="#58a6ff" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="13" cy="11" r="1.5" fill="#f85149"/>
+  <path d="M10 15.5 Q13 18 16 15.5" fill="none" stroke="#f85149" stroke-width="1.5" stroke-linecap="round"/>
+</svg>"""
+
+FAVICON_DATA_URI = (
+    "data:image/svg+xml;base64," + base64.b64encode(FAVICON_SVG.encode()).decode()
 )
 
 
@@ -49,6 +62,7 @@ def format_result_as_html(result: AnalysisResult) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Jenkins Analysis - {e(job_name)} #{e(build_number)}</title>
+<link rel="icon" href="{FAVICON_DATA_URI}">
 <style>
 :root {{
     --bg-primary: #0d1117;
@@ -1051,6 +1065,7 @@ def format_status_page(job_id: str, status: str, result: dict) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Analysis {e(status_label)} - {e(job_id)}</title>
+<link rel="icon" href="{FAVICON_DATA_URI}">
 <style>
 :root {{
     --bg-primary: #0d1117;
@@ -1173,3 +1188,596 @@ body {{
 </div>
 </body>
 </html>"""
+
+
+def generate_dashboard_html(
+    jobs: list[dict], base_url: str = "", limit: int = 500
+) -> str:
+    """Generate a self-contained HTML dashboard page listing analysis jobs.
+
+    Produces a complete HTML document with inline CSS using the same dark
+    GitHub-inspired theme as the analysis reports. Each job is rendered as
+    a clickable card linking to its HTML report.
+
+    Args:
+        jobs: List of dicts from list_results_for_dashboard(). Each dict has
+            job_id, jenkins_url, status, created_at, and optionally job_name,
+            build_number, failure_count, summary.
+        base_url: External base URL for constructing absolute report links.
+        limit: The server-side cap that was used to load jobs. Shown in the UI
+            so the user can adjust it.
+
+    Returns:
+        A complete HTML document as a string.
+    """
+    e = html.escape
+    total_jobs = len(jobs)
+
+    parts: list[str] = []
+
+    parts.append(f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jenkins Job Insight - Dashboard</title>
+<link rel="icon" href="{FAVICON_DATA_URI}">
+<style>
+:root {{
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --bg-hover: #292e36;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --accent-red: #f85149;
+    --accent-blue: #58a6ff;
+    --accent-yellow: #d29922;
+    --accent-orange: #f0883e;
+    --accent-green: #3fb950;
+    --accent-purple: #bc8cff;
+    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    --radius: 8px;
+}}
+*,*::before,*::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{
+    font-family: var(--font-sans);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 100vh;
+}}
+.container {{ max-width: 1200px; margin: 0 auto; padding: 0 24px 60px; }}
+
+/* Header */
+.sticky-header {{
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    margin: 0 -24px 32px;
+}}
+.header-content {{ max-width: 1200px; margin: 0 auto; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }}
+.header-content h1 {{ font-size: 20px; font-weight: 700; flex-shrink: 0; }}
+.jobs-badge {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(88, 166, 255, 0.12);
+    color: var(--accent-blue);
+    font-size: 13px;
+    font-weight: 700;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-family: var(--font-mono);
+}}
+
+/* Dashboard cards */
+.dashboard-card {{
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 20px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    text-decoration: none;
+    color: inherit;
+    transition: background 0.15s, border-color 0.15s;
+}}
+.dashboard-card:hover {{
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+}}
+.card-main {{
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}}
+.card-job-name {{
+    font-weight: 600;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 400px;
+}}
+.card-build-chip {{
+    font-size: 12px;
+    font-family: var(--font-mono);
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}}
+.status-chip {{
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+}}
+.status-chip.completed {{ background: rgba(63, 185, 80, 0.15); color: var(--accent-green); }}
+.status-chip.failed {{ background: rgba(248, 81, 73, 0.15); color: var(--accent-red); }}
+.status-chip.running {{ background: rgba(210, 153, 34, 0.15); color: var(--accent-yellow); }}
+.status-chip.pending {{ background: rgba(88, 166, 255, 0.12); color: var(--accent-blue); }}
+.failure-count-badge {{
+    font-size: 12px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(248, 81, 73, 0.12);
+    color: var(--accent-red);
+    white-space: nowrap;
+}}
+.card-meta {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+}}
+.card-timestamp {{
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}}
+.card-jenkins-icon {{
+    color: var(--text-muted);
+    flex-shrink: 0;
+}}
+.card-job-id {{
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 120px;
+}}
+
+/* Controls bar (search + per-page) */
+.controls-bar {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}}
+.search-input {{
+    flex: 1;
+    min-width: 200px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color 0.15s;
+}}
+.search-input::placeholder {{ color: var(--text-muted); }}
+.search-input:focus {{ border-color: var(--accent-blue); }}
+.per-page-select {{
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    cursor: pointer;
+    outline: none;
+}}
+.per-page-select:focus {{ border-color: var(--accent-blue); }}
+.limit-control {{
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}}
+.limit-label {{
+    font-size: 13px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}}
+.limit-input {{
+    width: 80px;
+    padding: 10px 10px;
+    font-size: 14px;
+    font-family: var(--font-mono);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color 0.15s;
+}}
+.limit-input:focus {{ border-color: var(--accent-blue); }}
+.limit-btn {{
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}}
+.limit-btn:hover {{
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+}}
+
+/* Pagination controls */
+.pagination-controls {{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-top: 24px;
+    padding: 16px 0;
+}}
+.pagination-btn {{
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}}
+.pagination-btn:hover:not(:disabled) {{
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+}}
+.pagination-btn:disabled {{
+    opacity: 0.4;
+    cursor: not-allowed;
+}}
+.page-info {{
+    font-size: 13px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+}}
+
+/* Empty state */
+.empty-state {{
+    text-align: center;
+    padding: 80px 20px;
+    color: var(--text-muted);
+}}
+.empty-state svg {{ margin-bottom: 20px; }}
+.empty-state p {{
+    font-size: 16px;
+    margin-top: 8px;
+}}
+
+/* Footer */
+.report-footer {{
+    margin-top: 48px;
+    padding: 24px 0;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+}}
+
+/* Responsive */
+@media (max-width: 768px) {{
+    .header-content {{ flex-direction: column; align-items: flex-start; }}
+    .dashboard-card {{ flex-direction: column; align-items: flex-start; gap: 10px; }}
+    .card-meta {{ width: 100%; justify-content: space-between; }}
+    .card-job-name {{ max-width: 100%; }}
+    .controls-bar {{ flex-direction: column; }}
+    .search-input {{ min-width: 100%; }}
+}}
+@media (max-width: 480px) {{
+    .card-main {{ font-size: 12px; gap: 6px; }}
+    .card-job-id {{ max-width: 80px; }}
+}}
+</style>
+</head>
+<body>
+<div class="container">
+""")
+
+    # --- STICKY HEADER ---
+    limit_note = f" (showing last {limit})" if total_jobs >= limit else ""
+    parts.append(f"""
+<div class="sticky-header">
+  <div class="header-content">
+    <h1>Jenkins Job Insight</h1>
+    <span id="jobs-badge" class="jobs-badge">{total_jobs} job{"s" if total_jobs != 1 else ""}{e(limit_note)}</span>
+  </div>
+</div>
+""")
+
+    # --- EMPTY STATE ---
+    if total_jobs == 0:
+        parts.append(f"""
+<div class="controls-bar">
+  <div class="limit-control">
+    <span class="limit-label">Load last</span>
+    <input type="number" id="limit-input" class="limit-input" min="1" value="{limit}">
+    <button id="limit-btn" class="limit-btn" onclick="window.location.href='/dashboard?limit='+document.getElementById('limit-input').value">Load</button>
+  </div>
+</div>
+<div class="empty-state">
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <rect x="3" y="3" width="18" height="18" rx="2"/>
+    <line x1="9" y1="9" x2="15" y2="9"/>
+    <line x1="9" y1="13" x2="15" y2="13"/>
+    <line x1="9" y1="17" x2="12" y2="17"/>
+  </svg>
+  <p>No analysis results yet</p>
+</div>
+""")
+    else:
+        # --- CONTROLS BAR ---
+        parts.append(f"""
+<div class="controls-bar">
+  <input type="text" id="search-input" class="search-input" placeholder="Search jobs by name, ID, or status...">
+  <select id="per-page-select" class="per-page-select">
+    <option value="10" selected>10 per page</option>
+    <option value="50">50 per page</option>
+    <option value="100">100 per page</option>
+  </select>
+  <div class="limit-control">
+    <span class="limit-label">Load last</span>
+    <input type="number" id="limit-input" class="limit-input" min="1" value="{limit}">
+    <button id="limit-btn" class="limit-btn" onclick="window.location.href='/dashboard?limit='+document.getElementById('limit-input').value">Load</button>
+  </div>
+</div>
+""")
+
+        # --- JOB CARDS ---
+        parts.append('<div id="job-cards">')
+        for job in jobs:
+            _render_dashboard_card(parts, job, base_url, e)
+        parts.append("</div>")
+
+        # --- PAGINATION CONTROLS ---
+        parts.append("""
+<div class="pagination-controls">
+  <button id="prev-btn" class="pagination-btn" disabled>Previous</button>
+  <span id="page-info" class="page-info">Page 1 of 1</span>
+  <button id="next-btn" class="pagination-btn" disabled>Next</button>
+</div>
+""")
+
+    # --- FOOTER ---
+    parts.append("""
+<div class="report-footer">
+  <span>Jenkins Job Insight Dashboard</span>
+</div>
+""")
+
+    # --- JAVASCRIPT (only when there are jobs) ---
+    if total_jobs > 0:
+        parts.append(f"""
+<script>
+(function() {{
+  var currentPage = 1;
+  var perPage = 10;
+  var serverLimit = {limit};
+  var allCards = Array.from(document.querySelectorAll('#job-cards .dashboard-card'));
+  var totalAll = allCards.length;
+  var filteredCards = allCards.slice();
+
+  var searchInput = document.getElementById('search-input');
+  var perPageSelect = document.getElementById('per-page-select');
+  var prevBtn = document.getElementById('prev-btn');
+  var nextBtn = document.getElementById('next-btn');
+  var pageInfo = document.getElementById('page-info');
+  var jobsBadge = document.getElementById('jobs-badge');
+
+  function getCardText(card) {{
+    var text = card.textContent.toLowerCase();
+    var titles = card.querySelectorAll('[title]');
+    for (var i = 0; i < titles.length; i++) {{
+      text += ' ' + titles[i].getAttribute('title').toLowerCase();
+    }}
+    var href = card.getAttribute('href');
+    if (href) {{
+      text += ' ' + href.toLowerCase();
+    }}
+    return text;
+  }}
+
+  function applyFilter() {{
+    var query = searchInput.value.toLowerCase().trim();
+    if (query === '') {{
+      filteredCards = allCards.slice();
+    }} else {{
+      filteredCards = allCards.filter(function(card) {{
+        return getCardText(card).indexOf(query) !== -1;
+      }});
+    }}
+    currentPage = 1;
+    render();
+  }}
+
+  function render() {{
+    var totalFiltered = filteredCards.length;
+    var totalPages = Math.max(1, Math.ceil(totalFiltered / perPage));
+    if (currentPage > totalPages) currentPage = totalPages;
+    var start = (currentPage - 1) * perPage;
+    var end = start + perPage;
+
+    // Hide all cards first
+    for (var i = 0; i < allCards.length; i++) {{
+      allCards[i].style.display = 'none';
+    }}
+    // Show only the filtered cards for the current page
+    for (var j = 0; j < filteredCards.length; j++) {{
+      if (j >= start && j < end) {{
+        filteredCards[j].style.display = '';
+      }}
+    }}
+
+    // Update page info
+    pageInfo.textContent = 'Page ' + currentPage + ' of ' + totalPages;
+
+    // Update buttons
+    prevBtn.disabled = (currentPage <= 1);
+    nextBtn.disabled = (currentPage >= totalPages);
+
+    // Update badge
+    var suffix = (totalAll !== 1 ? 's' : '');
+    if (totalFiltered === totalAll) {{
+      var limitNote = (totalAll >= serverLimit) ? ' (showing last ' + serverLimit + ')' : '';
+      jobsBadge.textContent = totalAll + ' job' + suffix + limitNote;
+    }} else {{
+      jobsBadge.textContent = totalFiltered + ' of ' + totalAll + ' job' + suffix;
+    }}
+  }}
+
+  searchInput.addEventListener('input', applyFilter);
+
+  perPageSelect.addEventListener('change', function() {{
+    perPage = parseInt(perPageSelect.value, 10);
+    currentPage = 1;
+    render();
+  }});
+
+  prevBtn.addEventListener('click', function() {{
+    if (currentPage > 1) {{
+      currentPage--;
+      render();
+    }}
+  }});
+
+  nextBtn.addEventListener('click', function() {{
+    var totalPages = Math.max(1, Math.ceil(filteredCards.length / perPage));
+    if (currentPage < totalPages) {{
+      currentPage++;
+      render();
+    }}
+  }});
+
+  // Initial render
+  render();
+}})();
+</script>
+""")
+
+    parts.append("</div>\n</body>\n</html>")
+    return "\n".join(parts)
+
+
+def _render_dashboard_card(
+    parts: list[str],
+    job: dict,
+    base_url: str,
+    e: Callable[[str], str],
+) -> None:
+    """Render a single dashboard job card as a clickable link.
+
+    Args:
+        parts: List of HTML string parts to append to.
+        job: Job dict from list_results_for_dashboard().
+        base_url: External base URL for constructing report links.
+        e: HTML escape function reference.
+    """
+    job_id = job.get("job_id", "")
+    status = job.get("status", "unknown")
+    created_at = job.get("created_at", "")
+    jenkins_url = job.get("jenkins_url", "")
+    job_name = job.get("job_name", "") or "Direct Analysis"
+    build_number = job.get("build_number", "")
+    failure_count = job.get("failure_count")
+
+    status_class = (
+        status if status in ("completed", "failed", "running", "pending") else "pending"
+    )
+    report_href = f"{base_url}/results/{job_id}.html"
+
+    # Truncated job_id for display (first 8 chars)
+    short_id = job_id[:8] if len(job_id) > 8 else job_id
+
+    parts.append(
+        f'<a class="dashboard-card" href="{e(report_href)}" target="_blank" rel="noopener">'
+    )
+    parts.append('  <div class="card-main">')
+    parts.append(f'    <span class="card-job-name">{e(job_name)}</span>')
+
+    if build_number:
+        parts.append(
+            f'    <span class="card-build-chip">#{e(str(build_number))}</span>'
+        )
+
+    parts.append(f'    <span class="status-chip {e(status_class)}">{e(status)}</span>')
+
+    if failure_count is not None and failure_count > 0:
+        parts.append(
+            f'    <span class="failure-count-badge">'
+            f"{failure_count} failure{'s' if failure_count != 1 else ''}"
+            f"</span>"
+        )
+
+    parts.append("  </div>")
+    parts.append('  <div class="card-meta">')
+    parts.append(
+        f'    <span class="card-job-id" title="{e(job_id)}">{e(short_id)}</span>'
+    )
+    parts.append(f'    <span class="card-timestamp">{e(created_at)}</span>')
+
+    if jenkins_url:
+        parts.append(
+            '    <span class="card-jenkins-icon" title="Jenkins build available">'
+            '\n      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
+            ' stroke="currentColor" stroke-width="2">'
+            '\n        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'
+            '\n        <polyline points="15 3 21 3 21 9"/>'
+            '\n        <line x1="10" y1="14" x2="21" y2="3"/>'
+            "\n      </svg>"
+            "\n    </span>"
+        )
+
+    parts.append("  </div>")
+    parts.append("</a>")

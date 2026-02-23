@@ -860,3 +860,134 @@ class TestOpenAPISchema:
         """Test that docs endpoint is available."""
         response = test_client.get("/docs")
         assert response.status_code == 200
+
+
+class TestDashboardEndpoint:
+    """Tests for the GET /dashboard endpoint."""
+
+    def test_dashboard_returns_html(self, test_client) -> None:
+        """Test that GET /dashboard returns 200 with text/html content type."""
+        response = test_client.get("/dashboard")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+
+    def test_dashboard_contains_title(self, test_client) -> None:
+        """Test that the dashboard HTML contains the application title."""
+        response = test_client.get("/dashboard")
+        assert response.status_code == 200
+        assert "Jenkins Job Insight" in response.text
+
+    def test_dashboard_empty_shows_message(self, test_client) -> None:
+        """Test that an empty dashboard shows the 'No analysis results yet' message."""
+        response = test_client.get("/dashboard")
+        assert response.status_code == 200
+        assert "No analysis results yet" in response.text
+
+    async def test_dashboard_shows_jobs(self, test_client, temp_db_path: Path) -> None:
+        """Test that stored jobs appear on the dashboard with links to HTML reports."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            for i in range(3):
+                await storage.save_result(
+                    job_id=f"dash-job-{i}",
+                    jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
+                    status="completed",
+                    result={
+                        "job_name": f"test-job-{i}",
+                        "build_number": i + 1,
+                        "failures": [{"test_name": "t"}] if i == 0 else [],
+                    },
+                )
+
+            response = test_client.get("/dashboard")
+            assert response.status_code == 200
+            html = response.text
+            for i in range(3):
+                assert f"dash-job-{i}" in html
+                assert f"/results/dash-job-{i}.html" in html
+
+    async def test_dashboard_links_open_new_tab(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """Test that dashboard cards have target='_blank' for opening in new tabs."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            await storage.save_result(
+                job_id="tab-test-job",
+                jenkins_url="https://jenkins.example.com/job/test/1/",
+                status="completed",
+                result={"job_name": "tab-test", "failures": []},
+            )
+
+            response = test_client.get("/dashboard")
+            assert response.status_code == 200
+            assert 'target="_blank"' in response.text
+
+    async def test_dashboard_default_limit(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """Test that the dashboard default limit returns up to 500 jobs."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            for i in range(10):
+                await storage.save_result(
+                    job_id=f"all-job-{i}",
+                    jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
+                    status="completed",
+                    result={"job_name": f"all-test-{i}", "failures": []},
+                )
+
+            response = test_client.get("/dashboard")
+            assert response.status_code == 200
+            html = response.text
+            # All 10 cards should be present (fewer than default limit of 500)
+            card_count = html.count('class="dashboard-card"')
+            assert card_count == 10
+
+    async def test_dashboard_limit_parameter(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """Test that ?limit=3 caps the number of job cards returned."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            for i in range(5):
+                await storage.save_result(
+                    job_id=f"lim-job-{i}",
+                    jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
+                    status="completed",
+                    result={"job_name": f"lim-test-{i}", "failures": []},
+                )
+
+            response = test_client.get("/dashboard?limit=3")
+            assert response.status_code == 200
+            html = response.text
+            card_count = html.count('class="dashboard-card"')
+            assert card_count == 3
+
+    def test_dashboard_limit_invalid_zero(self, test_client) -> None:
+        """Test that limit=0 returns a validation error."""
+        response = test_client.get("/dashboard?limit=0")
+        assert response.status_code == 422
+
+
+class TestFaviconEndpoint:
+    """Tests for the GET /favicon.ico endpoint."""
+
+    def test_favicon_returns_svg(self, test_client) -> None:
+        """Test that GET /favicon.ico returns 200 with image/svg+xml content type."""
+        response = test_client.get("/favicon.ico")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/svg+xml"
+
+    def test_favicon_contains_svg_content(self, test_client) -> None:
+        """Test that the favicon response body contains a valid SVG tag."""
+        response = test_client.get("/favicon.ico")
+        assert response.status_code == 200
+        assert "<svg" in response.text
+
+    def test_favicon_has_cache_control(self, test_client) -> None:
+        """Test that the favicon response has a Cache-Control header with max-age."""
+        response = test_client.get("/favicon.ico")
+        assert response.status_code == 200
+        cache_control = response.headers.get("cache-control", "")
+        assert "max-age" in cache_control
