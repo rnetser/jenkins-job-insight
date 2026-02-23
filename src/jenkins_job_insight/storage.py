@@ -155,6 +155,52 @@ async def list_results(limit: int = 50) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
+    """List recent analysis results with summary data for dashboard display.
+
+    Unlike list_results, this function also extracts key fields from result_json
+    for any row that has a stored result (job_name, build_number, failure_count).
+    Returns at most ``limit`` results; pagination is handled client-side.
+
+    Args:
+        limit: Maximum number of results to return.
+
+    Returns:
+        List of result dictionaries enriched with summary data from result_json.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT job_id, jenkins_url, status, result_json, created_at
+            FROM results
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        results = []
+        for row in rows:
+            entry: dict = {
+                "job_id": row["job_id"],
+                "jenkins_url": row["jenkins_url"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+            }
+            if row["result_json"]:
+                try:
+                    result_data = json.loads(row["result_json"])
+                    entry["job_name"] = result_data.get("job_name", "")
+                    entry["build_number"] = result_data.get("build_number", "")
+                    failures = result_data.get("failures", [])
+                    entry["failure_count"] = len(failures)
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    logger.debug(f"Failed to parse result_json for job {row['job_id']}")
+            results.append(entry)
+        return results
+
+
 async def save_html_report(job_id: str, html_content: str) -> Path:
     """Save an HTML report to disk.
 
