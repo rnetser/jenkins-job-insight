@@ -160,16 +160,21 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # Configure logging
-    log_level = logging.DEBUG if args.verbose else logging.INFO
+    # Load .env file first so LOG_LEVEL and other env vars are available
+    load_dotenv()
+
+    # Configure logging (--verbose > LOG_LEVEL env var > INFO default)
+    if args.verbose:
+        log_level = logging.DEBUG
+    else:
+        log_level = getattr(
+            logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO
+        )
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         datefmt="%H:%M:%S",
     )
-
-    # Load .env file
-    load_dotenv()
 
     # Validate XML path
     xml_path: Path = args.xml_path
@@ -184,8 +189,8 @@ def main() -> int:
     # Parse XML
     try:
         failures = _extract_failures_from_xml(xml_path)
-    except ET.ParseError as exc:
-        logger.error("Failed to parse XML: %s", exc)
+    except ET.ParseError:
+        logger.exception("Failed to parse XML")
         return EXIT_INVALID_INPUT
 
     if not failures:

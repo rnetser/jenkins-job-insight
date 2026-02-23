@@ -164,13 +164,11 @@ def _fetch_analysis_from_server(
 
         Returns ({}, "") on request failure.
     """
-    timeout_value = timeout
-
     try:
         response = requests.post(
             f"{server_url.rstrip('/')}/analyze-failures",
             json=payload,
-            timeout=timeout_value,
+            timeout=timeout,
         )
         response.raise_for_status()
         result = response.json()
