@@ -196,7 +196,7 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
                     failures = result_data.get("failures", [])
                     entry["failure_count"] = len(failures)
                 except (json.JSONDecodeError, TypeError, AttributeError):
-                    pass
+                    logger.debug(f"Failed to parse result_json for job {row['job_id']}")
             results.append(entry)
         return results
 

@@ -1085,6 +1085,8 @@ def format_status_page(job_id: str, status: str, result: dict) -> str:
 <title>Analysis {e(status_label)} - {e(job_id)}</title>
 <link rel="icon" href="{FAVICON_DATA_URI}">
 <style>
+/* Minimal standalone styles — this lightweight status page intentionally
+   skips _common_css() to keep the response small and self-contained. */
 :root {{
     --bg-primary: #0d1117;
     --bg-secondary: #161b22;
