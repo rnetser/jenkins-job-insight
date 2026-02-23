@@ -32,38 +32,18 @@ FAVICON_DATA_URI = (
 )
 
 
-def format_result_as_html(result: AnalysisResult) -> str:
-    """Generate a self-contained HTML report for an analysis result.
+def _common_css() -> str:
+    """Return the shared CSS rules used by both the analysis report and dashboard.
 
-    Produces a complete HTML document with inline CSS using a dark
-    GitHub-inspired theme.  The report includes failure cards, a
-    detail table, and child job sections.
-
-    Args:
-        result: The analysis result to render.
+    Includes CSS custom properties, base element resets, body, container,
+    sticky header, and report footer styles. Page-specific rules are added
+    by each caller.
 
     Returns:
-        A complete HTML document as a string.
+        A CSS string (without ``<style>`` tags) using doubled braces for
+        use inside an f-string.
     """
-    e = html.escape
-
-    job_name = result.job_name or "Unknown"
-    build_number = str(result.build_number) if result.build_number else ""
-    provider_info = _format_provider(result.ai_provider, result.ai_model)
-    jenkins_url_str = str(result.jenkins_url)
-    total_failures = len(result.failures)
-
-    parts: list[str] = []
-
-    # --- HTML HEAD ---
-    parts.append(f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Jenkins Analysis - {e(job_name)} #{e(build_number)}</title>
-<link rel="icon" href="{FAVICON_DATA_URI}">
-<style>
+    return """\
 :root {{
     --bg-primary: #0d1117;
     --bg-secondary: #161b22;
@@ -108,6 +88,61 @@ body {{
 }}
 .header-content {{ max-width: 1200px; margin: 0 auto; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }}
 .header-content h1 {{ font-size: 20px; font-weight: 700; flex-shrink: 0; }}
+
+/* Footer */
+.report-footer {{
+    margin-top: 48px;
+    padding: 24px 0;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+}}
+.report-footer a {{ color: var(--accent-blue); text-decoration: none; }}
+.report-footer a:hover {{ text-decoration: underline; }}
+
+/* Responsive */
+@media (max-width: 768px) {{
+    .header-content {{ flex-direction: column; align-items: flex-start; }}
+}}"""
+
+
+def format_result_as_html(result: AnalysisResult) -> str:
+    """Generate a self-contained HTML report for an analysis result.
+
+    Produces a complete HTML document with inline CSS using a dark
+    GitHub-inspired theme.  The report includes failure cards, a
+    detail table, and child job sections.
+
+    Args:
+        result: The analysis result to render.
+
+    Returns:
+        A complete HTML document as a string.
+    """
+    e = html.escape
+
+    job_name = result.job_name or "Unknown"
+    build_number = str(result.build_number) if result.build_number else ""
+    provider_info = _format_provider(result.ai_provider, result.ai_model)
+    jenkins_url_str = str(result.jenkins_url)
+    total_failures = len(result.failures)
+
+    parts: list[str] = []
+
+    # --- HTML HEAD ---
+    parts.append(f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jenkins Analysis - {e(job_name)} #{e(build_number)}</title>
+<link rel="icon" href="{FAVICON_DATA_URI}">
+<style>
+{_common_css()}
 .failure-badge {{
     display: inline-flex;
     align-items: center;
@@ -427,21 +462,6 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 .key-takeaway-header h3 {{ font-size: 14px; color: var(--accent-yellow); }}
 .key-takeaway p {{ font-size: 14px; color: var(--text-secondary); line-height: 1.7; }}
 
-/* Footer */
-.report-footer {{
-    margin-top: 48px;
-    padding: 24px 0;
-    border-top: 1px solid var(--border);
-    font-size: 12px;
-    color: var(--text-muted);
-    display: flex;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 12px;
-}}
-.report-footer a {{ color: var(--accent-blue); text-decoration: none; }}
-.report-footer a:hover {{ text-decoration: underline; }}
-
 /* No failures */
 .no-failures {{
     text-align: center;
@@ -451,9 +471,8 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 }}
 .no-failures svg {{ margin-bottom: 16px; }}
 
-/* Responsive */
+/* Responsive (page-specific) */
 @media (max-width: 768px) {{
-    .header-content {{ flex-direction: column; align-items: flex-start; }}
     .env-chips {{ margin-left: 0; }}
 }}
 @media (max-width: 480px) {{
@@ -1202,7 +1221,7 @@ def generate_dashboard_html(
     Args:
         jobs: List of dicts from list_results_for_dashboard(). Each dict has
             job_id, jenkins_url, status, created_at, and optionally job_name,
-            build_number, failure_count, summary.
+            build_number, failure_count.
         base_url: External base URL for constructing absolute report links.
         limit: The server-side cap that was used to load jobs. Shown in the UI
             so the user can adjust it.
@@ -1223,47 +1242,7 @@ def generate_dashboard_html(
 <title>Jenkins Job Insight - Dashboard</title>
 <link rel="icon" href="{FAVICON_DATA_URI}">
 <style>
-:root {{
-    --bg-primary: #0d1117;
-    --bg-secondary: #161b22;
-    --bg-tertiary: #21262d;
-    --bg-hover: #292e36;
-    --border: #30363d;
-    --text-primary: #e6edf3;
-    --text-secondary: #8b949e;
-    --text-muted: #6e7681;
-    --accent-red: #f85149;
-    --accent-blue: #58a6ff;
-    --accent-yellow: #d29922;
-    --accent-orange: #f0883e;
-    --accent-green: #3fb950;
-    --accent-purple: #bc8cff;
-    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
-    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-    --radius: 8px;
-}}
-*,*::before,*::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{
-    font-family: var(--font-sans);
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    line-height: 1.6;
-    min-height: 100vh;
-}}
-.container {{ max-width: 1200px; margin: 0 auto; padding: 0 24px 60px; }}
-
-/* Header */
-.sticky-header {{
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border);
-    padding: 16px 24px;
-    margin: 0 -24px 32px;
-}}
-.header-content {{ max-width: 1200px; margin: 0 auto; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }}
-.header-content h1 {{ font-size: 20px; font-weight: 700; flex-shrink: 0; }}
+{_common_css()}
 .jobs-badge {{
     display: inline-flex;
     align-items: center;
@@ -1494,22 +1473,8 @@ body {{
     margin-top: 8px;
 }}
 
-/* Footer */
-.report-footer {{
-    margin-top: 48px;
-    padding: 24px 0;
-    border-top: 1px solid var(--border);
-    font-size: 12px;
-    color: var(--text-muted);
-    display: flex;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 12px;
-}}
-
-/* Responsive */
+/* Responsive (page-specific) */
 @media (max-width: 768px) {{
-    .header-content {{ flex-direction: column; align-items: flex-start; }}
     .dashboard-card {{ flex-direction: column; align-items: flex-start; gap: 10px; }}
     .card-meta {{ width: 100%; justify-content: space-between; }}
     .card-job-name {{ max-width: 100%; }}
@@ -1544,7 +1509,7 @@ body {{
   <div class="limit-control">
     <span class="limit-label">Load last</span>
     <input type="number" id="limit-input" class="limit-input" min="1" value="{limit}">
-    <button id="limit-btn" class="limit-btn" onclick="window.location.href='/dashboard?limit='+document.getElementById('limit-input').value">Load</button>
+    <button id="limit-btn" class="limit-btn" onclick="window.location.href='{e(base_url)}/dashboard?limit='+document.getElementById('limit-input').value">Load</button>
   </div>
 </div>
 <div class="empty-state">
@@ -1570,7 +1535,7 @@ body {{
   <div class="limit-control">
     <span class="limit-label">Load last</span>
     <input type="number" id="limit-input" class="limit-input" min="1" value="{limit}">
-    <button id="limit-btn" class="limit-btn" onclick="window.location.href='/dashboard?limit='+document.getElementById('limit-input').value">Load</button>
+    <button id="limit-btn" class="limit-btn" onclick="window.location.href='{e(base_url)}/dashboard?limit='+document.getElementById('limit-input').value">Load</button>
   </div>
 </div>
 """)

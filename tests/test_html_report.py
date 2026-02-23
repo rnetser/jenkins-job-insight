@@ -535,7 +535,10 @@ class TestGenerateDashboardHtml:
             html_output = generate_dashboard_html(
                 jobs, base_url="https://example.com", limit=limit_val
             )
-            assert f'value="{limit_val}"' in html_output
+            assert (
+                f'id="limit-input" class="limit-input" min="1" value="{limit_val}"'
+                in html_output
+            )
 
     def test_dashboard_empty_still_has_limit_control(self) -> None:
         """Even with 0 jobs the limit control is present."""
@@ -559,3 +562,37 @@ class TestGenerateDashboardHtml:
         ]
         html_output = generate_dashboard_html(jobs, base_url="https://example.com")
         assert 'value="500"' in html_output
+
+    def test_dashboard_load_button_uses_base_url(self) -> None:
+        """Load buttons in both empty and populated states use base_url, not hardcoded /dashboard."""
+        base = "https://myproxy.example.com/prefix"
+        # Populated state
+        jobs = [
+            {
+                "job_id": "btn-job",
+                "jenkins_url": "",
+                "status": "completed",
+                "created_at": "2026-01-01T00:00:00",
+                "job_name": "btn-test",
+            },
+        ]
+        html_output = generate_dashboard_html(jobs, base_url=base)
+        assert f"{base}/dashboard?limit=" in html_output
+        assert "'/dashboard?limit=" not in html_output
+
+        # Empty state
+        html_empty = generate_dashboard_html([], base_url=base)
+        assert f"{base}/dashboard?limit=" in html_empty
+        assert "'/dashboard?limit=" not in html_empty
+
+    def test_dashboard_common_css_shared(self) -> None:
+        """Both report and dashboard HTML contain the shared CSS custom properties."""
+        from jenkins_job_insight.html_report import _common_css
+
+        css = _common_css()
+        # Verify it contains key shared rules
+        assert "--bg-primary" in css
+        assert "--accent-blue" in css
+        assert ".sticky-header" in css
+        assert ".report-footer" in css
+        assert ".container" in css

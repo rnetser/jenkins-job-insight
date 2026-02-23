@@ -639,7 +639,7 @@ async def list_job_results(limit: int = Query(50, le=100)) -> list[dict]:
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
-    limit: int = Query(500, ge=1),
+    limit: int = Query(500, ge=1, le=10000),
 ) -> HTMLResponse:
     """Serve the dashboard page listing analysis reports.
 

@@ -159,7 +159,7 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
     """List recent analysis results with summary data for dashboard display.
 
     Unlike list_results, this function also extracts key fields from result_json
-    for completed jobs (job_name, build_number, failure_count, summary).
+    for any row that has a stored result (job_name, build_number, failure_count).
     Returns at most ``limit`` results; pagination is handled client-side.
 
     Args:

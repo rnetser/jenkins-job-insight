@@ -885,26 +885,25 @@ class TestDashboardEndpoint:
 
     async def test_dashboard_shows_jobs(self, test_client, temp_db_path: Path) -> None:
         """Test that stored jobs appear on the dashboard with links to HTML reports."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            for i in range(3):
-                await storage.save_result(
-                    job_id=f"dash-job-{i}",
-                    jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
-                    status="completed",
-                    result={
-                        "job_name": f"test-job-{i}",
-                        "build_number": i + 1,
-                        "failures": [{"test_name": "t"}] if i == 0 else [],
-                    },
-                )
+        await storage.init_db()
+        for i in range(3):
+            await storage.save_result(
+                job_id=f"dash-job-{i}",
+                jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
+                status="completed",
+                result={
+                    "job_name": f"test-job-{i}",
+                    "build_number": i + 1,
+                    "failures": [{"test_name": "t"}] if i == 0 else [],
+                },
+            )
 
-            response = test_client.get("/dashboard")
-            assert response.status_code == 200
-            html = response.text
-            for i in range(3):
-                assert f"dash-job-{i}" in html
-                assert f"/results/dash-job-{i}.html" in html
+        response = test_client.get("/dashboard")
+        assert response.status_code == 200
+        html = response.text
+        for i in range(3):
+            assert f"dash-job-{i}" in html
+            assert f"/results/dash-job-{i}.html" in html
 
     async def test_dashboard_links_open_new_tab(
         self, test_client, temp_db_path: Path
@@ -967,6 +966,11 @@ class TestDashboardEndpoint:
     def test_dashboard_limit_invalid_zero(self, test_client) -> None:
         """Test that limit=0 returns a validation error."""
         response = test_client.get("/dashboard?limit=0")
+        assert response.status_code == 422
+
+    def test_dashboard_limit_exceeds_max(self, test_client) -> None:
+        """Test that limit above the maximum returns a validation error."""
+        response = test_client.get("/dashboard?limit=99999")
         assert response.status_code == 422
 
 
