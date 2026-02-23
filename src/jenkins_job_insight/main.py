@@ -617,7 +617,7 @@ async def get_job_report(job_id: str) -> HTMLResponse:
         html_content = format_result_as_html(analysis_result)
         try:
             await save_html_report(job_id, html_content)
-        except Exception:
+        except OSError:
             logger.warning(
                 "Failed to cache HTML report for job_id: %s", job_id, exc_info=True
             )

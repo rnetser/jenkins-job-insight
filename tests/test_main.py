@@ -90,7 +90,9 @@ class TestAnalyzeEndpoint:
         with patch(
             "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
         ) as mock_analyze:
-            with patch("jenkins_job_insight.main.save_result", new_callable=AsyncMock):
+            with patch(
+                "jenkins_job_insight.main.save_result", new_callable=AsyncMock
+            ) as mock_save:
                 mock_result = AnalysisResult(
                     job_id="test-123",
                     jenkins_url="https://jenkins.example.com/job/test/123/",
@@ -119,6 +121,9 @@ class TestAnalyzeEndpoint:
                 )
                 assert data["base_url"] == "http://testserver"
                 assert data["result_url"] == "http://testserver/results/test-123"
+
+                # Verify result was persisted
+                mock_save.assert_called_once()
 
     def test_analyze_sync_missing_ai_provider_returns_400(self, test_client) -> None:
         """Test that sync analyze without AI provider returns 400."""
@@ -865,6 +870,75 @@ class TestResultsEndpoints:
                         assert response.status_code == 200
                         assert response.headers["content-type"].startswith("text/html")
                         assert "Report" in response.text
+
+    def test_get_report_on_demand_generation_jenkins_path(self, test_client) -> None:
+        """Test on-demand HTML generation for Jenkins analysis results (with jenkins_url)."""
+        stored_result = {
+            "job_id": "jenkins-job",
+            "status": "completed",
+            "result": {
+                "job_id": "jenkins-job",
+                "job_name": "my-pipeline",
+                "build_number": 42,
+                "jenkins_url": "https://jenkins.example.com/job/my-pipeline/42/",
+                "status": "completed",
+                "summary": "Analyzed 2 failures",
+                "ai_provider": "claude",
+                "ai_model": "test-model",
+                "failures": [
+                    {
+                        "test_name": "test_example",
+                        "error": "assert False",
+                        "analysis": {
+                            "classification": "CODE ISSUE",
+                            "details": "Test assertion failed",
+                        },
+                    }
+                ],
+            },
+            "created_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
+        ) as mock_get_html:
+            mock_get_html.return_value = None
+
+            with patch(
+                "jenkins_job_insight.main.get_result", new_callable=AsyncMock
+            ) as mock_get_result:
+                mock_get_result.return_value = stored_result
+
+                with patch(
+                    "jenkins_job_insight.main.format_result_as_html"
+                ) as mock_format:
+                    mock_format.return_value = (
+                        "<html><body>Jenkins Report</body></html>"
+                    )
+
+                    with patch(
+                        "jenkins_job_insight.main.save_html_report",
+                        new_callable=AsyncMock,
+                    ) as mock_save:
+                        response = test_client.get("/results/jenkins-job.html")
+
+                        assert response.status_code == 200
+                        assert response.headers["content-type"].startswith("text/html")
+                        assert "Jenkins Report" in response.text
+
+                        # Verify format_result_as_html was called with AnalysisResult from model_validate path
+                        mock_format.assert_called_once()
+                        analysis_arg = mock_format.call_args[0][0]
+                        assert analysis_arg.jenkins_url is not None
+                        assert (
+                            str(analysis_arg.jenkins_url)
+                            == "https://jenkins.example.com/job/my-pipeline/42/"
+                        )
+                        assert analysis_arg.job_name == "my-pipeline"
+                        assert analysis_arg.build_number == 42
+
+                        # Verify disk caching was attempted
+                        mock_save.assert_called_once()
 
     async def test_get_result_json_format_default(
         self, test_client, temp_db_path: Path
