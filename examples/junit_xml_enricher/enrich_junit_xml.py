@@ -45,24 +45,37 @@ Exit codes:
 """
 
 import argparse
+import importlib.util
 import logging
 import os
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
 from dotenv import load_dotenv
 
-# Add sibling example directory to path for shared utilities
-_CONFTEST_DIR = Path(__file__).resolve().parent.parent / "pytest_junitxml"
-sys.path.insert(0, str(_CONFTEST_DIR))
-
-from conftest_junit_ai_utils import (  # noqa: E402
-    _apply_analysis_to_xml,
-    _extract_failures_from_xml,
-    _fetch_analysis_from_server,
+# Import shared utilities from sibling example directory
+_UTILS_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "pytest_junitxml"
+    / "conftest_junit_ai_utils.py"
 )
+if not _UTILS_PATH.exists():
+    sys.exit(
+        f"Error: Required utility file not found: {_UTILS_PATH}\n"
+        "Ensure conftest_junit_ai_utils.py exists in examples/pytest_junitxml/"
+    )
+_spec = importlib.util.spec_from_file_location("conftest_junit_ai_utils", _UTILS_PATH)
+if _spec is None or _spec.loader is None:
+    sys.exit(f"Error: Cannot create module spec from {_UTILS_PATH}")
+_utils = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_utils)
+
+_apply_analysis_to_xml = _utils._apply_analysis_to_xml
+_extract_failures_from_xml = _utils._extract_failures_from_xml
+_fetch_analysis_from_server = _utils._fetch_analysis_from_server
 
 EXIT_SUCCESS = 0
 EXIT_NO_FAILURES = 1
@@ -84,9 +97,7 @@ def _print_failures_summary(failures: list[dict[str, str]]) -> None:
         status = failure["status"]
         name = failure["test_name"]
         msg = failure["error_message"]
-        # Truncate long messages for display
-        if len(msg) > 120:
-            msg = msg[:117] + "..."
+        msg = textwrap.shorten(msg, width=120, placeholder="...")
         print(f"  {i}. [{status}] {name}")
         print(f"     {msg}")
     print()
@@ -199,8 +210,7 @@ def main() -> int:
     ai_provider = args.ai_provider or os.environ.get("JJI_AI_PROVIDER", "claude")
     ai_model = args.ai_model or os.environ.get("JJI_AI_MODEL", "claude-opus-4-6[1m]")
 
-    # Resolve timeout and set in environment for the shared utility function
-    # (_fetch_analysis_from_server reads JJI_TIMEOUT from os.environ)
+    # Resolve timeout (CLI arg > env var > default)
     timeout_raw = args.timeout
     if timeout_raw is None:
         try:
@@ -209,7 +219,6 @@ def main() -> int:
             logger.warning("Invalid JJI_TIMEOUT value, using default 600 seconds")
             timeout_raw = 600
     timeout: int = timeout_raw
-    os.environ["JJI_TIMEOUT"] = str(timeout)
 
     logger.info("Server URL: %s", server_url)
     logger.info("AI provider: %s, model: %s", ai_provider, ai_model)
@@ -226,6 +235,7 @@ def main() -> int:
     analysis_map, html_report_url = _fetch_analysis_from_server(
         server_url=server_url,
         payload=payload,
+        timeout=timeout,
     )
 
     if not analysis_map:
@@ -241,9 +251,10 @@ def main() -> int:
             analysis_map=analysis_map,
             html_report_url=html_report_url,
         )
-    except Exception as exc:
-        logger.error("Failed to apply analysis to XML: %s", exc)
-        logger.error("Original XML has been restored from backup.")
+    except Exception:
+        logger.exception(
+            "Failed to apply analysis to XML; original restored from backup."
+        )
         return EXIT_SERVER_ERROR
 
     # Print summary

@@ -88,8 +88,13 @@ def enrich_junit_xml(session) -> None:
         "ai_model": ai_model,
     }
 
+    try:
+        timeout = int(os.environ.get("JJI_TIMEOUT", "600"))
+    except ValueError:
+        timeout = 600
+
     analysis_map, html_report_url = _fetch_analysis_from_server(
-        server_url=server_url, payload=payload
+        server_url=server_url, payload=payload, timeout=timeout
     )
     if not analysis_map and not html_report_url:
         return
@@ -142,13 +147,14 @@ def _extract_failures_from_xml(xml_path: Path) -> list[dict[str, str]]:
 
 
 def _fetch_analysis_from_server(
-    server_url: str, payload: dict[str, Any]
+    server_url: str, payload: dict[str, Any], timeout: int = 600
 ) -> tuple[dict[tuple[str, str], dict[str, Any]], str]:
     """Send collected failures to the JJI server and return the analysis map.
 
     Args:
         server_url: The JJI server base URL.
         payload: Request payload containing failures and AI config.
+        timeout: Request timeout in seconds (default: 600).
 
     Returns:
         tuple[dict[tuple[str, str], dict[str, Any]], str]: Two-element tuple of:
@@ -158,11 +164,7 @@ def _fetch_analysis_from_server(
 
         Returns ({}, "") on request failure.
     """
-    try:
-        timeout_value = int(os.environ.get("JJI_TIMEOUT", "600"))
-    except ValueError:
-        logger.warning("Invalid JJI_TIMEOUT value, using default 600 seconds")
-        timeout_value = 600
+    timeout_value = timeout
 
     try:
         response = requests.post(

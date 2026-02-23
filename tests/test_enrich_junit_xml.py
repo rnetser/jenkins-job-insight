@@ -1,5 +1,6 @@
 """Tests for the standalone JUnit XML AI enrichment CLI."""
 
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -8,23 +9,57 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-# Import the script's main function and constants
-_ENRICHER_DIR = (
-    Path(__file__).resolve().parent.parent / "examples" / "junit_xml_enricher"
+# Import the enricher script via importlib (avoids sys.path mutation)
+_ENRICHER_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "examples"
+    / "junit_xml_enricher"
+    / "enrich_junit_xml.py"
 )
-sys.path.insert(0, str(_ENRICHER_DIR))
-from enrich_junit_xml import (  # noqa: E402
-    EXIT_INVALID_INPUT,
-    EXIT_NO_FAILURES,
-    EXIT_SERVER_ERROR,
-    EXIT_SUCCESS,
-    main,
+_enricher_spec = importlib.util.spec_from_file_location(
+    "enrich_junit_xml", _ENRICHER_PATH
 )
+if _enricher_spec is None or _enricher_spec.loader is None:
+    raise ImportError(f"Cannot create module spec from {_ENRICHER_PATH}")
+_enricher = importlib.util.module_from_spec(_enricher_spec)
+sys.modules["enrich_junit_xml"] = _enricher
+try:
+    _enricher_spec.loader.exec_module(_enricher)
+except Exception as exc:
+    pytest.exit(f"Cannot import enrich_junit_xml: {exc}", returncode=4)
+
+EXIT_INVALID_INPUT = _enricher.EXIT_INVALID_INPUT
+EXIT_NO_FAILURES = _enricher.EXIT_NO_FAILURES
+EXIT_SERVER_ERROR = _enricher.EXIT_SERVER_ERROR
+EXIT_SUCCESS = _enricher.EXIT_SUCCESS
+main = _enricher.main
 
 # Import the shared utility for direct extraction tests
-_CONFTEST_DIR = Path(__file__).resolve().parent.parent / "examples" / "pytest_junitxml"
-sys.path.insert(0, str(_CONFTEST_DIR))
-from conftest_junit_ai_utils import _extract_failures_from_xml  # noqa: E402
+_UTILS_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "examples"
+    / "pytest_junitxml"
+    / "conftest_junit_ai_utils.py"
+)
+_utils_spec = importlib.util.spec_from_file_location(
+    "conftest_junit_ai_utils", _UTILS_PATH
+)
+if _utils_spec is None or _utils_spec.loader is None:
+    raise ImportError(f"Cannot create module spec from {_UTILS_PATH}")
+_utils = importlib.util.module_from_spec(_utils_spec)
+try:
+    _utils_spec.loader.exec_module(_utils)
+except Exception as exc:
+    pytest.exit(f"Cannot import conftest_junit_ai_utils: {exc}", returncode=4)
+
+_extract_failures_from_xml = _utils._extract_failures_from_xml
+
+
+@pytest.fixture(autouse=True)
+def _suppress_dotenv():
+    """Prevent load_dotenv from loading real .env files during tests."""
+    with patch("enrich_junit_xml.load_dotenv"):
+        yield
 
 
 @pytest.fixture
@@ -93,8 +128,7 @@ class TestCLIInputValidation:
         }
         with patch("sys.argv", ["prog", str(junit_xml_with_failures)]):
             with patch.dict(os.environ, env_without_server, clear=True):
-                with patch("enrich_junit_xml.load_dotenv"):
-                    assert main() == EXIT_INVALID_INPUT
+                assert main() == EXIT_INVALID_INPUT
 
 
 class TestDryRun:
@@ -124,9 +158,9 @@ class TestErrorMessageExtraction:
     def test_message_attribute_extracted(self, junit_xml_with_failures: Path) -> None:
         """Test that message attribute is used when present (pytest/Java style)."""
         failures = _extract_failures_from_xml(junit_xml_with_failures)
-        msg_failure = [
+        msg_failure = next(
             f for f in failures if "test_fail_with_message" in f["test_name"]
-        ][0]
+        )
         assert msg_failure["error_message"] == "Expected true but got false"
 
     def test_first_line_fallback_when_no_message(
@@ -134,9 +168,9 @@ class TestErrorMessageExtraction:
     ) -> None:
         """Test that first line of element text is used when message attribute is missing."""
         failures = _extract_failures_from_xml(junit_xml_with_failures)
-        no_msg_failure = [
+        no_msg_failure = next(
             f for f in failures if "test_fail_no_message" in f["test_name"]
-        ][0]
+        )
         assert no_msg_failure["error_message"] == "tests/storage/datavolume.go:229"
         # Stack trace should have the full text
         assert "Timed out after 500.055s" in no_msg_failure["stack_trace"]
@@ -293,17 +327,14 @@ class TestConfigResolution:
                     main()
 
                 # Verify the CLI values were used in the payload
-                call_args = mock_fetch.call_args
-                payload = (
-                    call_args[1]["payload"]
-                    if "payload" in call_args[1]
-                    else call_args[0][1]
+                assert mock_fetch.call_args.kwargs["payload"]["ai_provider"] == "claude"
+                assert (
+                    mock_fetch.call_args.kwargs["payload"]["ai_model"] == "claude-model"
                 )
-                assert payload["ai_provider"] == "claude"
-                assert payload["ai_model"] == "claude-model"
-                # Server URL is keyword arg to _fetch_analysis_from_server
-                server_url = call_args[1].get("server_url") or call_args[0][0]
-                assert server_url == "http://cli-server:9000"
+                assert (
+                    mock_fetch.call_args.kwargs["server_url"]
+                    == "http://cli-server:9000"
+                )
 
     def test_env_vars_used_when_no_cli_args(
         self, junit_xml_with_failures: Path
@@ -324,11 +355,7 @@ class TestConfigResolution:
                 ) as mock_fetch:
                     main()
 
-                call_args = mock_fetch.call_args
-                payload = (
-                    call_args[1]["payload"]
-                    if "payload" in call_args[1]
-                    else call_args[0][1]
+                assert mock_fetch.call_args.kwargs["payload"]["ai_provider"] == "gemini"
+                assert (
+                    mock_fetch.call_args.kwargs["payload"]["ai_model"] == "gemini-model"
                 )
-                assert payload["ai_provider"] == "gemini"
-                assert payload["ai_model"] == "gemini-model"
