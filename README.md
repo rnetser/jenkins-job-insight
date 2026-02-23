@@ -724,6 +724,60 @@ For each failed test case, the JUnit XML is enriched with:
 **`<system-out>`** (human-readable, visible in Jenkins test details):
 - Formatted analysis text with classification, details, and fix/bug information
 
+## Standalone JUnit XML Enricher
+
+A standalone CLI that enriches any JUnit XML file with AI failure analysis from a JJI server. Unlike the pytest integration (which hooks into pytest's session), this works with any JUnit XML file regardless of how it was generated -- Go tests, Java/Maven, CI artifacts, etc.
+
+The enricher reuses the same shared utilities as the pytest integration (`conftest_junit_ai_utils.py`) for XML parsing, server communication, and result injection.
+
+**Safety**: The original XML is backed up before modification and restored automatically if anything goes wrong. The backup is removed on success.
+
+### Usage
+
+```bash
+# Basic usage (server URL from environment)
+export JJI_SERVER_URL=http://localhost:8000
+uv run python examples/junit_xml_enricher/enrich_junit_xml.py report.xml
+
+# Explicit server URL
+uv run python examples/junit_xml_enricher/enrich_junit_xml.py report.xml --server-url http://jji.example.com:8000
+
+# Dry run (show failures without sending to server)
+uv run python examples/junit_xml_enricher/enrich_junit_xml.py report.xml --dry-run
+
+# With custom AI provider and model
+uv run python examples/junit_xml_enricher/enrich_junit_xml.py report.xml \
+    --server-url http://localhost:8000 \
+    --ai-provider gemini \
+    --ai-model gemini-2.5-pro
+
+# Verbose output
+uv run python examples/junit_xml_enricher/enrich_junit_xml.py report.xml -v
+```
+
+### Configuration
+
+CLI arguments override environment variables. A `.env` file is auto-loaded if present.
+
+| Argument | Environment Variable | Default | Description |
+|----------|---------------------|---------|-------------|
+| `xml_path` (positional) | -- | -- | Path to JUnit XML file to enrich |
+| `--server-url` | `JJI_SERVER_URL` | -- | JJI server URL (required unless --dry-run) |
+| `--ai-provider` | `JJI_AI_PROVIDER` | `claude` | AI provider: claude, gemini, or cursor |
+| `--ai-model` | `JJI_AI_MODEL` | `claude-opus-4-6[1m]` | AI model name |
+| `--timeout` | `JJI_TIMEOUT` | `600` | Request timeout in seconds |
+| `--dry-run` | -- | -- | Show failures without sending to server |
+| `-v, --verbose` | `LOG_LEVEL` | `INFO` | Enable verbose (DEBUG) logging |
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success (XML enriched with analysis) |
+| 1 | No failures found in XML (nothing to do) |
+| 2 | Server error (request failed or bad response) |
+| 3 | Invalid input (file not found, parse error, missing config) |
+
 ## Development
 
 ### Prerequisites

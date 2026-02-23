@@ -1,6 +1,7 @@
 """Tests for the standalone JUnit XML AI enrichment CLI."""
 
 import importlib.util
+import logging
 import os
 import sys
 from pathlib import Path
@@ -135,15 +136,16 @@ class TestDryRun:
     """Tests for dry-run mode."""
 
     def test_dry_run_shows_failures_and_exits_success(
-        self, junit_xml_with_failures: Path, capsys: pytest.CaptureFixture[str]
+        self, junit_xml_with_failures: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        with patch("sys.argv", ["prog", str(junit_xml_with_failures), "--dry-run"]):
-            result = main()
+        with caplog.at_level(logging.INFO, logger="jji-enricher"):
+            with patch("sys.argv", ["prog", str(junit_xml_with_failures), "--dry-run"]):
+                result = main()
         assert result == EXIT_SUCCESS
-        output = capsys.readouterr().out
-        assert "2 failure(s)" in output
-        assert "test_fail_with_message" in output
-        assert "test_fail_no_message" in output
+        log_output = caplog.text
+        assert "2 failure(s)" in log_output
+        assert "test_fail_with_message" in log_output
+        assert "test_fail_no_message" in log_output
 
     def test_dry_run_does_not_modify_xml(self, junit_xml_with_failures: Path) -> None:
         original = junit_xml_with_failures.read_text()

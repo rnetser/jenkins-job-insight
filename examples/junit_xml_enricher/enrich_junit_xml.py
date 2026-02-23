@@ -45,37 +45,23 @@ Exit codes:
 """
 
 import argparse
-import importlib.util
 import logging
 import os
 import sys
-import textwrap
+
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
 from dotenv import load_dotenv
 
-# Import shared utilities from sibling example directory
-_UTILS_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "pytest_junitxml"
-    / "conftest_junit_ai_utils.py"
-)
-if not _UTILS_PATH.exists():
-    sys.exit(
-        f"Error: Required utility file not found: {_UTILS_PATH}\n"
-        "Ensure conftest_junit_ai_utils.py exists in examples/pytest_junitxml/"
-    )
-_spec = importlib.util.spec_from_file_location("conftest_junit_ai_utils", _UTILS_PATH)
-if _spec is None or _spec.loader is None:
-    sys.exit(f"Error: Cannot create module spec from {_UTILS_PATH}")
-_utils = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_utils)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-_apply_analysis_to_xml = _utils._apply_analysis_to_xml
-_extract_failures_from_xml = _utils._extract_failures_from_xml
-_fetch_analysis_from_server = _utils._fetch_analysis_from_server
+from pytest_junitxml.conftest_junit_ai_utils import (
+    _apply_analysis_to_xml,
+    _extract_failures_from_xml,
+    _fetch_analysis_from_server,
+)
 
 EXIT_SUCCESS = 0
 EXIT_NO_FAILURES = 1
@@ -90,17 +76,15 @@ logger = logging.getLogger("jji-enricher")
 # ---------------------------------------------------------------------------
 
 
-def _print_failures_summary(failures: list[dict[str, str]]) -> None:
-    """Print a human-readable summary of extracted failures."""
-    print(f"\nFound {len(failures)} failure(s):\n")
+def _log_failures_summary(failures: list[dict[str, str]]) -> None:
+    """Log a human-readable summary of extracted failures."""
+    logger.info("Found %d failure(s):", len(failures))
     for i, failure in enumerate(failures, 1):
         status = failure["status"]
         name = failure["test_name"]
         msg = failure["error_message"]
-        msg = textwrap.shorten(msg, width=120, placeholder="...")
-        print(f"  {i}. [{status}] {name}")
-        print(f"     {msg}")
-    print()
+        logger.info("  %d. [%s] %s", i, status, name)
+        logger.info("     %s", msg)
 
 
 def main() -> int:
@@ -194,14 +178,14 @@ def main() -> int:
         return EXIT_INVALID_INPUT
 
     if not failures:
-        print("No failures found in JUnit XML. Nothing to do.")
+        logger.info("No failures found in JUnit XML. Nothing to do.")
         return EXIT_NO_FAILURES
 
-    _print_failures_summary(failures)
+    _log_failures_summary(failures)
 
     # Dry run: just show failures and exit
     if args.dry_run:
-        print("Dry run mode: skipping server analysis.")
+        logger.info("Dry run mode: skipping server analysis.")
         return EXIT_SUCCESS
 
     # Resolve configuration (CLI args > env vars > defaults)
@@ -263,11 +247,8 @@ def main() -> int:
         )
         return EXIT_SERVER_ERROR
 
-    # Print summary
-    print(f"Successfully enriched {xml_path} with AI analysis.")
     logger.info("Successfully enriched %s with AI analysis.", xml_path)
     if html_report_url:
-        print(f"HTML report: {html_report_url}")
         logger.info("HTML report: %s", html_report_url)
 
     return EXIT_SUCCESS
