@@ -44,7 +44,6 @@ Exit codes:
     3 - Invalid input (file not found, parse error, missing config)
 """
 
-import argparse
 import os
 import sys
 
@@ -52,6 +51,7 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
+import click
 from dotenv import load_dotenv
 from simple_logger.logger import get_logger
 
@@ -87,74 +87,61 @@ def _log_failures_summary(failures: list[dict[str, str]]) -> None:
         logger.info("     %s", msg)
 
 
-def main() -> int:
+@click.command(
+    help="Enrich JUnit XML files with AI failure analysis from a JJI server."
+)
+@click.argument("xml_path", type=click.Path(exists=False, path_type=Path))
+@click.option(
+    "--server-url",
+    default=None,
+    help="JJI server URL (env: JJI_SERVER_URL, required unless --dry-run)",
+)
+@click.option(
+    "--ai-provider",
+    default=None,
+    help='AI provider: claude, gemini, or cursor (env: JJI_AI_PROVIDER, default: "claude")',
+)
+@click.option(
+    "--ai-model",
+    default=None,
+    help='AI model name (env: JJI_AI_MODEL, default: "claude-opus-4-6[1m]")',
+)
+@click.option(
+    "--timeout",
+    type=int,
+    default=None,
+    help="Request timeout in seconds (env: JJI_TIMEOUT, default: 600)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Extract and show failures without sending to server",
+)
+@click.option("-v", "--verbose", is_flag=True, help="Enable verbose (DEBUG) logging")
+def main(
+    xml_path: Path,
+    server_url: str | None,
+    ai_provider: str | None,
+    ai_model: str | None,
+    timeout: int | None,
+    dry_run: bool,
+    verbose: bool,
+) -> int:
     """CLI entry point for JUnit XML AI enrichment.
 
     Returns:
         Exit code (0=success, 1=no failures, 2=server error, 3=invalid input).
     """
-    parser = argparse.ArgumentParser(
-        description="Enrich JUnit XML files with AI failure analysis from a JJI server.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Examples:\n"
-            "  %(prog)s report.xml --server-url http://localhost:8000\n"
-            "  %(prog)s report.xml --dry-run\n"
-            "  %(prog)s report.xml --ai-provider gemini --ai-model gemini-2.5-pro\n"
-            "  %(prog)s report.xml -v\n"
-        ),
-    )
-    parser.add_argument(
-        "xml_path",
-        type=Path,
-        help="Path to JUnit XML file to enrich",
-    )
-    parser.add_argument(
-        "--server-url",
-        default=None,
-        help="JJI server URL (env: JJI_SERVER_URL, required unless --dry-run)",
-    )
-    parser.add_argument(
-        "--ai-provider",
-        default=None,
-        help='AI provider: claude, gemini, or cursor (env: JJI_AI_PROVIDER, default: "claude")',
-    )
-    parser.add_argument(
-        "--ai-model",
-        default=None,
-        help='AI model name (env: JJI_AI_MODEL, default: "claude-opus-4-6")',
-    )
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=None,
-        help="Request timeout in seconds (env: JJI_TIMEOUT, default: 600)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Extract and show failures without sending to server",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose (DEBUG) logging",
-    )
-
-    args = parser.parse_args()
-
     # Load .env file first so LOG_LEVEL and other env vars are available
     load_dotenv()
 
     # Configure logging (--verbose overrides LOG_LEVEL env var)
-    if args.verbose:
+    if verbose:
         import logging as _logging
 
         logger.setLevel(_logging.DEBUG)
 
     # Validate XML path
-    xml_path: Path = args.xml_path
     if not xml_path.exists():
         logger.error("File not found: %s", xml_path)
         return EXIT_INVALID_INPUT
@@ -177,34 +164,34 @@ def main() -> int:
     _log_failures_summary(failures)
 
     # Dry run: just show failures and exit
-    if args.dry_run:
+    if dry_run:
         logger.info("Dry run mode: skipping server analysis.")
         return EXIT_SUCCESS
 
     # Resolve configuration (CLI args > env vars > defaults)
-    server_url = args.server_url or os.environ.get("JJI_SERVER_URL", "")
+    server_url = server_url or os.environ.get("JJI_SERVER_URL", "")
     if not server_url:
         logger.error(
             "JJI_SERVER_URL is required. Set via --server-url or JJI_SERVER_URL env var."
         )
         return EXIT_INVALID_INPUT
 
-    ai_provider = args.ai_provider or os.environ.get("JJI_AI_PROVIDER", "claude")
-    ai_model = args.ai_model or os.environ.get("JJI_AI_MODEL", "claude-opus-4-6")
+    ai_provider = ai_provider or os.environ.get("JJI_AI_PROVIDER", "claude")
+    ai_model = ai_model or os.environ.get("JJI_AI_MODEL", "claude-opus-4-6[1m]")
 
     # Resolve timeout (CLI arg > env var > default)
-    timeout_raw = args.timeout
+    timeout_raw = timeout
     if timeout_raw is None:
         try:
             timeout_raw = int(os.environ.get("JJI_TIMEOUT", "600"))
         except ValueError:
             logger.warning("Invalid JJI_TIMEOUT value, using default 600 seconds")
             timeout_raw = 600
-    timeout: int = timeout_raw
+    resolved_timeout: int = timeout_raw
 
     logger.info("Server URL: %s", server_url)
     logger.info("AI provider: %s, model: %s", ai_provider, ai_model)
-    logger.info("Timeout: %d seconds", timeout)
+    logger.info("Timeout: %d seconds", resolved_timeout)
     logger.info("Sending %d failure(s) for analysis...", len(failures))
 
     # Build payload and send to server
@@ -217,7 +204,7 @@ def main() -> int:
     analysis_map, html_report_url = _fetch_analysis_from_server(
         server_url=server_url,
         payload=payload,
-        timeout=timeout,
+        timeout=resolved_timeout,
     )
 
     if not analysis_map and not html_report_url:
@@ -248,4 +235,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(standalone_mode=False))

@@ -47,7 +47,7 @@ def setup_ai_analysis(session) -> None:
             os.environ["JJI_AI_PROVIDER"] = "claude"
 
         if not os.environ.get("JJI_AI_MODEL"):
-            os.environ["JJI_AI_MODEL"] = "claude-opus-4-6"
+            os.environ["JJI_AI_MODEL"] = "claude-opus-4-6[1m]"
 
 
 def enrich_junit_xml(session) -> None:

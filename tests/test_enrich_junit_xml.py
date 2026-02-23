@@ -9,6 +9,7 @@ from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 import pytest
+from click.testing import CliRunner
 
 # Import the enricher script via importlib (avoids sys.path mutation)
 _ENRICHER_PATH = (
@@ -64,6 +65,12 @@ def _suppress_dotenv():
 
 
 @pytest.fixture
+def runner() -> CliRunner:
+    """Create a Click CLI test runner."""
+    return CliRunner()
+
+
+@pytest.fixture
 def junit_xml_with_failures(tmp_path: Path) -> Path:
     """Create a JUnit XML file with test failures."""
     xml_content = """<?xml version="1.0" encoding="UTF-8"?>
@@ -109,34 +116,46 @@ def invalid_xml(tmp_path: Path) -> Path:
 class TestCLIInputValidation:
     """Tests for CLI input validation and exit codes."""
 
-    def test_file_not_found(self) -> None:
-        with patch("sys.argv", ["prog", "/nonexistent/file.xml", "--dry-run"]):
-            assert main() == EXIT_INVALID_INPUT
+    def test_file_not_found(self, runner: CliRunner) -> None:
+        result = runner.invoke(
+            main, ["/nonexistent/file.xml", "--dry-run"], standalone_mode=False
+        )
+        assert result.return_value == EXIT_INVALID_INPUT
 
-    def test_invalid_xml_parse_error(self, invalid_xml: Path) -> None:
-        with patch("sys.argv", ["prog", str(invalid_xml), "--dry-run"]):
-            assert main() == EXIT_INVALID_INPUT
+    def test_invalid_xml_parse_error(
+        self, runner: CliRunner, invalid_xml: Path
+    ) -> None:
+        result = runner.invoke(
+            main, [str(invalid_xml), "--dry-run"], standalone_mode=False
+        )
+        assert result.return_value == EXIT_INVALID_INPUT
 
-    def test_no_failures_returns_exit_1(self, junit_xml_no_failures: Path) -> None:
-        with patch("sys.argv", ["prog", str(junit_xml_no_failures), "--dry-run"]):
-            assert main() == EXIT_NO_FAILURES
+    def test_no_failures_returns_exit_1(
+        self, runner: CliRunner, junit_xml_no_failures: Path
+    ) -> None:
+        result = runner.invoke(
+            main, [str(junit_xml_no_failures), "--dry-run"], standalone_mode=False
+        )
+        assert result.return_value == EXIT_NO_FAILURES
 
     def test_missing_server_url_returns_exit_3(
-        self, junit_xml_with_failures: Path
+        self, runner: CliRunner, junit_xml_with_failures: Path
     ) -> None:
         env_without_server = {
             k: v for k, v in os.environ.items() if k != "JJI_SERVER_URL"
         }
-        with patch("sys.argv", ["prog", str(junit_xml_with_failures)]):
-            with patch.dict(os.environ, env_without_server, clear=True):
-                assert main() == EXIT_INVALID_INPUT
+        with patch.dict(os.environ, env_without_server, clear=True):
+            result = runner.invoke(
+                main, [str(junit_xml_with_failures)], standalone_mode=False
+            )
+            assert result.return_value == EXIT_INVALID_INPUT
 
 
 class TestDryRun:
     """Tests for dry-run mode."""
 
     def test_dry_run_shows_failures_and_exits_success(
-        self, junit_xml_with_failures: Path
+        self, runner: CliRunner, junit_xml_with_failures: Path
     ) -> None:
         # simple_logger writes to stderr via its own StreamHandler;
         # capture by temporarily redirecting the handler's stream.
@@ -149,22 +168,26 @@ class TestDryRun:
                 handler.stream = buf
 
         try:
-            with patch("sys.argv", ["prog", str(junit_xml_with_failures), "--dry-run"]):
-                result = main()
+            result = runner.invoke(
+                main, [str(junit_xml_with_failures), "--dry-run"], standalone_mode=False
+            )
         finally:
             for handler, stream in original_streams:
                 handler.stream = stream
 
-        assert result == EXIT_SUCCESS
+        assert result.return_value == EXIT_SUCCESS
         log_output = buf.getvalue()
         assert "2 failure(s)" in log_output
         assert "test_fail_with_message" in log_output
         assert "test_fail_no_message" in log_output
 
-    def test_dry_run_does_not_modify_xml(self, junit_xml_with_failures: Path) -> None:
+    def test_dry_run_does_not_modify_xml(
+        self, runner: CliRunner, junit_xml_with_failures: Path
+    ) -> None:
         original = junit_xml_with_failures.read_text()
-        with patch("sys.argv", ["prog", str(junit_xml_with_failures), "--dry-run"]):
-            main()
+        runner.invoke(
+            main, [str(junit_xml_with_failures), "--dry-run"], standalone_mode=False
+        )
         assert junit_xml_with_failures.read_text() == original
 
 
@@ -195,7 +218,9 @@ class TestErrorMessageExtraction:
 class TestServerInteraction:
     """Tests for server communication and XML enrichment."""
 
-    def test_successful_enrichment(self, junit_xml_with_failures: Path) -> None:
+    def test_successful_enrichment(
+        self, runner: CliRunner, junit_xml_with_failures: Path
+    ) -> None:
         """Test full enrichment flow with mocked server."""
         mock_analysis_map = {
             ("com.example.Tests", "test_fail_with_message"): {
@@ -211,28 +236,27 @@ class TestServerInteraction:
         }
 
         with patch(
-            "sys.argv",
-            [
-                "prog",
-                str(junit_xml_with_failures),
-                "--server-url",
-                "http://test-server:8000",
-                "--ai-provider",
-                "claude",
-                "--ai-model",
-                "test-model",
-            ],
+            "enrich_junit_xml._fetch_analysis_from_server",
+            return_value=(
+                mock_analysis_map,
+                "http://test-server:8000/results/job-123.html",
+            ),
         ):
-            with patch(
-                "enrich_junit_xml._fetch_analysis_from_server",
-                return_value=(
-                    mock_analysis_map,
-                    "http://test-server:8000/results/job-123.html",
-                ),
-            ):
-                result = main()
+            result = runner.invoke(
+                main,
+                [
+                    str(junit_xml_with_failures),
+                    "--server-url",
+                    "http://test-server:8000",
+                    "--ai-provider",
+                    "claude",
+                    "--ai-model",
+                    "test-model",
+                ],
+                standalone_mode=False,
+            )
 
-        assert result == EXIT_SUCCESS
+        assert result.return_value == EXIT_SUCCESS
 
         # Verify XML was enriched
         tree = ET.parse(junit_xml_with_failures)
@@ -260,52 +284,52 @@ class TestServerInteraction:
                 == "http://test-server:8000/results/job-123.html"
             )
 
-    def test_server_error_returns_exit_2(self, junit_xml_with_failures: Path) -> None:
+    def test_server_error_returns_exit_2(
+        self, runner: CliRunner, junit_xml_with_failures: Path
+    ) -> None:
         """Test that server failure returns EXIT_SERVER_ERROR."""
         with patch(
-            "sys.argv",
-            [
-                "prog",
-                str(junit_xml_with_failures),
-                "--server-url",
-                "http://test-server:8000",
-                "--ai-provider",
-                "claude",
-                "--ai-model",
-                "test-model",
-            ],
+            "enrich_junit_xml._fetch_analysis_from_server",
+            return_value=({}, ""),
         ):
-            with patch(
-                "enrich_junit_xml._fetch_analysis_from_server",
-                return_value=({}, ""),
-            ):
-                result = main()
+            result = runner.invoke(
+                main,
+                [
+                    str(junit_xml_with_failures),
+                    "--server-url",
+                    "http://test-server:8000",
+                    "--ai-provider",
+                    "claude",
+                    "--ai-model",
+                    "test-model",
+                ],
+                standalone_mode=False,
+            )
 
-        assert result == EXIT_SERVER_ERROR
+        assert result.return_value == EXIT_SERVER_ERROR
 
     def test_xml_not_modified_on_server_error(
-        self, junit_xml_with_failures: Path
+        self, runner: CliRunner, junit_xml_with_failures: Path
     ) -> None:
         """Test that XML is not modified when server returns no results."""
         original = junit_xml_with_failures.read_text()
         with patch(
-            "sys.argv",
-            [
-                "prog",
-                str(junit_xml_with_failures),
-                "--server-url",
-                "http://test-server:8000",
-                "--ai-provider",
-                "claude",
-                "--ai-model",
-                "test-model",
-            ],
+            "enrich_junit_xml._fetch_analysis_from_server",
+            return_value=({}, ""),
         ):
-            with patch(
-                "enrich_junit_xml._fetch_analysis_from_server",
-                return_value=({}, ""),
-            ):
-                main()
+            runner.invoke(
+                main,
+                [
+                    str(junit_xml_with_failures),
+                    "--server-url",
+                    "http://test-server:8000",
+                    "--ai-provider",
+                    "claude",
+                    "--ai-model",
+                    "test-model",
+                ],
+                standalone_mode=False,
+            )
 
         assert junit_xml_with_failures.read_text() == original
 
@@ -313,7 +337,9 @@ class TestServerInteraction:
 class TestConfigResolution:
     """Tests for CLI args vs env var resolution."""
 
-    def test_cli_args_override_env_vars(self, junit_xml_with_failures: Path) -> None:
+    def test_cli_args_override_env_vars(
+        self, runner: CliRunner, junit_xml_with_failures: Path
+    ) -> None:
         """Test that CLI arguments take precedence over environment variables."""
         with patch.dict(
             os.environ,
@@ -324,23 +350,23 @@ class TestConfigResolution:
             },
         ):
             with patch(
-                "sys.argv",
-                [
-                    "prog",
-                    str(junit_xml_with_failures),
-                    "--server-url",
-                    "http://cli-server:9000",
-                    "--ai-provider",
-                    "claude",
-                    "--ai-model",
-                    "claude-model",
-                ],
-            ):
-                with patch(
-                    "enrich_junit_xml._fetch_analysis_from_server",
-                    return_value=({}, ""),
-                ) as mock_fetch:
-                    assert main() == EXIT_SERVER_ERROR
+                "enrich_junit_xml._fetch_analysis_from_server",
+                return_value=({}, ""),
+            ) as mock_fetch:
+                result = runner.invoke(
+                    main,
+                    [
+                        str(junit_xml_with_failures),
+                        "--server-url",
+                        "http://cli-server:9000",
+                        "--ai-provider",
+                        "claude",
+                        "--ai-model",
+                        "claude-model",
+                    ],
+                    standalone_mode=False,
+                )
+                assert result.return_value == EXIT_SERVER_ERROR
 
                 # Verify the CLI values were used in the payload
                 assert mock_fetch.call_args.kwargs["payload"]["ai_provider"] == "claude"
@@ -353,7 +379,7 @@ class TestConfigResolution:
                 )
 
     def test_env_vars_used_when_no_cli_args(
-        self, junit_xml_with_failures: Path
+        self, runner: CliRunner, junit_xml_with_failures: Path
     ) -> None:
         """Test that env vars are used when CLI args are not provided."""
         with patch.dict(
@@ -364,12 +390,16 @@ class TestConfigResolution:
                 "JJI_AI_MODEL": "gemini-model",
             },
         ):
-            with patch("sys.argv", ["prog", str(junit_xml_with_failures)]):
-                with patch(
-                    "enrich_junit_xml._fetch_analysis_from_server",
-                    return_value=({}, ""),
-                ) as mock_fetch:
-                    assert main() == EXIT_SERVER_ERROR
+            with patch(
+                "enrich_junit_xml._fetch_analysis_from_server",
+                return_value=({}, ""),
+            ) as mock_fetch:
+                result = runner.invoke(
+                    main,
+                    [str(junit_xml_with_failures)],
+                    standalone_mode=False,
+                )
+                assert result.return_value == EXIT_SERVER_ERROR
 
                 assert mock_fetch.call_args.kwargs["payload"]["ai_provider"] == "gemini"
                 assert (

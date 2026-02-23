@@ -690,7 +690,7 @@ Enrich JUnit XML reports with AI-powered failure analysis. After tests complete,
 |----------|----------|---------|-------------|
 | `JJI_SERVER_URL` | Yes | - | Jenkins Job Insight server URL |
 | `JJI_AI_PROVIDER` | No | `claude` | AI provider: claude, gemini, or cursor |
-| `JJI_AI_MODEL` | No | `claude-opus-4-6` | AI model to use |
+| `JJI_AI_MODEL` | No | `claude-opus-4-6[1m]` | AI model to use |
 | `JJI_TIMEOUT` | No | `600` | Request timeout in seconds |
 
 ### Usage
@@ -764,7 +764,7 @@ CLI arguments override environment variables. A `.env` file is auto-loaded if pr
 | `xml_path` (positional) | -- | -- | Path to JUnit XML file to enrich |
 | `--server-url` | `JJI_SERVER_URL` | -- | JJI server URL (required unless --dry-run) |
 | `--ai-provider` | `JJI_AI_PROVIDER` | `claude` | AI provider: claude, gemini, or cursor |
-| `--ai-model` | `JJI_AI_MODEL` | `claude-opus-4-6` | AI model name |
+| `--ai-model` | `JJI_AI_MODEL` | `claude-opus-4-6[1m]` | AI model name |
 | `--timeout` | `JJI_TIMEOUT` | `600` | Request timeout in seconds |
 | `--dry-run` | -- | -- | Show failures without sending to server |
 | `-v, --verbose` | `LOG_LEVEL` | `INFO` | Enable verbose (DEBUG) logging |
