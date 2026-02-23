@@ -885,18 +885,19 @@ class TestDashboardEndpoint:
 
     async def test_dashboard_shows_jobs(self, test_client, temp_db_path: Path) -> None:
         """Test that stored jobs appear on the dashboard with links to HTML reports."""
-        await storage.init_db()
-        for i in range(3):
-            await storage.save_result(
-                job_id=f"dash-job-{i}",
-                jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
-                status="completed",
-                result={
-                    "job_name": f"test-job-{i}",
-                    "build_number": i + 1,
-                    "failures": [{"test_name": "t"}] if i == 0 else [],
-                },
-            )
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            for i in range(3):
+                await storage.save_result(
+                    job_id=f"dash-job-{i}",
+                    jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
+                    status="completed",
+                    result={
+                        "job_name": f"test-job-{i}",
+                        "build_number": i + 1,
+                        "failures": [{"test_name": "t"}] if i == 0 else [],
+                    },
+                )
 
         response = test_client.get("/dashboard")
         assert response.status_code == 200
