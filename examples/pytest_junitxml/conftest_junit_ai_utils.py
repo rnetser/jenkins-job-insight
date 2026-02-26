@@ -1,12 +1,17 @@
-"""Utility functions for JUnit XML AI analysis enrichment."""
+"""Pytest utilities for JUnit XML AI analysis enrichment.
+
+Thin glue between pytest session hooks and the JJI enrichment client.
+All server communication is handled by jji_junit_enrichment module.
+"""
 
 import logging
 import os
 from pathlib import Path
-from typing import Any
 
 import requests
 from dotenv import load_dotenv
+
+from jji_junit_enrichment import enrich_junit_xml_via_server
 
 logger = logging.getLogger("jenkins-job-insight")
 
@@ -50,11 +55,6 @@ def setup_ai_analysis(session) -> None:
 def enrich_junit_xml(session) -> None:
     """Read JUnit XML, send to server for analysis, write enriched XML back.
 
-    Reads the JUnit XML that pytest already generated, sends the raw XML
-    content to the JJI server which extracts failures, runs AI analysis,
-    and returns the enriched XML. The enriched XML is written back to the
-    same file.
-
     Args:
         session: The pytest session containing config options.
     """
@@ -72,14 +72,8 @@ def enrich_junit_xml(session) -> None:
         )
         return
 
-    raw_xml = xml_path.read_text()
-
     server_url = os.environ["JJI_SERVER_URL"]
-    payload: dict[str, Any] = {
-        "raw_xml": raw_xml,
-        "ai_provider": ai_provider,
-        "ai_model": ai_model,
-    }
+    raw_xml = xml_path.read_text()
 
     try:
         timeout = int(os.environ.get("JJI_TIMEOUT", "600"))
@@ -87,21 +81,24 @@ def enrich_junit_xml(session) -> None:
         timeout = 600
 
     try:
-        response = requests.post(
-            f"{server_url.rstrip('/')}/analyze-failures",
-            json=payload,
+        result = enrich_junit_xml_via_server(
+            server_url=server_url,
+            raw_xml=raw_xml,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
             timeout=timeout,
         )
-        response.raise_for_status()
-        result = response.json()
-    except (requests.RequestException, ValueError) as exc:
+    except requests.RequestException as exc:
         error_detail = ""
-        if isinstance(exc, requests.RequestException) and exc.response is not None:
+        if exc.response is not None:
             try:
                 error_detail = f" Response: {exc.response.text}"
-            except Exception as detail_exc:
-                logger.debug("Could not extract response detail: %s", detail_exc)
-        logger.error("Server request failed: %s%s", exc, error_detail)
+            except Exception:
+                pass
+        logger.error("JJI server request failed: %s%s", exc, error_detail)
+        return
+    except Exception as exc:
+        logger.error("JJI server request failed: %s", exc)
         return
 
     enriched_xml = result.get("enriched_xml")
@@ -109,9 +106,7 @@ def enrich_junit_xml(session) -> None:
         xml_path.write_text(enriched_xml)
         logger.info("JUnit XML enriched with AI analysis: %s", xml_path)
     else:
-        logger.info(
-            "No enriched XML in server response (no failures found or analysis failed)"
-        )
+        logger.info("No enriched XML returned (no failures or analysis failed)")
 
     html_report_url = result.get("html_report_url", "")
     if html_report_url:

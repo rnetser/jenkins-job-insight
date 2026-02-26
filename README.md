@@ -709,10 +709,12 @@ Enrich JUnit XML reports with AI-powered failure analysis. After tests complete,
 
 ### Setup
 
-1. Copy `examples/pytest_junitxml/conftest_junit_ai.py` and `examples/pytest_junitxml/conftest_junit_ai_utils.py` to your project root
-2. Rename `conftest_junit_ai.py` to `conftest.py`
-3. Install dependencies: `pip install requests python-dotenv`
-4. Create a `.env` file or set environment variables:
+1. Copy these files from `examples/pytest_junitxml/` to your project root:
+   - `conftest_junit_ai.py` (rename to `conftest.py`)
+   - `conftest_junit_ai_utils.py`
+   - `jji_junit_enrichment.py`
+2. Install dependencies: `pip install requests python-dotenv`
+3. Create a `.env` file or set environment variables:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -734,11 +736,29 @@ pytest --junitxml=report.xml
 ### How It Works
 
 1. pytest runs tests and generates JUnit XML as usual
-2. At session finish, the plugin reads the raw XML content
-3. The raw XML is POSTed to the `/analyze-failures` endpoint
+2. At session finish, the conftest reads the raw XML file
+3. `jji_junit_enrichment` sends the XML to the `/analyze-failures` endpoint
 4. The server extracts failures, runs AI analysis, and returns enriched XML
-5. The enriched XML is written back to the same file
+5. The conftest writes the enriched XML back to the same file
 6. No global state or runtime collection -- works with pytest-xdist parallel execution
+
+### Standalone Usage
+
+The `jji_junit_enrichment.py` module can be used independently of pytest to enrich any JUnit XML file:
+
+```python
+from jji_junit_enrichment import enrich_junit_xml_via_server
+from pathlib import Path
+
+result = enrich_junit_xml_via_server(
+    server_url="http://localhost:8000",
+    raw_xml=Path("report.xml").read_text(),
+    ai_provider="claude",
+    ai_model="sonnet",
+)
+if result.get("enriched_xml"):
+    Path("report.xml").write_text(result["enriched_xml"])
+```
 
 ### What Gets Injected
 
