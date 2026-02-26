@@ -709,8 +709,9 @@ Enrich JUnit XML reports with AI-powered failure analysis. After tests complete,
 
 ### Setup
 
-1. Copy `examples/pytest_junitxml/conftest_junit_ai.py` to your project root and rename to `conftest.py`
-2. Install dependencies: `pip install requests python-dotenv`
+1. Copy `examples/pytest-junitxml/conftest_junit_ai.py` and `examples/pytest-junitxml/conftest_junit_ai_utils.py` to your project root
+2. Rename `conftest_junit_ai.py` to `conftest.py`
+3. Install dependencies: `pip install requests python-dotenv`
 3. Create a `.env` file or set environment variables:
 
 | Variable | Required | Default | Description |

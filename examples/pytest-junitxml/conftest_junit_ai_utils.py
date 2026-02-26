@@ -1,52 +1,28 @@
-"""
-Standalone conftest.py for enriching JUnit XML with AI failure analysis.
+"""Utility functions for JUnit XML AI analysis enrichment.
 
-Sends the raw JUnit XML to a jenkins-job-insight server for AI analysis
-and writes the enriched XML back to the same file.
-
-Usage:
-    1. Copy conftest_junit_ai.py to your project root and rename to conftest.py
-    2. Install dependencies: pip install requests python-dotenv
-    3. Create a .env file or set environment variables:
-       - JJI_SERVER_URL: jenkins-job-insight server URL (required)
-       - JJI_AI_PROVIDER: AI provider - claude, gemini, or cursor (default: claude)
-       - JJI_AI_MODEL: AI model (default: claude-opus-4-6[1m])
-       - JJI_TIMEOUT: request timeout in seconds (default: 600)
-    4. Run: pytest --junitxml=report.xml --analyze-with-ai
-
-Requirements:
-    - requests
-    - python-dotenv
-    - A running jenkins-job-insight server
+These functions handle server communication and XML enrichment.
+They are not tied to pytest and can be used independently.
 """
 
 import logging
 import os
 from pathlib import Path
 
-import pytest
 import requests
 from dotenv import load_dotenv
 
 logger = logging.getLogger("jenkins-job-insight")
 
 
-def pytest_addoption(parser):
-    """Add --analyze-with-ai CLI option."""
-    group = parser.getgroup("jenkins-job-insight", "AI-powered failure analysis")
-    group.addoption(
-        "--analyze-with-ai",
-        action="store_true",
-        default=False,
-        help="Enrich JUnit XML with AI-powered failure analysis from jenkins-job-insight",
-    )
+def setup_ai_analysis(session) -> None:
+    """Load .env, validate JJI_SERVER_URL, set defaults for AI provider/model.
 
+    Disables analysis if JJI_SERVER_URL is missing or if pytest was invoked
+    with --collectonly or --setupplan.
 
-def pytest_sessionstart(session):
-    """Set up AI analysis if --analyze-with-ai is passed."""
-    if not session.config.option.analyze_with_ai:
-        return
-
+    Args:
+        session: The pytest session containing config options.
+    """
     if session.config.option.setupplan or session.config.option.collectonly:
         session.config.option.analyze_with_ai = False
         return
@@ -68,21 +44,30 @@ def pytest_sessionstart(session):
             os.environ["JJI_AI_MODEL"] = "claude-opus-4-6[1m]"
 
 
-@pytest.hookimpl(trylast=True)
-def pytest_sessionfinish(session, exitstatus):
-    """Enrich JUnit XML with AI analysis after all tests complete.
+def enrich_junit_xml(session) -> None:
+    """Read JUnit XML, send to server for analysis, write enriched XML back.
 
-    Reads the raw XML, POSTs it to the JJI server's /analyze-failures
-    endpoint, and writes the enriched XML back to the same file.
+    Reads the JUnit XML that pytest generated, POSTs the raw content to the
+    JJI server's /analyze-failures endpoint, and writes the enriched XML
+    (with analysis results) back to the same file.
+
+    Args:
+        session: The pytest session containing config options.
     """
-    if not session.config.option.analyze_with_ai:
-        return
-
     xml_path_raw = getattr(session.config.option, "xmlpath", None)
-    if not xml_path_raw or not Path(xml_path_raw).exists():
+    if not xml_path_raw:
+        logger.warning(
+            "xunit file not found; pass --junitxml. Skipping AI analysis enrichment"
+        )
         return
 
     xml_path = Path(xml_path_raw)
+    if not xml_path.exists():
+        logger.warning(
+            "xunit file not found under %s. Skipping AI analysis enrichment",
+            xml_path_raw,
+        )
+        return
 
     ai_provider = os.environ.get("JJI_AI_PROVIDER")
     ai_model = os.environ.get("JJI_AI_MODEL")
