@@ -49,7 +49,10 @@ def pytest_sessionstart(session):
 
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
-    """Enrich JUnit XML with AI analysis after all tests complete."""
+    """Enrich JUnit XML with AI analysis after all tests complete.
+
+    Uses trylast to run AFTER the junitxml plugin writes the XML file.
+    """
     if session.config.option.analyze_with_ai:
         try:
             enrich_junit_xml(session)

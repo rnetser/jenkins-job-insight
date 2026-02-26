@@ -14,16 +14,22 @@ from dotenv import load_dotenv
 logger = logging.getLogger("jenkins-job-insight")
 
 
-def setup_ai_analysis(session) -> None:
-    """Load .env, validate JJI_SERVER_URL, set defaults for AI provider/model.
+def is_dry_run(config) -> bool:
+    """Check if pytest was invoked in dry-run mode (--collectonly or --setupplan)."""
+    return config.option.setupplan or config.option.collectonly
 
+
+def setup_ai_analysis(session) -> None:
+    """Configure AI analysis for test failure reporting.
+
+    Loads .env, validates JJI_SERVER_URL, and sets defaults for AI provider/model.
     Disables analysis if JJI_SERVER_URL is missing or if pytest was invoked
     with --collectonly or --setupplan.
 
     Args:
         session: The pytest session containing config options.
     """
-    if session.config.option.setupplan or session.config.option.collectonly:
+    if is_dry_run(session.config):
         session.config.option.analyze_with_ai = False
         return
 
@@ -81,9 +87,10 @@ def enrich_junit_xml(session) -> None:
     raw_xml = xml_path.read_text()
 
     try:
-        timeout = int(os.environ.get("JJI_TIMEOUT", "600"))
+        timeout_value = int(os.environ.get("JJI_TIMEOUT", "600"))
     except ValueError:
-        timeout = 600
+        logger.warning("Invalid JJI_TIMEOUT value, using default 600 seconds")
+        timeout_value = 600
 
     try:
         response = requests.post(
@@ -93,7 +100,7 @@ def enrich_junit_xml(session) -> None:
                 "ai_provider": ai_provider,
                 "ai_model": ai_model,
             },
-            timeout=timeout,
+            timeout=timeout_value,
         )
         response.raise_for_status()
         result = response.json()
@@ -101,13 +108,8 @@ def enrich_junit_xml(session) -> None:
         logger.exception("Failed to enrich JUnit XML, original preserved")
         return
 
-    enriched_xml = result.get("enriched_xml")
-    if enriched_xml:
+    if enriched_xml := result.get("enriched_xml"):
         xml_path.write_text(enriched_xml)
         logger.info("JUnit XML enriched with AI analysis: %s", xml_path)
     else:
         logger.info("No enriched XML returned (no failures or analysis failed)")
-
-    html_report_url = result.get("html_report_url", "")
-    if html_report_url:
-        logger.info("HTML report: %s", html_report_url)
