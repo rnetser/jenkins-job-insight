@@ -155,6 +155,43 @@ async def list_results(limit: int = 50) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def count_all_failures(result_data: dict) -> int:
+    """Count all failures including those in nested child job analyses.
+
+    Walks the top-level ``failures`` list, then recursively counts failures in
+    ``child_job_analyses`` (top-level key) and ``failed_children`` (nested key
+    inside each child).
+
+    Args:
+        result_data: Parsed result dictionary from result_json.
+
+    Returns:
+        Total number of failures across all levels.
+    """
+    count = len(result_data.get("failures", []))
+    for child in result_data.get("child_job_analyses", []):
+        count += _count_child_failures_recursive(child)
+    return count
+
+
+def _count_child_failures_recursive(child: dict) -> int:
+    """Recursively count failures in a child job analysis dict.
+
+    Each child has a ``failures`` list and a ``failed_children`` list that can
+    nest arbitrarily deep.
+
+    Args:
+        child: A single child job analysis dictionary.
+
+    Returns:
+        Total number of failures for this child and its descendants.
+    """
+    count = len(child.get("failures", []))
+    for nested in child.get("failed_children", []):
+        count += _count_child_failures_recursive(nested)
+    return count
+
+
 async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
     """List recent analysis results with summary data for dashboard display.
 
@@ -193,8 +230,10 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
                     result_data = json.loads(row["result_json"])
                     entry["job_name"] = result_data.get("job_name", "")
                     entry["build_number"] = result_data.get("build_number", "")
-                    failures = result_data.get("failures", [])
-                    entry["failure_count"] = len(failures)
+                    entry["failure_count"] = count_all_failures(result_data)
+                    child_jobs = result_data.get("child_job_analyses", [])
+                    if child_jobs:
+                        entry["child_job_count"] = len(child_jobs)
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     logger.debug(f"Failed to parse result_json for job {row['job_id']}")
             results.append(entry)

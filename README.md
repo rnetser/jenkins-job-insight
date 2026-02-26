@@ -397,7 +397,7 @@ The custom prompt should include instructions for the AI on how to analyze Jenki
 | `/analyze`               | POST   | Submit analysis job (async, returns 202)          |
 | `/analyze?sync=true`     | POST   | Submit and wait for result (returns JSON)         |
 | `/results/{job_id}`      | GET    | Retrieve stored result (JSON)                     |
-| `/results/{job_id}.html` | GET    | Retrieve stored result as an HTML report          |
+| `/results/{job_id}.html` | GET    | Retrieve stored result as an HTML report (supports `?refresh=1`) |
 | `/dashboard`             | GET    | HTML dashboard listing all analysis reports       |
 | `/results`               | GET    | List recent analysis jobs (default: 50, max: 100) |
 | `/health`                | GET    | Health check endpoint                             |
@@ -662,6 +662,14 @@ curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000.html -o 
 open report.html  # macOS
 xdg-open report.html  # Linux
 ```
+
+By default, HTML reports are served from disk cache once generated. To force regeneration of the report from stored data, append the `?refresh=1` query parameter:
+
+```bash
+curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000.html?refresh=1 -o report.html
+```
+
+This is useful after server code updates when cached reports may be stale and need to reflect the latest rendering logic.
 
 The HTML report includes:
 

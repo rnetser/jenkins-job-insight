@@ -3,7 +3,14 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, HttpUrl, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    HttpUrl,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 class BaseAnalysisRequest(BaseModel):
@@ -186,6 +193,19 @@ class FailureAnalysis(BaseModel):
     test_name: str = Field(description="Name of the failed test")
     error: str = Field(description="Error message or exception")
     analysis: AnalysisDetail = Field(description="Structured AI analysis output")
+
+    @field_validator("analysis", mode="before")
+    @classmethod
+    def _coerce_legacy_analysis(cls, v: object) -> object:
+        """Accept legacy string format for backward compatibility.
+
+        Data stored before the AnalysisDetail model was introduced has the
+        analysis field as a plain string.  Wrap it in a dict so Pydantic can
+        construct an AnalysisDetail with the text in the ``details`` field.
+        """
+        if isinstance(v, str):
+            return {"details": v}
+        return v
 
 
 class ChildJobAnalysis(BaseModel):
