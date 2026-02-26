@@ -49,12 +49,19 @@ def pytest_sessionstart(session):
 
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
-    """Enrich JUnit XML with AI analysis after all tests complete.
+    """Enrich JUnit XML with AI analysis when tests fail.
 
-    Uses trylast to run AFTER the junitxml plugin writes the XML file.
+    Only runs when exitstatus indicates test failures (exit code 1).
+    Skips enrichment when all tests pass or execution was interrupted.
     """
     if session.config.option.analyze_with_ai:
-        try:
-            enrich_junit_xml(session)
-        except Exception:
-            logger.exception("Failed to enrich JUnit XML, original preserved")
+        if exitstatus == 0:
+            logger.info(
+                "No test failures (exit code %d), skipping AI analysis", exitstatus
+            )
+
+        else:
+            try:
+                enrich_junit_xml(session)
+            except Exception:
+                logger.exception("Failed to enrich JUnit XML, original preserved")
