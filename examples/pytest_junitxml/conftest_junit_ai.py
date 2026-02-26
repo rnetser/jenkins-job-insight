@@ -6,7 +6,7 @@ and writes the enriched XML back to the same file.
 
 Usage:
     1. Copy conftest_junit_ai.py to your project root and rename to conftest.py
-    2. Install dependencies: pip install jenkins-job-insight python-dotenv
+    2. Install dependencies: pip install requests python-dotenv
     3. Create a .env file or set environment variables:
        - JJI_SERVER_URL: jenkins-job-insight server URL (required)
        - JJI_AI_PROVIDER: AI provider - claude, gemini, or cursor (default: claude)
@@ -15,7 +15,7 @@ Usage:
     4. Run: pytest --junitxml=report.xml --analyze-with-ai
 
 Requirements:
-    - jenkins-job-insight (pip install jenkins-job-insight)
+    - requests
     - python-dotenv
     - A running jenkins-job-insight server
 """
@@ -25,9 +25,8 @@ import os
 from pathlib import Path
 
 import pytest
+import requests
 from dotenv import load_dotenv
-
-from jenkins_job_insight.xml_enrichment import enrich_junit_xml_via_server
 
 logger = logging.getLogger("jenkins-job-insight")
 
@@ -73,9 +72,8 @@ def pytest_sessionstart(session):
 def pytest_sessionfinish(session, exitstatus):
     """Enrich JUnit XML with AI analysis after all tests complete.
 
-    Uses trylast to run AFTER the junitxml plugin writes the XML file.
-    Reads the raw XML, sends it to the JJI server, and writes back the
-    enriched XML with analysis results.
+    Reads the raw XML, POSTs it to the JJI server's /analyze-failures
+    endpoint, and writes the enriched XML back to the same file.
     """
     if not session.config.option.analyze_with_ai:
         return
@@ -103,13 +101,17 @@ def pytest_sessionfinish(session, exitstatus):
         timeout = 600
 
     try:
-        result = enrich_junit_xml_via_server(
-            server_url=server_url,
-            raw_xml=raw_xml,
-            ai_provider=ai_provider,
-            ai_model=ai_model,
+        response = requests.post(
+            f"{server_url.rstrip('/')}/analyze-failures",
+            json={
+                "raw_xml": raw_xml,
+                "ai_provider": ai_provider,
+                "ai_model": ai_model,
+            },
             timeout=timeout,
         )
+        response.raise_for_status()
+        result = response.json()
     except Exception:
         logger.exception("Failed to enrich JUnit XML, original preserved")
         return
