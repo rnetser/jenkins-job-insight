@@ -602,6 +602,34 @@ curl -X POST http://localhost:8000/analyze-failures \
   }'
 ```
 
+**Sending an XML file via curl:**
+
+```bash
+curl -X POST http://localhost:8000/analyze-failures \
+  -H "Content-Type: application/json" \
+  -d "$(jq -n --arg xml "$(cat report.xml)" \
+    '{raw_xml: $xml, ai_provider: "claude", ai_model: "sonnet"}')"
+```
+
+**Sending an XML file via Python:**
+
+```python
+import requests
+from pathlib import Path
+
+response = requests.post(
+    "http://localhost:8000/analyze-failures",
+    json={
+        "raw_xml": Path("report.xml").read_text(),
+        "ai_provider": "claude",
+        "ai_model": "sonnet",
+    },
+    timeout=600,
+)
+result = response.json()
+print(result["enriched_xml"])  # Enriched XML with analysis injected
+```
+
 When `raw_xml` is provided, the server extracts failures from the XML, runs analysis, and returns `enriched_xml` in the response with analysis results injected back into the XML.
 
 **Response (200 OK):**
