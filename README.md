@@ -709,9 +709,7 @@ Enrich JUnit XML reports with AI-powered failure analysis. After tests complete,
 
 ### Setup
 
-1. Copy these files from `examples/pytest_junitxml/` to your project root:
-   - `conftest_junit_ai.py` (rename to `conftest.py`)
-   - `conftest_junit_ai_utils.py`
+1. Copy `examples/pytest_junitxml/conftest_junit_ai.py` to your project root and rename to `conftest.py`
 2. Install dependencies: `pip install jenkins-job-insight python-dotenv`
 3. Create a `.env` file or set environment variables:
 
