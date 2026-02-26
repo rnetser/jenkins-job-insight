@@ -363,7 +363,10 @@ async def analyze(
     request: Request,
     body: AnalyzeRequest,
     background_tasks: BackgroundTasks,
-    sync: bool = Query(False, description="If true, wait for result and return it"),
+    *,
+    sync: bool = Query(
+        default=False, description="If true, wait for result and return it"
+    ),
     settings: Settings = Depends(get_settings),
 ) -> dict | JSONResponse:
     """Submit a Jenkins job for analysis.
@@ -591,15 +594,23 @@ def _build_analysis_result(job_id: str, result_data: dict) -> AnalysisResult:
 
 
 @app.get("/results/{job_id}.html", response_class=HTMLResponse)
-async def get_job_report(job_id: str) -> HTMLResponse:
+async def get_job_report(
+    job_id: str,
+    *,
+    refresh: bool = Query(
+        default=False, description="Force regeneration of the HTML report"
+    ),
+) -> HTMLResponse:
     """Serve an HTML report, generating it on-demand if needed.
 
     Reports are generated lazily from stored results and cached to disk.
+    Pass ``?refresh=1`` to force regeneration (e.g. after a code update).
     """
-    # Try disk cache first
-    html_content = await get_html_report(job_id)
-    if html_content:
-        return HTMLResponse(html_content)
+    # Try disk cache first (skip when refresh requested)
+    if not refresh:
+        html_content = await get_html_report(job_id)
+        if html_content:
+            return HTMLResponse(html_content)
 
     # Check if the job exists
     result = await get_result(job_id)
@@ -627,7 +638,7 @@ async def get_job_report(job_id: str) -> HTMLResponse:
             logger.warning(
                 "Failed to cache HTML report for job_id: %s", job_id, exc_info=True
             )
-        logger.info("HTML report generated on-demand for job_id: %s", job_id)
+        logger.info(f"HTML report generated on-demand for job_id: {job_id}")
         return HTMLResponse(html_content)
 
     raise HTTPException(

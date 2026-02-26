@@ -308,6 +308,43 @@ class TestFormatResultAsHtml:
         html_output = format_result_as_html(sample_analysis_result)
         assert '<link rel="icon"' in html_output
 
+    def test_report_header_counts_child_job_failures(self) -> None:
+        """Header shows total failure count including child job failures."""
+        top_level_failure = FailureAnalysis(
+            test_name="tests.parent.test_top_level",
+            error="AssertionError: top-level failure",
+            analysis=AnalysisDetail(classification="CODE ISSUE"),
+        )
+        child = ChildJobAnalysis(
+            job_name="child-job",
+            build_number=10,
+            jenkins_url="https://jenkins.example.com/job/child/10/",
+            failures=[
+                FailureAnalysis(
+                    test_name="tests.child.test_first",
+                    error="ValueError: child error one",
+                    analysis=AnalysisDetail(classification="PRODUCT BUG"),
+                ),
+                FailureAnalysis(
+                    test_name="tests.child.test_second",
+                    error="RuntimeError: child error two",
+                    analysis=AnalysisDetail(classification="CODE ISSUE"),
+                ),
+            ],
+        )
+        result = AnalysisResult(
+            job_id="header-count-test",
+            job_name="header-count",
+            build_number=1,
+            jenkins_url="https://jenkins.example.com/job/header-count/1/",
+            status="completed",
+            summary="Failures across parent and child",
+            failures=[top_level_failure],
+            child_job_analyses=[child],
+        )
+        html_output = format_result_as_html(result)
+        assert "3 failures" in html_output
+
 
 # ===========================================================================
 # TestStatusPageFavicon
