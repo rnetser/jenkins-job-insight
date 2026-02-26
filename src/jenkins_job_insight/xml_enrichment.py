@@ -1,15 +1,3 @@
-"""JUnit XML extraction, enrichment, and client functions.
-
-Server-side functions:
-    extract_failures_from_xml - Parse XML string and extract test failures
-    extract_test_failures - Extract failures and return as TestFailure objects
-    apply_analysis_to_xml - Inject analysis results into XML string
-    build_enriched_xml - High-level: build enriched XML from FailureAnalysis objects
-
-Client-side function:
-    enrich_junit_xml_via_server - Send XML to JJI server, get enriched XML back
-"""
-
 from __future__ import annotations
 
 import logging

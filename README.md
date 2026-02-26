@@ -769,24 +769,6 @@ pytest --junitxml=report.xml
 5. The conftest writes the enriched XML back to the same file
 6. No global state or runtime collection -- works with pytest-xdist parallel execution
 
-### Standalone Usage
-
-For programmatic access outside of pytest, install the `jenkins-job-insight` package and use the client function directly:
-
-```python
-from jenkins_job_insight.xml_enrichment import enrich_junit_xml_via_server
-from pathlib import Path
-
-result = enrich_junit_xml_via_server(
-    server_url="http://localhost:8000",
-    raw_xml=Path("report.xml").read_text(),
-    ai_provider="claude",
-    ai_model="sonnet",
-)
-if result.get("enriched_xml"):
-    Path("report.xml").write_text(result["enriched_xml"])
-```
-
 ### What Gets Injected
 
 For each failed test case, the JUnit XML is enriched with:
