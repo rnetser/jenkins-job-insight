@@ -2,6 +2,7 @@
 
 Server-side functions:
     extract_failures_from_xml - Parse XML string and extract test failures
+    extract_test_failures - Extract failures and return as TestFailure objects
     apply_analysis_to_xml - Inject analysis results into XML string
     build_enriched_xml - High-level: build enriched XML from FailureAnalysis objects
 
@@ -9,10 +10,15 @@ Client-side function:
     enrich_junit_xml_via_server - Send XML to JJI server, get enriched XML back
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from xml.etree import ElementTree as ET
 from xml.etree.ElementTree import Element
+
+if TYPE_CHECKING:
+    from jenkins_job_insight.models import TestFailure
 
 import httpx
 from defusedxml.ElementTree import fromstring as safe_fromstring
@@ -67,6 +73,35 @@ def extract_failures_from_xml(raw_xml: str) -> list[dict[str, str]]:
         )
 
     return failures
+
+
+def extract_test_failures(raw_xml: str) -> list[TestFailure]:
+    """Extract test failures from JUnit XML and return as TestFailure objects.
+
+    Parses the XML, extracts failure/error elements, and converts them
+    to TestFailure model objects ready for analysis.
+
+    Args:
+        raw_xml: JUnit XML content as a string.
+
+    Returns:
+        List of TestFailure objects. Empty list if no failures found.
+
+    Raises:
+        xml.etree.ElementTree.ParseError: If the XML is malformed.
+    """
+    from jenkins_job_insight.models import TestFailure
+
+    raw_failures = extract_failures_from_xml(raw_xml)
+    return [
+        TestFailure(
+            test_name=f["test_name"],
+            error_message=f.get("error_message", ""),
+            stack_trace=f.get("stack_trace", ""),
+            status=f.get("status", "FAILED"),
+        )
+        for f in raw_failures
+    ]
 
 
 def apply_analysis_to_xml(

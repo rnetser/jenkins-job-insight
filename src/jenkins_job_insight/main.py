@@ -5,6 +5,7 @@ import urllib.parse
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from xml.etree.ElementTree import ParseError
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -28,11 +29,10 @@ from jenkins_job_insight.models import (
     ChildJobAnalysis,
     FailureAnalysis,
     FailureAnalysisResult,
-    TestFailure,
 )
 from jenkins_job_insight.xml_enrichment import (
     build_enriched_xml,
-    extract_failures_from_xml,
+    extract_test_failures,
 )
 from jenkins_job_insight.html_report import (
     FAVICON_SVG,
@@ -467,18 +467,13 @@ async def analyze_failures(
     """
     base_url = _extract_base_url(request)
 
-    # Determine failures source
-    raw_xml = body.raw_xml
-    if raw_xml is not None:
+    if raw_xml := body.raw_xml:
         try:
-            from xml.etree.ElementTree import ParseError
-
-            raw_failures = extract_failures_from_xml(raw_xml)
+            test_failures = extract_test_failures(raw_xml)
         except ParseError as e:
             raise HTTPException(status_code=400, detail=f"Invalid XML: {e}")
 
-        if not raw_failures:
-            # No failures in XML - return immediately with empty result
+        if not test_failures:
             job_id = str(uuid.uuid4())
             analysis_result = FailureAnalysisResult(
                 job_id=job_id,
@@ -491,17 +486,6 @@ async def analyze_failures(
             result_data["result_url"] = f"{base_url}/results/{job_id}"
             result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
             return JSONResponse(content=result_data)
-
-        # Convert raw failure dicts to TestFailure objects
-        test_failures = [
-            TestFailure(
-                test_name=f["test_name"],
-                error_message=f.get("error_message", ""),
-                stack_trace=f.get("stack_trace", ""),
-                status=f.get("status", "FAILED"),
-            )
-            for f in raw_failures
-        ]
     else:
         if not body.failures:
             raise HTTPException(status_code=400, detail="No failures provided")
