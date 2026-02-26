@@ -268,7 +268,21 @@ class JobStatus(BaseModel):
 class AnalyzeFailuresRequest(BaseAnalysisRequest):
     """Request payload for direct failure analysis (no Jenkins)."""
 
-    failures: list[TestFailure] = Field(description="Raw test failures to analyze")
+    failures: list[TestFailure] | None = Field(
+        default=None, description="Raw test failures to analyze"
+    )
+    raw_xml: Annotated[str, Field(max_length=50_000_000)] | None = Field(
+        default=None,
+        description="Raw JUnit XML content to extract failures from and enrich with analysis results",
+    )
+
+    @model_validator(mode="after")
+    def check_input_source(self) -> "AnalyzeFailuresRequest":
+        if self.failures and self.raw_xml:
+            raise ValueError("Provide either 'failures' or 'raw_xml', not both")
+        if not self.failures and not self.raw_xml:
+            raise ValueError("Either 'failures' or 'raw_xml' must be provided")
+        return self
 
 
 class FailureAnalysisResult(BaseModel):
@@ -281,4 +295,8 @@ class FailureAnalysisResult(BaseModel):
     ai_model: str = Field(default="", description="AI model used")
     failures: list[FailureAnalysis] = Field(
         default_factory=list, description="Analyzed failures"
+    )
+    enriched_xml: str | None = Field(
+        default=None,
+        description="Enriched JUnit XML with analysis results (only when raw_xml was provided in request)",
     )

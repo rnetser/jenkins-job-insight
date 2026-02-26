@@ -12,6 +12,7 @@ dependencies = [
     "gitpython",
     "aiosqlite",
     "python-simple-logger",
+    "defusedxml>=0.7.1",
 ]
 
 [project.scripts]

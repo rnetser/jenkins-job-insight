@@ -21,7 +21,8 @@ For each failure, the service provides detailed explanations and either fix sugg
 - **Callback webhooks**: Delivers results to your specified endpoint with custom headers
 - **HTML report output**: Generate self-contained, dark-themed HTML failure reports viewable in any browser
 - **Direct failure analysis**: Analyze raw test failures without Jenkins via `POST /analyze-failures`
-- **pytest JUnit XML integration**: Enrich JUnit XML reports with AI analysis using a standalone conftest.py
+- **pytest JUnit XML integration**: Enrich JUnit XML reports with AI analysis via a pytest plugin
+- **Raw XML analysis**: Accept raw JUnit XML via API, extract failures, analyze, and return enriched XML
 
 ## Quick Start
 
@@ -218,6 +219,8 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `AI_PROVIDER`        | `ai_provider`        | Yes      | Both                   | AI provider to use (`claude`, `gemini`, or `cursor`)           |
 | `AI_MODEL`           | `ai_model`           | Yes      | Both                   | Model for the AI provider                                      |
 | `AI_CLI_TIMEOUT`     | `ai_cli_timeout`     | No       | Both                   | AI CLI timeout in minutes (default: 10)                        |
+| --                   | `raw_xml`            | No       | `/analyze-failures`    | Raw JUnit XML content (alternative to `failures`)              |
+| --                   | `failures`           | No*      | `/analyze-failures`    | Raw test failure objects (alternative to `raw_xml`)             |
 | **General**          |                      |          |                        |                                                                |
 | `TESTS_REPO_URL`     | `tests_repo_url`     | No       | Both                   | Repository URL for test context                                |
 | `CALLBACK_URL`       | `callback_url`       | No       | `/analyze`             | Callback webhook URL for results                               |
@@ -238,7 +241,7 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `JIRA_SSL_VERIFY`    | `jira_ssl_verify`    | No       | Both                   | SSL certificate verification for Jira (default: true)          |
 | `JIRA_MAX_RESULTS`   | `jira_max_results`   | No       | Both                   | Maximum Jira results per search (default: 5)                   |
 
-*Jenkins fields are required for `/analyze` but must be configured in at least one place (environment variable or request body).
+*Jenkins fields are required for `/analyze` but must be configured in at least one place (environment variable or request body). *Either `failures` or `raw_xml` must be provided for `/analyze-failures` (mutually exclusive).
 
 **Priority**: Request values take precedence over environment variable defaults. "Both" means the field works with `/analyze` and `/analyze-failures` endpoints.
 
@@ -563,9 +566,9 @@ curl "http://localhost:8000/results?limit=10"
 
 ### Analyze Raw Test Failures (No Jenkins)
 
-Analyze test failures directly without Jenkins. Accepts raw failure data and returns AI analysis.
+Analyze test failures directly without Jenkins. Accepts either raw failure data or raw JUnit XML content.
 
-**Request:**
+**Option 1: Raw failures (existing)**
 
 ```bash
 curl -X POST http://localhost:8000/analyze-failures \
@@ -587,6 +590,20 @@ curl -X POST http://localhost:8000/analyze-failures \
   }'
 ```
 
+**Option 2: Raw JUnit XML (new)**
+
+```bash
+curl -X POST http://localhost:8000/analyze-failures \
+  -H "Content-Type: application/json" \
+  -d '{
+    "raw_xml": "<?xml version=\"1.0\"?><testsuite name=\"tests\" tests=\"1\" failures=\"1\"><testcase classname=\"tests.test_auth\" name=\"test_login\"><failure message=\"assert False\">traceback here</failure></testcase></testsuite>",
+    "ai_provider": "claude",
+    "ai_model": "sonnet"
+  }'
+```
+
+When `raw_xml` is provided, the server extracts failures from the XML, runs analysis, and returns `enriched_xml` in the response with analysis results injected back into the XML.
+
 **Response (200 OK):**
 
 ```json
@@ -598,11 +615,11 @@ curl -X POST http://localhost:8000/analyze-failures \
   "ai_model": "sonnet",
   "failures": [
     {
-      "test_name": "tests/test_auth.py::test_login",
-      "error": "AssertionError: expected 200 but got 401",
+      "test_name": "tests.test_auth.test_login",
+      "error": "assert False",
       "analysis": {
         "classification": "PRODUCT BUG",
-        "affected_tests": ["tests/test_auth.py::test_login"],
+        "affected_tests": ["tests.test_auth.test_login"],
         "details": "The authentication endpoint returns 401...",
         "product_bug_report": {
           "title": "Authentication endpoint rejects valid credentials",
@@ -613,9 +630,12 @@ curl -X POST http://localhost:8000/analyze-failures \
         }
       }
     }
-  ]
+  ],
+  "enriched_xml": "<?xml version='1.0' encoding='utf-8'?>..."
 }
 ```
+
+Note: `enriched_xml` is only present when `raw_xml` was provided in the request. Provide either `failures` or `raw_xml`, not both.
 
 ### Response Fields
 
@@ -714,10 +734,11 @@ pytest --junitxml=report.xml
 ### How It Works
 
 1. pytest runs tests and generates JUnit XML as usual
-2. At session finish, the plugin parses the XML for `<failure>` and `<error>` elements
-3. Failures are POSTed to the `/analyze-failures` endpoint
-4. AI analysis results are injected back into the XML as `<properties>` and `<system-out>`
-5. No global state or runtime collection -- works with pytest-xdist parallel execution
+2. At session finish, the plugin reads the raw XML content
+3. The raw XML is POSTed to the `/analyze-failures` endpoint
+4. The server extracts failures, runs AI analysis, and returns enriched XML
+5. The enriched XML is written back to the same file
+6. No global state or runtime collection -- works with pytest-xdist parallel execution
 
 ### What Gets Injected
 
@@ -731,60 +752,6 @@ For each failed test case, the JUnit XML is enriched with:
 
 **`<system-out>`** (human-readable, visible in Jenkins test details):
 - Formatted analysis text with classification, details, and fix/bug information
-
-## Standalone JUnit XML Enricher
-
-A standalone CLI that enriches any JUnit XML file with AI failure analysis from a JJI server. Unlike the pytest integration (which hooks into pytest's session), this works with any JUnit XML file regardless of how it was generated -- Go tests, Java/Maven, CI artifacts, etc.
-
-The enricher reuses the same shared utilities as the pytest integration (`conftest_junit_ai_utils.py`) for XML parsing, server communication, and result injection.
-
-**Safety**: The original XML is backed up before modification and restored automatically if anything goes wrong. The backup is removed on success.
-
-### Enricher Usage
-
-```bash
-# Basic usage (server URL from environment)
-export JJI_SERVER_URL=http://localhost:8000
-uv run python examples/junit_xml_enricher/enrich_junit_xml.py report.xml
-
-# Explicit server URL
-uv run python examples/junit_xml_enricher/enrich_junit_xml.py report.xml --server-url http://jji.example.com:8000
-
-# Dry run (show failures without sending to server)
-uv run python examples/junit_xml_enricher/enrich_junit_xml.py report.xml --dry-run
-
-# With custom AI provider and model
-uv run python examples/junit_xml_enricher/enrich_junit_xml.py report.xml \
-    --server-url http://localhost:8000 \
-    --ai-provider gemini \
-    --ai-model gemini-2.5-pro
-
-# Verbose output
-uv run python examples/junit_xml_enricher/enrich_junit_xml.py report.xml -v
-```
-
-### Enricher Configuration
-
-CLI arguments override environment variables. A `.env` file is auto-loaded if present.
-
-| Argument | Environment Variable | Default | Description |
-|----------|---------------------|---------|-------------|
-| `xml_path` (positional) | -- | -- | Path to JUnit XML file to enrich |
-| `--server-url` | `JJI_SERVER_URL` | -- | JJI server URL (required unless --dry-run) |
-| `--ai-provider` | `JJI_AI_PROVIDER` | `claude` | AI provider: claude, gemini, or cursor |
-| `--ai-model` | `JJI_AI_MODEL` | `claude-opus-4-6[1m]` | AI model name |
-| `--timeout` | `JJI_TIMEOUT` | `600` | Request timeout in seconds |
-| `--dry-run` | -- | -- | Show failures without sending to server |
-| `-v, --verbose` | `LOG_LEVEL` | `INFO` | Enable verbose (DEBUG) logging |
-
-### Exit Codes
-
-| Code | Meaning |
-|------|---------|
-| 0 | Success (XML enriched with analysis) |
-| 1 | No failures found in XML (nothing to do) |
-| 2 | Server error (request failed or bad response) |
-| 3 | Invalid input (file not found, parse error, missing config) |
 
 ## Development
 

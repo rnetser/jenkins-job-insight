@@ -424,7 +424,7 @@ class TestAnalyzeFailuresEndpoint:
                     assert data["html_report_url"].endswith(".html")
 
     def test_analyze_failures_empty_failures(self, test_client) -> None:
-        """Test that empty failures list returns 400."""
+        """Test that empty failures list returns 422 (validator rejects empty list without raw_xml)."""
         response = test_client.post(
             "/analyze-failures",
             json={
@@ -433,8 +433,7 @@ class TestAnalyzeFailuresEndpoint:
                 "ai_model": "test-model",
             },
         )
-        assert response.status_code == 400
-        assert "No failures provided" in response.json()["detail"]
+        assert response.status_code == 422
 
     def test_analyze_failures_missing_ai_provider(self, test_client) -> None:
         """Test that missing AI provider (no env var, no body param) returns 400."""
@@ -661,6 +660,196 @@ class TestAnalyzeFailuresEndpoint:
                         assert data["status"] == "completed"
                         # analyze_failure_group called twice: once for sig-a group, once for sig-b
                         assert mock_analyze_group.call_count == 2
+
+
+class TestAnalyzeFailuresRawXml:
+    """Tests for the POST /analyze-failures endpoint with raw_xml input."""
+
+    SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="TestSuite" tests="2" failures="1" errors="0">
+    <testcase classname="tests.test_auth" name="test_login" time="0.5">
+        <failure message="assert False" type="AssertionError">
+            at tests/test_auth.py:42
+        </failure>
+    </testcase>
+    <testcase classname="tests.test_auth" name="test_logout" time="0.1"/>
+</testsuite>"""
+
+    SAMPLE_XML_NO_FAILURES = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="TestSuite" tests="1" failures="0" errors="0">
+    <testcase classname="tests.test_auth" name="test_ok" time="0.1"/>
+</testsuite>"""
+
+    def test_raw_xml_success(self, test_client) -> None:
+        """Test that raw_xml with failures returns enriched XML."""
+        mock_analysis = FailureAnalysis(
+            test_name="tests.test_auth.test_login",
+            error="assert False",
+            analysis=AnalysisDetail(
+                classification="CODE ISSUE",
+                details="Test assertion failed",
+            ),
+        )
+
+        with patch("jenkins_job_insight.main.RepositoryManager") as mock_repo_cls:
+            mock_repo_instance = mock_repo_cls.return_value
+            mock_repo_instance.clone.return_value = None
+            mock_repo_instance.cleanup.return_value = None
+
+            with patch(
+                "jenkins_job_insight.main.run_parallel_with_limit",
+                new_callable=AsyncMock,
+            ) as mock_parallel:
+                mock_parallel.return_value = [[mock_analysis]]
+
+                response = test_client.post(
+                    "/analyze-failures",
+                    json={
+                        "raw_xml": self.SAMPLE_XML,
+                        "ai_provider": "claude",
+                        "ai_model": "test-model",
+                    },
+                )
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "completed"
+                assert data["enriched_xml"] is not None
+                assert "<?xml" in data["enriched_xml"]
+                assert len(data["failures"]) == 1
+
+    def test_raw_xml_no_failures(self, test_client) -> None:
+        """Test that raw_xml with no failures returns the original XML."""
+        response = test_client.post(
+            "/analyze-failures",
+            json={
+                "raw_xml": self.SAMPLE_XML_NO_FAILURES,
+                "ai_provider": "claude",
+                "ai_model": "test-model",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert "No test failures" in data["summary"]
+        assert data["enriched_xml"] is not None
+
+    def test_raw_xml_invalid_xml(self, test_client) -> None:
+        """Test that invalid XML returns 400."""
+        response = test_client.post(
+            "/analyze-failures",
+            json={
+                "raw_xml": "this is not valid xml <<<<",
+                "ai_provider": "claude",
+                "ai_model": "test-model",
+            },
+        )
+        assert response.status_code == 400
+        assert "Invalid XML" in response.json()["detail"]
+
+    def test_raw_xml_and_failures_mutual_exclusion(self, test_client) -> None:
+        """Test that providing both raw_xml and failures returns 422."""
+        response = test_client.post(
+            "/analyze-failures",
+            json={
+                "raw_xml": self.SAMPLE_XML,
+                "failures": [
+                    {
+                        "test_name": "test_foo",
+                        "error_message": "assert False",
+                    }
+                ],
+                "ai_provider": "claude",
+                "ai_model": "test-model",
+            },
+        )
+        assert response.status_code == 422
+
+    def test_neither_raw_xml_nor_failures_returns_422(self, test_client) -> None:
+        """Test that providing neither raw_xml nor failures returns 422."""
+        response = test_client.post(
+            "/analyze-failures",
+            json={
+                "ai_provider": "claude",
+                "ai_model": "test-model",
+            },
+        )
+        assert response.status_code == 422
+
+    def test_failures_mode_still_works(self, test_client) -> None:
+        """Test that existing failures mode is backwards compatible."""
+        mock_analysis = FailureAnalysis(
+            test_name="test_foo",
+            error="assert False",
+            analysis=AnalysisDetail(
+                classification="CODE ISSUE",
+                details="Test assertion failed",
+            ),
+        )
+
+        with patch("jenkins_job_insight.main.RepositoryManager") as mock_repo_cls:
+            mock_repo_instance = mock_repo_cls.return_value
+            mock_repo_instance.clone.return_value = None
+            mock_repo_instance.cleanup.return_value = None
+
+            with patch(
+                "jenkins_job_insight.main.run_parallel_with_limit",
+                new_callable=AsyncMock,
+            ) as mock_parallel:
+                mock_parallel.return_value = [[mock_analysis]]
+
+                response = test_client.post(
+                    "/analyze-failures",
+                    json={
+                        "failures": [
+                            {
+                                "test_name": "test_foo",
+                                "error_message": "assert False",
+                                "stack_trace": "File test.py, line 10",
+                            }
+                        ],
+                        "ai_provider": "claude",
+                        "ai_model": "test-model",
+                    },
+                )
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "completed"
+                assert data["enriched_xml"] is None  # No enriched_xml in failures mode
+
+    def test_raw_xml_enriched_xml_contains_analysis(self, test_client) -> None:
+        """Test that enriched_xml contains ai_classification properties."""
+        mock_analysis = FailureAnalysis(
+            test_name="tests.test_auth.test_login",
+            error="assert False",
+            analysis=AnalysisDetail(
+                classification="PRODUCT BUG",
+                details="Auth service down",
+            ),
+        )
+
+        with patch("jenkins_job_insight.main.RepositoryManager") as mock_repo_cls:
+            mock_repo_instance = mock_repo_cls.return_value
+            mock_repo_instance.clone.return_value = None
+            mock_repo_instance.cleanup.return_value = None
+
+            with patch(
+                "jenkins_job_insight.main.run_parallel_with_limit",
+                new_callable=AsyncMock,
+            ) as mock_parallel:
+                mock_parallel.return_value = [[mock_analysis]]
+
+                response = test_client.post(
+                    "/analyze-failures",
+                    json={
+                        "raw_xml": self.SAMPLE_XML,
+                        "ai_provider": "claude",
+                        "ai_model": "test-model",
+                    },
+                )
+                data = response.json()
+                assert data["enriched_xml"] is not None
+                assert "ai_classification" in data["enriched_xml"]
+                assert "PRODUCT BUG" in data["enriched_xml"]
 
 
 class TestResultsEndpoints:
