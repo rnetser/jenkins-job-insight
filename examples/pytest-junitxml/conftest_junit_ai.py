@@ -51,7 +51,7 @@ def pytest_sessionstart(session):
 def pytest_sessionfinish(session, exitstatus):
     """Enrich JUnit XML with AI analysis when tests fail.
 
-    Only runs when exitstatus indicates test failures (exit code 1).
+    Only runs when exitstatus indicates test failures (exit code != 0).
     Skips enrichment when all tests pass or execution was interrupted.
     """
     if session.config.option.analyze_with_ai:
