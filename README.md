@@ -605,10 +605,11 @@ curl -X POST http://localhost:8000/analyze-failures \
 **Sending an XML file via curl:**
 
 ```bash
-curl -X POST http://localhost:8000/analyze-failures \
-  -H "Content-Type: application/json" \
-  -d "$(jq -n --arg xml "$(cat report.xml)" \
-    '{raw_xml: $xml, ai_provider: "claude", ai_model: "sonnet"}')"
+jq -n --rawfile xml report.xml \
+  '{raw_xml: $xml, ai_provider: "claude", ai_model: "sonnet"}' \
+  | curl -X POST http://localhost:8000/analyze-failures \
+    -H "Content-Type: application/json" \
+    -d @-
 ```
 
 **Sending an XML file via Python:**
