@@ -18,6 +18,7 @@ from jenkins_job_insight.models import (
     JiraMatch,
     ProductBugReport,
 )
+from jenkins_job_insight.storage import count_all_failures
 
 FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <rect width="32" height="32" rx="6" fill="#0d1117"/>
@@ -128,7 +129,7 @@ def format_result_as_html(result: AnalysisResult) -> str:
     build_number = str(result.build_number) if result.build_number else ""
     provider_info = _format_provider(result.ai_provider, result.ai_model)
     jenkins_url_str = str(result.jenkins_url) if result.jenkins_url else ""
-    total_failures = len(result.failures)
+    total_failures = count_all_failures(result.model_dump())
 
     parts: list[str] = []
 
@@ -166,6 +167,24 @@ def format_result_as_html(result: AnalysisResult) -> str:
 }}
 .env-chip a {{ color: var(--accent-blue); text-decoration: none; }}
 .env-chip a:hover {{ text-decoration: underline; }}
+.regenerate-btn {{
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--accent-blue);
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: background 0.15s, border-color 0.15s;
+}}
+.regenerate-btn:hover {{
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+}}
 
 /* Section titles */
 .section-title {{
@@ -494,6 +513,7 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
       <span class="env-chip">Status: {e(result.status)}</span>
       <span class="env-chip">AI: {e(provider_info)}</span>
       {f'<span class="env-chip"><a href="{e(jenkins_url_str)}" target="_blank" rel="noopener">Jenkins</a></span>' if jenkins_url_str else ""}
+      <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
     </div>
   </div>
 </div>
@@ -961,11 +981,23 @@ def _render_child_jobs(
     """
     for child in children:
         child_failures_count = len(child.failures)
+        child_groups = _group_failures(child.failures) if child.failures else []
+        child_groups_count = len(child_groups)
+
+        # Show group count when grouping reduces the visible cards
+        if child_groups_count and child_groups_count < child_failures_count:
+            badge_text = (
+                f"{child_groups_count} root cause{'s' if child_groups_count != 1 else ''}"
+                f" ({child_failures_count} failure{'s' if child_failures_count != 1 else ''})"
+            )
+        else:
+            badge_text = f"{child_failures_count} failure{'s' if child_failures_count != 1 else ''}"
+
         parts.append(f"""<details class="child-job">
   <summary class="child-job-summary">
     <span style="color:var(--accent-purple)">{e(child.job_name)}</span>
     <span style="color:var(--text-muted)">#{child.build_number}</span>
-    <span class="failure-badge" style="font-size:11px;padding:2px 8px">{child_failures_count} failure{"s" if child_failures_count != 1 else ""}</span>
+    <span class="failure-badge" style="font-size:11px;padding:2px 8px">{badge_text}</span>
   </summary>
   <div class="child-job-body">
     <div class="child-job-meta">
@@ -985,8 +1017,7 @@ def _render_child_jobs(
                 f'    <p style="font-size:13px;color:var(--text-secondary);margin:8px 0">{e(child.summary)}</p>'
             )
 
-        if child.failures:
-            child_groups = _group_failures(child.failures)
+        if child_groups:
             for group in child_groups:
                 _render_group_card(parts, group, e, indent="    ")
 
@@ -1327,6 +1358,49 @@ def generate_dashboard_html(
     border-radius: 4px;
     background: rgba(248, 81, 73, 0.12);
     color: var(--accent-red);
+    white-space: nowrap;
+}}
+/* Result indicators */
+.card-result-icon {{
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+}}
+.card-result-icon.passed {{
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--accent-green);
+}}
+.card-result-icon.has-failures {{
+    background: rgba(248, 81, 73, 0.15);
+    color: var(--accent-red);
+}}
+.dashboard-card.result-passed {{
+    border-left: 3px solid var(--accent-green);
+}}
+.dashboard-card.result-failures {{
+    border-left: 3px solid var(--accent-red);
+}}
+.passed-badge {{
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(63, 185, 80, 0.12);
+    color: var(--accent-green);
+    white-space: nowrap;
+}}
+.child-jobs-badge {{
+    font-size: 11px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(188, 140, 255, 0.12);
+    color: var(--accent-purple);
     white-space: nowrap;
 }}
 .card-meta {{
@@ -1711,10 +1785,39 @@ def _render_dashboard_card(
     # Truncated job_id for display (first 8 chars)
     short_id = job_id[:8] if len(job_id) > 8 else job_id
 
+    # Determine result class for the card border
+    result_class = ""
+    if status == "completed" and failure_count is not None:
+        if failure_count > 0:
+            result_class = " result-failures"
+        else:
+            result_class = " result-passed"
+
     parts.append(
-        f'<a class="dashboard-card" href="{e(report_href)}" target="_blank" rel="noopener">'
+        f'<a class="dashboard-card{result_class}" href="{e(report_href)}" target="_blank" rel="noopener">'
     )
     parts.append('  <div class="card-main">')
+
+    # Result icon for completed jobs with known failure count
+    if status == "completed" and failure_count is not None:
+        if failure_count > 0:
+            parts.append(
+                '    <span class="card-result-icon has-failures">'
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
+                ' stroke="currentColor" stroke-width="3">'
+                '<line x1="18" y1="6" x2="6" y2="18"/>'
+                '<line x1="6" y1="6" x2="18" y2="18"/>'
+                "</svg></span>"
+            )
+        else:
+            parts.append(
+                '    <span class="card-result-icon passed">'
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
+                ' stroke="currentColor" stroke-width="3">'
+                '<polyline points="20 6 9 17 4 12"/>'
+                "</svg></span>"
+            )
+
     parts.append(f'    <span class="card-job-name">{e(job_name)}</span>')
 
     if build_number:
@@ -1728,6 +1831,16 @@ def _render_dashboard_card(
         parts.append(
             f'    <span class="failure-count-badge">'
             f"{failure_count} failure{'s' if failure_count != 1 else ''}"
+            f"</span>"
+        )
+    elif status == "completed" and failure_count is not None:
+        parts.append('    <span class="passed-badge">passed</span>')
+
+    child_job_count = job.get("child_job_count")
+    if child_job_count is not None and child_job_count > 0:
+        parts.append(
+            f'    <span class="child-jobs-badge">'
+            f"{child_job_count} child job{'s' if child_job_count != 1 else ''}"
             f"</span>"
         )
 
