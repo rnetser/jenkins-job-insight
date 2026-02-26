@@ -5,7 +5,6 @@ import urllib.parse
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from typing import Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -32,7 +31,7 @@ from jenkins_job_insight.models import (
     TestFailure,
 )
 from jenkins_job_insight.xml_enrichment import (
-    apply_analysis_to_xml,
+    build_enriched_xml,
     extract_failures_from_xml,
 )
 from jenkins_job_insight.html_report import (
@@ -574,22 +573,9 @@ async def analyze_failures(
         # If raw_xml was provided, produce enriched XML
         enriched_xml = None
         if raw_xml is not None:
-            # Build analysis_map from the analysis results
-            analysis_map: dict[tuple[str, str], dict[str, Any]] = {}
-            for fa in all_analyses:
-                test_name = fa.test_name
-                analysis_dict = fa.analysis.model_dump(mode="json")
-                # Split test_name on last dot to get (classname, name)
-                dot_idx = test_name.rfind(".")
-                if dot_idx > 0:
-                    analysis_map[(test_name[:dot_idx], test_name[dot_idx + 1 :])] = (
-                        analysis_dict
-                    )
-                else:
-                    analysis_map[("", test_name)] = analysis_dict
-
-            html_report_url = f"{base_url}/results/{job_id}.html"
-            enriched_xml = apply_analysis_to_xml(raw_xml, analysis_map, html_report_url)
+            enriched_xml = build_enriched_xml(
+                raw_xml, all_analyses, f"{base_url}/results/{job_id}.html"
+            )
 
         analysis_result = FailureAnalysisResult(
             job_id=job_id,

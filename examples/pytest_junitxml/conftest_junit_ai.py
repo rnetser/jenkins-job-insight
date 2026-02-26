@@ -10,9 +10,9 @@ All operations are wrapped in error handling. The original XML is backed up
 before modification and restored if anything goes wrong.
 
 Usage:
-    1. Copy conftest_junit_ai.py, conftest_junit_ai_utils.py, and jji_junit_enrichment.py to your project root
+    1. Copy conftest_junit_ai.py and conftest_junit_ai_utils.py to your project root
     2. Rename conftest_junit_ai.py to conftest.py
-    3. Install dependencies: pip install requests python-dotenv
+    3. Install dependencies: pip install jenkins-job-insight python-dotenv
     4. Create a .env file or set environment variables:
        - JJI_SERVER_URL: jenkins-job-insight server URL (required)
        - JJI_AI_PROVIDER: AI provider - claude, gemini, or cursor (default: claude)

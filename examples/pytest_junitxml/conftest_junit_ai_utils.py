@@ -1,17 +1,15 @@
 """Pytest utilities for JUnit XML AI analysis enrichment.
 
-Thin glue between pytest session hooks and the JJI enrichment client.
-All server communication is handled by jji_junit_enrichment module.
+Thin glue between pytest session hooks and the JJI server.
 """
 
 import logging
 import os
 from pathlib import Path
 
-import requests
 from dotenv import load_dotenv
 
-from jji_junit_enrichment import enrich_junit_xml_via_server
+from jenkins_job_insight.xml_enrichment import enrich_junit_xml_via_server
 
 logger = logging.getLogger("jenkins-job-insight")
 
@@ -88,15 +86,6 @@ def enrich_junit_xml(session) -> None:
             ai_model=ai_model,
             timeout=timeout,
         )
-    except requests.RequestException as exc:
-        error_detail = ""
-        if exc.response is not None:
-            try:
-                error_detail = f" Response: {exc.response.text}"
-            except Exception:
-                pass
-        logger.error("JJI server request failed: %s%s", exc, error_detail)
-        return
     except Exception as exc:
         logger.error("JJI server request failed: %s", exc)
         return

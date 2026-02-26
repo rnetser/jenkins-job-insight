@@ -712,8 +712,7 @@ Enrich JUnit XML reports with AI-powered failure analysis. After tests complete,
 1. Copy these files from `examples/pytest_junitxml/` to your project root:
    - `conftest_junit_ai.py` (rename to `conftest.py`)
    - `conftest_junit_ai_utils.py`
-   - `jji_junit_enrichment.py`
-2. Install dependencies: `pip install requests python-dotenv`
+2. Install dependencies: `pip install jenkins-job-insight python-dotenv`
 3. Create a `.env` file or set environment variables:
 
 | Variable | Required | Default | Description |
@@ -737,17 +736,17 @@ pytest --junitxml=report.xml
 
 1. pytest runs tests and generates JUnit XML as usual
 2. At session finish, the conftest reads the raw XML file
-3. `jji_junit_enrichment` sends the XML to the `/analyze-failures` endpoint
+3. `jenkins_job_insight.xml_enrichment` sends the XML to the `/analyze-failures` endpoint
 4. The server extracts failures, runs AI analysis, and returns enriched XML
 5. The conftest writes the enriched XML back to the same file
 6. No global state or runtime collection -- works with pytest-xdist parallel execution
 
 ### Standalone Usage
 
-The `jji_junit_enrichment.py` module can be used independently of pytest to enrich any JUnit XML file:
+The enrichment client is part of the `jenkins-job-insight` package and can be used independently of pytest to enrich any JUnit XML file:
 
 ```python
-from jji_junit_enrichment import enrich_junit_xml_via_server
+from jenkins_job_insight.xml_enrichment import enrich_junit_xml_via_server
 from pathlib import Path
 
 result = enrich_junit_xml_via_server(

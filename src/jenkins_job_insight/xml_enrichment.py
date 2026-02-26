@@ -1,10 +1,20 @@
-"""XML extraction and enrichment functions for JUnit XML processing."""
+"""JUnit XML extraction, enrichment, and client functions.
+
+Server-side functions:
+    extract_failures_from_xml - Parse XML string and extract test failures
+    apply_analysis_to_xml - Inject analysis results into XML string
+    build_enriched_xml - High-level: build enriched XML from FailureAnalysis objects
+
+Client-side function:
+    enrich_junit_xml_via_server - Send XML to JJI server, get enriched XML back
+"""
 
 import logging
 from typing import Any
 from xml.etree import ElementTree as ET
 from xml.etree.ElementTree import Element
 
+import httpx
 from defusedxml.ElementTree import fromstring as safe_fromstring
 
 logger = logging.getLogger(__name__)
@@ -113,6 +123,81 @@ def apply_analysis_to_xml(
             )
 
     return ET.tostring(root, encoding="unicode", xml_declaration=True)
+
+
+def build_enriched_xml(
+    raw_xml: str,
+    analyses: list,
+    html_report_url: str = "",
+) -> str:
+    """Build enriched XML from raw XML and FailureAnalysis objects.
+
+    Constructs the (classname, name) analysis map from FailureAnalysis objects
+    and delegates to apply_analysis_to_xml.
+
+    Args:
+        raw_xml: Original JUnit XML content.
+        analyses: List of FailureAnalysis objects with analysis results.
+        html_report_url: URL to the HTML report.
+
+    Returns:
+        Enriched JUnit XML as a string.
+    """
+    analysis_map: dict[tuple[str, str], dict[str, Any]] = {}
+    for fa in analyses:
+        test_name = fa.test_name
+        analysis_dict = fa.analysis.model_dump(mode="json")
+        dot_idx = test_name.rfind(".")
+        if dot_idx > 0:
+            analysis_map[(test_name[:dot_idx], test_name[dot_idx + 1 :])] = (
+                analysis_dict
+            )
+        else:
+            analysis_map[("", test_name)] = analysis_dict
+
+    return apply_analysis_to_xml(raw_xml, analysis_map, html_report_url)
+
+
+def enrich_junit_xml_via_server(
+    server_url: str,
+    raw_xml: str,
+    ai_provider: str,
+    ai_model: str,
+    timeout: int = 600,
+) -> dict[str, Any]:
+    """Send raw JUnit XML to a JJI server for AI analysis and enrichment.
+
+    Posts the XML content to the /analyze-failures endpoint. The server
+    extracts failures, runs AI analysis, and returns the enriched XML
+    with analysis results injected back into it.
+
+    Args:
+        server_url: Base URL of the JJI server (e.g., "http://localhost:8000").
+        raw_xml: JUnit XML content as a string.
+        ai_provider: AI provider to use (claude, gemini, or cursor).
+        ai_model: AI model name.
+        timeout: Request timeout in seconds (default: 600).
+
+    Returns:
+        Server response dict with enriched_xml, html_report_url, status, failures.
+
+    Raises:
+        httpx.HTTPStatusError: If the server returns an error status.
+        httpx.RequestError: If the HTTP request fails.
+    """
+    payload: dict[str, Any] = {
+        "raw_xml": raw_xml,
+        "ai_provider": ai_provider,
+        "ai_model": ai_model,
+    }
+
+    response = httpx.post(
+        f"{server_url.rstrip('/')}/analyze-failures",
+        json=payload,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def _inject_analysis(testcase: Element, analysis: dict[str, Any]) -> None:
