@@ -1,13 +1,8 @@
 """
 Standalone conftest.py for enriching JUnit XML with AI failure analysis.
 
-Parses the JUnit XML that pytest generates, extracts failed test cases,
-sends them to a jenkins-job-insight server for AI analysis, and injects
-the analysis results back into the XML.
-
-SAFETY: This plugin NEVER fails pytest or compromises the original JUnit XML.
-All operations are wrapped in error handling. The original XML is backed up
-before modification and restored if anything goes wrong.
+Sends the raw JUnit XML to a jenkins-job-insight server for AI analysis
+and writes the enriched XML back to the same file.
 
 Usage:
     1. Copy conftest_junit_ai.py and conftest_junit_ai_utils.py to your project root
@@ -54,12 +49,19 @@ def pytest_sessionstart(session):
 
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
-    """Enrich JUnit XML with AI analysis after all tests complete.
+    """Enrich JUnit XML with AI analysis when tests fail.
 
-    Uses trylast to run AFTER the junitxml plugin writes the XML file.
+    Only runs when exitstatus indicates test failures (exit code != 0).
+    Skips enrichment when all tests pass or execution was interrupted.
     """
     if session.config.option.analyze_with_ai:
-        try:
-            enrich_junit_xml(session)
-        except Exception:
-            logger.exception("Failed to enrich JUnit XML, original preserved")
+        if exitstatus == 0:
+            logger.info(
+                "No test failures (exit code %d), skipping AI analysis", exitstatus
+            )
+
+        else:
+            try:
+                enrich_junit_xml(session)
+            except Exception:
+                logger.exception("Failed to enrich JUnit XML, original preserved")

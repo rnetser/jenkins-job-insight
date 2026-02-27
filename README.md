@@ -21,7 +21,8 @@ For each failure, the service provides detailed explanations and either fix sugg
 - **Callback webhooks**: Delivers results to your specified endpoint with custom headers
 - **HTML report output**: Generate self-contained, dark-themed HTML failure reports viewable in any browser
 - **Direct failure analysis**: Analyze raw test failures without Jenkins via `POST /analyze-failures`
-- **pytest JUnit XML integration**: Enrich JUnit XML reports with AI analysis using a standalone conftest.py
+- **pytest JUnit XML integration**: Enrich JUnit XML reports with AI analysis via a pytest plugin
+- **Raw XML analysis**: Accept raw JUnit XML via API, extract failures, analyze, and return enriched XML
 
 ## Quick Start
 
@@ -218,6 +219,8 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `AI_PROVIDER`        | `ai_provider`        | Yes      | Both                   | AI provider to use (`claude`, `gemini`, or `cursor`)           |
 | `AI_MODEL`           | `ai_model`           | Yes      | Both                   | Model for the AI provider                                      |
 | `AI_CLI_TIMEOUT`     | `ai_cli_timeout`     | No       | Both                   | AI CLI timeout in minutes (default: 10)                        |
+| --                   | `raw_xml`            | No       | `/analyze-failures`    | Raw JUnit XML content (alternative to `failures`)              |
+| --                   | `failures`           | No*      | `/analyze-failures`    | Raw test failure objects (alternative to `raw_xml`)             |
 | **General**          |                      |          |                        |                                                                |
 | `TESTS_REPO_URL`     | `tests_repo_url`     | No       | Both                   | Repository URL for test context                                |
 | `CALLBACK_URL`       | `callback_url`       | No       | `/analyze`             | Callback webhook URL for results                               |
@@ -238,7 +241,7 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `JIRA_SSL_VERIFY`    | `jira_ssl_verify`    | No       | Both                   | SSL certificate verification for Jira (default: true)          |
 | `JIRA_MAX_RESULTS`   | `jira_max_results`   | No       | Both                   | Maximum Jira results per search (default: 5)                   |
 
-*Jenkins fields are required for `/analyze` but must be configured in at least one place (environment variable or request body).
+*Jenkins fields are required for `/analyze` but must be configured in at least one place (environment variable or request body). *Either `failures` or `raw_xml` must be provided for `/analyze-failures` (mutually exclusive).
 
 **Priority**: Request values take precedence over environment variable defaults. "Both" means the field works with `/analyze` and `/analyze-failures` endpoints.
 
@@ -563,9 +566,9 @@ curl "http://localhost:8000/results?limit=10"
 
 ### Analyze Raw Test Failures (No Jenkins)
 
-Analyze test failures directly without Jenkins. Accepts raw failure data and returns AI analysis.
+Analyze test failures directly without Jenkins. Accepts either raw failure data or raw JUnit XML content.
 
-**Request:**
+**Option 1: Raw failures (existing)**
 
 ```bash
 curl -X POST http://localhost:8000/analyze-failures \
@@ -587,6 +590,49 @@ curl -X POST http://localhost:8000/analyze-failures \
   }'
 ```
 
+**Option 2: Raw JUnit XML (new)**
+
+```bash
+curl -X POST http://localhost:8000/analyze-failures \
+  -H "Content-Type: application/json" \
+  -d '{
+    "raw_xml": "<?xml version=\"1.0\"?><testsuite name=\"tests\" tests=\"1\" failures=\"1\"><testcase classname=\"tests.test_auth\" name=\"test_login\"><failure message=\"assert False\">traceback here</failure></testcase></testsuite>",
+    "ai_provider": "claude",
+    "ai_model": "sonnet"
+  }'
+```
+
+**Sending an XML file via curl:**
+
+```bash
+jq -n --rawfile xml report.xml \
+  '{raw_xml: $xml, ai_provider: "claude", ai_model: "sonnet"}' \
+  | curl -X POST http://localhost:8000/analyze-failures \
+    -H "Content-Type: application/json" \
+    -d @-
+```
+
+**Sending an XML file via Python:**
+
+```python
+import requests
+from pathlib import Path
+
+response = requests.post(
+    "http://localhost:8000/analyze-failures",
+    json={
+        "raw_xml": Path("report.xml").read_text(),
+        "ai_provider": "claude",
+        "ai_model": "sonnet",
+    },
+    timeout=600,
+)
+result = response.json()
+print(result["enriched_xml"])  # Enriched XML with analysis injected
+```
+
+When `raw_xml` is provided, the server extracts failures from the XML, runs analysis, and returns `enriched_xml` in the response with analysis results injected back into the XML.
+
 **Response (200 OK):**
 
 ```json
@@ -598,11 +644,11 @@ curl -X POST http://localhost:8000/analyze-failures \
   "ai_model": "sonnet",
   "failures": [
     {
-      "test_name": "tests/test_auth.py::test_login",
-      "error": "AssertionError: expected 200 but got 401",
+      "test_name": "tests.test_auth.test_login",
+      "error": "assert False",
       "analysis": {
         "classification": "PRODUCT BUG",
-        "affected_tests": ["tests/test_auth.py::test_login"],
+        "affected_tests": ["tests.test_auth.test_login"],
         "details": "The authentication endpoint returns 401...",
         "product_bug_report": {
           "title": "Authentication endpoint rejects valid credentials",
@@ -613,9 +659,12 @@ curl -X POST http://localhost:8000/analyze-failures \
         }
       }
     }
-  ]
+  ],
+  "enriched_xml": "<?xml version='1.0' encoding='utf-8'?>..."
 }
 ```
+
+Note: `enriched_xml` is only present when `raw_xml` was provided in the request. Provide either `failures` or `raw_xml`, not both.
 
 ### Response Fields
 
@@ -692,7 +741,7 @@ Enrich JUnit XML reports with AI-powered failure analysis. After tests complete,
 1. Copy `examples/pytest-junitxml/conftest_junit_ai.py` and `examples/pytest-junitxml/conftest_junit_ai_utils.py` to your project root
 2. Rename `conftest_junit_ai.py` to `conftest.py`
 3. Install dependencies: `pip install requests python-dotenv`
-4. Create a `.env` file or set environment variables:
+3. Create a `.env` file or set environment variables:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -714,10 +763,11 @@ pytest --junitxml=report.xml
 ### How It Works
 
 1. pytest runs tests and generates JUnit XML as usual
-2. At session finish, the plugin parses the XML for `<failure>` and `<error>` elements
-3. Failures are POSTed to the `/analyze-failures` endpoint
-4. AI analysis results are injected back into the XML as `<properties>` and `<system-out>`
-5. No global state or runtime collection -- works with pytest-xdist parallel execution
+2. At session finish, the conftest reads the raw XML file
+3. `jenkins_job_insight.xml_enrichment` sends the XML to the `/analyze-failures` endpoint
+4. The server extracts failures, runs AI analysis, and returns enriched XML
+5. The conftest writes the enriched XML back to the same file
+6. No global state or runtime collection -- works with pytest-xdist parallel execution
 
 ### What Gets Injected
 

@@ -5,6 +5,7 @@ import urllib.parse
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from xml.etree.ElementTree import ParseError
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -28,6 +29,10 @@ from jenkins_job_insight.models import (
     ChildJobAnalysis,
     FailureAnalysis,
     FailureAnalysisResult,
+)
+from jenkins_job_insight.xml_enrichment import (
+    build_enriched_xml,
+    extract_test_failures,
 )
 from jenkins_job_insight.html_report import (
     FAVICON_SVG,
@@ -454,20 +459,44 @@ async def analyze_failures(
 ) -> JSONResponse:
     """Analyze raw test failures directly without Jenkins.
 
-    Accepts test failure data and returns AI analysis. Sync only.
-    Reuses the same deduplication and analysis logic as Jenkins-based analysis.
+    Accepts test failure data (or raw JUnit XML) and returns AI analysis.
+    Sync only. Reuses the same deduplication and analysis logic as Jenkins-based analysis.
+
+    When raw_xml is provided, failures are extracted from the XML and the enriched
+    XML with analysis results is included in the response.
     """
     base_url = _extract_base_url(request)
 
-    if not body.failures:
-        raise HTTPException(status_code=400, detail="No failures provided")
+    if raw_xml := body.raw_xml:
+        try:
+            test_failures = extract_test_failures(raw_xml)
+        except ParseError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid XML: {e}")
+
+        if not test_failures:
+            job_id = str(uuid.uuid4())
+            analysis_result = FailureAnalysisResult(
+                job_id=job_id,
+                status="completed",
+                summary="No test failures found in the provided XML.",
+                enriched_xml=raw_xml,
+            )
+            result_data = analysis_result.model_dump(mode="json")
+            result_data["base_url"] = base_url
+            result_data["result_url"] = f"{base_url}/results/{job_id}"
+            result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
+            return JSONResponse(content=result_data)
+    else:
+        if not body.failures:
+            raise HTTPException(status_code=400, detail="No failures provided")
+        test_failures = body.failures
 
     merged = _merge_settings(body, settings)
     ai_provider, ai_model = _resolve_ai_config_values(body.ai_provider, body.ai_model)
 
     job_id = str(uuid.uuid4())
     logger.info(
-        f"Direct failure analysis request received with {len(body.failures)} failures (job_id: {job_id})"
+        f"Direct failure analysis request received with {len(test_failures)} failures (job_id: {job_id})"
     )
 
     # Save initial pending state so GET /results/{job_id} works immediately
@@ -475,12 +504,12 @@ async def analyze_failures(
 
     # Group failures by error signature for deduplication
     groups: dict[str, list] = defaultdict(list)
-    for failure in body.failures:
+    for failure in test_failures:
         sig = get_failure_signature(failure)
         groups[sig].append(failure)
 
     logger.info(
-        f"Grouped {len(body.failures)} failures into {len(groups)} unique error signatures"
+        f"Grouped {len(test_failures)} failures into {len(groups)} unique error signatures"
     )
 
     # Optionally clone repo for AI code context
@@ -519,11 +548,18 @@ async def analyze_failures(
                 all_analyses.extend(result)
 
         unique_errors = len(groups)
-        summary = f"Analyzed {len(body.failures)} test failures ({unique_errors} unique errors). {len(all_analyses)} analyzed successfully."
+        summary = f"Analyzed {len(test_failures)} test failures ({unique_errors} unique errors). {len(all_analyses)} analyzed successfully."
 
         # Enrich PRODUCT BUG failures with Jira matches
         if _resolve_enable_jira(body, merged):
             await enrich_with_jira_matches(all_analyses, merged, ai_provider, ai_model)
+
+        # If raw_xml was provided, produce enriched XML
+        enriched_xml = None
+        if raw_xml is not None:
+            enriched_xml = build_enriched_xml(
+                raw_xml, all_analyses, f"{base_url}/results/{job_id}.html"
+            )
 
         analysis_result = FailureAnalysisResult(
             job_id=job_id,
@@ -532,6 +568,7 @@ async def analyze_failures(
             ai_provider=ai_provider,
             ai_model=ai_model,
             failures=all_analyses,
+            enriched_xml=enriched_xml,
         )
 
         result_data = analysis_result.model_dump(mode="json")
