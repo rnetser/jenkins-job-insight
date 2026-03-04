@@ -12,12 +12,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import SecretStr
 from simple_logger.logger import get_logger
 
+from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
-    VALID_AI_PROVIDERS,
     analyze_failure_group,
     analyze_job,
     get_failure_signature,
-    run_parallel_with_limit,
 )
 from jenkins_job_insight.config import Settings, get_settings
 from jenkins_job_insight.jira import enrich_with_jira_matches

@@ -13,7 +13,8 @@ from collections.abc import Sequence
 import httpx
 from simple_logger.logger import get_logger
 
-from jenkins_job_insight.analyzer import call_ai_cli
+from ai_cli_runner import call_ai_cli
+from jenkins_job_insight.analyzer import PROVIDER_CLI_FLAGS
 from jenkins_job_insight.config import Settings
 from jenkins_job_insight.models import (
     AnalysisDetail,
@@ -258,6 +259,7 @@ Respond with ONLY the JSON array, no other text."""
         ai_provider=ai_provider,
         ai_model=ai_model,
         ai_cli_timeout=ai_cli_timeout,
+        cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
     )
 
     if not success:

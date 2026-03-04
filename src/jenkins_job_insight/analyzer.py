@@ -4,13 +4,16 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Callable
 from typing import NoReturn
+
+from ai_cli_runner import (
+    call_ai_cli,
+    check_ai_cli_available,
+    run_parallel_with_limit,
+)
 
 import jenkins
 from fastapi import HTTPException
@@ -35,24 +38,16 @@ from jenkins_job_insight.repository import RepositoryManager
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 
-def _get_ai_cli_timeout() -> int:
-    """Parse AI_CLI_TIMEOUT with fallback for invalid values."""
-    raw = os.getenv("AI_CLI_TIMEOUT", "10")
-    try:
-        value = int(raw)
-    except ValueError:
-        logger.warning(f"Invalid AI_CLI_TIMEOUT={raw}; defaulting to 10")
-        return 10
-    if value <= 0:
-        logger.warning(f"Non-positive AI_CLI_TIMEOUT={raw}; defaulting to 10")
-        return 10
-    return value
-
-
-AI_CLI_TIMEOUT = _get_ai_cli_timeout()  # minutes
-
 FALLBACK_TAIL_LINES = 200
-MAX_CONCURRENT_AI_CALLS = 10
+
+# CLI flags that were previously hardcoded in provider command builders.
+# The ai-cli-runner package handles structural flags (-p for claude, --print
+# for cursor) internally; these are the extra per-provider flags.
+PROVIDER_CLI_FLAGS: dict[str, list[str]] = {
+    "claude": ["--dangerously-skip-permissions"],
+    "gemini": ["--yolo"],
+    "cursor": ["--force"],
+}
 
 # Pre-compiled pattern for error detection with word boundaries
 ERROR_PATTERN = re.compile(
@@ -98,41 +93,6 @@ jira_search_keywords rules:
 - Think: "what would someone title a Jira bug for this exact issue?\""""
 
 
-@dataclass(frozen=True)
-class ProviderConfig:
-    """Configuration for an AI CLI provider."""
-
-    binary: str
-    build_cmd: Callable[[str, str, Path | None], list[str]]
-    uses_own_cwd: bool = False
-
-
-def _build_claude_cmd(binary: str, model: str, _cwd: Path | None) -> list[str]:
-    return [binary, "--model", model, "--dangerously-skip-permissions", "-p"]
-
-
-def _build_gemini_cmd(binary: str, model: str, _cwd: Path | None) -> list[str]:
-    return [binary, "--model", model, "--yolo"]
-
-
-def _build_cursor_cmd(binary: str, model: str, cwd: Path | None) -> list[str]:
-    cmd = [binary, "--force", "--model", model, "--print"]
-    if cwd:
-        cmd.extend(["--workspace", str(cwd)])
-    return cmd
-
-
-PROVIDER_CONFIG: dict[str, ProviderConfig] = {
-    "claude": ProviderConfig(binary="claude", build_cmd=_build_claude_cmd),
-    "gemini": ProviderConfig(binary="gemini", build_cmd=_build_gemini_cmd),
-    "cursor": ProviderConfig(
-        binary="agent", uses_own_cwd=True, build_cmd=_build_cursor_cmd
-    ),
-}
-
-VALID_AI_PROVIDERS = set(PROVIDER_CONFIG.keys())
-
-
 def get_failure_signature(failure: TestFailure) -> str:
     """Create a signature for grouping identical failures.
 
@@ -149,31 +109,6 @@ def get_failure_signature(failure: TestFailure) -> str:
     stack_lines = failure.stack_trace.split("\n")[:5]
     signature_text = f"{failure.error_message}|{'|'.join(stack_lines)}"
     return hashlib.sha256(signature_text.encode()).hexdigest()
-
-
-async def run_parallel_with_limit(
-    coroutines: list,
-    max_concurrency: int = MAX_CONCURRENT_AI_CALLS,
-) -> list:
-    """Run coroutines in parallel with bounded concurrency.
-
-    Args:
-        coroutines: List of coroutines to execute.
-        max_concurrency: Maximum concurrent executions.
-
-    Returns:
-        List of results (including exceptions if any failed).
-    """
-    semaphore = asyncio.Semaphore(max_concurrency)
-
-    async def bounded(coro):
-        async with semaphore:
-            return await coro
-
-    return await asyncio.gather(
-        *[bounded(c) for c in coroutines],
-        return_exceptions=True,
-    )
 
 
 def _parse_json_response(raw_text: str) -> AnalysisDetail:
@@ -421,127 +356,6 @@ def _extract_json_from_code_blocks(text: str) -> AnalysisDetail | None:
             return result
 
     return None
-
-
-async def check_ai_cli_available(ai_provider: str, ai_model: str) -> tuple[bool, str]:
-    """Run a lightweight sanity check to verify the AI CLI is reachable.
-
-    Sends a trivial prompt ("Hi") to the configured provider and returns
-    whether the CLI responded successfully.  This should be called once
-    before spawning parallel analysis tasks so that a misconfigured
-    provider is caught early without wasting API credits.
-
-    Args:
-        ai_provider: AI provider name (e.g. "claude", "gemini").
-        ai_model: AI model identifier to pass to the provider.
-
-    Returns:
-        Tuple of (ok, error_message).  ok is True when the CLI works;
-        on failure ok is False and error_message describes the problem.
-    """
-    config = PROVIDER_CONFIG.get(ai_provider)
-    if not config:
-        return (
-            False,
-            f"Unknown AI provider: '{ai_provider}'. Valid providers: {', '.join(sorted(VALID_AI_PROVIDERS))}",
-        )
-
-    if not ai_model:
-        return (
-            False,
-            "No AI model configured. Set AI_MODEL env var or pass ai_model in request body.",
-        )
-
-    provider_info = f"{ai_provider.upper()} ({ai_model})"
-    sanity_cmd = config.build_cmd(config.binary, ai_model, None)
-
-    try:
-        sanity_result = await asyncio.to_thread(
-            subprocess.run,
-            sanity_cmd,
-            cwd=None,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            input="Hi",
-        )
-        if sanity_result.returncode != 0:
-            error_detail = (
-                sanity_result.stderr
-                or sanity_result.stdout
-                or "unknown error (no output)"
-            )
-            return False, f"{provider_info} sanity check failed: {error_detail}"
-    except subprocess.TimeoutExpired:
-        return False, f"{provider_info} sanity check timed out"
-
-    return True, ""
-
-
-async def call_ai_cli(
-    prompt: str,
-    cwd: Path | None = None,
-    ai_provider: str = "",
-    ai_model: str = "",
-    ai_cli_timeout: int | None = None,
-) -> tuple[bool, str]:
-    """Call AI CLI (Claude, Gemini, or Cursor) with given prompt.
-
-    Args:
-        prompt: The prompt to send to the AI CLI.
-        cwd: Working directory for AI to explore (typically repo path).
-        ai_provider: AI provider to use.
-        ai_model: AI model to use.
-        ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
-
-    Returns:
-        Tuple of (success, output). success is True with AI output, False with error message.
-    """
-    config = PROVIDER_CONFIG.get(ai_provider)
-    if not config:
-        return (
-            False,
-            f"Unknown AI provider: '{ai_provider}'. Valid providers: {', '.join(sorted(VALID_AI_PROVIDERS))}",
-        )
-
-    if not ai_model:
-        return (
-            False,
-            "No AI model configured. Set AI_MODEL env var or pass ai_model in request body.",
-        )
-
-    provider_info = f"{ai_provider.upper()} ({ai_model})"
-    cmd = config.build_cmd(config.binary, ai_model, cwd)
-
-    subprocess_cwd = None if config.uses_own_cwd else cwd
-
-    effective_timeout = ai_cli_timeout or AI_CLI_TIMEOUT
-    timeout = effective_timeout * 60  # Convert minutes to seconds
-
-    logger.info("Calling %s CLI", provider_info)
-
-    try:
-        result = await asyncio.to_thread(
-            subprocess.run,
-            cmd,
-            cwd=subprocess_cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            input=prompt,
-        )
-    except subprocess.TimeoutExpired:
-        return (
-            False,
-            f"{provider_info} CLI error: Analysis timed out after {effective_timeout} minutes",
-        )
-
-    if result.returncode != 0:
-        error_detail = result.stderr or result.stdout or "unknown error (no output)"
-        return False, f"{provider_info} CLI error: {error_detail}"
-
-    logger.debug(f"{provider_info} CLI response length: {len(result.stdout)} chars")
-    return True, result.stdout
 
 
 def extract_relevant_console_lines(console_output: str) -> str:
@@ -834,6 +648,7 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
         ai_provider=ai_provider,
         ai_model=ai_model,
         ai_cli_timeout=ai_cli_timeout,
+        cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
     )
 
     # Parse the AI response into structured data
@@ -1079,6 +894,7 @@ You have access to the repository if one was cloned. Explore to understand the f
         ai_provider=ai_provider,
         ai_model=ai_model,
         ai_cli_timeout=ai_cli_timeout,
+        cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
     )
 
     if success:
@@ -1196,7 +1012,9 @@ async def analyze_job(
                 repo_context = f"\nFailed to clone repo: {e}"
 
         # Pre-flight: verify AI CLI is reachable before spawning parallel tasks
-        ok, err = await check_ai_cli_available(ai_provider, ai_model)
+        ok, err = await check_ai_cli_available(
+            ai_provider, ai_model, cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, [])
+        )
         if not ok:
             return AnalysisResult(
                 job_id=job_id,
@@ -1344,6 +1162,7 @@ You have access to the repository if one was cloned. Explore to understand the f
                 ai_provider=ai_provider,
                 ai_model=ai_model,
                 ai_cli_timeout=settings.ai_cli_timeout,
+                cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
             )
 
             if not success:
