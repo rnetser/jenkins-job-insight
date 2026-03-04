@@ -2,17 +2,18 @@
 name = "jenkins-job-insight"
 version = "0.1.0"
 description = "Jenkins job insight and analysis tool"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
+    "ai-cli-runner>=0.1.0",
+    "aiosqlite",
+    "defusedxml>=0.7.1",
     "fastapi",
-    "uvicorn",
-    "python-jenkins",
+    "gitpython",
     "httpx",
     "pydantic-settings",
-    "gitpython",
-    "aiosqlite",
+    "python-jenkins",
     "python-simple-logger",
-    "defusedxml>=0.7.1",
+    "uvicorn",
 ]
 
 [project.scripts]
