@@ -33,23 +33,6 @@ class TestSettings:
             assert settings.callback_url is None
             assert settings.callback_headers is None
 
-    def test_settings_default_prompt_file(self, mock_env_vars: dict[str, str]) -> None:
-        """Test that prompt_file has a default value."""
-        settings = Settings()
-        assert settings.prompt_file == "/app/PROMPT.md"
-
-    def test_settings_custom_prompt_file(self) -> None:
-        """Test that prompt_file can be overridden."""
-        env = {
-            "JENKINS_URL": "https://jenkins.example.com",
-            "JENKINS_USER": "testuser",
-            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
-            "PROMPT_FILE": "/custom/path/PROMPT.md",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            settings = Settings()
-            assert settings.prompt_file == "/custom/path/PROMPT.md"
-
     def test_settings_validation_error_missing_jenkins_url(self) -> None:
         """Test that ValidationError is raised when JENKINS_URL is missing."""
         env = {

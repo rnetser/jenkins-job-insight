@@ -40,6 +40,45 @@ logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 FALLBACK_TAIL_LINES = 200
 
+JOB_INSIGHT_PROMPT_FILENAME = "JOB_INSIGHT_PROMPT.md"
+
+
+def _read_repo_prompt(repo_path: Path | None) -> str:
+    """Read custom prompt file from cloned repository if it exists.
+
+    Looks for JOB_INSIGHT_PROMPT.md in the repository root.
+
+    Args:
+        repo_path: Path to cloned repository, or None.
+
+    Returns:
+        Prompt file content, or empty string if not found.
+    """
+    if not repo_path:
+        return ""
+
+    prompt_path = repo_path / JOB_INSIGHT_PROMPT_FILENAME
+    if not prompt_path.is_file():
+        return ""
+
+    try:
+        content = prompt_path.read_text(encoding="utf-8").strip()
+        logger.info("Using custom prompt from repo: %s", prompt_path)
+        return content
+    except (OSError, UnicodeDecodeError):
+        logger.warning("Failed to read prompt file: %s", prompt_path)
+        return ""
+
+
+def _resolve_custom_prompt(raw_prompt: str | None, repo_path: Path | None) -> str:
+    """Resolve additional AI instructions from request input or repo defaults."""
+    prompt = (raw_prompt or "").strip()
+    if prompt:
+        logger.info("Using raw prompt from request")
+        return prompt
+    return _read_repo_prompt(repo_path)
+
+
 # CLI flags that were previously hardcoded in provider command builders.
 # The ai-cli-runner package handles structural flags (-p for claude, --print
 # for cursor) internally; these are the extra per-provider flags.
@@ -599,6 +638,7 @@ async def analyze_failure_group(
     ai_provider: str = "",
     ai_model: str = "",
     ai_cli_timeout: int | None = None,
+    custom_prompt: str = "",
 ) -> list[FailureAnalysis]:
     """Analyze a group of failures with the same error signature.
 
@@ -612,6 +652,7 @@ async def analyze_failure_group(
         ai_provider: AI provider to use.
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
+        custom_prompt: Additional instructions from request or repo-level file.
 
     Returns:
         List of FailureAnalysis objects, one per failure in the group.
@@ -619,6 +660,10 @@ async def analyze_failure_group(
     # Use the first failure as representative
     representative = failures[0]
     test_names = [f.test_name for f in failures]
+
+    custom_prompt_section = (
+        f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
+    )
 
     prompt = f"""Analyze this test failure from a Jenkins CI job.
 
@@ -635,7 +680,7 @@ CONSOLE CONTEXT:
 You have access to the test repository. Explore the code to understand the failure.
 
 Note: Multiple tests failed with the same error. Provide ONE analysis that applies to all of them.
-
+{custom_prompt_section}
 {_JSON_RESPONSE_SCHEMA}
 """
 
@@ -679,6 +724,7 @@ async def analyze_child_job(
     ai_provider: str = "",
     ai_model: str = "",
     ai_cli_timeout: int | None = None,
+    custom_prompt: str = "",
 ) -> ChildJobAnalysis:
     """Analyze a single child job, recursively analyzing its failed children.
 
@@ -695,6 +741,7 @@ async def analyze_child_job(
         ai_provider: AI provider to use.
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
+        custom_prompt: Additional instructions from request or repo-level file.
 
     Returns:
         ChildJobAnalysis with analysis results or nested child analyses.
@@ -759,6 +806,7 @@ async def analyze_child_job(
                 ai_provider,
                 ai_model,
                 ai_cli_timeout,
+                custom_prompt,
             )
             for child_name, child_num in failed_children
         ]
@@ -831,6 +879,7 @@ async def analyze_child_job(
                 ai_provider=ai_provider,
                 ai_model=ai_model,
                 ai_cli_timeout=ai_cli_timeout,
+                custom_prompt=custom_prompt,
             )
             for group in failure_groups.values()
         ]
@@ -877,6 +926,10 @@ async def analyze_child_job(
         )
 
     # No structured test failures - fall back to single Claude CLI analysis of console output
+    custom_prompt_section = (
+        f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
+    )
+
     prompt = f"""Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
@@ -885,7 +938,7 @@ CONSOLE OUTPUT (errors/failures/warnings extracted):
 {console_context}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-
+{custom_prompt_section}
 {_JSON_RESPONSE_SCHEMA}
 """
     success, analysis_output = await call_ai_cli(
@@ -995,6 +1048,7 @@ async def analyze_job(
     tests_repo_url = request.tests_repo_url or settings.tests_repo_url
     repo_context = ""
     repo_path: Path | None = None
+    custom_prompt = ""
 
     # Use RepositoryManager context for entire analysis (child jobs and main job)
     async with contextlib.AsyncExitStack() as stack:
@@ -1010,6 +1064,8 @@ async def analyze_job(
             except Exception as e:
                 logger.warning(f"Failed to clone repository: {e}")
                 repo_context = f"\nFailed to clone repo: {e}"
+
+        custom_prompt = _resolve_custom_prompt(request.raw_prompt, repo_path)
 
         # Pre-flight: verify AI CLI is reachable before spawning parallel tasks
         ok, err = await check_ai_cli_available(
@@ -1042,6 +1098,7 @@ async def analyze_job(
                     ai_provider=ai_provider,
                     ai_model=ai_model,
                     ai_cli_timeout=settings.ai_cli_timeout,
+                    custom_prompt=custom_prompt,
                 )
                 for child_name, child_num in failed_child_jobs
             ]
@@ -1119,6 +1176,7 @@ async def analyze_job(
                     ai_provider=ai_provider,
                     ai_model=ai_model,
                     ai_cli_timeout=settings.ai_cli_timeout,
+                    custom_prompt=custom_prompt,
                 )
                 for group in failure_groups.values()
             ]
@@ -1144,6 +1202,12 @@ async def analyze_job(
                     failures.extend(result)
         else:
             # No structured test failures - fall back to single Claude CLI analysis
+            custom_prompt_section = (
+                f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n"
+                if custom_prompt
+                else ""
+            )
+
             prompt = f"""Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
@@ -1153,7 +1217,7 @@ CONSOLE OUTPUT (errors/failures/warnings extracted):
 {repo_context}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-
+{custom_prompt_section}
 {_JSON_RESPONSE_SCHEMA}
 """
             success, analysis_output = await call_ai_cli(

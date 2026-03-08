@@ -66,6 +66,10 @@ class BaseAnalysisRequest(BaseModel):
         default=None,
         description="Max Jira search results (overrides JIRA_MAX_RESULTS env var)",
     )
+    raw_prompt: str | None = Field(
+        default=None,
+        description="Raw prompt to append as additional AI instructions (overrides repo-level JOB_INSIGHT_PROMPT.md)",
+    )
 
 
 class AnalyzeRequest(BaseAnalysisRequest):

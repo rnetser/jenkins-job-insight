@@ -31,9 +31,6 @@ class Settings(BaseSettings):
     jenkins_password: str
     jenkins_ssl_verify: bool = True
 
-    # Custom prompt file path
-    prompt_file: str = "/app/PROMPT.md"
-
     # Optional defaults (can be overridden per-request in webhook)
     tests_repo_url: str | None = None
     callback_url: str | None = None

@@ -14,6 +14,7 @@ from simple_logger.logger import get_logger
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
+    _resolve_custom_prompt,
     analyze_failure_group,
     analyze_job,
     get_failure_signature,
@@ -514,12 +515,15 @@ async def analyze_failures(
     # Optionally clone repo for AI code context
     repo_manager = RepositoryManager()
     repo_path = None
+    custom_prompt = ""
     tests_repo_url = body.tests_repo_url or merged.tests_repo_url
     try:
         await update_status(job_id, "running")
 
         if tests_repo_url:
             repo_path = await asyncio.to_thread(repo_manager.clone, str(tests_repo_url))
+
+        custom_prompt = _resolve_custom_prompt(body.raw_prompt, repo_path)
 
         # Analyze each unique failure group in parallel
         coroutines = [
@@ -530,6 +534,7 @@ async def analyze_failures(
                 ai_provider=ai_provider,
                 ai_model=ai_model,
                 ai_cli_timeout=merged.ai_cli_timeout,
+                custom_prompt=custom_prompt,
             )
             for group_failures in groups.values()
         ]

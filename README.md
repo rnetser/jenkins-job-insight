@@ -65,7 +65,6 @@ Configure the service using environment variables. The service is tied to a sing
 | `CALLBACK_HEADERS` | No | - | Default callback headers as JSON (can be overridden per-request) |
 | **Other** | | | |
 | `TESTS_REPO_URL` | No | - | Default tests repository URL (can be overridden per-request) |
-| `PROMPT_FILE` | No | `/app/PROMPT.md` | Path to custom analysis prompt file |
 | `HTML_REPORT` | No | `true` | Generate HTML reports (set to `false` to disable) |
 | `DEBUG` | No | `false` | Enable debug mode with hot reload for development |
 | **Jira (Optional)** | | | |
@@ -223,6 +222,7 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | --                   | `failures`           | No*      | `/analyze-failures`    | Raw test failure objects (alternative to `raw_xml`)             |
 | **General**          |                      |          |                        |                                                                |
 | `TESTS_REPO_URL`     | `tests_repo_url`     | No       | Both                   | Repository URL for test context                                |
+| --                   | `raw_prompt`         | No       | Both                   | Additional AI instructions (overrides repo-level prompt file)  |
 | `CALLBACK_URL`       | `callback_url`       | No       | `/analyze`             | Callback webhook URL for results                               |
 | `CALLBACK_HEADERS`   | `callback_headers`   | No       | `/analyze`             | Headers for callback requests                                  |
 | `HTML_REPORT`        | `html_report`        | No       | `/analyze`             | Generate HTML report (default: true)                           |
@@ -360,38 +360,34 @@ This allows the service to connect to Jenkins instances that use self-signed or 
 
 ### Custom Analysis Prompt
 
-You can customize the AI analysis behavior by mounting a custom `PROMPT.md` file. The service looks for the prompt at the path specified by `PROMPT_FILE` (default: `/app/PROMPT.md`). If the file exists, its content is used as the system prompt for AI analysis; otherwise, the built-in default prompt is used.
+You can customize the AI analysis behavior by placing a `JOB_INSIGHT_PROMPT.md` file in the root of your tests repository. When the service clones the tests repo (via `TESTS_REPO_URL` or the per-request `tests_repo_url` field), it automatically looks for this file and appends its content as additional instructions to the AI prompt.
 
-**Docker run example:**
+This allows test repository maintainers to provide project-specific context such as:
+- Domain-specific classification rules
+- Known failure patterns and their categories
+- Product-specific terminology and components
+- Custom analysis priorities
 
-```bash
-docker run -d \
-  -p 8000:8000 \
-  -v ./data:/data \
-  -v ./my-prompt.md:/app/PROMPT.md:ro \
-  -e JENKINS_URL=https://jenkins.example.com \
-  -e JENKINS_USER=your-username \
-  -e JENKINS_PASSWORD=your-api-token \
-  -e AI_PROVIDER=claude \
-  jenkins-job-insight
+**Example `JOB_INSIGHT_PROMPT.md`:**
+
+```markdown
+## Project Context
+
+This is a network storage product. Common components include:
+- NFS server (nfs-ganesha)
+- Block storage (rbd)
+- Object storage (rgw)
+
+## Classification Rules
+
+- Timeout errors in NFS tests are usually PRODUCT BUGs in nfs-ganesha
+- Import errors are always CODE ISSUEs
+- "HEALTH_WARN" in logs indicates a PRODUCT BUG in the storage cluster
 ```
 
-**Docker Compose example:**
+Alternatively, you can pass a `raw_prompt` field in the request body to provide custom instructions per-request. When both are present, the request `raw_prompt` takes priority over the repo-level file.
 
-```yaml
-services:
-  jenkins-job-insight:
-    image: jenkins-job-insight
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./data:/data
-      - ./PROMPT.md:/app/PROMPT.md:ro  # Mount custom prompt (read-only)
-    env_file:
-      - .env
-```
-
-The custom prompt should include instructions for the AI on how to analyze Jenkins failures and format the JSON response. Refer to the built-in default prompt as a starting point.
+No server configuration is needed — the prompt file lives in your tests repository and is picked up automatically.
 
 ## API Endpoints
 

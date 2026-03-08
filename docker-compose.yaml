@@ -27,8 +27,6 @@ services:
     # The ./data directory on host maps to /data in container
     volumes:
       - ./data:/data
-      # Optional: mount custom analysis prompt
-      # - ./PROMPT.md:/app/PROMPT.md:ro
       # Optional: Mount gcloud credentials for Vertex AI authentication
       # Uncomment if using CLAUDE_CODE_USE_VERTEX=1 with Application Default Credentials
       # - ~/.config/gcloud:/home/appuser/.config/gcloud:ro
@@ -102,9 +100,6 @@ services:
       - TESTS_REPO_URL=${TESTS_REPO_URL:-}
       - CALLBACK_URL=${CALLBACK_URL:-}
       - CALLBACK_HEADERS=${CALLBACK_HEADERS:-}
-
-      # Custom prompt file (mount your own PROMPT.md)
-      - PROMPT_FILE=${PROMPT_FILE:-/app/PROMPT.md}
 
       # SSL verification for Jenkins (set to false for self-signed certs)
       - JENKINS_SSL_VERIFY=${JENKINS_SSL_VERIFY:-true}

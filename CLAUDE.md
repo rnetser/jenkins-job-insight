@@ -94,4 +94,3 @@ When adding a new environment variable:
 Exceptions (server-level only, no payload equivalent):
 - `DEBUG` — server reload toggle
 - `LOG_LEVEL` — server log verbosity
-- `PROMPT_FILE` — server-local file path
