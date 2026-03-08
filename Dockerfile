@@ -72,10 +72,10 @@ COPY --chown=appuser:0 --from=builder /app/src /app/src
 RUN chmod -R g+w /app
 
 # Make appuser home accessible by OpenShift arbitrary UID
-# Only chmod directories (not files) — files are already group-readable by default.
-# Directories need group write+execute for OpenShift's arbitrary UID (in GID 0)
-# to create config/cache files at runtime.
-RUN find /home/appuser -type d -exec chmod g=u {} + \
+# Set group permissions equal to user permissions on all files and directories.
+# OpenShift runs containers as a random UID in GID 0, so group access must
+# match user access for CLI tools (Cursor, Claude, Gemini) to manage their config.
+RUN chmod -R g=u /home/appuser \
     && npm cache clean --force 2>/dev/null; \
     rm -rf /home/appuser/.npm/_cacache
 

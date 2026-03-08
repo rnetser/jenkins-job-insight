@@ -387,6 +387,36 @@ This is a network storage product. Common components include:
 
 Alternatively, you can pass a `raw_prompt` field in the request body to provide custom instructions per-request. When both are present, the request `raw_prompt` takes priority over the repo-level file.
 
+**Example with `raw_prompt`:**
+
+```bash
+curl -X POST "http://localhost:8000/analyze?sync=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_name": "my-test-job",
+    "build_number": 42,
+    "ai_provider": "claude",
+    "ai_model": "claude-sonnet-4-6",
+    "raw_prompt": "This is an MTV product test suite. Timeout errors in migration tests are usually PRODUCT BUGs in the forklift operator. Import errors are always CODE ISSUEs."
+  }'
+```
+
+**Example with `raw_prompt` from a file:**
+
+```bash
+curl -X POST "http://localhost:8000/analyze?sync=true" \
+  -H "Content-Type: application/json" \
+  -d "$(jq -n \
+    --arg prompt "$(cat my-prompt.md)" \
+    '{
+      "job_name": "my-test-job",
+      "build_number": 42,
+      "ai_provider": "claude",
+      "ai_model": "claude-sonnet-4-6",
+      "raw_prompt": $prompt
+    }')"
+```
+
 No server configuration is needed — the prompt file lives in your tests repository and is picked up automatically.
 
 ## API Endpoints
