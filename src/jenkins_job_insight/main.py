@@ -14,7 +14,7 @@ from simple_logger.logger import get_logger
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
-    _read_repo_prompt,
+    _resolve_custom_prompt,
     analyze_failure_group,
     analyze_job,
     get_failure_signature,
@@ -523,13 +523,7 @@ async def analyze_failures(
         if tests_repo_url:
             repo_path = await asyncio.to_thread(repo_manager.clone, str(tests_repo_url))
 
-        # Resolve custom prompt: request raw_prompt > repo-level file > nothing
-        raw_prompt = (body.raw_prompt or "").strip()
-        if raw_prompt:
-            custom_prompt = raw_prompt
-            logger.info("Using raw prompt from request")
-        elif repo_path:
-            custom_prompt = _read_repo_prompt(repo_path)
+        custom_prompt = _resolve_custom_prompt(body.raw_prompt, repo_path)
 
         # Analyze each unique failure group in parallel
         coroutines = [

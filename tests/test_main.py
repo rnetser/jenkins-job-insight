@@ -392,7 +392,11 @@ class TestAnalyzeFailuresEndpoint:
                     "jenkins_job_insight.main.run_parallel_with_limit",
                     new_callable=AsyncMock,
                 ) as mock_parallel:
-                    mock_parallel.return_value = [[mock_analysis]]
+
+                    async def run_coroutines(coroutines, **kwargs):
+                        return [await coro for coro in coroutines]
+
+                    mock_parallel.side_effect = run_coroutines
 
                     response = test_client.post(
                         "/analyze-failures",
@@ -422,6 +426,68 @@ class TestAnalyzeFailuresEndpoint:
                         "http://testserver/results/"
                     )
                     assert data["html_report_url"].endswith(".html")
+
+    def test_analyze_failures_passes_resolved_custom_prompt(self, test_client) -> None:
+        """Test that resolved custom prompt is forwarded to group analysis."""
+        mock_analysis = FailureAnalysis(
+            test_name="test_foo",
+            error="assert False",
+            analysis=AnalysisDetail(
+                classification="CODE ISSUE",
+                details="Test assertion failed",
+            ),
+        )
+
+        with patch("jenkins_job_insight.main.RepositoryManager") as mock_repo_cls:
+            mock_repo_instance = mock_repo_cls.return_value
+            mock_repo_instance.clone.return_value = Path("/tmp/test-repo")
+            mock_repo_instance.cleanup.return_value = None
+
+            with patch(
+                "jenkins_job_insight.main._resolve_custom_prompt",
+                return_value="Custom instructions",
+            ) as mock_resolve_prompt:
+                with patch(
+                    "jenkins_job_insight.main.analyze_failure_group",
+                    new_callable=AsyncMock,
+                ) as mock_analyze_group:
+                    mock_analyze_group.return_value = [mock_analysis]
+
+                    with patch(
+                        "jenkins_job_insight.main.run_parallel_with_limit",
+                        new_callable=AsyncMock,
+                    ) as mock_parallel:
+
+                        async def run_coroutines(coroutines, **kwargs):
+                            return [await coro for coro in coroutines]
+
+                        mock_parallel.side_effect = run_coroutines
+
+                        response = test_client.post(
+                            "/analyze-failures",
+                            json={
+                                "failures": [
+                                    {
+                                        "test_name": "test_foo",
+                                        "error_message": "assert False",
+                                        "stack_trace": "File test.py, line 10",
+                                    }
+                                ],
+                                "tests_repo_url": "https://github.com/example/repo",
+                                "raw_prompt": "Request prompt",
+                                "ai_provider": "claude",
+                                "ai_model": "test-model",
+                            },
+                        )
+
+                    assert response.status_code == 200
+                    mock_resolve_prompt.assert_called_once_with(
+                        "Request prompt", Path("/tmp/test-repo")
+                    )
+                    assert (
+                        mock_analyze_group.call_args.kwargs["custom_prompt"]
+                        == "Custom instructions"
+                    )
 
     def test_analyze_failures_empty_failures(self, test_client) -> None:
         """Test that empty failures list returns 422 (validator rejects empty list without raw_xml)."""
@@ -483,8 +549,15 @@ class TestAnalyzeFailuresEndpoint:
                 with patch(
                     "jenkins_job_insight.main.run_parallel_with_limit",
                     new_callable=AsyncMock,
-                    side_effect=RuntimeError("AI CLI crashed"),
-                ):
+                ) as mock_parallel:
+
+                    async def raise_after_closing(coroutines, **kwargs):
+                        for coro in coroutines:
+                            coro.close()
+                        raise RuntimeError("AI CLI crashed")
+
+                    mock_parallel.side_effect = raise_after_closing
+
                     response = test_client.post(
                         "/analyze-failures",
                         json={
@@ -533,10 +606,16 @@ class TestAnalyzeFailuresEndpoint:
                     "jenkins_job_insight.main.run_parallel_with_limit",
                     new_callable=AsyncMock,
                 ) as mock_parallel:
-                    mock_parallel.return_value = [
-                        [mock_analysis],
-                        RuntimeError("AI CLI crashed"),
-                    ]
+
+                    async def run_partial_failure(coroutines, **kwargs):
+                        for coro in coroutines:
+                            coro.close()
+                        return [
+                            [mock_analysis],
+                            RuntimeError("AI CLI crashed"),
+                        ]
+
+                    mock_parallel.side_effect = run_partial_failure
 
                     with patch(
                         "jenkins_job_insight.main.save_result",
@@ -700,7 +779,13 @@ class TestAnalyzeFailuresRawXml:
                 "jenkins_job_insight.main.run_parallel_with_limit",
                 new_callable=AsyncMock,
             ) as mock_parallel:
-                mock_parallel.return_value = [[mock_analysis]]
+
+                async def return_mock_results(coroutines, **kwargs):
+                    for coro in coroutines:
+                        coro.close()
+                    return [[mock_analysis]]
+
+                mock_parallel.side_effect = return_mock_results
 
                 response = test_client.post(
                     "/analyze-failures",
@@ -795,7 +880,13 @@ class TestAnalyzeFailuresRawXml:
                 "jenkins_job_insight.main.run_parallel_with_limit",
                 new_callable=AsyncMock,
             ) as mock_parallel:
-                mock_parallel.return_value = [[mock_analysis]]
+
+                async def return_mock_results(coroutines, **kwargs):
+                    for coro in coroutines:
+                        coro.close()
+                    return [[mock_analysis]]
+
+                mock_parallel.side_effect = return_mock_results
 
                 response = test_client.post(
                     "/analyze-failures",
@@ -836,7 +927,13 @@ class TestAnalyzeFailuresRawXml:
                 "jenkins_job_insight.main.run_parallel_with_limit",
                 new_callable=AsyncMock,
             ) as mock_parallel:
-                mock_parallel.return_value = [[mock_analysis]]
+
+                async def return_mock_results(coroutines, **kwargs):
+                    for coro in coroutines:
+                        coro.close()
+                    return [[mock_analysis]]
+
+                mock_parallel.side_effect = return_mock_results
 
                 response = test_client.post(
                     "/analyze-failures",

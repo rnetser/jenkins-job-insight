@@ -70,6 +70,15 @@ def _read_repo_prompt(repo_path: Path | None) -> str:
         return ""
 
 
+def _resolve_custom_prompt(raw_prompt: str | None, repo_path: Path | None) -> str:
+    """Resolve additional AI instructions from request input or repo defaults."""
+    prompt = (raw_prompt or "").strip()
+    if prompt:
+        logger.info("Using raw prompt from request")
+        return prompt
+    return _read_repo_prompt(repo_path)
+
+
 # CLI flags that were previously hardcoded in provider command builders.
 # The ai-cli-runner package handles structural flags (-p for claude, --print
 # for cursor) internally; these are the extra per-provider flags.
@@ -643,7 +652,7 @@ async def analyze_failure_group(
         ai_provider: AI provider to use.
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
-        custom_prompt: Additional instructions from repo-level prompt file.
+        custom_prompt: Additional instructions from request or repo-level file.
 
     Returns:
         List of FailureAnalysis objects, one per failure in the group.
@@ -732,7 +741,7 @@ async def analyze_child_job(
         ai_provider: AI provider to use.
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
-        custom_prompt: Additional instructions from repo-level prompt file.
+        custom_prompt: Additional instructions from request or repo-level file.
 
     Returns:
         ChildJobAnalysis with analysis results or nested child analyses.
@@ -1056,13 +1065,7 @@ async def analyze_job(
                 logger.warning(f"Failed to clone repository: {e}")
                 repo_context = f"\nFailed to clone repo: {e}"
 
-        # Resolve custom prompt: request raw_prompt > repo-level file > nothing
-        raw_prompt = (request.raw_prompt or "").strip()
-        if raw_prompt:
-            custom_prompt = raw_prompt
-            logger.info("Using raw prompt from request")
-        elif repo_path:
-            custom_prompt = _read_repo_prompt(repo_path)
+        custom_prompt = _resolve_custom_prompt(request.raw_prompt, repo_path)
 
         # Pre-flight: verify AI CLI is reachable before spawning parallel tasks
         ok, err = await check_ai_cli_available(

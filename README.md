@@ -222,6 +222,7 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | --                   | `failures`           | No*      | `/analyze-failures`    | Raw test failure objects (alternative to `raw_xml`)             |
 | **General**          |                      |          |                        |                                                                |
 | `TESTS_REPO_URL`     | `tests_repo_url`     | No       | Both                   | Repository URL for test context                                |
+| --                   | `raw_prompt`         | No       | Both                   | Additional AI instructions (overrides repo-level prompt file)  |
 | `CALLBACK_URL`       | `callback_url`       | No       | `/analyze`             | Callback webhook URL for results                               |
 | `CALLBACK_HEADERS`   | `callback_headers`   | No       | `/analyze`             | Headers for callback requests                                  |
 | `HTML_REPORT`        | `html_report`        | No       | `/analyze`             | Generate HTML report (default: true)                           |

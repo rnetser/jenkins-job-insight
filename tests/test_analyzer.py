@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from jenkins_job_insight.analyzer import (
     JOB_INSIGHT_PROMPT_FILENAME,
     _read_repo_prompt,
+    _resolve_custom_prompt,
     handle_jenkins_exception,
 )
 
@@ -94,8 +95,40 @@ class TestReadRepoPrompt:
         prompt_file.write_text("  \n  Custom instructions  \n  ", encoding="utf-8")
         assert _read_repo_prompt(tmp_path) == "Custom instructions"
 
-    def test_returns_empty_on_read_error(self, tmp_path) -> None:
+    def test_returns_empty_on_read_error(self, monkeypatch, tmp_path) -> None:
         """Test that read errors return empty string gracefully."""
         prompt_file = tmp_path / JOB_INSIGHT_PROMPT_FILENAME
-        prompt_file.mkdir()  # Create as directory to cause read error
+        prompt_file.write_text("Custom instructions here", encoding="utf-8")
+
+        def raise_os_error(*args, **kwargs) -> str:
+            raise OSError("boom")
+
+        monkeypatch.setattr(type(prompt_file), "read_text", raise_os_error)
         assert _read_repo_prompt(tmp_path) == ""
+
+
+class TestResolveCustomPrompt:
+    """Tests for _resolve_custom_prompt helper."""
+
+    def test_prefers_raw_prompt_over_repo_prompt(self, tmp_path) -> None:
+        """Test that request raw_prompt takes precedence over repo prompt."""
+        prompt_file = tmp_path / JOB_INSIGHT_PROMPT_FILENAME
+        prompt_file.write_text("Repo prompt", encoding="utf-8")
+
+        assert (
+            _resolve_custom_prompt("  Request prompt  ", tmp_path) == "Request prompt"
+        )
+
+    def test_falls_back_to_repo_prompt(self, tmp_path) -> None:
+        """Test that repo prompt is used when raw_prompt is missing."""
+        prompt_file = tmp_path / JOB_INSIGHT_PROMPT_FILENAME
+        prompt_file.write_text("Repo prompt", encoding="utf-8")
+
+        assert _resolve_custom_prompt(None, tmp_path) == "Repo prompt"
+
+    def test_blank_raw_prompt_falls_back_to_repo_prompt(self, tmp_path) -> None:
+        """Test that blank raw_prompt does not suppress the repo prompt."""
+        prompt_file = tmp_path / JOB_INSIGHT_PROMPT_FILENAME
+        prompt_file.write_text("Repo prompt", encoding="utf-8")
+
+        assert _resolve_custom_prompt("   \n  ", tmp_path) == "Repo prompt"
