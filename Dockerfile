@@ -1,10 +1,9 @@
-# syntax=docker/dockerfile:1
 FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
 # Install uv
-COPY --from=ghcr.io/astral-sh/uv:0.5.14 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Install git (needed for gitpython dependency)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -40,7 +39,7 @@ RUN useradd --create-home --shell /bin/bash -g 0 appuser \
     && chmod -R g+w /data
 
 # Copy uv for runtime
-COPY --from=ghcr.io/astral-sh/uv:0.5.14 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Switch to non-root user for CLI installs
 USER appuser
@@ -68,14 +67,18 @@ COPY --chown=appuser:0 --from=builder /app/pyproject.toml /app/uv.lock ./
 # Copy source code
 COPY --chown=appuser:0 --from=builder /app/src /app/src
 
+# Copy entrypoint script
+COPY --chown=appuser:0 entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 # Make /app group-writable for OpenShift compatibility
 RUN chmod -R g+w /app
 
 # Make appuser home accessible by OpenShift arbitrary UID
-# Set group permissions equal to user permissions on all files and directories.
-# OpenShift runs containers as a random UID in GID 0, so group access must
-# match user access for CLI tools (Cursor, Claude, Gemini) to manage their config.
-RUN chmod -R g=u /home/appuser \
+# Only chmod directories (not files) — files are already group-readable by default.
+# Directories need group write+execute for OpenShift's arbitrary UID (in GID 0)
+# to create config/cache files at runtime.
+RUN find /home/appuser -type d -exec chmod g=u {} + \
     && npm cache clean --force 2>/dev/null; \
     rm -rf /home/appuser/.npm/_cacache
 
@@ -93,4 +96,5 @@ EXPOSE 8000
 # --no-sync prevents uv from attempting to modify the venv at runtime.
 # This is required for OpenShift where containers run as an arbitrary UID
 # and may not have write access to the .venv directory.
-ENTRYPOINT ["uv", "run", "--no-sync", "uvicorn", "jenkins_job_insight.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["uv", "run", "--no-sync", "uvicorn", "jenkins_job_insight.main:app", "--host", "0.0.0.0", "--port", "8000"]
