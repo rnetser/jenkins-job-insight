@@ -4,7 +4,11 @@ import jenkins
 import pytest
 from fastapi import HTTPException
 
-from jenkins_job_insight.analyzer import handle_jenkins_exception
+from jenkins_job_insight.analyzer import (
+    JOB_INSIGHT_PROMPT_FILENAME,
+    _read_repo_prompt,
+    handle_jenkins_exception,
+)
 
 
 class TestHandleJenkinsException:
@@ -65,3 +69,33 @@ class TestHandleJenkinsException:
             handle_jenkins_exception(exc, "my-job", 123)
         assert exc_info.value.status_code == 502
         assert "Failed to connect to Jenkins" in exc_info.value.detail
+
+
+class TestReadRepoPrompt:
+    """Tests for _read_repo_prompt helper."""
+
+    def test_returns_empty_when_no_repo_path(self) -> None:
+        """Test that None repo_path returns empty string."""
+        assert _read_repo_prompt(None) == ""
+
+    def test_returns_empty_when_file_missing(self, tmp_path) -> None:
+        """Test that missing prompt file returns empty string."""
+        assert _read_repo_prompt(tmp_path) == ""
+
+    def test_reads_prompt_file(self, tmp_path) -> None:
+        """Test that existing prompt file content is returned."""
+        prompt_file = tmp_path / JOB_INSIGHT_PROMPT_FILENAME
+        prompt_file.write_text("Custom instructions here", encoding="utf-8")
+        assert _read_repo_prompt(tmp_path) == "Custom instructions here"
+
+    def test_strips_whitespace(self, tmp_path) -> None:
+        """Test that whitespace is stripped from prompt file content."""
+        prompt_file = tmp_path / JOB_INSIGHT_PROMPT_FILENAME
+        prompt_file.write_text("  \n  Custom instructions  \n  ", encoding="utf-8")
+        assert _read_repo_prompt(tmp_path) == "Custom instructions"
+
+    def test_returns_empty_on_read_error(self, tmp_path) -> None:
+        """Test that read errors return empty string gracefully."""
+        prompt_file = tmp_path / JOB_INSIGHT_PROMPT_FILENAME
+        prompt_file.mkdir()  # Create as directory to cause read error
+        assert _read_repo_prompt(tmp_path) == ""
