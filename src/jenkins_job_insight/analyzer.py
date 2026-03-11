@@ -119,6 +119,7 @@ If PRODUCT BUG:
     "component": "affected component",
     "description": "what product behavior is broken",
     "evidence": "relevant log snippets",
+    "archive_evidence": "VERBATIM lines from PRODUCT-SIDE logs in the diagnostic archive: pod logs (virt-handler, virt-controller, virt-launcher, cdi-controller), Kubernetes events, CR status, node conditions. Do NOT paste test console output here — that belongs in 'evidence'. This field is for product/cluster diagnostic data only.",
     "jira_search_keywords": ["specific error symptom", "component + behavior", "error type"]
   }
 }
@@ -639,6 +640,7 @@ async def analyze_failure_group(
     ai_model: str = "",
     ai_cli_timeout: int | None = None,
     custom_prompt: str = "",
+    diagnostic_context: str = "",
 ) -> list[FailureAnalysis]:
     """Analyze a group of failures with the same error signature.
 
@@ -653,6 +655,7 @@ async def analyze_failure_group(
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
         custom_prompt: Additional instructions from request or repo-level file.
+        diagnostic_context: Diagnostic archive context for AI analysis (optional).
 
     Returns:
         List of FailureAnalysis objects, one per failure in the group.
@@ -677,12 +680,20 @@ STACK TRACE:
 CONSOLE CONTEXT:
 {console_context}
 
+{diagnostic_context}
+
 You have access to the test repository. Explore the code to understand the failure.
+If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause.
 
 Note: Multiple tests failed with the same error. Provide ONE analysis that applies to all of them.
 {custom_prompt_section}
 {_JSON_RESPONSE_SCHEMA}
 """
+
+    if diagnostic_context:
+        logger.info(
+            f"Prompt includes diagnostic archive context ({len(diagnostic_context)} chars)"
+        )
 
     logger.info(
         f"Calling {ai_provider.upper()} CLI for failure group ({len(failures)} tests with same error)"
@@ -725,6 +736,7 @@ async def analyze_child_job(
     ai_model: str = "",
     ai_cli_timeout: int | None = None,
     custom_prompt: str = "",
+    diagnostic_context: str = "",
 ) -> ChildJobAnalysis:
     """Analyze a single child job, recursively analyzing its failed children.
 
@@ -742,6 +754,7 @@ async def analyze_child_job(
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
         custom_prompt: Additional instructions from request or repo-level file.
+        diagnostic_context: Diagnostic archive context for AI analysis (optional).
 
     Returns:
         ChildJobAnalysis with analysis results or nested child analyses.
@@ -807,6 +820,7 @@ async def analyze_child_job(
                 ai_model,
                 ai_cli_timeout,
                 custom_prompt,
+                diagnostic_context=diagnostic_context,
             )
             for child_name, child_num in failed_children
         ]
@@ -880,6 +894,7 @@ async def analyze_child_job(
                 ai_model=ai_model,
                 ai_cli_timeout=ai_cli_timeout,
                 custom_prompt=custom_prompt,
+                diagnostic_context=diagnostic_context,
             )
             for group in failure_groups.values()
         ]
@@ -937,7 +952,10 @@ Job: {job_name} #{build_number}
 CONSOLE OUTPUT (errors/failures/warnings extracted):
 {console_context}
 
+{diagnostic_context}
+
 You have access to the repository if one was cloned. Explore to understand the failure.
+If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause.
 {custom_prompt_section}
 {_JSON_RESPONSE_SCHEMA}
 """
@@ -976,6 +994,7 @@ async def analyze_job(
     ai_provider: str,
     ai_model: str,
     job_id: str | None = None,
+    diagnostic_context: str = "",
 ) -> AnalysisResult:
     """Analyze a Jenkins job failure."""
     if job_id is None:
@@ -1099,6 +1118,7 @@ async def analyze_job(
                     ai_model=ai_model,
                     ai_cli_timeout=settings.ai_cli_timeout,
                     custom_prompt=custom_prompt,
+                    diagnostic_context=diagnostic_context,
                 )
                 for child_name, child_num in failed_child_jobs
             ]
@@ -1177,6 +1197,7 @@ async def analyze_job(
                     ai_model=ai_model,
                     ai_cli_timeout=settings.ai_cli_timeout,
                     custom_prompt=custom_prompt,
+                    diagnostic_context=diagnostic_context,
                 )
                 for group in failure_groups.values()
             ]
@@ -1216,7 +1237,10 @@ CONSOLE OUTPUT (errors/failures/warnings extracted):
 {console_context}
 {repo_context}
 
+{diagnostic_context}
+
 You have access to the repository if one was cloned. Explore to understand the failure.
+If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause.
 {custom_prompt_section}
 {_JSON_RESPONSE_SCHEMA}
 """

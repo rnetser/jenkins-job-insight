@@ -76,6 +76,9 @@ Configure the service using environment variables. The service is tied to a sing
 | `JIRA_PROJECT_KEY` | No | - | Scope Jira searches to a specific project |
 | `JIRA_SSL_VERIFY` | No | `true` | SSL certificate verification for Jira |
 | `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
+| **Diagnostic Archive (Optional)** | | | |
+| `DIAGNOSTIC_ARCHIVE_MAX_SIZE_MB` | No | `500` | Maximum diagnostic archive (tar/zip) file size in MB |
+| `DIAGNOSTIC_ARCHIVE_CONTEXT_LINES` | No | `200` | Maximum diagnostic context lines for AI prompt |
 
 ### Jenkins Configuration
 
@@ -222,6 +225,7 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | --                   | `failures`           | No*      | `/analyze-failures`    | Raw test failure objects (alternative to `raw_xml`)             |
 | **General**          |                      |          |                        |                                                                |
 | `TESTS_REPO_URL`     | `tests_repo_url`     | No       | Both                   | Repository URL for test context                                |
+| --                   | `diagnostic_archive_path` | No  | `/analyze`             | Path to diagnostic archive (tar/zip) artifact in Jenkins build |
 | --                   | `raw_prompt`         | No       | Both                   | Additional AI instructions (overrides repo-level prompt file)  |
 | `CALLBACK_URL`       | `callback_url`       | No       | `/analyze`             | Callback webhook URL for results                               |
 | `CALLBACK_HEADERS`   | `callback_headers`   | No       | `/analyze`             | Headers for callback requests                                  |
@@ -240,6 +244,9 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `JIRA_PROJECT_KEY`   | `jira_project_key`   | No       | Both                   | Scope Jira searches to a specific project                      |
 | `JIRA_SSL_VERIFY`    | `jira_ssl_verify`    | No       | Both                   | SSL certificate verification for Jira (default: true)          |
 | `JIRA_MAX_RESULTS`   | `jira_max_results`   | No       | Both                   | Maximum Jira results per search (default: 5)                   |
+| **Diagnostic Archive** |                    |          |                        |                                                                |
+| `DIAGNOSTIC_ARCHIVE_MAX_SIZE_MB` | --        | No       | `/analyze`             | Maximum diagnostic archive (tar/zip) size in MB (default: 500) |
+| `DIAGNOSTIC_ARCHIVE_CONTEXT_LINES` | --      | No       | `/analyze`             | Maximum context lines for AI prompt (default: 200)             |
 
 *Jenkins fields are required for `/analyze` but must be configured in at least one place (environment variable or request body). *Either `failures` or `raw_xml` must be provided for `/analyze-failures` (mutually exclusive).
 
@@ -418,6 +425,54 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
 ```
 
 No server configuration is needed — the prompt file lives in your tests repository and is picked up automatically.
+
+### Diagnostic Archive Analysis (Optional)
+
+When analyzing Jenkins jobs that produce diagnostic archives (such as [must-gather](https://docs.openshift.com/container-platform/latest/support/gathering-cluster-data.html) or other diagnostic data), the service can download and analyze the archive (tar or zip) to provide richer diagnostic context to the AI.
+
+#### How It Works
+
+1. Your Jenkins job archives the diagnostic data (tar.gz or zip) as a build artifact
+2. You include the `diagnostic_archive_path` field in the analysis request
+3. The service downloads the artifact using existing Jenkins credentials
+4. The archive is extracted and scanned for error logs, Kubernetes events, and pod issues
+5. Diagnostic context is injected into the AI prompt for better PRODUCT BUG classification
+
+#### Usage
+
+```bash
+curl -X POST "http://localhost:8000/analyze?sync=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_name": "my-test-job",
+    "build_number": 42,
+    "ai_provider": "claude",
+    "ai_model": "sonnet",
+    "diagnostic_archive_path": "artifacts/diagnostic-data.tar.gz"
+  }'
+```
+
+The `diagnostic_archive_path` is relative to the Jenkins build's artifact directory. Common paths:
+- `artifacts/diagnostic-data.tar.gz`
+- `diagnostic-data/diagnostic-data.tar.gz`
+- `logs/diagnostic-data.tar.gz`
+- `logs/failed-tc-logs.zip`
+
+#### What Gets Analyzed
+
+The service extracts and summarizes:
+- **Log files** (`*.log`): Error, warning, and exception lines
+- **Kubernetes events**: Warning-type events
+- **Pod status**: CrashLoopBackOff, OOMKilled, ImagePullBackOff, and other abnormal states
+
+This context helps the AI distinguish between test infrastructure issues (CODE ISSUE) and actual cluster/product problems (PRODUCT BUG).
+
+#### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DIAGNOSTIC_ARCHIVE_MAX_SIZE_MB` | `500` | Maximum archive (tar/zip) file size in MB |
+| `DIAGNOSTIC_ARCHIVE_CONTEXT_LINES` | `200` | Maximum lines of diagnostic context included in AI prompt |
 
 ## API Endpoints
 

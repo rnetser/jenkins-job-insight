@@ -3,6 +3,7 @@ import os
 import re
 import urllib.parse
 import uuid
+from pathlib import Path
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from xml.etree.ElementTree import ParseError
@@ -21,6 +22,12 @@ from jenkins_job_insight.analyzer import (
 )
 from jenkins_job_insight.config import Settings, get_settings
 from jenkins_job_insight.jira import enrich_with_jira_matches
+from jenkins_job_insight.diagnostic_archive import (
+    build_diagnostic_context,
+    cleanup_extract_dir,
+    download_jenkins_artifact,
+    validate_and_extract_archive,
+)
 from jenkins_job_insight.models import (
     AnalysisResult,
     AnalyzeFailuresRequest,
@@ -244,6 +251,8 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         "jira_max_results",
         "ai_cli_timeout",
         "enable_jira",
+        "diagnostic_archive_max_size_mb",
+        "diagnostic_archive_context_lines",
     ]
     for field in direct_fields:
         value = getattr(body, field, None)
@@ -311,6 +320,69 @@ async def _enrich_result_with_jira(
     await enrich_with_jira_matches(all_failures, settings, ai_provider, ai_model)
 
 
+async def _download_diagnostic_archive_context(
+    body: AnalyzeRequest, settings: Settings
+) -> tuple[str, Path | None]:
+    """Download and process diagnostic archive from Jenkins if specified.
+
+    Args:
+        body: The analysis request with optional diagnostic_archive_path.
+        settings: Application settings with Jenkins credentials.
+
+    Returns:
+        Tuple of (diagnostic_archive_context_string, extract_path_or_None).
+        The caller must call cleanup_extract_dir(extract_path) when done.
+    """
+    if not body.diagnostic_archive_path:
+        return "", None
+
+    archive_data = await asyncio.to_thread(
+        download_jenkins_artifact,
+        settings.jenkins_url,
+        settings.jenkins_user,
+        settings.jenkins_password,
+        body.job_name,
+        body.build_number,
+        body.diagnostic_archive_path,
+        settings.diagnostic_archive_max_size_mb,
+        settings.jenkins_ssl_verify,
+    )
+    if archive_data is None:
+        return (
+            f"NOTE: Diagnostic archive '{body.diagnostic_archive_path}' could not be "
+            f"downloaded. Analysis will proceed without diagnostic archive data.",
+            None,
+        )
+
+    extract_path = await asyncio.to_thread(
+        validate_and_extract_archive,
+        archive_data,
+        settings.diagnostic_archive_max_size_mb,
+    )
+    if extract_path is None:
+        return (
+            f"NOTE: Diagnostic archive '{body.diagnostic_archive_path}' could not be "
+            f"extracted. Analysis will proceed without diagnostic archive data.",
+            None,
+        )
+
+    content_summary = await asyncio.to_thread(
+        build_diagnostic_context,
+        extract_path,
+        settings.diagnostic_archive_context_lines,
+    )
+    context = (
+        f"{content_summary}\n\n"
+        f"Full diagnostic archive is extracted at: {extract_path}\n"
+        f"You can read additional files from that path for deeper investigation."
+    )
+    logger.info(
+        f"Diagnostic archive context length: {len(context)} chars, "
+        f"{len(context.splitlines())} lines"
+    )
+    return context, extract_path
+
+
 async def process_analysis_with_id(
     job_id: str, body: AnalyzeRequest, settings: Settings, base_url: str = ""
 ) -> None:
@@ -326,13 +398,24 @@ async def process_analysis_with_id(
         f"Analysis request received for {body.job_name} #{body.build_number} "
         f"(job_id: {job_id})"
     )
+    extract_path_to_clean = None
     try:
         await update_status(job_id, "running")
 
         ai_provider, ai_model = _resolve_ai_config(body)
 
+        (
+            diagnostic_context,
+            extract_path_to_clean,
+        ) = await _download_diagnostic_archive_context(body, settings)
+
         result = await analyze_job(
-            body, settings, ai_provider=ai_provider, ai_model=ai_model, job_id=job_id
+            body,
+            settings,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            job_id=job_id,
+            diagnostic_context=diagnostic_context,
         )
 
         # Enrich PRODUCT BUG failures with Jira matches
@@ -362,6 +445,10 @@ async def process_analysis_with_id(
         logger.exception(f"Analysis failed for job {job_id}")
         await update_status(job_id, "failed", {"error": str(e)})
 
+    finally:
+        if extract_path_to_clean:
+            cleanup_extract_dir(extract_path_to_clean)
+
 
 @app.post("/analyze", status_code=202, response_model=None)
 async def analyze(
@@ -389,38 +476,52 @@ async def analyze(
         merged = _merge_settings(body, settings)
         ai_provider, ai_model = _resolve_ai_config(body)
 
-        result = await analyze_job(
-            body, merged, ai_provider=ai_provider, ai_model=ai_model
-        )
+        extract_path_to_clean = None
+        try:
+            (
+                diagnostic_context,
+                extract_path_to_clean,
+            ) = await _download_diagnostic_archive_context(body, merged)
 
-        # Enrich PRODUCT BUG failures with Jira matches
-        if _resolve_enable_jira(body, merged):
-            await _enrich_result_with_jira(
-                result.failures + list(result.child_job_analyses),
+            result = await analyze_job(
+                body,
                 merged,
-                ai_provider,
-                ai_model,
+                ai_provider=ai_provider,
+                ai_model=ai_model,
+                diagnostic_context=diagnostic_context,
             )
 
-        jenkins_url = build_jenkins_url(
-            merged.jenkins_url, body.job_name, body.build_number
-        )
-        await save_result(
-            result.job_id, jenkins_url, "completed", result.model_dump(mode="json")
-        )
-        logger.info(
-            f"Sync analysis completed for {body.job_name} #{body.build_number} "
-            f"(job_id: {result.job_id})"
-        )
+            # Enrich PRODUCT BUG failures with Jira matches
+            if _resolve_enable_jira(body, merged):
+                await _enrich_result_with_jira(
+                    result.failures + list(result.child_job_analyses),
+                    merged,
+                    ai_provider,
+                    ai_model,
+                )
 
-        await deliver_results(result, body, merged)
+            jenkins_url = build_jenkins_url(
+                merged.jenkins_url, body.job_name, body.build_number
+            )
+            await save_result(
+                result.job_id, jenkins_url, "completed", result.model_dump(mode="json")
+            )
+            logger.info(
+                f"Sync analysis completed for {body.job_name} #{body.build_number} "
+                f"(job_id: {result.job_id})"
+            )
 
-        content = result.model_dump(mode="json")
-        content["base_url"] = base_url
-        content["result_url"] = f"{base_url}/results/{result.job_id}"
-        content["html_report_url"] = f"{base_url}/results/{result.job_id}.html"
+            await deliver_results(result, body, merged)
 
-        return JSONResponse(content=content, status_code=200)
+            content = result.model_dump(mode="json")
+            content["base_url"] = base_url
+            content["result_url"] = f"{base_url}/results/{result.job_id}"
+            content["html_report_url"] = f"{base_url}/results/{result.job_id}.html"
+
+            return JSONResponse(content=content, status_code=200)
+        finally:
+            if extract_path_to_clean:
+                cleanup_extract_dir(extract_path_to_clean)
 
     # Async mode - queue background task
     # Generate job_id here so we can return it to the client for polling

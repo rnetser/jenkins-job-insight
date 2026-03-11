@@ -797,13 +797,17 @@ def _render_failure_card(
     # Product Bug Report details
     if isinstance(detail.product_bug_report, ProductBugReport):
         bug = detail.product_bug_report
+        archive_evidence_html = ""
+        if bug.archive_evidence:
+            archive_evidence_html = f'\n{indent}      <span class="detail-label">Archive Evidence:</span><span class="detail-value">{e(bug.archive_evidence)}</span>'
+
         parts.append(f"""{indent}    <h4>Product Bug Report</h4>
 {indent}    <div class="detail-grid">
 {indent}      <span class="detail-label">Title:</span><span class="detail-value">{e(bug.title)}</span>
 {indent}      <span class="detail-label">Severity:</span><span class="detail-value">{e(bug.severity)}</span>
 {indent}      <span class="detail-label">Component:</span><span class="detail-value">{e(bug.component)}</span>
 {indent}      <span class="detail-label">Description:</span><span class="detail-value">{e(bug.description)}</span>
-{indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>
+{indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>{archive_evidence_html}
 {indent}    </div>
 """)
         # Jira matches
@@ -900,13 +904,17 @@ def _render_group_card(
     # Product Bug Report details (improvement over reference)
     if isinstance(detail.product_bug_report, ProductBugReport):
         bug = detail.product_bug_report
+        archive_evidence_html = ""
+        if bug.archive_evidence:
+            archive_evidence_html = f'\n{indent}      <span class="detail-label">Archive Evidence:</span><span class="detail-value">{e(bug.archive_evidence)}</span>'
+
         parts.append(f"""{indent}    <h4>Product Bug Report</h4>
 {indent}    <div class="detail-grid">
 {indent}      <span class="detail-label">Title:</span><span class="detail-value">{e(bug.title)}</span>
 {indent}      <span class="detail-label">Severity:</span><span class="detail-value">{e(bug.severity)}</span>
 {indent}      <span class="detail-label">Component:</span><span class="detail-value">{e(bug.component)}</span>
 {indent}      <span class="detail-label">Description:</span><span class="detail-value">{e(bug.description)}</span>
-{indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>
+{indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>{archive_evidence_html}
 {indent}    </div>
 """)
         # Jira matches

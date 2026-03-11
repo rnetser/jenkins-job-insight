@@ -1,0 +1,405 @@
+"""Diagnostic archive extraction and context building for test failure analysis."""
+
+import io
+import os
+import re
+import shutil
+import tarfile
+import uuid
+import zipfile
+from pathlib import Path
+
+from simple_logger.logger import get_logger
+
+logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+
+EXTRACT_BASE = Path("/tmp/jenkins-insight")
+
+ERROR_PATTERN = re.compile(
+    r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
+    re.IGNORECASE,
+)
+
+POD_ISSUE_PATTERNS = re.compile(
+    r"\b(CrashLoopBackOff|OOMKilled|ImagePullBackOff|ErrImagePull|CreateContainerError"
+    r"|RunContainerError|Pending|Failed|Unknown|Evicted)\b"
+)
+
+
+def _extract_tar(fileobj: io.BytesIO, extract_dir: Path) -> None:
+    """Extract a tar archive with security checks.
+
+    Logs warnings for unsafe entries and skips them. On Python 3.12+,
+    falls back to manual filtering if data_filter rejects entries.
+
+    Args:
+        fileobj: BytesIO containing the tar data.
+        extract_dir: Directory to extract into.
+
+    Raises:
+        tarfile.TarError: If the data is not a valid tar archive.
+    """
+    tar = tarfile.open(fileobj=fileobj, mode="r:*")
+    with tar:
+        if hasattr(tarfile, "data_filter"):
+            try:
+                tar.extractall(path=extract_dir, filter="data")
+                return
+            except Exception as exc:
+                logger.warning(
+                    f"Tar data_filter rejected entries, falling back to manual filtering: {exc}"
+                )
+
+        # Manual member-by-member extraction with filtering
+        safe_members = []
+        for member in tar.getmembers():
+            if member.issym() or member.islnk():
+                link_target = Path(extract_dir / member.linkname).resolve()
+                if not str(link_target).startswith(str(extract_dir.resolve())):
+                    logger.warning(
+                        f"Skipping tar entry with symlink outside extraction dir: "
+                        f"{member.name} -> {member.linkname}"
+                    )
+                    continue
+            member_path = Path(extract_dir / member.name).resolve()
+            if not str(member_path).startswith(str(extract_dir.resolve())):
+                logger.warning(f"Skipping tar entry with unsafe path: {member.name}")
+                continue
+            if member.name.startswith("/") or ".." in member.name.split("/"):
+                logger.warning(
+                    f"Skipping tar entry with unsafe path component: {member.name}"
+                )
+                continue
+            safe_members.append(member)
+        tar.extractall(path=extract_dir, members=safe_members)
+
+
+def _extract_zip(fileobj: io.BytesIO, extract_dir: Path) -> None:
+    """Extract a zip archive with security checks.
+
+    Logs warnings for unsafe entries and skips them instead of raising.
+
+    Args:
+        fileobj: BytesIO containing the zip data.
+        extract_dir: Directory to extract into.
+
+    Raises:
+        zipfile.BadZipFile: If the data is not a valid zip file.
+    """
+    with zipfile.ZipFile(fileobj) as zf:
+        safe_names = []
+        for info in zf.infolist():
+            if info.filename.startswith("/") or ".." in info.filename.split("/"):
+                logger.warning(f"Skipping zip entry with unsafe path: {info.filename}")
+                continue
+            member_path = Path(extract_dir / info.filename).resolve()
+            if not str(member_path).startswith(str(extract_dir.resolve())):
+                logger.warning(f"Skipping zip entry with unsafe path: {info.filename}")
+                continue
+            safe_names.append(info)
+        zf.extractall(path=extract_dir, members=safe_names)
+
+
+def download_jenkins_artifact(
+    jenkins_url: str,
+    username: str,
+    password: str,
+    job_name: str,
+    build_number: int,
+    artifact_path: str,
+    max_size_mb: int = 500,
+    ssl_verify: bool = True,
+) -> bytes | None:
+    """Download a build artifact from Jenkins.
+
+    Args:
+        jenkins_url: Jenkins server base URL.
+        username: Jenkins username.
+        password: Jenkins password or API token.
+        job_name: Name of the Jenkins job (can include folders).
+        build_number: Build number containing the artifact.
+        artifact_path: Relative path to the artifact within the build.
+        max_size_mb: Maximum allowed artifact size in megabytes.
+        ssl_verify: Whether to verify SSL certificates.
+
+    Returns:
+        Raw bytes of the artifact file, or None if download fails.
+    """
+    if ".." in artifact_path.split("/"):
+        logger.warning(f"Artifact path contains unsafe component '..': {artifact_path}")
+        return None
+
+    # Strip common accidental prefixes — the API endpoint already includes /artifact/
+    for prefix in ("artifact/", "artifacts/"):
+        if artifact_path.startswith(prefix):
+            artifact_path = artifact_path[len(prefix) :]
+            logger.debug(
+                f"Stripped '{prefix}' prefix from artifact path: {artifact_path}"
+            )
+            break
+
+    job_path = "/job/".join(job_name.split("/"))
+    url = f"{jenkins_url.rstrip('/')}/job/{job_path}/{build_number}/artifact/{artifact_path}"
+    logger.info(f"Downloading artifact: {url}")
+
+    import requests
+
+    try:
+        session = requests.Session()
+        session.auth = (username, password)
+        session.verify = ssl_verify
+
+        response = session.get(url, stream=True)
+        if response.status_code != 200:
+            logger.warning(
+                f"Failed to download artifact '{artifact_path}' from "
+                f"{job_name} #{build_number}: HTTP {response.status_code}"
+            )
+            return None
+
+        # Stream download with size tracking
+        chunks = []
+        downloaded = 0
+        max_bytes = max_size_mb * 1024 * 1024
+
+        for chunk in response.iter_content(chunk_size=8192):
+            downloaded += len(chunk)
+            if downloaded > max_bytes:
+                logger.warning(
+                    f"Artifact download exceeded maximum size ({max_size_mb} MB)"
+                )
+                return None
+            chunks.append(chunk)
+
+        return b"".join(chunks)
+
+    except Exception as e:
+        logger.warning(f"Failed to download artifact: {e}")
+        return None
+
+
+def validate_and_extract_archive(
+    archive_data: bytes, max_size_mb: int = 500
+) -> Path | None:
+    """Validate and extract a tar/tar.gz/tgz or zip archive to a temporary directory.
+
+    Performs size validation, format validation, and path traversal security checks
+    before extracting. Returns None on failure instead of raising.
+
+    Args:
+        archive_data: Raw bytes of the archive.
+        max_size_mb: Maximum allowed size of ``archive_data`` in megabytes.
+
+    Returns:
+        Path to the directory where the archive was extracted, or None on failure.
+    """
+    size_mb = len(archive_data) / (1024 * 1024)
+    if size_mb > max_size_mb:
+        logger.warning(
+            f"Archive size ({size_mb:.1f} MB) exceeds maximum allowed size ({max_size_mb} MB)"
+        )
+        return None
+
+    extract_dir = EXTRACT_BASE / f"diagnostic-archive-{uuid.uuid4().hex[:8]}"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Extracting archive ({size_mb:.1f} MB) to {extract_dir}")
+
+    fileobj = io.BytesIO(archive_data)
+
+    # Try tar first, then zip
+    try:
+        _extract_tar(fileobj, extract_dir)
+    except (tarfile.TarError, Exception):
+        fileobj.seek(0)
+        try:
+            _extract_zip(fileobj, extract_dir)
+        except (zipfile.BadZipFile, Exception) as exc:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+            logger.warning(f"Invalid archive (not a valid tar or zip file): {exc}")
+            return None
+
+    # Post-extraction size check to prevent decompression bombs
+    extracted_size = sum(
+        f.stat().st_size for f in extract_dir.rglob("*") if f.is_file()
+    )
+    max_extracted_bytes = max_size_mb * 10 * 1024 * 1024
+    if extracted_size > max_extracted_bytes:
+        shutil.rmtree(extract_dir)
+        logger.warning(
+            f"Extracted size ({extracted_size / (1024 * 1024):.1f} MB) exceeds maximum "
+            f"allowed ({max_size_mb * 10} MB). Possible decompression bomb."
+        )
+        return None
+
+    logger.info(f"Extraction complete: {extract_dir}")
+    return extract_dir
+
+
+def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
+    """Walk an extracted archive directory and build a structured diagnostic summary.
+
+    Discovers log files, YAML/JSON resource dumps, and event files, then
+    extracts error/warning lines, pod issues, and warning-type Kubernetes
+    events into a human-readable context string.
+
+    Args:
+        extract_path: Root directory of the extracted archive.
+        max_lines: Maximum number of lines in the returned context string.
+
+    Returns:
+        A structured text summary with sections for log errors, Kubernetes
+        events, and pod issues. Returns a note if no relevant content is found.
+    """
+    logger.info(f"Building diagnostic context from {extract_path}")
+
+    log_files: list[Path] = []
+    yaml_json_files: list[Path] = []
+    event_files: list[Path] = []
+    all_files: list[str] = []
+
+    max_lines_per_file = 5
+
+    for file_path in extract_path.rglob("*"):
+        if not file_path.is_file():
+            continue
+
+        relative = str(file_path.relative_to(extract_path))
+        all_files.append(relative)
+        name_lower = file_path.name.lower()
+
+        if (
+            name_lower.endswith((".log", ".txt"))
+            or "/logs/" in relative
+            or "/log/" in relative
+        ):
+            log_files.append(file_path)
+        elif name_lower.endswith((".yaml", ".yml", ".json")):
+            if "event" in name_lower or "event" in relative.lower():
+                event_files.append(file_path)
+            else:
+                yaml_json_files.append(file_path)
+
+    logger.info(
+        f"Archive file discovery: {len(all_files)} total files, "
+        f"{len(log_files)} log files, {len(event_files)} event files, "
+        f"{len(yaml_json_files)} yaml/json files"
+    )
+    error_lines: list[str] = []
+    event_lines: list[str] = []
+    pod_issues: list[str] = []
+    seen_errors: set[str] = set()
+
+    # Extract error/warning lines from log files (limited per file, deduplicated)
+    for log_file in log_files:
+        try:
+            text = log_file.read_text(errors="replace")
+            relative_name = str(log_file.relative_to(extract_path))
+            file_error_count = 0
+            for line in text.splitlines():
+                if ERROR_PATTERN.search(line):
+                    # Simple deduplication: skip lines with same first 80 chars
+                    dedup_key = line.strip()[:80]
+                    if dedup_key in seen_errors:
+                        continue
+                    seen_errors.add(dedup_key)
+                    error_lines.append(f"[{relative_name}]: {line.rstrip()}")
+                    file_error_count += 1
+                    if file_error_count >= max_lines_per_file:
+                        break
+        except OSError:
+            continue
+
+    # Extract warning events (limited per file)
+    for event_file in event_files:
+        try:
+            text = event_file.read_text(errors="replace")
+            relative_name = str(event_file.relative_to(extract_path))
+            file_event_count = 0
+            for line in text.splitlines():
+                if "Warning" in line or "warning" in line:
+                    event_lines.append(f"[{relative_name}]: {line.rstrip()}")
+                    file_event_count += 1
+                    if file_event_count >= max_lines_per_file:
+                        break
+        except OSError:
+            continue
+
+    # Scan YAML/JSON files for pod issues (limited per file)
+    for resource_file in yaml_json_files:
+        try:
+            text = resource_file.read_text(errors="replace")
+            relative_name = str(resource_file.relative_to(extract_path))
+            file_issue_count = 0
+            for line in text.splitlines():
+                if POD_ISSUE_PATTERNS.search(line):
+                    pod_issues.append(f"[{relative_name}]: {line.strip()}")
+                    file_issue_count += 1
+                    if file_issue_count >= max_lines_per_file:
+                        break
+        except OSError:
+            continue
+
+    # Build the structured context
+    sections: list[str] = [
+        "=== DIAGNOSTIC ARCHIVE CONTEXT ===",
+        "",
+        f"Archive contains {len(all_files)} files.",
+        "",
+    ]
+
+    if error_lines:
+        sections.append("--- Error/Warning Lines from Logs ---")
+        sections.extend(error_lines)
+        sections.append("")
+
+    if event_lines:
+        sections.append("--- Kubernetes Events (Warnings) ---")
+        sections.extend(event_lines)
+        sections.append("")
+
+    if pod_issues:
+        sections.append("--- Pod Issues ---")
+        sections.extend(pod_issues)
+        sections.append("")
+
+    if not error_lines and not event_lines and not pod_issues:
+        sections.append(
+            "No errors, warnings, or pod issues found in diagnostic archive."
+        )
+        # Include file listing so AI knows what's available
+        sections.append("")
+        sections.append("--- Files in Archive ---")
+        sections.extend(all_files[:50])
+        if len(all_files) > 50:
+            sections.append(f"... and {len(all_files) - 50} more files")
+        sections.append("")
+
+    # Truncate to max_lines
+    if len(sections) > max_lines:
+        sections = sections[:max_lines]
+        sections.append("... [truncated to max_lines limit]")
+
+    context = "\n".join(sections)
+    logger.info(
+        f"Diagnostic context built: {len(error_lines)} error lines, "
+        f"{len(event_lines)} event lines, {len(pod_issues)} pod issues, "
+        f"total context: {len(context)} chars"
+    )
+    return context
+
+
+def cleanup_extract_dir(extract_path: Path) -> None:
+    """Remove an extracted archive directory tree.
+
+    Logs the cleanup operation. Errors during removal are logged as warnings
+    and swallowed so that cleanup failures never crash the pipeline.
+
+    Args:
+        extract_path: Path to the extracted directory to remove.
+    """
+    logger.info(f"Cleaning up extracted archive directory: {extract_path}")
+    try:
+        shutil.rmtree(extract_path)
+        logger.info(f"Cleanup complete: {extract_path}")
+    except OSError as exc:
+        logger.warning(f"Failed to clean up {extract_path}: {exc}")

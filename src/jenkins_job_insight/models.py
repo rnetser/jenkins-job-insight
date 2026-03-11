@@ -104,6 +104,18 @@ class AnalyzeRequest(BaseAnalysisRequest):
         default=None,
         description="Jenkins SSL verification (overrides JENKINS_SSL_VERIFY env var)",
     )
+    diagnostic_archive_path: str | None = Field(
+        default=None,
+        description="Path to diagnostic archive (tar/zip) in Jenkins build artifacts (e.g., 'logs.zip' or 'diagnostic-data.tar.gz')",
+    )
+    diagnostic_archive_max_size_mb: Annotated[int, Field(gt=0)] | None = Field(
+        default=None,
+        description="Maximum diagnostic archive size in MB (overrides DIAGNOSTIC_ARCHIVE_MAX_SIZE_MB env var)",
+    )
+    diagnostic_archive_context_lines: Annotated[int, Field(gt=0)] | None = Field(
+        default=None,
+        description="Maximum diagnostic context lines for AI prompt (overrides DIAGNOSTIC_ARCHIVE_CONTEXT_LINES env var)",
+    )
 
 
 class TestFailure(BaseModel):
@@ -143,6 +155,10 @@ class ProductBugReport(BaseModel):
     component: str = Field(default="", description="Affected component")
     description: str = Field(default="", description="What product behavior is broken")
     evidence: str = Field(default="", description="Relevant log snippets")
+    archive_evidence: str = Field(
+        default="",
+        description="Verbatim log lines from diagnostic archive proving the product defect (not a summary)",
+    )
     jira_search_keywords: list[str] = Field(
         default_factory=list, description="AI-suggested keywords for Jira search"
     )

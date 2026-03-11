@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # AI CLI timeout in minutes
     ai_cli_timeout: int = Field(default=10, gt=0)
 
+    # Diagnostic archive configuration
+    diagnostic_archive_max_size_mb: int = Field(default=500, gt=0)
+    diagnostic_archive_context_lines: int = Field(default=200, gt=0)
+
     @property
     def jira_enabled(self) -> bool:
         """Check if Jira integration is enabled and configured with valid credentials."""
