@@ -23,10 +23,8 @@ from jenkins_job_insight.analyzer import (
 from jenkins_job_insight.config import Settings, get_settings
 from jenkins_job_insight.jira import enrich_with_jira_matches
 from jenkins_job_insight.diagnostic_archive import (
-    build_diagnostic_context,
     cleanup_extract_dir,
-    download_jenkins_artifact,
-    validate_and_extract_archive,
+    fetch_diagnostic_context,
 )
 from jenkins_job_insight.models import (
     AnalysisResult,
@@ -323,21 +321,12 @@ async def _enrich_result_with_jira(
 async def _download_diagnostic_archive_context(
     body: AnalyzeRequest, settings: Settings
 ) -> tuple[str, Path | None]:
-    """Download and process diagnostic archive from Jenkins if specified.
-
-    Args:
-        body: The analysis request with optional diagnostic_archive_path.
-        settings: Application settings with Jenkins credentials.
-
-    Returns:
-        Tuple of (diagnostic_archive_context_string, extract_path_or_None).
-        The caller must call cleanup_extract_dir(extract_path) when done.
-    """
+    """Download and process diagnostic archive from Jenkins if specified."""
     if not body.diagnostic_archive_path:
         return "", None
 
-    archive_data = await asyncio.to_thread(
-        download_jenkins_artifact,
+    return await asyncio.to_thread(
+        fetch_diagnostic_context,
         settings.jenkins_url,
         settings.jenkins_user,
         settings.jenkins_password,
@@ -346,41 +335,8 @@ async def _download_diagnostic_archive_context(
         body.diagnostic_archive_path,
         settings.diagnostic_archive_max_size_mb,
         settings.jenkins_ssl_verify,
-    )
-    if archive_data is None:
-        return (
-            f"NOTE: Diagnostic archive '{body.diagnostic_archive_path}' could not be "
-            f"downloaded. Analysis will proceed without diagnostic archive data.",
-            None,
-        )
-
-    extract_path = await asyncio.to_thread(
-        validate_and_extract_archive,
-        archive_data,
-        settings.diagnostic_archive_max_size_mb,
-    )
-    if extract_path is None:
-        return (
-            f"NOTE: Diagnostic archive '{body.diagnostic_archive_path}' could not be "
-            f"extracted. Analysis will proceed without diagnostic archive data.",
-            None,
-        )
-
-    content_summary = await asyncio.to_thread(
-        build_diagnostic_context,
-        extract_path,
         settings.diagnostic_archive_context_lines,
     )
-    context = (
-        f"{content_summary}\n\n"
-        f"Full diagnostic archive is extracted at: {extract_path}\n"
-        f"You can read additional files from that path for deeper investigation."
-    )
-    logger.info(
-        f"Diagnostic archive context length: {len(context)} chars, "
-        f"{len(context.splitlines())} lines"
-    )
-    return context, extract_path
 
 
 async def process_analysis_with_id(

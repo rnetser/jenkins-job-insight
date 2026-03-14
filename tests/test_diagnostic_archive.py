@@ -253,13 +253,14 @@ class TestBuildDiagnosticContext:
         lines = [f"ERROR failure number {i}\n" for i in range(200)]
         log_file.write_text("".join(lines))
 
-        context = build_diagnostic_context(tmp_path, max_lines=10)
+        max_lines = 10
+        context = build_diagnostic_context(tmp_path, max_lines=max_lines)
 
         assert "truncated" in context.lower()
         # The total line count in the output should not greatly exceed max_lines
         output_lines = context.splitlines()
-        # max_lines + 1 for the truncation message itself
-        assert len(output_lines) <= 12
+        # max_lines + truncation message + 2 footer lines + empty line
+        assert len(output_lines) <= max_lines + 4
 
 
 class TestCleanupExtractDir:

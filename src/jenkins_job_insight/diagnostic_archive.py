@@ -3,6 +3,7 @@
 import io
 import os
 import re
+import requests
 import shutil
 import tarfile
 import uuid
@@ -141,8 +142,6 @@ def download_jenkins_artifact(
     job_path = "/job/".join(job_name.split("/"))
     url = f"{jenkins_url.rstrip('/')}/job/{job_path}/{build_number}/artifact/{artifact_path}"
     logger.info(f"Downloading artifact: {url}")
-
-    import requests
 
     try:
         session = requests.Session()
@@ -342,8 +341,11 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
     # Build the structured context
     sections: list[str] = [
         "=== DIAGNOSTIC ARCHIVE CONTEXT ===",
-        "",
+        f"Extracted archive path: {extract_path}",
         f"Archive contains {len(all_files)} files.",
+        "",
+        "IMPORTANT: You MUST read the files at the path above. The summary below is only a preview.",
+        "Use the extracted path to read full log files, pod logs, events, and resource status.",
         "",
     ]
 
@@ -379,6 +381,10 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
         sections = sections[:max_lines]
         sections.append("... [truncated to max_lines limit]")
 
+    # Always end with the path reminder
+    sections.append(f"--- Full archive available at: {extract_path} ---")
+    sections.append("You MUST explore the files above before classifying any failure.")
+
     context = "\n".join(sections)
     logger.info(
         f"Diagnostic context built: {len(error_lines)} error lines, "
@@ -403,3 +409,68 @@ def cleanup_extract_dir(extract_path: Path) -> None:
         logger.info(f"Cleanup complete: {extract_path}")
     except OSError as exc:
         logger.warning(f"Failed to clean up {extract_path}: {exc}")
+
+
+def fetch_diagnostic_context(
+    jenkins_url: str,
+    username: str,
+    password: str,
+    job_name: str,
+    build_number: int,
+    artifact_path: str,
+    max_size_mb: int = 500,
+    ssl_verify: bool = True,
+    max_context_lines: int = 200,
+) -> tuple[str, Path | None]:
+    """Download, extract, and build diagnostic context from a Jenkins artifact.
+
+    Single entry point for the entire diagnostic archive pipeline. Downloads
+    the artifact from Jenkins, extracts it, and builds a context summary.
+    Never raises — returns a warning message on failure.
+
+    Args:
+        jenkins_url: Jenkins server base URL.
+        username: Jenkins username.
+        password: Jenkins password or API token.
+        job_name: Name of the Jenkins job (can include folders).
+        build_number: Build number containing the artifact.
+        artifact_path: Relative path to the artifact within the build.
+        max_size_mb: Maximum allowed artifact size in megabytes.
+        ssl_verify: Whether to verify SSL certificates.
+        max_context_lines: Maximum lines in the context summary.
+
+    Returns:
+        Tuple of (context_string, extract_path_or_None).
+        The caller must call cleanup_extract_dir(extract_path) when done.
+    """
+    archive_data = download_jenkins_artifact(
+        jenkins_url=jenkins_url,
+        username=username,
+        password=password,
+        job_name=job_name,
+        build_number=build_number,
+        artifact_path=artifact_path,
+        max_size_mb=max_size_mb,
+        ssl_verify=ssl_verify,
+    )
+    if archive_data is None:
+        return (
+            f"NOTE: Diagnostic archive '{artifact_path}' could not be downloaded. "
+            f"Analysis will proceed without diagnostic archive data.",
+            None,
+        )
+
+    extract_path = validate_and_extract_archive(archive_data, max_size_mb)
+    if extract_path is None:
+        return (
+            f"NOTE: Diagnostic archive '{artifact_path}' could not be extracted. "
+            f"Analysis will proceed without diagnostic archive data.",
+            None,
+        )
+
+    context = build_diagnostic_context(extract_path, max_context_lines)
+    logger.info(
+        f"Diagnostic archive context length: {len(context)} chars, "
+        f"{len(context.splitlines())} lines"
+    )
+    return context, extract_path
