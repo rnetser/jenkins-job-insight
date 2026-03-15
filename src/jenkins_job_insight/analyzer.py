@@ -101,7 +101,7 @@ If CODE ISSUE:
   "classification": "CODE ISSUE",
   "affected_tests": ["test_name_1", "test_name_2"],
   "details": "Your detailed analysis of what caused this failure",
-  "artifacts_evidence": "VERBATIM lines from build artifact logs that support your analysis. Include relevant error messages, stack traces, or status information from the artifacts.",
+  "artifacts_evidence": "VERBATIM lines from build artifact logs that confirm this is a CODE ISSUE, not a product bug. For example: artifact logs showing the product/service is healthy, no crashes or errors on the product side, or evidence that the test environment or test code itself caused the failure.",
   "code_fix": {
     "file": "exact/file/path.py",
     "line": "line number",
@@ -114,7 +114,7 @@ If PRODUCT BUG:
   "classification": "PRODUCT BUG",
   "affected_tests": ["test_name_1", "test_name_2"],
   "details": "Your detailed analysis of what caused this failure",
-  "artifacts_evidence": "VERBATIM lines from build artifact logs that prove the product defect. Include relevant error messages, stack traces, service logs, or status information from the artifacts.",
+  "artifacts_evidence": "VERBATIM lines from build artifact files that prove the product defect. Include relevant error messages, stack traces, service logs, or status information from the artifacts.",
   "product_bug_report": {
     "title": "concise bug title",
     "severity": "critical/high/medium/low",
