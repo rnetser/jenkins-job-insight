@@ -6,7 +6,6 @@ import shutil
 import tarfile
 import uuid
 import zipfile
-from collections.abc import Callable
 from pathlib import Path
 
 from simple_logger.logger import get_logger
@@ -367,48 +366,33 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
 
 
 def fetch_all_artifacts(
-    artifact_list: list[dict],
-    download_fn: Callable[[str], bytes | None],
+    artifact_data: list[tuple[str, bytes]],
     max_size_mb: int = 500,
-    max_context_lines: int = 200,
+    max_context_lines: int = 1000,
 ) -> tuple[str, Path | None]:
-    """Download all build artifacts, extract archives, and build diagnostic context.
+    """Process downloaded artifacts: extract archives and build diagnostic context.
 
-    Downloads each artifact using the provided download function. Archive files
-    (tar/zip) are extracted. Non-archive files are stored directly. All content
-    is placed under a single artifacts directory for AI consumption.
+    Takes already-downloaded artifact data, stores non-archive files directly,
+    extracts archive files (tar/zip), and builds a diagnostic context summary.
 
     Args:
-        artifact_list: List of artifact dicts from Jenkins API (each has 'relativePath').
-        download_fn: Callable that takes an artifact relative path and returns bytes or None.
-        max_size_mb: Maximum allowed artifact size in megabytes (per artifact).
+        artifact_data: List of (relative_path, raw_bytes) tuples.
+        max_size_mb: Maximum allowed extracted archive size in megabytes.
         max_context_lines: Maximum lines in the context summary.
 
     Returns:
         Tuple of (context_string, artifacts_dir_or_None).
         The caller must call cleanup_extract_dir(artifacts_dir) when done.
     """
-    if not artifact_list:
-        logger.debug("No artifacts found for build, skipping artifact download")
+    if not artifact_data:
+        logger.debug("No artifact data to process")
         return "", None
 
     artifacts_dir = EXTRACT_BASE / f"artifacts-{uuid.uuid4().hex[:8]}"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Downloading {len(artifact_list)} artifacts to {artifacts_dir}")
+    logger.info(f"Processing {len(artifact_data)} artifacts to {artifacts_dir}")
 
-    downloaded_count = 0
-    for artifact in artifact_list:
-        relative_path = artifact.get("relativePath", "")
-        if not relative_path:
-            continue
-
-        data = download_fn(relative_path)
-        if data is None:
-            logger.warning(f"Skipping artifact '{relative_path}': download failed")
-            continue
-
-        downloaded_count += 1
-
+    for relative_path, data in artifact_data:
         # Try to extract if it looks like an archive
         if _is_archive(relative_path):
             extract_subdir = artifacts_dir / _strip_archive_extension(relative_path)
@@ -427,13 +411,6 @@ def fetch_all_artifacts(
         dest = artifacts_dir / relative_path
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
-
-    if downloaded_count == 0:
-        cleanup_extract_dir(artifacts_dir)
-        return (
-            "NOTE: No artifacts could be downloaded. Analysis will proceed without artifact data.",
-            None,
-        )
 
     context = build_diagnostic_context(artifacts_dir, max_context_lines)
     logger.info(
