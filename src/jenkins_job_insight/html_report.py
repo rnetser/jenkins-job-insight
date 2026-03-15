@@ -783,10 +783,11 @@ def _render_failure_card(
 {indent}    <pre class="analysis-pre">{e(detail.details)}</pre>
 """)
 
-    # Archive evidence (available for both CODE ISSUE and PRODUCT BUG)
+    # Artifacts evidence (available for both CODE ISSUE and PRODUCT BUG)
     if detail.artifacts_evidence:
-        parts.append(f"""{indent}    <h4>Artifact Evidence</h4>
-{indent}    <pre class="detail-value" style="white-space: pre-wrap; margin: 0; padding: 8px; background: var(--bg-primary); border-radius: 4px;">{e(detail.artifacts_evidence)}</pre>
+        parts.append(f"""{indent}    <div class="detail-grid">
+{indent}      <span class="detail-label">Artifacts Evidence:</span><pre class="detail-value" style="white-space: pre-wrap; margin: 0;">{e(detail.artifacts_evidence)}</pre>
+{indent}    </div>
 """)
 
     # Code Fix details
@@ -893,10 +894,11 @@ def _render_group_card(
 {indent}    </div>
 """)
 
-    # Archive evidence (available for both CODE ISSUE and PRODUCT BUG)
+    # Artifacts evidence (available for both CODE ISSUE and PRODUCT BUG)
     if detail.artifacts_evidence:
-        parts.append(f"""{indent}    <h4>Artifact Evidence</h4>
-{indent}    <pre class="detail-value" style="white-space: pre-wrap; margin: 0; padding: 8px; background: var(--bg-primary); border-radius: 4px;">{e(detail.artifacts_evidence)}</pre>
+        parts.append(f"""{indent}    <div class="detail-grid">
+{indent}      <span class="detail-label">Artifacts Evidence:</span><pre class="detail-value" style="white-space: pre-wrap; margin: 0;">{e(detail.artifacts_evidence)}</pre>
+{indent}    </div>
 """)
 
     # Code Fix details (improvement over reference)
