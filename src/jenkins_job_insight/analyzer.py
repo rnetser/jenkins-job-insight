@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import hashlib
-import io
 import json
 import os
 import re
@@ -24,7 +23,7 @@ from jenkins_job_insight.config import Settings
 from jenkins_job_insight.diagnostic_archive import (
     ERROR_PATTERN,
     cleanup_extract_dir,
-    fetch_all_artifacts,
+    process_build_artifacts,
 )
 from jenkins_job_insight.jenkins import JenkinsClient
 from pydantic import HttpUrl
@@ -47,67 +46,6 @@ logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 FALLBACK_TAIL_LINES = 200
 
 JOB_INSIGHT_PROMPT_FILENAME = "JOB_INSIGHT_PROMPT.md"
-
-
-def _download_artifacts_from_build(
-    client: JenkinsClient,
-    artifacts: list[dict],
-    build_url: str,
-    max_size_mb: int,
-) -> list[tuple[str, bytes]]:
-    """Download artifacts using an existing client and pre-fetched build info.
-
-    Args:
-        client: Authenticated JenkinsClient instance.
-        artifacts: List of artifact dicts from build_info["artifacts"].
-        build_url: The build URL from build_info["url"].
-        max_size_mb: Maximum allowed size per artifact in megabytes.
-
-    Returns:
-        List of (relative_path, data) tuples for successfully downloaded artifacts.
-    """
-    results: list[tuple[str, bytes]] = []
-    max_bytes = max_size_mb * 1024 * 1024
-    logger.info(f"Downloading {len(artifacts)} artifacts")
-
-    for artifact in artifacts:
-        relative_path = artifact.get("relativePath", "")
-        if not relative_path:
-            continue
-
-        url = f"{build_url}/artifact/{relative_path}"
-        try:
-            response = client._session.get(url, stream=True, timeout=60)
-            try:
-                if response.status_code != 200:
-                    logger.warning(
-                        f"Failed to download artifact '{relative_path}': "
-                        f"HTTP {response.status_code}"
-                    )
-                    continue
-
-                buffer = io.BytesIO()
-                downloaded = 0
-                for chunk in response.iter_content(chunk_size=8192):
-                    downloaded += len(chunk)
-                    if downloaded > max_bytes:
-                        logger.warning(
-                            f"Artifact '{relative_path}' exceeded max size "
-                            f"({max_size_mb} MB), skipping"
-                        )
-                        break
-                    buffer.write(chunk)
-                else:
-                    results.append((relative_path, buffer.getvalue()))
-                    continue
-            finally:
-                response.close()
-        except Exception as exc:
-            logger.warning(f"Failed to download artifact '{relative_path}': {exc}")
-            continue
-
-    logger.info(f"Downloaded {len(results)}/{len(artifacts)} artifacts")
-    return results
 
 
 def _read_repo_prompt(repo_path: Path | None) -> str:
@@ -1121,22 +1059,16 @@ async def analyze_job(
         build_url = build_info.get("url", "").rstrip("/")
         if artifacts and build_url:
             try:
-                artifact_data = await asyncio.to_thread(
-                    _download_artifacts_from_build,
-                    jenkins_client,
-                    artifacts,
+                diagnostic_context, extract_path = await asyncio.to_thread(
+                    process_build_artifacts,
+                    jenkins_client._session,
                     build_url,
+                    artifacts,
                     settings.diagnostic_archive_max_size_mb,
+                    settings.diagnostic_archive_context_lines,
                 )
-                if artifact_data:
-                    diagnostic_context, extract_path = await asyncio.to_thread(
-                        fetch_all_artifacts,
-                        artifact_data=artifact_data,
-                        max_size_mb=settings.diagnostic_archive_max_size_mb,
-                        max_context_lines=settings.diagnostic_archive_context_lines,
-                    )
             except Exception as exc:
-                logger.warning(f"Failed to fetch artifacts: {exc}")
+                logger.warning(f"Failed to process artifacts: {exc}")
 
     # Check if build passed - return early if yes
     build_result = build_info.get("result")

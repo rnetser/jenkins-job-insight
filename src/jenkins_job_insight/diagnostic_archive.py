@@ -9,6 +9,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
+import requests
 from simple_logger.logger import get_logger
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -31,6 +32,87 @@ class _SizeLimitExceeded(Exception):
     """Raised when archive extraction exceeds size limit."""
 
     pass
+
+
+def download_artifact(
+    session: requests.Session,
+    build_url: str,
+    relative_path: str,
+    max_size_mb: int = 500,
+) -> bytes | None:
+    """Download a single artifact from Jenkins.
+
+    Args:
+        session: Authenticated requests session.
+        build_url: Full Jenkins build URL (from API response).
+        relative_path: Relative path of the artifact.
+        max_size_mb: Maximum allowed artifact size in megabytes.
+
+    Returns:
+        Raw bytes of the artifact, or None if download fails.
+    """
+    url = f"{build_url.rstrip('/')}/artifact/{relative_path}"
+    logger.info(f"Downloading artifact: {url}")
+
+    try:
+        response = session.get(url, stream=True, timeout=60)
+        try:
+            if response.status_code != 200:
+                logger.warning(
+                    f"Failed to download artifact '{relative_path}': "
+                    f"HTTP {response.status_code}"
+                )
+                return None
+
+            buffer = io.BytesIO()
+            downloaded = 0
+            max_bytes = max_size_mb * 1024 * 1024
+
+            for chunk in response.iter_content(chunk_size=8192):
+                downloaded += len(chunk)
+                if downloaded > max_bytes:
+                    logger.warning(
+                        f"Artifact '{relative_path}' exceeded max size "
+                        f"({max_size_mb} MB), skipping"
+                    )
+                    return None
+                buffer.write(chunk)
+
+            return buffer.getvalue()
+        finally:
+            response.close()
+    except Exception as exc:
+        logger.warning(f"Failed to download artifact '{relative_path}': {exc}")
+        return None
+
+
+def store_artifact(
+    relative_path: str,
+    data: bytes,
+    artifacts_dir: Path,
+    max_size_mb: int = 500,
+) -> None:
+    """Store a single artifact to disk, extracting archives if possible.
+
+    Args:
+        relative_path: Relative path of the artifact.
+        data: Raw bytes of the artifact.
+        artifacts_dir: Root directory to store artifacts in.
+        max_size_mb: Maximum allowed extracted archive size in megabytes.
+    """
+    if _is_archive(relative_path):
+        extract_subdir = artifacts_dir / _strip_archive_extension(relative_path)
+        if (
+            validate_and_extract_archive(data, max_size_mb, extract_dir=extract_subdir)
+            is not None
+        ):
+            logger.info(f"Extracted archive artifact '{relative_path}'")
+            return
+        logger.warning(f"Could not extract '{relative_path}', storing as raw file")
+
+    dest = artifacts_dir / relative_path
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
 
 
 def _extract_tar(
@@ -370,58 +452,56 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
     return context
 
 
-def fetch_all_artifacts(
-    artifact_data: list[tuple[str, bytes]],
+def process_build_artifacts(
+    session: requests.Session,
+    build_url: str,
+    artifact_list: list[dict],
     max_size_mb: int = 500,
     max_context_lines: int = 1000,
 ) -> tuple[str, Path | None]:
-    """Process downloaded artifacts: extract archives and build diagnostic context.
+    """Download, store, and analyze all build artifacts in a single pass.
 
-    Takes already-downloaded artifact data, stores non-archive files directly,
-    extracts archive files (tar/zip), and builds a diagnostic context summary.
+    Downloads each artifact, immediately stores it to disk (extracting
+    archives), then builds a diagnostic context summary.
 
     Args:
-        artifact_data: List of (relative_path, raw_bytes) tuples.
-        max_size_mb: Maximum allowed extracted archive size in megabytes.
+        session: Authenticated requests session.
+        build_url: Full Jenkins build URL (from API response).
+        artifact_list: List of artifact dicts from Jenkins API.
+        max_size_mb: Maximum allowed size per artifact in megabytes.
         max_context_lines: Maximum lines in the context summary.
 
     Returns:
         Tuple of (context_string, artifacts_dir_or_None).
         The caller must call cleanup_extract_dir(artifacts_dir) when done.
     """
-    if not artifact_data:
-        logger.debug("No artifact data to process")
+    if not artifact_list:
+        logger.debug("No artifacts to process")
         return "", None
 
     artifacts_dir = EXTRACT_BASE / f"artifacts-{uuid.uuid4().hex[:8]}"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Processing {len(artifact_data)} artifacts to {artifacts_dir}")
+    logger.info(f"Processing {len(artifact_list)} artifacts to {artifacts_dir}")
 
-    for relative_path, data in artifact_data:
-        # Try to extract if it looks like an archive
-        if _is_archive(relative_path):
-            extract_subdir = artifacts_dir / _strip_archive_extension(relative_path)
-            extract_result = validate_and_extract_archive(
-                data, max_size_mb, extract_dir=extract_subdir
-            )
-            if extract_result is not None:
-                logger.info(f"Extracted archive artifact '{relative_path}'")
-                continue
-            else:
-                logger.warning(
-                    f"Could not extract '{relative_path}', storing as raw file"
-                )
+    downloaded = 0
+    for artifact in artifact_list:
+        relative_path = artifact.get("relativePath", "")
+        if not relative_path:
+            continue
 
-        # Store as raw file
-        dest = artifacts_dir / relative_path
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
+        data = download_artifact(session, build_url, relative_path, max_size_mb)
+        if data is None:
+            continue
 
+        store_artifact(relative_path, data, artifacts_dir, max_size_mb)
+        downloaded += 1
+
+    if downloaded == 0:
+        cleanup_extract_dir(artifacts_dir)
+        return "NOTE: No artifacts could be downloaded.", None
+
+    logger.info(f"Downloaded and stored {downloaded}/{len(artifact_list)} artifacts")
     context = build_diagnostic_context(artifacts_dir, max_context_lines)
-    logger.info(
-        f"Artifacts context length: {len(context)} chars, "
-        f"{len(context.splitlines())} lines"
-    )
     return context, artifacts_dir
 
 
