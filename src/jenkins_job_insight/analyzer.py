@@ -101,7 +101,7 @@ If CODE ISSUE:
   "classification": "CODE ISSUE",
   "affected_tests": ["test_name_1", "test_name_2"],
   "details": "Your detailed analysis of what caused this failure",
-  "archive_evidence": "VERBATIM lines from build artifact logs that support your analysis. Include relevant error messages, stack traces, or status information from the artifacts.",
+  "artifact_evidence": "VERBATIM lines from build artifact logs that support your analysis. Include relevant error messages, stack traces, or status information from the artifacts.",
   "code_fix": {
     "file": "exact/file/path.py",
     "line": "line number",
@@ -114,7 +114,7 @@ If PRODUCT BUG:
   "classification": "PRODUCT BUG",
   "affected_tests": ["test_name_1", "test_name_2"],
   "details": "Your detailed analysis of what caused this failure",
-  "archive_evidence": "VERBATIM lines from build artifact logs that prove the product defect. Include relevant error messages, stack traces, service logs, or status information from the artifacts.",
+  "artifact_evidence": "VERBATIM lines from build artifact logs that prove the product defect. Include relevant error messages, stack traces, service logs, or status information from the artifacts.",
   "product_bug_report": {
     "title": "concise bug title",
     "severity": "critical/high/medium/low",
@@ -256,9 +256,9 @@ def _recover_from_details(result: AnalysisDetail) -> AnalysisDetail:
             change=change_match.group(1).replace("\\n", "\n"),
         )
 
-    # Extract archive_evidence (top-level field)
-    archive_evidence_match = re.search(
-        r'"archive_evidence"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
+    # Extract artifact_evidence (top-level field)
+    artifact_evidence_match = re.search(
+        r'"artifact_evidence"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
     )
 
     # Extract product_bug_report if present
@@ -301,9 +301,9 @@ def _recover_from_details(result: AnalysisDetail) -> AnalysisDetail:
         classification=classification,
         affected_tests=affected_tests,
         details=analysis_text,
-        archive_evidence=(
-            archive_evidence_match.group(1).replace("\\n", "\n")
-            if archive_evidence_match
+        artifact_evidence=(
+            artifact_evidence_match.group(1).replace("\\n", "\n")
+            if artifact_evidence_match
             else ""
         ),
         code_fix=code_fix,
