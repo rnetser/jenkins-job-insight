@@ -153,7 +153,7 @@ def _extract_zip(
         zf.extractall(path=extract_dir, members=safe_names)
 
 
-def download_jenkins_artifact(
+def download_jenkins_artifacts(
     jenkins_url: str,
     username: str,
     password: str,
@@ -464,6 +464,7 @@ def fetch_all_artifacts(
         The caller must call cleanup_extract_dir(artifacts_dir) when done.
     """
     if not artifact_list:
+        logger.debug("No artifacts found for build, skipping artifact download")
         return "", None
 
     artifacts_dir = EXTRACT_BASE / f"artifacts-{uuid.uuid4().hex[:8]}"
@@ -476,7 +477,7 @@ def fetch_all_artifacts(
         if not relative_path:
             continue
 
-        data = download_jenkins_artifact(
+        data = download_jenkins_artifacts(
             jenkins_url=jenkins_url,
             username=username,
             password=password,
@@ -605,7 +606,7 @@ def fetch_diagnostic_context(
         Tuple of (context_string, extract_path_or_None).
         The caller must call cleanup_extract_dir(extract_path) when done.
     """
-    archive_data = download_jenkins_artifact(
+    archive_data = download_jenkins_artifacts(
         jenkins_url=jenkins_url,
         username=username,
         password=password,
