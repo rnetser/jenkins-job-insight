@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -41,6 +42,67 @@ logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 FALLBACK_TAIL_LINES = 200
 
 JOB_INSIGHT_PROMPT_FILENAME = "JOB_INSIGHT_PROMPT.md"
+
+
+def _download_artifacts_from_build(
+    client: JenkinsClient,
+    artifacts: list[dict],
+    build_url: str,
+    max_size_mb: int,
+) -> list[tuple[str, bytes]]:
+    """Download artifacts using an existing client and pre-fetched build info.
+
+    Args:
+        client: Authenticated JenkinsClient instance.
+        artifacts: List of artifact dicts from build_info["artifacts"].
+        build_url: The build URL from build_info["url"].
+        max_size_mb: Maximum allowed size per artifact in megabytes.
+
+    Returns:
+        List of (relative_path, data) tuples for successfully downloaded artifacts.
+    """
+    results: list[tuple[str, bytes]] = []
+    max_bytes = max_size_mb * 1024 * 1024
+    logger.info(f"Downloading {len(artifacts)} artifacts")
+
+    for artifact in artifacts:
+        relative_path = artifact.get("relativePath", "")
+        if not relative_path:
+            continue
+
+        url = f"{build_url}/artifact/{relative_path}"
+        try:
+            response = client._session.get(url, stream=True, timeout=60)
+            try:
+                if response.status_code != 200:
+                    logger.warning(
+                        f"Failed to download artifact '{relative_path}': "
+                        f"HTTP {response.status_code}"
+                    )
+                    continue
+
+                buffer = io.BytesIO()
+                downloaded = 0
+                for chunk in response.iter_content(chunk_size=8192):
+                    downloaded += len(chunk)
+                    if downloaded > max_bytes:
+                        logger.warning(
+                            f"Artifact '{relative_path}' exceeded max size "
+                            f"({max_size_mb} MB), skipping"
+                        )
+                        break
+                    buffer.write(chunk)
+                else:
+                    results.append((relative_path, buffer.getvalue()))
+                    continue
+            finally:
+                response.close()
+        except Exception as exc:
+            logger.warning(f"Failed to download artifact '{relative_path}': {exc}")
+            continue
+
+    logger.info(f"Downloaded {len(results)}/{len(artifacts)} artifacts")
+    return results
 
 
 def _read_repo_prompt(repo_path: Path | None) -> str:
@@ -1020,8 +1082,7 @@ async def analyze_job(
     ai_provider: str,
     ai_model: str,
     job_id: str | None = None,
-    diagnostic_context: str = "",
-) -> AnalysisResult:
+) -> tuple[AnalysisResult, Path | None]:
     """Analyze a Jenkins job failure."""
     if job_id is None:
         job_id = str(uuid.uuid4())
@@ -1053,9 +1114,42 @@ async def analyze_job(
     except Exception as e:
         handle_jenkins_exception(e, job_name, build_number)
 
+    # Download build artifacts for diagnostic context
+    # Lazy import to avoid circular dependency (diagnostic_archive imports ERROR_PATTERN from this module)
+    from jenkins_job_insight.diagnostic_archive import (
+        cleanup_extract_dir,
+        fetch_all_artifacts,
+    )
+
+    diagnostic_context = ""
+    extract_path: Path | None = None
+    if settings.get_job_artifacts:
+        artifacts = build_info.get("artifacts", [])
+        build_url = build_info.get("url", "").rstrip("/")
+        if artifacts and build_url:
+            try:
+                artifact_data = await asyncio.to_thread(
+                    _download_artifacts_from_build,
+                    jenkins_client,
+                    artifacts,
+                    build_url,
+                    settings.diagnostic_archive_max_size_mb,
+                )
+                if artifact_data:
+                    diagnostic_context, extract_path = await asyncio.to_thread(
+                        fetch_all_artifacts,
+                        artifact_data=artifact_data,
+                        max_size_mb=settings.diagnostic_archive_max_size_mb,
+                        max_context_lines=settings.diagnostic_archive_context_lines,
+                    )
+            except Exception as exc:
+                logger.warning(f"Failed to fetch artifacts: {exc}")
+
     # Check if build passed - return early if yes
     build_result = build_info.get("result")
     if build_result == "SUCCESS":
+        if extract_path:
+            cleanup_extract_dir(extract_path)
         return AnalysisResult(
             job_id=job_id,
             job_name=request.job_name,
@@ -1066,7 +1160,7 @@ async def analyze_job(
             ai_provider=ai_provider,
             ai_model=ai_model,
             failures=[],
-        )
+        ), None
 
     # Only fetch console output if build failed
     console_output: str = ""
@@ -1127,7 +1221,7 @@ async def analyze_job(
                 ai_provider=ai_provider,
                 ai_model=ai_model,
                 failures=[],
-            )
+            ), extract_path
 
         # Analyze failed child jobs IN PARALLEL with bounded concurrency
         if failed_child_jobs:
@@ -1194,7 +1288,7 @@ async def analyze_job(
                 ai_model=ai_model,
                 failures=[],  # Pipeline has no direct failures
                 child_job_analyses=child_job_analyses,
-            )
+            ), extract_path
 
         # Extract relevant console lines for context
         console_context = extract_relevant_console_lines(console_output)
@@ -1291,7 +1385,7 @@ You have access to the repository if one was cloned. Explore to understand the f
                     ai_model=ai_model,
                     failures=[],
                     child_job_analyses=child_job_analyses,
-                )
+                ), extract_path
 
             failures = [
                 FailureAnalysis(
@@ -1330,4 +1424,4 @@ You have access to the repository if one was cloned. Explore to understand the f
             ai_model=ai_model,
             failures=failures,
             child_job_analyses=child_job_analyses,
-        )
+        ), extract_path

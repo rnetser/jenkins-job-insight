@@ -3,7 +3,6 @@ import os
 import re
 import urllib.parse
 import uuid
-from pathlib import Path
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from xml.etree.ElementTree import ParseError
@@ -22,11 +21,7 @@ from jenkins_job_insight.analyzer import (
 )
 from jenkins_job_insight.config import Settings, get_settings
 from jenkins_job_insight.jira import enrich_with_jira_matches
-from jenkins_job_insight.diagnostic_archive import (
-    cleanup_extract_dir,
-    fetch_all_artifacts,
-)
-from jenkins_job_insight.jenkins import JenkinsClient
+from jenkins_job_insight.diagnostic_archive import cleanup_extract_dir
 from jenkins_job_insight.models import (
     AnalysisResult,
     AnalyzeFailuresRequest,
@@ -320,45 +315,6 @@ async def _enrich_result_with_jira(
     await enrich_with_jira_matches(all_failures, settings, ai_provider, ai_model)
 
 
-async def _download_artifacts_context(
-    body: AnalyzeRequest, settings: Settings
-) -> tuple[str, Path | None]:
-    """Download artifacts from Jenkins and build diagnostic context."""
-    if not settings.get_job_artifacts:
-        return "", None
-
-    return await asyncio.to_thread(
-        _fetch_artifacts_sync, settings, body.job_name, body.build_number
-    )
-
-
-def _fetch_artifacts_sync(
-    settings: Settings, job_name: str, build_number: int
-) -> tuple[str, Path | None]:
-    """Synchronous helper to download and process all build artifacts."""
-    try:
-        client = JenkinsClient(
-            url=settings.jenkins_url,
-            username=settings.jenkins_user,
-            password=settings.jenkins_password,
-            ssl_verify=settings.jenkins_ssl_verify,
-        )
-        artifact_data = client.download_build_artifacts(
-            job_name, build_number, settings.diagnostic_archive_max_size_mb
-        )
-        if not artifact_data:
-            return "", None
-
-        return fetch_all_artifacts(
-            artifact_data=artifact_data,
-            max_size_mb=settings.diagnostic_archive_max_size_mb,
-            max_context_lines=settings.diagnostic_archive_context_lines,
-        )
-    except Exception as exc:
-        logger.warning(f"Failed to fetch artifacts: {exc}")
-        return "", None
-
-
 async def process_analysis_with_id(
     job_id: str, body: AnalyzeRequest, settings: Settings, base_url: str = ""
 ) -> None:
@@ -380,18 +336,12 @@ async def process_analysis_with_id(
 
         ai_provider, ai_model = _resolve_ai_config(body)
 
-        (
-            diagnostic_context,
-            extract_path_to_clean,
-        ) = await _download_artifacts_context(body, settings)
-
-        result = await analyze_job(
+        result, extract_path_to_clean = await analyze_job(
             body,
             settings,
             ai_provider=ai_provider,
             ai_model=ai_model,
             job_id=job_id,
-            diagnostic_context=diagnostic_context,
         )
 
         # Enrich PRODUCT BUG failures with Jira matches
@@ -454,17 +404,11 @@ async def analyze(
 
         extract_path_to_clean = None
         try:
-            (
-                diagnostic_context,
-                extract_path_to_clean,
-            ) = await _download_artifacts_context(body, merged)
-
-            result = await analyze_job(
+            result, extract_path_to_clean = await analyze_job(
                 body,
                 merged,
                 ai_provider=ai_provider,
                 ai_model=ai_model,
-                diagnostic_context=diagnostic_context,
             )
 
             # Enrich PRODUCT BUG failures with Jira matches
