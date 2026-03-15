@@ -226,7 +226,6 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | --                   | `failures`           | No*      | `/analyze-failures`    | Raw test failure objects (alternative to `raw_xml`)             |
 | **General**          |                      |          |                        |                                                                |
 | `TESTS_REPO_URL`     | `tests_repo_url`     | No       | Both                   | Repository URL for test context                                |
-| --                   | `diagnostic_archive_path` | No  | `/analyze`             | Path to diagnostic archive (tar/zip) artifact in Jenkins build |
 | --                   | `raw_prompt`         | No       | Both                   | Additional AI instructions (overrides repo-level prompt file)  |
 | `CALLBACK_URL`       | `callback_url`       | No       | `/analyze`             | Callback webhook URL for results                               |
 | `CALLBACK_HEADERS`   | `callback_headers`   | No       | `/analyze`             | Headers for callback requests                                  |
@@ -467,18 +466,6 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
     "ai_provider": "claude",
     "ai_model": "sonnet",
     "get_job_artifacts": false
-  }'
-
-# Legacy: specify a single artifact path
-curl -X POST "http://localhost:8000/analyze?sync=true" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "job_name": "my-test-job",
-    "build_number": 42,
-    "ai_provider": "claude",
-    "ai_model": "sonnet",
-    "get_job_artifacts": false,
-    "diagnostic_archive_path": "artifacts/diagnostic-data.tar.gz"
   }'
 ```
 

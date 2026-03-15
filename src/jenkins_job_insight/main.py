@@ -25,7 +25,6 @@ from jenkins_job_insight.jira import enrich_with_jira_matches
 from jenkins_job_insight.diagnostic_archive import (
     cleanup_extract_dir,
     fetch_all_artifacts,
-    fetch_diagnostic_context,
 )
 from jenkins_job_insight.jenkins import JenkinsClient
 from jenkins_job_insight.models import (
@@ -324,46 +323,28 @@ async def _enrich_result_with_jira(
 async def _download_artifacts_context(
     body: AnalyzeRequest, settings: Settings
 ) -> tuple[str, Path | None]:
-    """Download artifacts from Jenkins and build diagnostic context.
+    """Download artifacts from Jenkins and build diagnostic context."""
+    if not settings.get_job_artifacts:
+        return "", None
 
-    When get_job_artifacts is enabled, downloads ALL build artifacts.
-    Falls back to diagnostic_archive_path if specified and get_job_artifacts is disabled.
-    """
-    # Mode 1: Download all artifacts (default)
-    if settings.get_job_artifacts:
-        artifact_list = await asyncio.to_thread(
-            _list_artifacts, settings, body.job_name, body.build_number
-        )
-        if artifact_list:
-            return await asyncio.to_thread(
-                fetch_all_artifacts,
-                settings.jenkins_url,
-                settings.jenkins_user,
-                settings.jenkins_password,
-                body.job_name,
-                body.build_number,
-                artifact_list,
-                settings.diagnostic_archive_max_size_mb,
-                settings.jenkins_ssl_verify,
-                settings.diagnostic_archive_context_lines,
-            )
+    artifact_list = await asyncio.to_thread(
+        _list_artifacts, settings, body.job_name, body.build_number
+    )
+    if not artifact_list:
+        return "", None
 
-    # Mode 2: Single diagnostic archive path (legacy/explicit)
-    if body.diagnostic_archive_path:
-        return await asyncio.to_thread(
-            fetch_diagnostic_context,
-            settings.jenkins_url,
-            settings.jenkins_user,
-            settings.jenkins_password,
-            body.job_name,
-            body.build_number,
-            body.diagnostic_archive_path,
-            settings.diagnostic_archive_max_size_mb,
-            settings.jenkins_ssl_verify,
-            settings.diagnostic_archive_context_lines,
-        )
-
-    return "", None
+    return await asyncio.to_thread(
+        fetch_all_artifacts,
+        settings.jenkins_url,
+        settings.jenkins_user,
+        settings.jenkins_password,
+        body.job_name,
+        body.build_number,
+        artifact_list,
+        settings.diagnostic_archive_max_size_mb,
+        settings.jenkins_ssl_verify,
+        settings.diagnostic_archive_context_lines,
+    )
 
 
 def _list_artifacts(settings: Settings, job_name: str, build_number: int) -> list[dict]:

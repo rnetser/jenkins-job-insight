@@ -104,10 +104,6 @@ class AnalyzeRequest(BaseAnalysisRequest):
         default=None,
         description="Jenkins SSL verification (overrides JENKINS_SSL_VERIFY env var)",
     )
-    diagnostic_archive_path: str | None = Field(
-        default=None,
-        description="Path to diagnostic archive (tar/zip) in Jenkins build artifacts (e.g., 'logs.zip' or 'diagnostic-data.tar.gz')",
-    )
     diagnostic_archive_max_size_mb: Annotated[int, Field(gt=0)] | None = Field(
         default=None,
         description="Maximum diagnostic archive size in MB (overrides DIAGNOSTIC_ARCHIVE_MAX_SIZE_MB env var)",
