@@ -21,6 +21,11 @@ from fastapi import HTTPException
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.config import Settings
+from jenkins_job_insight.diagnostic_archive import (
+    ERROR_PATTERN,
+    cleanup_extract_dir,
+    fetch_all_artifacts,
+)
 from jenkins_job_insight.jenkins import JenkinsClient
 from pydantic import HttpUrl
 
@@ -149,12 +154,6 @@ PROVIDER_CLI_FLAGS: dict[str, list[str]] = {
     "gemini": ["--yolo"],
     "cursor": ["--force"],
 }
-
-# Pre-compiled pattern for error detection with word boundaries
-ERROR_PATTERN = re.compile(
-    r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
-    re.IGNORECASE,
-)
 
 _JSON_RESPONSE_SCHEMA = """CRITICAL: Your response must be ONLY a valid JSON object. No text before or after. No markdown code blocks. No explanation.
 
@@ -1115,12 +1114,6 @@ async def analyze_job(
         handle_jenkins_exception(e, job_name, build_number)
 
     # Download build artifacts for diagnostic context
-    # Lazy import to avoid circular dependency (diagnostic_archive imports ERROR_PATTERN from this module)
-    from jenkins_job_insight.diagnostic_archive import (
-        cleanup_extract_dir,
-        fetch_all_artifacts,
-    )
-
     diagnostic_context = ""
     extract_path: Path | None = None
     if settings.get_job_artifacts:

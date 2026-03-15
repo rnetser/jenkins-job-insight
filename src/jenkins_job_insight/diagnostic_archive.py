@@ -2,6 +2,7 @@
 
 import io
 import os
+import re
 import shutil
 import tarfile
 import uuid
@@ -10,11 +11,15 @@ from pathlib import Path
 
 from simple_logger.logger import get_logger
 
-from jenkins_job_insight.analyzer import ERROR_PATTERN
-
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 EXTRACT_BASE = Path("/tmp/jenkins-insight")
+
+# Pre-compiled pattern for error detection with word boundaries
+ERROR_PATTERN = re.compile(
+    r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
+    re.IGNORECASE,
+)
 
 # Maximum ratio of extracted size to compressed size. Typical compression ratios
 # for diagnostic archives (logs, YAML, JSON) range from 3-8x; 10x provides safe
