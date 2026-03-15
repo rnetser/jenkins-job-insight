@@ -20,6 +20,7 @@ from fastapi import HTTPException
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.config import Settings
+from jenkins_job_insight.diagnostic_archive import ERROR_PATTERN
 from jenkins_job_insight.jenkins import JenkinsClient
 from pydantic import HttpUrl
 
@@ -88,11 +89,6 @@ PROVIDER_CLI_FLAGS: dict[str, list[str]] = {
     "cursor": ["--force"],
 }
 
-# Pre-compiled pattern for error detection with word boundaries
-ERROR_PATTERN = re.compile(
-    r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
-    re.IGNORECASE,
-)
 
 _JSON_RESPONSE_SCHEMA = """CRITICAL: Your response must be ONLY a valid JSON object. No text before or after. No markdown code blocks. No explanation.
 
@@ -679,6 +675,14 @@ async def analyze_failure_group(
         f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
     )
 
+    diagnostic_section = ""
+    if diagnostic_context:
+        diagnostic_section = f"""
+
+{diagnostic_context}
+
+If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause."""
+
     prompt = f"""Analyze this test failure from a Jenkins CI job.
 
 AFFECTED TESTS ({len(failures)} tests with same error):
@@ -690,11 +694,9 @@ STACK TRACE:
 
 CONSOLE CONTEXT:
 {console_context}
-
-{diagnostic_context}
+{diagnostic_section}
 
 You have access to the test repository. Explore the code to understand the failure.
-If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause.
 
 Note: Multiple tests failed with the same error. Provide ONE analysis that applies to all of them.
 {custom_prompt_section}
@@ -956,17 +958,23 @@ async def analyze_child_job(
         f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
     )
 
+    diagnostic_section = ""
+    if diagnostic_context:
+        diagnostic_section = f"""
+
+{diagnostic_context}
+
+If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause."""
+
     prompt = f"""Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
 
 CONSOLE OUTPUT (errors/failures/warnings extracted):
 {console_context}
-
-{diagnostic_context}
+{diagnostic_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause.
 {custom_prompt_section}
 {_JSON_RESPONSE_SCHEMA}
 """
@@ -1240,6 +1248,14 @@ async def analyze_job(
                 else ""
             )
 
+            diagnostic_section = ""
+            if diagnostic_context:
+                diagnostic_section = f"""
+
+{diagnostic_context}
+
+If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause."""
+
             prompt = f"""Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
@@ -1247,11 +1263,9 @@ Job: {job_name} #{build_number}
 CONSOLE OUTPUT (errors/failures/warnings extracted):
 {console_context}
 {repo_context}
-
-{diagnostic_context}
+{diagnostic_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause.
 {custom_prompt_section}
 {_JSON_RESPONSE_SCHEMA}
 """

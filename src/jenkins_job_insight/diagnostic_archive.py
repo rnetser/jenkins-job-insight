@@ -463,11 +463,23 @@ def _strip_archive_extension(filename: str) -> str:
 
 
 def _move_contents(src: Path, dest: Path) -> None:
-    """Move all contents from src directory into dest directory."""
+    """Move all contents from src directory into dest directory.
+
+    Validates symlinks to prevent path traversal via race conditions.
+    Logs warnings for unsafe entries and overwrites for conflicting targets.
+    """
+    src_boundary = str(src.resolve()) + os.sep
     for item in src.iterdir():
+        if item.is_symlink():
+            link_target = item.resolve()
+            if not str(link_target).startswith(src_boundary):
+                logger.warning(f"Skipping unsafe symlink during move: {item.name}")
+                continue
+
         target = dest / item.name
         if target.exists():
-            if target.is_dir():
+            logger.debug(f"Overwriting existing target during move: {target}")
+            if target.is_dir() and not target.is_symlink():
                 shutil.rmtree(target)
             else:
                 target.unlink()
