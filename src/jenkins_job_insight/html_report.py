@@ -783,6 +783,12 @@ def _render_failure_card(
 {indent}    <pre class="analysis-pre">{e(detail.details)}</pre>
 """)
 
+    # Archive evidence (available for both CODE ISSUE and PRODUCT BUG)
+    if detail.archive_evidence:
+        parts.append(f"""{indent}    <h4>Artifact Evidence</h4>
+{indent}    <pre class="detail-value" style="white-space: pre-wrap; margin: 0; padding: 8px; background: var(--bg-primary); border-radius: 4px;">{e(detail.archive_evidence)}</pre>
+""")
+
     # Code Fix details
     if isinstance(detail.code_fix, CodeFix):
         fix = detail.code_fix
@@ -797,9 +803,6 @@ def _render_failure_card(
     # Product Bug Report details
     if isinstance(detail.product_bug_report, ProductBugReport):
         bug = detail.product_bug_report
-        archive_evidence_html = ""
-        if bug.archive_evidence:
-            archive_evidence_html = f'\n{indent}      <span class="detail-label">Archive Evidence:</span><pre class="detail-value" style="white-space: pre-wrap; margin: 0;">{e(bug.archive_evidence)}</pre>'
 
         parts.append(f"""{indent}    <h4>Product Bug Report</h4>
 {indent}    <div class="detail-grid">
@@ -807,7 +810,7 @@ def _render_failure_card(
 {indent}      <span class="detail-label">Severity:</span><span class="detail-value">{e(bug.severity)}</span>
 {indent}      <span class="detail-label">Component:</span><span class="detail-value">{e(bug.component)}</span>
 {indent}      <span class="detail-label">Description:</span><span class="detail-value">{e(bug.description)}</span>
-{indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>{archive_evidence_html}
+{indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>
 {indent}    </div>
 """)
         # Jira matches
@@ -890,6 +893,12 @@ def _render_group_card(
 {indent}    </div>
 """)
 
+    # Archive evidence (available for both CODE ISSUE and PRODUCT BUG)
+    if detail.archive_evidence:
+        parts.append(f"""{indent}    <h4>Artifact Evidence</h4>
+{indent}    <pre class="detail-value" style="white-space: pre-wrap; margin: 0; padding: 8px; background: var(--bg-primary); border-radius: 4px;">{e(detail.archive_evidence)}</pre>
+""")
+
     # Code Fix details (improvement over reference)
     if isinstance(detail.code_fix, CodeFix):
         fix = detail.code_fix
@@ -904,9 +913,6 @@ def _render_group_card(
     # Product Bug Report details (improvement over reference)
     if isinstance(detail.product_bug_report, ProductBugReport):
         bug = detail.product_bug_report
-        archive_evidence_html = ""
-        if bug.archive_evidence:
-            archive_evidence_html = f'\n{indent}      <span class="detail-label">Archive Evidence:</span><pre class="detail-value" style="white-space: pre-wrap; margin: 0;">{e(bug.archive_evidence)}</pre>'
 
         parts.append(f"""{indent}    <h4>Product Bug Report</h4>
 {indent}    <div class="detail-grid">
@@ -914,7 +920,7 @@ def _render_group_card(
 {indent}      <span class="detail-label">Severity:</span><span class="detail-value">{e(bug.severity)}</span>
 {indent}      <span class="detail-label">Component:</span><span class="detail-value">{e(bug.component)}</span>
 {indent}      <span class="detail-label">Description:</span><span class="detail-value">{e(bug.description)}</span>
-{indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>{archive_evidence_html}
+{indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>
 {indent}    </div>
 """)
         # Jira matches

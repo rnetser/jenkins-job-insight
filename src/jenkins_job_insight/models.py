@@ -159,10 +159,6 @@ class ProductBugReport(BaseModel):
     component: str = Field(default="", description="Affected component")
     description: str = Field(default="", description="What product behavior is broken")
     evidence: str = Field(default="", description="Relevant log snippets")
-    archive_evidence: str = Field(
-        default="",
-        description="Verbatim log lines from diagnostic archive proving the product defect (not a summary)",
-    )
     jira_search_keywords: list[str] = Field(
         default_factory=list, description="AI-suggested keywords for Jira search"
     )
@@ -188,6 +184,10 @@ class AnalysisDetail(BaseModel):
         default_factory=list, description="List of affected test names"
     )
     details: str = Field(default="", description="Detailed analysis text")
+    archive_evidence: str = Field(
+        default="",
+        description="Verbatim log lines from build artifacts supporting the analysis (not a summary)",
+    )
     code_fix: CodeFix | bool | None = Field(
         default=False, description="Code fix (if CODE ISSUE)"
     )
