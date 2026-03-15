@@ -820,6 +820,17 @@ def _render_failure_card(
         if bug.jira_matches:
             _render_jira_matches(parts, bug.jira_matches, e, indent)
 
+    # Standalone artifacts evidence (when neither code_fix nor product_bug_report rendered it)
+    if (
+        detail.artifacts_evidence
+        and not isinstance(detail.code_fix, CodeFix)
+        and not isinstance(detail.product_bug_report, ProductBugReport)
+    ):
+        parts.append(f"""{indent}    <div class="detail-grid">
+{indent}      <span class="detail-label">Artifacts Evidence:</span><pre class="detail-value" style="white-space: pre-wrap; margin: 0;">{e(detail.artifacts_evidence)}</pre>
+{indent}    </div>
+""")
+
     # Affected tests
     if detail.affected_tests:
         parts.append(
@@ -932,6 +943,17 @@ def _render_group_card(
         # Jira matches
         if bug.jira_matches:
             _render_jira_matches(parts, bug.jira_matches, e, indent)
+
+    # Standalone artifacts evidence (when neither code_fix nor product_bug_report rendered it)
+    if (
+        detail.artifacts_evidence
+        and not isinstance(detail.code_fix, CodeFix)
+        and not isinstance(detail.product_bug_report, ProductBugReport)
+    ):
+        parts.append(f"""{indent}    <div class="detail-grid">
+{indent}      <span class="detail-label">Artifacts Evidence:</span><pre class="detail-value" style="white-space: pre-wrap; margin: 0;">{e(detail.artifacts_evidence)}</pre>
+{indent}    </div>
+""")
 
     # Affected Tests
     parts.append(f"""{indent}    <div class="bug-tests">

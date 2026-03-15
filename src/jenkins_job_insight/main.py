@@ -327,28 +327,15 @@ async def _download_artifacts_context(
     if not settings.get_job_artifacts:
         return "", None
 
-    artifact_list = await asyncio.to_thread(
-        _list_artifacts, settings, body.job_name, body.build_number
-    )
-    if not artifact_list:
-        return "", None
-
     return await asyncio.to_thread(
-        fetch_all_artifacts,
-        settings.jenkins_url,
-        settings.jenkins_user,
-        settings.jenkins_password,
-        body.job_name,
-        body.build_number,
-        artifact_list,
-        settings.diagnostic_archive_max_size_mb,
-        settings.jenkins_ssl_verify,
-        settings.diagnostic_archive_context_lines,
+        _fetch_artifacts_sync, settings, body.job_name, body.build_number
     )
 
 
-def _list_artifacts(settings: Settings, job_name: str, build_number: int) -> list[dict]:
-    """List build artifacts using Jenkins API."""
+def _fetch_artifacts_sync(
+    settings: Settings, job_name: str, build_number: int
+) -> tuple[str, Path | None]:
+    """Synchronous helper to list and download all build artifacts."""
     try:
         client = JenkinsClient(
             url=settings.jenkins_url,
@@ -356,10 +343,27 @@ def _list_artifacts(settings: Settings, job_name: str, build_number: int) -> lis
             password=settings.jenkins_password,
             ssl_verify=settings.jenkins_ssl_verify,
         )
-        return client.list_build_artifacts(job_name, build_number)
+        artifact_list = client.list_build_artifacts(job_name, build_number)
+        if not artifact_list:
+            return "", None
+
+        def download_fn(relative_path: str) -> bytes | None:
+            return client.download_artifact(
+                job_name,
+                build_number,
+                relative_path,
+                settings.diagnostic_archive_max_size_mb,
+            )
+
+        return fetch_all_artifacts(
+            artifact_list=artifact_list,
+            download_fn=download_fn,
+            max_size_mb=settings.diagnostic_archive_max_size_mb,
+            max_context_lines=settings.diagnostic_archive_context_lines,
+        )
     except Exception as exc:
-        logger.warning(f"Failed to list artifacts: {exc}")
-        return []
+        logger.warning(f"Failed to fetch artifacts: {exc}")
+        return "", None
 
 
 async def process_analysis_with_id(

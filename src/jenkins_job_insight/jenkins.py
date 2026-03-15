@@ -1,5 +1,6 @@
 """Jenkins API client wrapper."""
 
+import io
 import os
 from urllib.parse import urlparse
 
@@ -108,6 +109,64 @@ class JenkinsClient(jenkins.Jenkins):
                 f"Failed to list artifacts for {job_name} #{build_number}: {exc}"
             )
             return []
+
+    def download_artifact(
+        self,
+        job_name: str,
+        build_number: int,
+        relative_path: str,
+        max_size_mb: int = 500,
+    ) -> bytes | None:
+        """Download a single build artifact by relative path.
+
+        Uses the build URL from the Jenkins API to construct the download URL,
+        and the client's existing authenticated session for the request.
+
+        Args:
+            job_name: Name of the Jenkins job.
+            build_number: Build number containing the artifact.
+            relative_path: Relative path of the artifact (from Jenkins API).
+            max_size_mb: Maximum allowed artifact size in megabytes.
+
+        Returns:
+            Raw bytes of the artifact, or None if download fails.
+        """
+        try:
+            build_info = self.get_build_info_safe(job_name, build_number)
+            build_url = build_info.get("url", "").rstrip("/")
+            if not build_url:
+                logger.warning(f"No build URL found for {job_name} #{build_number}")
+                return None
+
+            url = f"{build_url}/artifact/{relative_path}"
+            logger.info(f"Downloading artifact: {url}")
+
+            response = self._session.get(url, stream=True, timeout=60)
+            if response.status_code != 200:
+                logger.warning(
+                    f"Failed to download artifact '{relative_path}' from "
+                    f"{job_name} #{build_number}: HTTP {response.status_code}"
+                )
+                return None
+
+            buffer = io.BytesIO()
+            downloaded = 0
+            max_bytes = max_size_mb * 1024 * 1024
+
+            for chunk in response.iter_content(chunk_size=8192):
+                downloaded += len(chunk)
+                if downloaded > max_bytes:
+                    logger.warning(
+                        f"Artifact download exceeded maximum size ({max_size_mb} MB)"
+                    )
+                    return None
+                buffer.write(chunk)
+
+            return buffer.getvalue()
+
+        except Exception as exc:
+            logger.warning(f"Failed to download artifact '{relative_path}': {exc}")
+            return None
 
     @staticmethod
     def parse_jenkins_url(url: str | HttpUrl) -> tuple[str, int]:

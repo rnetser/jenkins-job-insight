@@ -5,12 +5,10 @@ import os
 import re
 import shutil
 import tarfile
-import urllib.parse
 import uuid
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
-
-import requests
 
 from simple_logger.logger import get_logger
 
@@ -22,6 +20,13 @@ EXTRACT_BASE = Path("/tmp/jenkins-insight")
 # for diagnostic archives (logs, YAML, JSON) range from 3-8x; 10x provides safe
 # headroom while still catching decompression bombs.
 EXTRACT_SIZE_MULTIPLIER = 10
+
+
+class _SizeLimitExceeded(Exception):
+    """Raised when archive extraction exceeds size limit."""
+
+    pass
+
 
 ERROR_PATTERN = re.compile(
     r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
@@ -49,7 +54,8 @@ def _extract_tar(
             If 0, no pre-extraction size check is performed.
 
     Raises:
-        tarfile.TarError: If the data is not a valid tar archive or exceeds size limit.
+        tarfile.TarError: If the data is not a valid tar archive.
+        _SizeLimitExceeded: If the estimated extracted size exceeds the limit.
     """
     tar = tarfile.open(fileobj=fileobj, mode="r:*")
     with tar:
@@ -57,7 +63,7 @@ def _extract_tar(
             if max_extracted_bytes > 0:
                 total_size = sum(m.size for m in tar.getmembers() if m.isreg())
                 if total_size > max_extracted_bytes:
-                    raise tarfile.TarError(
+                    raise _SizeLimitExceeded(
                         f"Estimated extracted size ({total_size / (1024 * 1024):.1f} MB) "
                         f"exceeds limit ({max_extracted_bytes / (1024 * 1024):.0f} MB)"
                     )
@@ -104,7 +110,7 @@ def _extract_tar(
         if max_extracted_bytes > 0:
             total_size = sum(m.size for m in safe_members if m.isreg())
             if total_size > max_extracted_bytes:
-                raise tarfile.TarError(
+                raise _SizeLimitExceeded(
                     f"Estimated extracted size ({total_size / (1024 * 1024):.1f} MB) "
                     f"exceeds limit ({max_extracted_bytes / (1024 * 1024):.0f} MB)"
                 )
@@ -127,7 +133,7 @@ def _extract_zip(
 
     Raises:
         zipfile.BadZipFile: If the data is not a valid zip file.
-        zipfile.BadZipFile: If estimated extracted size exceeds limit.
+        _SizeLimitExceeded: If the estimated extracted size exceeds the limit.
     """
     with zipfile.ZipFile(fileobj) as zf:
         boundary = str(extract_dir.resolve()) + os.sep
@@ -145,90 +151,12 @@ def _extract_zip(
         if max_extracted_bytes > 0:
             total_size = sum(info.file_size for info in safe_names)
             if total_size > max_extracted_bytes:
-                raise zipfile.BadZipFile(
+                raise _SizeLimitExceeded(
                     f"Estimated extracted size ({total_size / (1024 * 1024):.1f} MB) "
                     f"exceeds limit ({max_extracted_bytes / (1024 * 1024):.0f} MB)"
                 )
 
         zf.extractall(path=extract_dir, members=safe_names)
-
-
-def download_jenkins_artifacts(
-    jenkins_url: str,
-    username: str,
-    password: str,
-    job_name: str,
-    build_number: int,
-    artifact_path: str,
-    max_size_mb: int = 500,
-    ssl_verify: bool = True,
-) -> bytes | None:
-    """Download a build artifact from Jenkins.
-
-    Args:
-        jenkins_url: Jenkins server base URL.
-        username: Jenkins username.
-        password: Jenkins password or API token.
-        job_name: Name of the Jenkins job (can include folders).
-        build_number: Build number containing the artifact.
-        artifact_path: Relative path to the artifact within the build.
-        max_size_mb: Maximum allowed artifact size in megabytes.
-        ssl_verify: Whether to verify SSL certificates.
-
-    Returns:
-        Raw bytes of the artifact file, or None if download fails.
-    """
-    if ".." in artifact_path.split("/"):
-        logger.warning(f"Artifact path contains unsafe component '..': {artifact_path}")
-        return None
-
-    # Strip common accidental prefixes — the API endpoint already includes /artifact/
-    for prefix in ("artifact/", "artifacts/"):
-        if artifact_path.startswith(prefix):
-            artifact_path = artifact_path[len(prefix) :]
-            logger.debug(
-                f"Stripped '{prefix}' prefix from artifact path: {artifact_path}"
-            )
-            break
-
-    job_path = "/job/".join(
-        urllib.parse.quote(seg, safe="") for seg in job_name.split("/")
-    )
-    url = f"{jenkins_url.rstrip('/')}/job/{job_path}/{build_number}/artifact/{urllib.parse.quote(artifact_path, safe='/')}"
-    logger.info(f"Downloading artifact: {url}")
-
-    try:
-        session = requests.Session()
-        session.auth = (username, password)
-        session.verify = ssl_verify
-
-        response = session.get(url, stream=True, timeout=60)
-        if response.status_code != 200:
-            logger.warning(
-                f"Failed to download artifact '{artifact_path}' from "
-                f"{job_name} #{build_number}: HTTP {response.status_code}"
-            )
-            return None
-
-        # Stream download with size tracking
-        buffer = io.BytesIO()
-        downloaded = 0
-        max_bytes = max_size_mb * 1024 * 1024
-
-        for chunk in response.iter_content(chunk_size=8192):
-            downloaded += len(chunk)
-            if downloaded > max_bytes:
-                logger.warning(
-                    f"Artifact download exceeded maximum size ({max_size_mb} MB)"
-                )
-                return None
-            buffer.write(chunk)
-
-        return buffer.getvalue()
-
-    except Exception as e:
-        logger.warning(f"Failed to download artifact: {e}")
-        return None
 
 
 def validate_and_extract_archive(
@@ -263,11 +191,19 @@ def validate_and_extract_archive(
     max_extracted_bytes = max_size_mb * EXTRACT_SIZE_MULTIPLIER * 1024 * 1024
     try:
         _extract_tar(fileobj, extract_dir, max_extracted_bytes=max_extracted_bytes)
-    except (tarfile.TarError, Exception):
+    except _SizeLimitExceeded as exc:
+        shutil.rmtree(extract_dir, ignore_errors=True)
+        logger.warning(f"Archive rejected: {exc}")
+        return None
+    except Exception:
         fileobj.seek(0)
         try:
             _extract_zip(fileobj, extract_dir, max_extracted_bytes=max_extracted_bytes)
-        except (zipfile.BadZipFile, Exception) as exc:
+        except _SizeLimitExceeded as exc:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+            logger.warning(f"Archive rejected: {exc}")
+            return None
+        except Exception as exc:
             shutil.rmtree(extract_dir, ignore_errors=True)
             logger.warning(f"Invalid archive (not a valid tar or zip file): {exc}")
             return None
@@ -432,31 +368,21 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
 
 
 def fetch_all_artifacts(
-    jenkins_url: str,
-    username: str,
-    password: str,
-    job_name: str,
-    build_number: int,
     artifact_list: list[dict],
+    download_fn: Callable[[str], bytes | None],
     max_size_mb: int = 500,
-    ssl_verify: bool = True,
     max_context_lines: int = 200,
 ) -> tuple[str, Path | None]:
     """Download all build artifacts, extract archives, and build diagnostic context.
 
-    Downloads each artifact from the build. Archive files (tar/zip) are extracted.
-    Non-archive files are stored directly. All content is placed under a single
-    artifacts directory for AI consumption.
+    Downloads each artifact using the provided download function. Archive files
+    (tar/zip) are extracted. Non-archive files are stored directly. All content
+    is placed under a single artifacts directory for AI consumption.
 
     Args:
-        jenkins_url: Jenkins server base URL.
-        username: Jenkins username.
-        password: Jenkins password or API token.
-        job_name: Name of the Jenkins job.
-        build_number: Build number containing the artifacts.
         artifact_list: List of artifact dicts from Jenkins API (each has 'relativePath').
+        download_fn: Callable that takes an artifact relative path and returns bytes or None.
         max_size_mb: Maximum allowed artifact size in megabytes (per artifact).
-        ssl_verify: Whether to verify SSL certificates.
         max_context_lines: Maximum lines in the context summary.
 
     Returns:
@@ -477,16 +403,7 @@ def fetch_all_artifacts(
         if not relative_path:
             continue
 
-        data = download_jenkins_artifacts(
-            jenkins_url=jenkins_url,
-            username=username,
-            password=password,
-            job_name=job_name,
-            build_number=build_number,
-            artifact_path=relative_path,
-            max_size_mb=max_size_mb,
-            ssl_verify=ssl_verify,
-        )
+        data = download_fn(relative_path)
         if data is None:
             logger.warning(f"Skipping artifact '{relative_path}': download failed")
             continue
