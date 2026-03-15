@@ -17,12 +17,12 @@ from ai_cli_runner import (
 
 import jenkins
 from fastapi import HTTPException
+from pydantic import HttpUrl
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.config import Settings
 from jenkins_job_insight.diagnostic_archive import ERROR_PATTERN
 from jenkins_job_insight.jenkins import JenkinsClient
-from pydantic import HttpUrl
 
 from jenkins_job_insight.models import (
     AnalysisDetail,
@@ -128,6 +128,21 @@ jira_search_keywords rules:
 - AVOID generic/broad terms alone like "timeout", "failure", "error"
 - Each keyword should be specific enough to narrow Jira search results to relevant bugs
 - Think: "what would someone title a Jira bug for this exact issue?\""""
+
+
+def _build_diagnostic_section(diagnostic_context: str) -> str:
+    """Build the diagnostic archive prompt section.
+
+    Returns an empty string when no diagnostic context is available,
+    ensuring no misleading instructions appear in the AI prompt.
+    """
+    if not diagnostic_context:
+        return ""
+    return f"""
+
+{diagnostic_context}
+
+If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause."""
 
 
 def get_failure_signature(failure: TestFailure) -> str:
@@ -675,13 +690,7 @@ async def analyze_failure_group(
         f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
     )
 
-    diagnostic_section = ""
-    if diagnostic_context:
-        diagnostic_section = f"""
-
-{diagnostic_context}
-
-If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause."""
+    diagnostic_section = _build_diagnostic_section(diagnostic_context)
 
     prompt = f"""Analyze this test failure from a Jenkins CI job.
 
@@ -958,13 +967,7 @@ async def analyze_child_job(
         f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
     )
 
-    diagnostic_section = ""
-    if diagnostic_context:
-        diagnostic_section = f"""
-
-{diagnostic_context}
-
-If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause."""
+    diagnostic_section = _build_diagnostic_section(diagnostic_context)
 
     prompt = f"""Analyze this failed Jenkins job:
 
@@ -1248,13 +1251,7 @@ async def analyze_job(
                 else ""
             )
 
-            diagnostic_section = ""
-            if diagnostic_context:
-                diagnostic_section = f"""
-
-{diagnostic_context}
-
-If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause."""
+            diagnostic_section = _build_diagnostic_section(diagnostic_context)
 
             prompt = f"""Analyze this failed Jenkins job:
 

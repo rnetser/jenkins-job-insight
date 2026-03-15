@@ -59,9 +59,11 @@ def _extract_tar(
     """
     tar = tarfile.open(fileobj=fileobj, mode="r:*")
     with tar:
+        members = tar.getmembers()
+
         if hasattr(tarfile, "data_filter"):
             if max_extracted_bytes > 0:
-                total_size = sum(m.size for m in tar.getmembers() if m.isreg())
+                total_size = sum(m.size for m in members if m.isreg())
                 if total_size > max_extracted_bytes:
                     raise _SizeLimitExceeded(
                         f"Estimated extracted size ({total_size / (1024 * 1024):.1f} MB) "
@@ -78,7 +80,7 @@ def _extract_tar(
         # Manual member-by-member extraction with filtering
         boundary = str(extract_dir.resolve()) + os.sep
         safe_members = []
-        for member in tar.getmembers():
+        for member in members:
             if member.issym() or member.islnk():
                 if member.linkname.startswith("/") or ".." in member.linkname.split(
                     "/"
