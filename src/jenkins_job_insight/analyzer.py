@@ -17,11 +17,11 @@ from ai_cli_runner import (
 
 import jenkins
 from fastapi import HTTPException
-from pydantic import HttpUrl
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.config import Settings
 from jenkins_job_insight.jenkins import JenkinsClient
+from pydantic import HttpUrl
 
 from jenkins_job_insight.models import (
     AnalysisDetail,
@@ -93,7 +93,6 @@ ERROR_PATTERN = re.compile(
     r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
     re.IGNORECASE,
 )
-
 
 _JSON_RESPONSE_SCHEMA = """CRITICAL: Your response must be ONLY a valid JSON object. No text before or after. No markdown code blocks. No explanation.
 

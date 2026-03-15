@@ -2,7 +2,6 @@
 
 import io
 import os
-import re
 import shutil
 import tarfile
 import uuid
@@ -11,6 +10,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from simple_logger.logger import get_logger
+
+from jenkins_job_insight.analyzer import ERROR_PATTERN
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
@@ -26,17 +27,6 @@ class _SizeLimitExceeded(Exception):
     """Raised when archive extraction exceeds size limit."""
 
     pass
-
-
-ERROR_PATTERN = re.compile(
-    r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
-    re.IGNORECASE,
-)
-
-ABNORMAL_STATUS_PATTERNS = re.compile(
-    r"\b(CrashLoopBackOff|OOMKilled|ImagePullBackOff|ErrImagePull|CreateContainerError"
-    r"|RunContainerError|Pending|Failed|Unknown|Evicted)\b"
-)
 
 
 def _extract_tar(
@@ -307,13 +297,17 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
         except OSError:
             continue
 
-    # Scan YAML/JSON files for abnormal status indicators
+    # Scan YAML/JSON files for errors and abnormal status
     for resource_file in yaml_json_files:
         try:
             text = resource_file.read_text(errors="replace")
             relative_name = str(resource_file.relative_to(extract_path))
             for line in text.splitlines():
-                if ABNORMAL_STATUS_PATTERNS.search(line):
+                if ERROR_PATTERN.search(line):
+                    dedup_key = line.strip()
+                    if dedup_key in seen_errors:
+                        continue
+                    seen_errors.add(dedup_key)
                     status_issues.append(f"[{relative_name}]: {line.strip()}")
         except OSError:
             continue

@@ -215,7 +215,7 @@ class TestBuildDiagnosticContext:
         assert "type: Warning" in context
 
     def test_detects_status_issues(self, tmp_path: Path) -> None:
-        """YAML files with CrashLoopBackOff/OOMKilled appear in abnormal status indicators."""
+        """YAML files with error/failure keywords appear in abnormal status indicators."""
         resource_dir = tmp_path / "namespaces" / "default"
         resource_dir.mkdir(parents=True)
         pod_file = resource_dir / "pods.yaml"
@@ -223,19 +223,17 @@ class TestBuildDiagnosticContext:
             "apiVersion: v1\n"
             "kind: Pod\n"
             "status:\n"
+            "  phase: Failed\n"
             "  containerStatuses:\n"
             "    - state:\n"
-            "        waiting:\n"
-            "          reason: CrashLoopBackOff\n"
-            "    - state:\n"
             "        terminated:\n"
-            "          reason: OOMKilled\n"
+            "          reason: Error pulling image\n"
         )
 
         context = build_diagnostic_context(tmp_path)
 
-        assert "CrashLoopBackOff" in context
-        assert "OOMKilled" in context
+        assert "Failed" in context
+        assert "Error pulling image" in context
         assert "Abnormal Status Indicators" in context
 
     def test_empty_directory_returns_note(self, tmp_path: Path) -> None:
