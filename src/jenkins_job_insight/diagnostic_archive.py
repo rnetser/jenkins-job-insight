@@ -162,7 +162,7 @@ def _extract_zip(
 
 
 def validate_and_extract_archive(
-    archive_data: bytes, max_size_mb: int = 500
+    archive_data: bytes, max_size_mb: int = 500, extract_dir: Path | None = None
 ) -> Path | None:
     """Validate and extract a tar/tar.gz/tgz or zip archive to a temporary directory.
 
@@ -172,6 +172,8 @@ def validate_and_extract_archive(
     Args:
         archive_data: Raw bytes of the archive.
         max_size_mb: Maximum allowed size of ``archive_data`` in megabytes.
+        extract_dir: Optional directory to extract into. If not provided, a random
+            directory under EXTRACT_BASE is created.
 
     Returns:
         Path to the directory where the archive was extracted, or None on failure.
@@ -183,7 +185,8 @@ def validate_and_extract_archive(
         )
         return None
 
-    extract_dir = EXTRACT_BASE / f"diagnostic-archive-{uuid.uuid4().hex[:8]}"
+    if extract_dir is None:
+        extract_dir = EXTRACT_BASE / f"diagnostic-archive-{uuid.uuid4().hex[:8]}"
     extract_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Extracting archive ({size_mb:.1f} MB) to {extract_dir}")
 
@@ -415,13 +418,10 @@ def fetch_all_artifacts(
         # Try to extract if it looks like an archive
         if _is_archive(relative_path):
             extract_subdir = artifacts_dir / _strip_archive_extension(relative_path)
-            extract_subdir.mkdir(parents=True, exist_ok=True)
-            extract_result = validate_and_extract_archive(data, max_size_mb)
+            extract_result = validate_and_extract_archive(
+                data, max_size_mb, extract_dir=extract_subdir
+            )
             if extract_result is not None:
-                # Move extracted contents into the artifacts dir under a subdir
-                # named after the archive
-                _move_contents(extract_result, extract_subdir)
-                cleanup_extract_dir(extract_result)
                 logger.info(f"Extracted archive artifact '{relative_path}'")
                 continue
             else:
@@ -462,30 +462,6 @@ def _strip_archive_extension(filename: str) -> str:
         if lower.endswith(ext):
             return filename[: -len(ext)]
     return filename
-
-
-def _move_contents(src: Path, dest: Path) -> None:
-    """Move all contents from src directory into dest directory.
-
-    Validates symlinks to prevent path traversal via race conditions.
-    Logs warnings for unsafe entries and overwrites for conflicting targets.
-    """
-    src_boundary = str(src.resolve()) + os.sep
-    for item in src.iterdir():
-        if item.is_symlink():
-            link_target = item.resolve()
-            if not str(link_target).startswith(src_boundary):
-                logger.warning(f"Skipping unsafe symlink during move: {item.name}")
-                continue
-
-        target = dest / item.name
-        if target.exists():
-            logger.debug(f"Overwriting existing target during move: {target}")
-            if target.is_dir() and not target.is_symlink():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-        shutil.move(str(item), str(target))
 
 
 def cleanup_extract_dir(extract_path: Path) -> None:

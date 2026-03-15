@@ -21,7 +21,6 @@ from pydantic import HttpUrl
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.config import Settings
-from jenkins_job_insight.diagnostic_archive import ERROR_PATTERN
 from jenkins_job_insight.jenkins import JenkinsClient
 
 from jenkins_job_insight.models import (
@@ -88,6 +87,12 @@ PROVIDER_CLI_FLAGS: dict[str, list[str]] = {
     "gemini": ["--yolo"],
     "cursor": ["--force"],
 }
+
+# Pre-compiled pattern for error detection with word boundaries
+ERROR_PATTERN = re.compile(
+    r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
+    re.IGNORECASE,
+)
 
 
 _JSON_RESPONSE_SCHEMA = """CRITICAL: Your response must be ONLY a valid JSON object. No text before or after. No markdown code blocks. No explanation.
