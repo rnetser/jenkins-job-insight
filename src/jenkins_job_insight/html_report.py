@@ -784,9 +784,9 @@ def _render_failure_card(
 """)
 
     # Archive evidence (available for both CODE ISSUE and PRODUCT BUG)
-    if detail.artifact_evidence:
+    if detail.artifacts_evidence:
         parts.append(f"""{indent}    <h4>Artifact Evidence</h4>
-{indent}    <pre class="detail-value" style="white-space: pre-wrap; margin: 0; padding: 8px; background: var(--bg-primary); border-radius: 4px;">{e(detail.artifact_evidence)}</pre>
+{indent}    <pre class="detail-value" style="white-space: pre-wrap; margin: 0; padding: 8px; background: var(--bg-primary); border-radius: 4px;">{e(detail.artifacts_evidence)}</pre>
 """)
 
     # Code Fix details
@@ -894,9 +894,9 @@ def _render_group_card(
 """)
 
     # Archive evidence (available for both CODE ISSUE and PRODUCT BUG)
-    if detail.artifact_evidence:
+    if detail.artifacts_evidence:
         parts.append(f"""{indent}    <h4>Artifact Evidence</h4>
-{indent}    <pre class="detail-value" style="white-space: pre-wrap; margin: 0; padding: 8px; background: var(--bg-primary); border-radius: 4px;">{e(detail.artifact_evidence)}</pre>
+{indent}    <pre class="detail-value" style="white-space: pre-wrap; margin: 0; padding: 8px; background: var(--bg-primary); border-radius: 4px;">{e(detail.artifacts_evidence)}</pre>
 """)
 
     # Code Fix details (improvement over reference)

@@ -184,7 +184,7 @@ class AnalysisDetail(BaseModel):
         default_factory=list, description="List of affected test names"
     )
     details: str = Field(default="", description="Detailed analysis text")
-    artifact_evidence: str = Field(
+    artifacts_evidence: str = Field(
         default="",
         description="Verbatim log lines from build artifacts supporting the analysis (not a summary)",
     )
