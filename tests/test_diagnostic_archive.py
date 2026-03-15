@@ -214,8 +214,8 @@ class TestBuildDiagnosticContext:
         # The Warning line itself should be captured
         assert "type: Warning" in context
 
-    def test_detects_pod_issues(self, tmp_path: Path) -> None:
-        """YAML files with CrashLoopBackOff/OOMKilled appear in pod issues."""
+    def test_detects_status_issues(self, tmp_path: Path) -> None:
+        """YAML files with CrashLoopBackOff/OOMKilled appear in abnormal status indicators."""
         resource_dir = tmp_path / "namespaces" / "default"
         resource_dir.mkdir(parents=True)
         pod_file = resource_dir / "pods.yaml"
@@ -236,13 +236,13 @@ class TestBuildDiagnosticContext:
 
         assert "CrashLoopBackOff" in context
         assert "OOMKilled" in context
-        assert "Pod Issues" in context
+        assert "Abnormal Status Indicators" in context
 
     def test_empty_directory_returns_note(self, tmp_path: Path) -> None:
         """Empty directory returns the 'no issues found' note."""
         context = build_diagnostic_context(tmp_path)
 
-        assert "No errors, warnings, or pod issues found" in context
+        assert "No errors, warnings, or status issues found" in context
 
     def test_max_lines_truncation(self, tmp_path: Path) -> None:
         """Context is truncated when it exceeds max_lines."""

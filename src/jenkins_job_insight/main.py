@@ -24,8 +24,10 @@ from jenkins_job_insight.config import Settings, get_settings
 from jenkins_job_insight.jira import enrich_with_jira_matches
 from jenkins_job_insight.diagnostic_archive import (
     cleanup_extract_dir,
+    fetch_all_artifacts,
     fetch_diagnostic_context,
 )
+from jenkins_job_insight.jenkins import JenkinsClient
 from jenkins_job_insight.models import (
     AnalysisResult,
     AnalyzeFailuresRequest,
@@ -251,6 +253,7 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         "enable_jira",
         "diagnostic_archive_max_size_mb",
         "diagnostic_archive_context_lines",
+        "get_job_artifacts",
     ]
     for field in direct_fields:
         value = getattr(body, field, None)
@@ -318,25 +321,64 @@ async def _enrich_result_with_jira(
     await enrich_with_jira_matches(all_failures, settings, ai_provider, ai_model)
 
 
-async def _download_diagnostic_archive_context(
+async def _download_artifacts_context(
     body: AnalyzeRequest, settings: Settings
 ) -> tuple[str, Path | None]:
-    """Download and process diagnostic archive from Jenkins if specified."""
-    if not body.diagnostic_archive_path:
-        return "", None
+    """Download artifacts from Jenkins and build diagnostic context.
 
-    return await asyncio.to_thread(
-        fetch_diagnostic_context,
-        settings.jenkins_url,
-        settings.jenkins_user,
-        settings.jenkins_password,
-        body.job_name,
-        body.build_number,
-        body.diagnostic_archive_path,
-        settings.diagnostic_archive_max_size_mb,
-        settings.jenkins_ssl_verify,
-        settings.diagnostic_archive_context_lines,
-    )
+    When get_job_artifacts is enabled, downloads ALL build artifacts.
+    Falls back to diagnostic_archive_path if specified and get_job_artifacts is disabled.
+    """
+    # Mode 1: Download all artifacts (default)
+    if settings.get_job_artifacts:
+        artifact_list = await asyncio.to_thread(
+            _list_artifacts, settings, body.job_name, body.build_number
+        )
+        if artifact_list:
+            return await asyncio.to_thread(
+                fetch_all_artifacts,
+                settings.jenkins_url,
+                settings.jenkins_user,
+                settings.jenkins_password,
+                body.job_name,
+                body.build_number,
+                artifact_list,
+                settings.diagnostic_archive_max_size_mb,
+                settings.jenkins_ssl_verify,
+                settings.diagnostic_archive_context_lines,
+            )
+
+    # Mode 2: Single diagnostic archive path (legacy/explicit)
+    if body.diagnostic_archive_path:
+        return await asyncio.to_thread(
+            fetch_diagnostic_context,
+            settings.jenkins_url,
+            settings.jenkins_user,
+            settings.jenkins_password,
+            body.job_name,
+            body.build_number,
+            body.diagnostic_archive_path,
+            settings.diagnostic_archive_max_size_mb,
+            settings.jenkins_ssl_verify,
+            settings.diagnostic_archive_context_lines,
+        )
+
+    return "", None
+
+
+def _list_artifacts(settings: Settings, job_name: str, build_number: int) -> list[dict]:
+    """List build artifacts using Jenkins API."""
+    try:
+        client = JenkinsClient(
+            url=settings.jenkins_url,
+            username=settings.jenkins_user,
+            password=settings.jenkins_password,
+            ssl_verify=settings.jenkins_ssl_verify,
+        )
+        return client.list_build_artifacts(job_name, build_number)
+    except Exception as exc:
+        logger.warning(f"Failed to list artifacts: {exc}")
+        return []
 
 
 async def process_analysis_with_id(
@@ -363,7 +405,7 @@ async def process_analysis_with_id(
         (
             diagnostic_context,
             extract_path_to_clean,
-        ) = await _download_diagnostic_archive_context(body, settings)
+        ) = await _download_artifacts_context(body, settings)
 
         result = await analyze_job(
             body,
@@ -437,7 +479,7 @@ async def analyze(
             (
                 diagnostic_context,
                 extract_path_to_clean,
-            ) = await _download_diagnostic_archive_context(body, merged)
+            ) = await _download_artifacts_context(body, merged)
 
             result = await analyze_job(
                 body,

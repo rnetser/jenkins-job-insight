@@ -119,7 +119,7 @@ If PRODUCT BUG:
     "component": "affected component",
     "description": "what product behavior is broken",
     "evidence": "relevant log snippets",
-    "archive_evidence": "VERBATIM lines from PRODUCT-SIDE logs in the diagnostic archive: pod logs (virt-handler, virt-controller, virt-launcher, cdi-controller), Kubernetes events, CR status, node conditions. Do NOT paste test console output here — that belongs in 'evidence'. This field is for product/cluster diagnostic data only.",
+    "archive_evidence": "VERBATIM lines from logs in the build artifacts that prove the product defect: application logs, service logs, infrastructure events, resource status. Do NOT paste test console output here — that belongs in 'evidence'. This field is for product-side diagnostic data only.",
     "jira_search_keywords": ["specific error symptom", "component + behavior", "error type"]
   }
 }
@@ -128,7 +128,7 @@ jira_search_keywords rules:
 - Generate 3-5 SHORT specific keywords for finding matching bugs in Jira
 - Focus on the specific error symptom and broken behavior, NOT test infrastructure
 - Combine component name with the specific failure (e.g. "VM start failure migration", "API timeout authentication")
-- AVOID generic/broad terms alone like "vSphere", "OpenShift", "timeout", "failure", "error"
+- AVOID generic/broad terms alone like "timeout", "failure", "error"
 - Each keyword should be specific enough to narrow Jira search results to relevant bugs
 - Think: "what would someone title a Jira bug for this exact issue?\""""
 

@@ -116,6 +116,10 @@ class AnalyzeRequest(BaseAnalysisRequest):
         default=None,
         description="Maximum diagnostic context lines for AI prompt (overrides DIAGNOSTIC_ARCHIVE_CONTEXT_LINES env var)",
     )
+    get_job_artifacts: bool | None = Field(
+        default=None,
+        description="Download all build artifacts for AI context (default: true, overrides GET_JOB_ARTIFACTS env var)",
+    )
 
 
 class TestFailure(BaseModel):

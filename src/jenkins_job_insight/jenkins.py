@@ -89,6 +89,26 @@ class JenkinsClient(jenkins.Jenkins):
             )
             raise
 
+    def list_build_artifacts(self, job_name: str, build_number: int) -> list[dict]:
+        """List all artifacts for a build.
+
+        Args:
+            job_name: Name of the Jenkins job.
+            build_number: Build number to retrieve.
+
+        Returns:
+            List of artifact dicts with 'relativePath' and 'fileName' keys.
+            Returns empty list if no artifacts or on error.
+        """
+        try:
+            build_info = self.get_build_info_safe(job_name, build_number)
+            return build_info.get("artifacts", [])
+        except Exception as exc:
+            logger.warning(
+                f"Failed to list artifacts for {job_name} #{build_number}: {exc}"
+            )
+            return []
+
     @staticmethod
     def parse_jenkins_url(url: str | HttpUrl) -> tuple[str, int]:
         """Parse Jenkins URL to extract job name and build number.

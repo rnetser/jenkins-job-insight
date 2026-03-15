@@ -18,12 +18,17 @@ logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 EXTRACT_BASE = Path("/tmp/jenkins-insight")
 
+# Maximum ratio of extracted size to compressed size. Typical compression ratios
+# for diagnostic archives (logs, YAML, JSON) range from 3-8x; 10x provides safe
+# headroom while still catching decompression bombs.
+EXTRACT_SIZE_MULTIPLIER = 10
+
 ERROR_PATTERN = re.compile(
     r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
     re.IGNORECASE,
 )
 
-POD_ISSUE_PATTERNS = re.compile(
+ABNORMAL_STATUS_PATTERNS = re.compile(
     r"\b(CrashLoopBackOff|OOMKilled|ImagePullBackOff|ErrImagePull|CreateContainerError"
     r"|RunContainerError|Pending|Failed|Unknown|Evicted)\b"
 )
@@ -77,7 +82,8 @@ def _extract_tar(
                         f"{member.name} -> {member.linkname}"
                     )
                     continue
-                link_target = Path(extract_dir / member.linkname).resolve()
+                member_parent = Path(extract_dir / member.name).parent
+                link_target = (member_parent / member.linkname).resolve()
                 if not str(link_target).startswith(boundary):
                     logger.warning(
                         f"Skipping tar entry with symlink outside extraction dir: "
@@ -254,7 +260,7 @@ def validate_and_extract_archive(
     fileobj = io.BytesIO(archive_data)
 
     # Try tar first, then zip
-    max_extracted_bytes = max_size_mb * 10 * 1024 * 1024
+    max_extracted_bytes = max_size_mb * EXTRACT_SIZE_MULTIPLIER * 1024 * 1024
     try:
         _extract_tar(fileobj, extract_dir, max_extracted_bytes=max_extracted_bytes)
     except (tarfile.TarError, Exception):
@@ -286,7 +292,7 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
     """Walk an extracted archive directory and build a structured diagnostic summary.
 
     Discovers log files, YAML/JSON resource dumps, and event files, then
-    extracts error/warning lines, pod issues, and warning-type Kubernetes
+    extracts error/warning lines, abnormal status indicators, and warning
     events into a human-readable context string.
 
     Args:
@@ -294,8 +300,8 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
         max_lines: Maximum number of lines in the returned context string.
 
     Returns:
-        A structured text summary with sections for log errors, Kubernetes
-        events, and pod issues. Returns a note if no relevant content is found.
+        A structured text summary with sections for log errors, warning
+        events, and abnormal status indicators. Returns a note if no relevant content is found.
     """
     logger.info(f"Building diagnostic context from {extract_path}")
 
@@ -331,7 +337,7 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
     )
     error_lines: list[str] = []
     event_lines: list[str] = []
-    pod_issues: list[str] = []
+    status_issues: list[str] = []
     seen_errors: set[str] = set()
 
     # Extract error/warning lines from log files (deduplicated)
@@ -360,14 +366,14 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
         except OSError:
             continue
 
-    # Scan YAML/JSON files for pod issues
+    # Scan YAML/JSON files for abnormal status indicators
     for resource_file in yaml_json_files:
         try:
             text = resource_file.read_text(errors="replace")
             relative_name = str(resource_file.relative_to(extract_path))
             for line in text.splitlines():
-                if POD_ISSUE_PATTERNS.search(line):
-                    pod_issues.append(f"[{relative_name}]: {line.strip()}")
+                if ABNORMAL_STATUS_PATTERNS.search(line):
+                    status_issues.append(f"[{relative_name}]: {line.strip()}")
         except OSError:
             continue
 
@@ -378,7 +384,7 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
         f"Archive contains {len(all_files)} files.",
         "",
         "IMPORTANT: You MUST read the files at the path above. The summary below is only a preview.",
-        "Use the extracted path to read full log files, pod logs, events, and resource status.",
+        "Use the extracted path to read full log files, events, and resource status.",
         "",
     ]
 
@@ -388,25 +394,23 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
         sections.append("")
 
     if event_lines:
-        sections.append("--- Kubernetes Events (Warnings) ---")
+        sections.append("--- Warning Events ---")
         sections.extend(event_lines)
         sections.append("")
 
-    if pod_issues:
-        sections.append("--- Pod Issues ---")
-        sections.extend(pod_issues)
+    if status_issues:
+        sections.append("--- Abnormal Status Indicators ---")
+        sections.extend(status_issues)
         sections.append("")
 
-    if not error_lines and not event_lines and not pod_issues:
+    if not error_lines and not event_lines and not status_issues:
         sections.append(
-            "No errors, warnings, or pod issues found in diagnostic archive."
+            "No errors, warnings, or status issues found in diagnostic archive."
         )
         # Include file listing so AI knows what's available
         sections.append("")
         sections.append("--- Files in Archive ---")
-        sections.extend(all_files[:50])
-        if len(all_files) > 50:
-            sections.append(f"... and {len(all_files) - 50} more files")
+        sections.extend(all_files)
         sections.append("")
 
     # Truncate to max_lines
@@ -421,10 +425,135 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
     context = "\n".join(sections)
     logger.info(
         f"Diagnostic context built: {len(error_lines)} error lines, "
-        f"{len(event_lines)} event lines, {len(pod_issues)} pod issues, "
+        f"{len(event_lines)} event lines, {len(status_issues)} status issues, "
         f"total context: {len(context)} chars"
     )
     return context
+
+
+def fetch_all_artifacts(
+    jenkins_url: str,
+    username: str,
+    password: str,
+    job_name: str,
+    build_number: int,
+    artifact_list: list[dict],
+    max_size_mb: int = 500,
+    ssl_verify: bool = True,
+    max_context_lines: int = 200,
+) -> tuple[str, Path | None]:
+    """Download all build artifacts, extract archives, and build diagnostic context.
+
+    Downloads each artifact from the build. Archive files (tar/zip) are extracted.
+    Non-archive files are stored directly. All content is placed under a single
+    artifacts directory for AI consumption.
+
+    Args:
+        jenkins_url: Jenkins server base URL.
+        username: Jenkins username.
+        password: Jenkins password or API token.
+        job_name: Name of the Jenkins job.
+        build_number: Build number containing the artifacts.
+        artifact_list: List of artifact dicts from Jenkins API (each has 'relativePath').
+        max_size_mb: Maximum allowed artifact size in megabytes (per artifact).
+        ssl_verify: Whether to verify SSL certificates.
+        max_context_lines: Maximum lines in the context summary.
+
+    Returns:
+        Tuple of (context_string, artifacts_dir_or_None).
+        The caller must call cleanup_extract_dir(artifacts_dir) when done.
+    """
+    if not artifact_list:
+        return "", None
+
+    artifacts_dir = EXTRACT_BASE / f"artifacts-{uuid.uuid4().hex[:8]}"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Downloading {len(artifact_list)} artifacts to {artifacts_dir}")
+
+    downloaded_count = 0
+    for artifact in artifact_list:
+        relative_path = artifact.get("relativePath", "")
+        if not relative_path:
+            continue
+
+        data = download_jenkins_artifact(
+            jenkins_url=jenkins_url,
+            username=username,
+            password=password,
+            job_name=job_name,
+            build_number=build_number,
+            artifact_path=relative_path,
+            max_size_mb=max_size_mb,
+            ssl_verify=ssl_verify,
+        )
+        if data is None:
+            logger.warning(f"Skipping artifact '{relative_path}': download failed")
+            continue
+
+        downloaded_count += 1
+
+        # Try to extract if it looks like an archive
+        if _is_archive(relative_path):
+            extract_subdir = artifacts_dir / _strip_archive_extension(relative_path)
+            extract_subdir.mkdir(parents=True, exist_ok=True)
+            extract_result = validate_and_extract_archive(data, max_size_mb)
+            if extract_result is not None:
+                # Move extracted contents into the artifacts dir under a subdir
+                # named after the archive
+                _move_contents(extract_result, extract_subdir)
+                cleanup_extract_dir(extract_result)
+                logger.info(f"Extracted archive artifact '{relative_path}'")
+                continue
+            else:
+                logger.warning(
+                    f"Could not extract '{relative_path}', storing as raw file"
+                )
+
+        # Store as raw file
+        dest = artifacts_dir / relative_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+
+    if downloaded_count == 0:
+        cleanup_extract_dir(artifacts_dir)
+        return (
+            "NOTE: No artifacts could be downloaded. Analysis will proceed without artifact data.",
+            None,
+        )
+
+    context = build_diagnostic_context(artifacts_dir, max_context_lines)
+    logger.info(
+        f"Artifacts context length: {len(context)} chars, "
+        f"{len(context.splitlines())} lines"
+    )
+    return context, artifacts_dir
+
+
+def _is_archive(filename: str) -> bool:
+    """Check if a filename looks like a tar or zip archive."""
+    lower = filename.lower()
+    return lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".zip"))
+
+
+def _strip_archive_extension(filename: str) -> str:
+    """Strip archive extension from filename for use as directory name."""
+    lower = filename.lower()
+    for ext in (".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tar", ".zip"):
+        if lower.endswith(ext):
+            return filename[: -len(ext)]
+    return filename
+
+
+def _move_contents(src: Path, dest: Path) -> None:
+    """Move all contents from src directory into dest directory."""
+    for item in src.iterdir():
+        target = dest / item.name
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        shutil.move(str(item), str(target))
 
 
 def cleanup_extract_dir(extract_path: Path) -> None:
