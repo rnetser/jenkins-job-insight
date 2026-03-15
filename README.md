@@ -245,8 +245,8 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `JIRA_SSL_VERIFY`    | `jira_ssl_verify`    | No       | Both                   | SSL certificate verification for Jira (default: true)          |
 | `JIRA_MAX_RESULTS`   | `jira_max_results`   | No       | Both                   | Maximum Jira results per search (default: 5)                   |
 | **Diagnostic Archive** |                    |          |                        |                                                                |
-| `DIAGNOSTIC_ARCHIVE_MAX_SIZE_MB` | --        | No       | `/analyze`             | Maximum diagnostic archive (tar/zip) size in MB (default: 500) |
-| `DIAGNOSTIC_ARCHIVE_CONTEXT_LINES` | --      | No       | `/analyze`             | Maximum context lines for AI prompt (default: 200)             |
+| `DIAGNOSTIC_ARCHIVE_MAX_SIZE_MB` | `diagnostic_archive_max_size_mb` | No       | `/analyze`             | Maximum diagnostic archive (tar/zip) size in MB (default: 500) |
+| `DIAGNOSTIC_ARCHIVE_CONTEXT_LINES` | `diagnostic_archive_context_lines` | No       | `/analyze`             | Maximum context lines for AI prompt (default: 200)             |
 
 *Jenkins fields are required for `/analyze` but must be configured in at least one place (environment variable or request body). *Either `failures` or `raw_xml` must be provided for `/analyze-failures` (mutually exclusive).
 

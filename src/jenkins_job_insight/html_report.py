@@ -799,7 +799,7 @@ def _render_failure_card(
         bug = detail.product_bug_report
         archive_evidence_html = ""
         if bug.archive_evidence:
-            archive_evidence_html = f'\n{indent}      <span class="detail-label">Archive Evidence:</span><span class="detail-value">{e(bug.archive_evidence)}</span>'
+            archive_evidence_html = f'\n{indent}      <span class="detail-label">Archive Evidence:</span><pre class="detail-value" style="white-space: pre-wrap; margin: 0;">{e(bug.archive_evidence)}</pre>'
 
         parts.append(f"""{indent}    <h4>Product Bug Report</h4>
 {indent}    <div class="detail-grid">
@@ -906,7 +906,7 @@ def _render_group_card(
         bug = detail.product_bug_report
         archive_evidence_html = ""
         if bug.archive_evidence:
-            archive_evidence_html = f'\n{indent}      <span class="detail-label">Archive Evidence:</span><span class="detail-value">{e(bug.archive_evidence)}</span>'
+            archive_evidence_html = f'\n{indent}      <span class="detail-label">Archive Evidence:</span><pre class="detail-value" style="white-space: pre-wrap; margin: 0;">{e(bug.archive_evidence)}</pre>'
 
         parts.append(f"""{indent}    <h4>Product Bug Report</h4>
 {indent}    <div class="detail-grid">

@@ -267,6 +267,9 @@ def _recover_from_details(result: AnalysisDetail) -> AnalysisDetail:
         evidence_match = re.search(
             r'"evidence"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
         )
+        archive_evidence_match = re.search(
+            r'"archive_evidence"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
+        )
         keywords_match = re.search(
             r'"jira_search_keywords"\s*:\s*\[([^\]]*)\]', details
         )
@@ -283,6 +286,11 @@ def _recover_from_details(result: AnalysisDetail) -> AnalysisDetail:
             ),
             evidence=(
                 evidence_match.group(1).replace("\\n", "\n") if evidence_match else ""
+            ),
+            archive_evidence=(
+                archive_evidence_match.group(1).replace("\\n", "\n")
+                if archive_evidence_match
+                else ""
             ),
             jira_search_keywords=jira_keywords,
         )

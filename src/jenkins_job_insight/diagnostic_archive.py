@@ -3,12 +3,14 @@
 import io
 import os
 import re
-import requests
 import shutil
 import tarfile
+import urllib.parse
 import uuid
 import zipfile
 from pathlib import Path
+
+import requests
 
 from simple_logger.logger import get_logger
 
@@ -27,7 +29,9 @@ POD_ISSUE_PATTERNS = re.compile(
 )
 
 
-def _extract_tar(fileobj: io.BytesIO, extract_dir: Path) -> None:
+def _extract_tar(
+    fileobj: io.BytesIO, extract_dir: Path, max_extracted_bytes: int = 0
+) -> None:
     """Extract a tar archive with security checks.
 
     Logs warnings for unsafe entries and skips them. On Python 3.12+,
@@ -36,13 +40,22 @@ def _extract_tar(fileobj: io.BytesIO, extract_dir: Path) -> None:
     Args:
         fileobj: BytesIO containing the tar data.
         extract_dir: Directory to extract into.
+        max_extracted_bytes: Maximum allowed total extracted size in bytes.
+            If 0, no pre-extraction size check is performed.
 
     Raises:
-        tarfile.TarError: If the data is not a valid tar archive.
+        tarfile.TarError: If the data is not a valid tar archive or exceeds size limit.
     """
     tar = tarfile.open(fileobj=fileobj, mode="r:*")
     with tar:
         if hasattr(tarfile, "data_filter"):
+            if max_extracted_bytes > 0:
+                total_size = sum(m.size for m in tar.getmembers() if m.isreg())
+                if total_size > max_extracted_bytes:
+                    raise tarfile.TarError(
+                        f"Estimated extracted size ({total_size / (1024 * 1024):.1f} MB) "
+                        f"exceeds limit ({max_extracted_bytes / (1024 * 1024):.0f} MB)"
+                    )
             try:
                 tar.extractall(path=extract_dir, filter="data")
                 return
@@ -52,18 +65,27 @@ def _extract_tar(fileobj: io.BytesIO, extract_dir: Path) -> None:
                 )
 
         # Manual member-by-member extraction with filtering
+        boundary = str(extract_dir.resolve()) + os.sep
         safe_members = []
         for member in tar.getmembers():
             if member.issym() or member.islnk():
+                if member.linkname.startswith("/") or ".." in member.linkname.split(
+                    "/"
+                ):
+                    logger.warning(
+                        f"Skipping tar entry with unsafe linkname: "
+                        f"{member.name} -> {member.linkname}"
+                    )
+                    continue
                 link_target = Path(extract_dir / member.linkname).resolve()
-                if not str(link_target).startswith(str(extract_dir.resolve())):
+                if not str(link_target).startswith(boundary):
                     logger.warning(
                         f"Skipping tar entry with symlink outside extraction dir: "
                         f"{member.name} -> {member.linkname}"
                     )
                     continue
             member_path = Path(extract_dir / member.name).resolve()
-            if not str(member_path).startswith(str(extract_dir.resolve())):
+            if not str(member_path).startswith(boundary):
                 logger.warning(f"Skipping tar entry with unsafe path: {member.name}")
                 continue
             if member.name.startswith("/") or ".." in member.name.split("/"):
@@ -72,10 +94,21 @@ def _extract_tar(fileobj: io.BytesIO, extract_dir: Path) -> None:
                 )
                 continue
             safe_members.append(member)
+
+        if max_extracted_bytes > 0:
+            total_size = sum(m.size for m in safe_members if m.isreg())
+            if total_size > max_extracted_bytes:
+                raise tarfile.TarError(
+                    f"Estimated extracted size ({total_size / (1024 * 1024):.1f} MB) "
+                    f"exceeds limit ({max_extracted_bytes / (1024 * 1024):.0f} MB)"
+                )
+
         tar.extractall(path=extract_dir, members=safe_members)
 
 
-def _extract_zip(fileobj: io.BytesIO, extract_dir: Path) -> None:
+def _extract_zip(
+    fileobj: io.BytesIO, extract_dir: Path, max_extracted_bytes: int = 0
+) -> None:
     """Extract a zip archive with security checks.
 
     Logs warnings for unsafe entries and skips them instead of raising.
@@ -83,21 +116,34 @@ def _extract_zip(fileobj: io.BytesIO, extract_dir: Path) -> None:
     Args:
         fileobj: BytesIO containing the zip data.
         extract_dir: Directory to extract into.
+        max_extracted_bytes: Maximum allowed total extracted size in bytes.
+            If 0, no pre-extraction size check is performed.
 
     Raises:
         zipfile.BadZipFile: If the data is not a valid zip file.
+        zipfile.BadZipFile: If estimated extracted size exceeds limit.
     """
     with zipfile.ZipFile(fileobj) as zf:
+        boundary = str(extract_dir.resolve()) + os.sep
         safe_names = []
         for info in zf.infolist():
             if info.filename.startswith("/") or ".." in info.filename.split("/"):
                 logger.warning(f"Skipping zip entry with unsafe path: {info.filename}")
                 continue
             member_path = Path(extract_dir / info.filename).resolve()
-            if not str(member_path).startswith(str(extract_dir.resolve())):
+            if not str(member_path).startswith(boundary):
                 logger.warning(f"Skipping zip entry with unsafe path: {info.filename}")
                 continue
             safe_names.append(info)
+
+        if max_extracted_bytes > 0:
+            total_size = sum(info.file_size for info in safe_names)
+            if total_size > max_extracted_bytes:
+                raise zipfile.BadZipFile(
+                    f"Estimated extracted size ({total_size / (1024 * 1024):.1f} MB) "
+                    f"exceeds limit ({max_extracted_bytes / (1024 * 1024):.0f} MB)"
+                )
+
         zf.extractall(path=extract_dir, members=safe_names)
 
 
@@ -139,8 +185,10 @@ def download_jenkins_artifact(
             )
             break
 
-    job_path = "/job/".join(job_name.split("/"))
-    url = f"{jenkins_url.rstrip('/')}/job/{job_path}/{build_number}/artifact/{artifact_path}"
+    job_path = "/job/".join(
+        urllib.parse.quote(seg, safe="") for seg in job_name.split("/")
+    )
+    url = f"{jenkins_url.rstrip('/')}/job/{job_path}/{build_number}/artifact/{urllib.parse.quote(artifact_path, safe='/')}"
     logger.info(f"Downloading artifact: {url}")
 
     try:
@@ -148,7 +196,7 @@ def download_jenkins_artifact(
         session.auth = (username, password)
         session.verify = ssl_verify
 
-        response = session.get(url, stream=True)
+        response = session.get(url, stream=True, timeout=60)
         if response.status_code != 200:
             logger.warning(
                 f"Failed to download artifact '{artifact_path}' from "
@@ -157,7 +205,7 @@ def download_jenkins_artifact(
             return None
 
         # Stream download with size tracking
-        chunks = []
+        buffer = io.BytesIO()
         downloaded = 0
         max_bytes = max_size_mb * 1024 * 1024
 
@@ -168,9 +216,9 @@ def download_jenkins_artifact(
                     f"Artifact download exceeded maximum size ({max_size_mb} MB)"
                 )
                 return None
-            chunks.append(chunk)
+            buffer.write(chunk)
 
-        return b"".join(chunks)
+        return buffer.getvalue()
 
     except Exception as e:
         logger.warning(f"Failed to download artifact: {e}")
@@ -206,12 +254,13 @@ def validate_and_extract_archive(
     fileobj = io.BytesIO(archive_data)
 
     # Try tar first, then zip
+    max_extracted_bytes = max_size_mb * 10 * 1024 * 1024
     try:
-        _extract_tar(fileobj, extract_dir)
+        _extract_tar(fileobj, extract_dir, max_extracted_bytes=max_extracted_bytes)
     except (tarfile.TarError, Exception):
         fileobj.seek(0)
         try:
-            _extract_zip(fileobj, extract_dir)
+            _extract_zip(fileobj, extract_dir, max_extracted_bytes=max_extracted_bytes)
         except (zipfile.BadZipFile, Exception) as exc:
             shutil.rmtree(extract_dir, ignore_errors=True)
             logger.warning(f"Invalid archive (not a valid tar or zip file): {exc}")
@@ -221,7 +270,6 @@ def validate_and_extract_archive(
     extracted_size = sum(
         f.stat().st_size for f in extract_dir.rglob("*") if f.is_file()
     )
-    max_extracted_bytes = max_size_mb * 10 * 1024 * 1024
     if extracted_size > max_extracted_bytes:
         shutil.rmtree(extract_dir)
         logger.warning(
@@ -256,8 +304,6 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
     event_files: list[Path] = []
     all_files: list[str] = []
 
-    max_lines_per_file = 5
-
     for file_path in extract_path.rglob("*"):
         if not file_path.is_file():
             continue
@@ -288,53 +334,40 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
     pod_issues: list[str] = []
     seen_errors: set[str] = set()
 
-    # Extract error/warning lines from log files (limited per file, deduplicated)
+    # Extract error/warning lines from log files (deduplicated)
     for log_file in log_files:
         try:
             text = log_file.read_text(errors="replace")
             relative_name = str(log_file.relative_to(extract_path))
-            file_error_count = 0
             for line in text.splitlines():
                 if ERROR_PATTERN.search(line):
-                    # Simple deduplication: skip lines with same first 80 chars
-                    dedup_key = line.strip()[:80]
+                    dedup_key = line.strip()
                     if dedup_key in seen_errors:
                         continue
                     seen_errors.add(dedup_key)
                     error_lines.append(f"[{relative_name}]: {line.rstrip()}")
-                    file_error_count += 1
-                    if file_error_count >= max_lines_per_file:
-                        break
         except OSError:
             continue
 
-    # Extract warning events (limited per file)
+    # Extract warning events
     for event_file in event_files:
         try:
             text = event_file.read_text(errors="replace")
             relative_name = str(event_file.relative_to(extract_path))
-            file_event_count = 0
             for line in text.splitlines():
                 if "Warning" in line or "warning" in line:
                     event_lines.append(f"[{relative_name}]: {line.rstrip()}")
-                    file_event_count += 1
-                    if file_event_count >= max_lines_per_file:
-                        break
         except OSError:
             continue
 
-    # Scan YAML/JSON files for pod issues (limited per file)
+    # Scan YAML/JSON files for pod issues
     for resource_file in yaml_json_files:
         try:
             text = resource_file.read_text(errors="replace")
             relative_name = str(resource_file.relative_to(extract_path))
-            file_issue_count = 0
             for line in text.splitlines():
                 if POD_ISSUE_PATTERNS.search(line):
                     pod_issues.append(f"[{relative_name}]: {line.strip()}")
-                    file_issue_count += 1
-                    if file_issue_count >= max_lines_per_file:
-                        break
         except OSError:
             continue
 
