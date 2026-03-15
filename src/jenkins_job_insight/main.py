@@ -343,16 +343,13 @@ def _fetch_artifacts_sync(
             password=settings.jenkins_password,
             ssl_verify=settings.jenkins_ssl_verify,
         )
-        artifact_list = client.list_build_artifacts(job_name, build_number)
+        artifact_list, build_url = client.list_build_artifacts(job_name, build_number)
         if not artifact_list:
             return "", None
 
         def download_fn(relative_path: str) -> bytes | None:
             return client.download_artifact(
-                job_name,
-                build_number,
-                relative_path,
-                settings.diagnostic_archive_max_size_mb,
+                build_url, relative_path, settings.diagnostic_archive_max_size_mb
             )
 
         return fetch_all_artifacts(

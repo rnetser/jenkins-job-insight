@@ -90,79 +90,75 @@ class JenkinsClient(jenkins.Jenkins):
             )
             raise
 
-    def list_build_artifacts(self, job_name: str, build_number: int) -> list[dict]:
-        """List all artifacts for a build.
+    def list_build_artifacts(
+        self, job_name: str, build_number: int
+    ) -> tuple[list[dict], str]:
+        """List all artifacts for a build and return the build URL.
 
         Args:
             job_name: Name of the Jenkins job.
             build_number: Build number to retrieve.
 
         Returns:
-            List of artifact dicts with 'relativePath' and 'fileName' keys.
-            Returns empty list if no artifacts or on error.
+            Tuple of (artifacts list, build URL).
+            Returns ([], "") if no artifacts or on error.
         """
         try:
             build_info = self.get_build_info_safe(job_name, build_number)
-            return build_info.get("artifacts", [])
+            return build_info.get("artifacts", []), build_info.get("url", "").rstrip(
+                "/"
+            )
         except Exception as exc:
             logger.warning(
                 f"Failed to list artifacts for {job_name} #{build_number}: {exc}"
             )
-            return []
+            return [], ""
 
     def download_artifact(
-        self,
-        job_name: str,
-        build_number: int,
-        relative_path: str,
-        max_size_mb: int = 500,
+        self, build_url: str, relative_path: str, max_size_mb: int = 500
     ) -> bytes | None:
-        """Download a single build artifact by relative path.
+        """Download a single build artifact using the build URL.
 
-        Uses the build URL from the Jenkins API to construct the download URL,
-        and the client's existing authenticated session for the request.
+        Uses the client's authenticated session. The build URL should come
+        from the Jenkins API (e.g., from get_build_info_safe()['url']).
 
         Args:
-            job_name: Name of the Jenkins job.
-            build_number: Build number containing the artifact.
-            relative_path: Relative path of the artifact (from Jenkins API).
+            build_url: Full Jenkins build URL (from API response).
+            relative_path: Relative path of the artifact (from artifacts list).
             max_size_mb: Maximum allowed artifact size in megabytes.
 
         Returns:
             Raw bytes of the artifact, or None if download fails.
         """
+        url = f"{build_url.rstrip('/')}/artifact/{relative_path}"
+        logger.info(f"Downloading artifact: {url}")
+
         try:
-            build_info = self.get_build_info_safe(job_name, build_number)
-            build_url = build_info.get("url", "").rstrip("/")
-            if not build_url:
-                logger.warning(f"No build URL found for {job_name} #{build_number}")
-                return None
-
-            url = f"{build_url}/artifact/{relative_path}"
-            logger.info(f"Downloading artifact: {url}")
-
             response = self._session.get(url, stream=True, timeout=60)
-            if response.status_code != 200:
-                logger.warning(
-                    f"Failed to download artifact '{relative_path}' from "
-                    f"{job_name} #{build_number}: HTTP {response.status_code}"
-                )
-                return None
-
-            buffer = io.BytesIO()
-            downloaded = 0
-            max_bytes = max_size_mb * 1024 * 1024
-
-            for chunk in response.iter_content(chunk_size=8192):
-                downloaded += len(chunk)
-                if downloaded > max_bytes:
+            try:
+                if response.status_code != 200:
                     logger.warning(
-                        f"Artifact download exceeded maximum size ({max_size_mb} MB)"
+                        f"Failed to download artifact '{relative_path}': "
+                        f"HTTP {response.status_code}"
                     )
                     return None
-                buffer.write(chunk)
 
-            return buffer.getvalue()
+                buffer = io.BytesIO()
+                downloaded = 0
+                max_bytes = max_size_mb * 1024 * 1024
+
+                for chunk in response.iter_content(chunk_size=8192):
+                    downloaded += len(chunk)
+                    if downloaded > max_bytes:
+                        logger.warning(
+                            f"Artifact download exceeded maximum size ({max_size_mb} MB)"
+                        )
+                        return None
+                    buffer.write(chunk)
+
+                return buffer.getvalue()
+            finally:
+                response.close()
 
         except Exception as exc:
             logger.warning(f"Failed to download artifact '{relative_path}': {exc}")
