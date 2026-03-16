@@ -550,31 +550,38 @@ def process_build_artifacts(
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Processing {len(artifact_list)} artifacts to {artifacts_dir}")
 
-    downloaded = 0
-    for artifact in artifact_list:
-        relative_path = artifact.get("relativePath", "")
-        if not relative_path:
-            continue
+    try:
+        downloaded = 0
+        for artifact in artifact_list:
+            relative_path = artifact.get("relativePath", "")
+            if not relative_path:
+                continue
 
-        # Reject absolute paths and traversal attempts
-        if relative_path.startswith("/") or ".." in relative_path.split("/"):
-            logger.warning(f"Skipping artifact with unsafe path: {relative_path}")
-            continue
+            # Reject absolute paths and traversal attempts
+            if relative_path.startswith("/") or ".." in relative_path.split("/"):
+                logger.warning(f"Skipping artifact with unsafe path: {relative_path}")
+                continue
 
-        data = download_artifact(session, build_url, relative_path, max_size_mb)
-        if data is None:
-            continue
+            data = download_artifact(session, build_url, relative_path, max_size_mb)
+            if data is None:
+                continue
 
-        store_artifact(relative_path, data, artifacts_dir, max_size_mb)
-        downloaded += 1
+            store_artifact(relative_path, data, artifacts_dir, max_size_mb)
+            downloaded += 1
 
-    if downloaded == 0:
+        if downloaded == 0:
+            cleanup_extract_dir(artifacts_dir)
+            return "NOTE: No artifacts could be downloaded.", None
+
+        logger.info(
+            f"Downloaded and stored {downloaded}/{len(artifact_list)} artifacts"
+        )
+        context = build_diagnostic_context(artifacts_dir, max_context_lines)
+        return context, artifacts_dir
+
+    except Exception:
         cleanup_extract_dir(artifacts_dir)
-        return "NOTE: No artifacts could be downloaded.", None
-
-    logger.info(f"Downloaded and stored {downloaded}/{len(artifact_list)} artifacts")
-    context = build_diagnostic_context(artifacts_dir, max_context_lines)
-    return context, artifacts_dir
+        raise
 
 
 def _is_archive(filename: str) -> bool:
