@@ -1,4 +1,4 @@
-"""Diagnostic archive extraction and context building for test failure analysis."""
+"""Jenkins artifacts extraction and context building for test failure analysis."""
 
 import io
 import os
@@ -24,7 +24,7 @@ ERROR_PATTERN = re.compile(
 )
 
 # Maximum ratio of extracted size to compressed size. Typical compression ratios
-# for diagnostic archives (logs, YAML, JSON) range from 3-8x; 10x provides safe
+# for Jenkins artifacts (logs, YAML, JSON) range from 3-8x; 10x provides safe
 # headroom while still catching decompression bombs.
 EXTRACT_SIZE_MULTIPLIER = 10
 
@@ -274,7 +274,7 @@ def validate_and_extract_archive(
         return None
 
     if extract_dir is None:
-        extract_dir = EXTRACT_BASE / f"diagnostic-archive-{uuid.uuid4().hex[:8]}"
+        extract_dir = EXTRACT_BASE / f"jenkins-artifacts-{uuid.uuid4().hex[:8]}"
     extract_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Extracting archive ({size_mb:.1f} MB) to {extract_dir}")
 
@@ -411,9 +411,9 @@ def _extract_status_issues(
     return lines
 
 
-def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
-    """Walk an extracted archive directory and build a structured diagnostic summary."""
-    logger.info(f"Building diagnostic context from {extract_path}")
+def build_artifacts_context(extract_path: Path, max_lines: int = 1000) -> str:
+    """Walk an extracted archive directory and build a structured artifacts summary."""
+    logger.info(f"Building artifacts context from {extract_path}")
 
     log_files, event_files, yaml_json_files, all_files = _discover_files(extract_path)
     total_size = sum(size for _, size in all_files)
@@ -512,7 +512,7 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
 
     context = "\n".join(sections)
     logger.info(
-        f"Diagnostic context built: {len(error_lines)} error lines, "
+        f"Artifacts context built: {len(error_lines)} error lines, "
         f"{len(event_lines)} event lines, {len(status_issues)} status issues, "
         f"total context: {len(context)} chars"
     )
@@ -529,7 +529,7 @@ def process_build_artifacts(
     """Download, store, and analyze all build artifacts in a single pass.
 
     Downloads each artifact, immediately stores it to disk (extracting
-    archives), then builds a diagnostic context summary.
+    archives), then builds an artifacts context summary.
 
     Args:
         session: Authenticated requests session.
@@ -576,7 +576,7 @@ def process_build_artifacts(
         logger.info(
             f"Downloaded and stored {downloaded}/{len(artifact_list)} artifacts"
         )
-        context = build_diagnostic_context(artifacts_dir, max_context_lines)
+        context = build_artifacts_context(artifacts_dir, max_context_lines)
         return context, artifacts_dir
 
     except Exception:

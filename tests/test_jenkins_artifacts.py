@@ -1,4 +1,4 @@
-"""Tests for diagnostic archive tar/zip extraction and context building."""
+"""Tests for Jenkins artifacts tar/zip extraction and context building."""
 
 import io
 import shutil
@@ -9,9 +9,9 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from jenkins_job_insight import diagnostic_archive
-from jenkins_job_insight.diagnostic_archive import (
-    build_diagnostic_context,
+from jenkins_job_insight import jenkins_artifacts
+from jenkins_job_insight.jenkins_artifacts import (
+    build_artifacts_context,
     cleanup_extract_dir,
     download_artifact,
     process_build_artifacts,
@@ -25,7 +25,7 @@ def extract_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Override EXTRACT_BASE to use tmp_path so tests never leave files in /tmp."""
     base = tmp_path / "extract-base"
     base.mkdir()
-    monkeypatch.setattr(diagnostic_archive, "EXTRACT_BASE", base)
+    monkeypatch.setattr(jenkins_artifacts, "EXTRACT_BASE", base)
     return base
 
 
@@ -174,8 +174,8 @@ class TestExtractZip:
             shutil.rmtree(extract_path, ignore_errors=True)
 
 
-class TestBuildDiagnosticContext:
-    """Tests for build_diagnostic_context."""
+class TestBuildArtifactsContext:
+    """Tests for build_artifacts_context."""
 
     def test_extracts_error_lines_from_logs(self, tmp_path: Path) -> None:
         """Error and failure lines from .log files appear in context."""
@@ -189,7 +189,7 @@ class TestBuildDiagnosticContext:
             "2024-01-01 FAILURE Something broke\n"
         )
 
-        context = build_diagnostic_context(tmp_path)
+        context = build_artifacts_context(tmp_path)
 
         assert "Connection refused" in context
         assert "FAILURE Something broke" in context
@@ -208,7 +208,7 @@ class TestBuildDiagnosticContext:
             "message: Scheduled successfully\n"
         )
 
-        context = build_diagnostic_context(tmp_path)
+        context = build_artifacts_context(tmp_path)
 
         assert "Warning" in context
         # Only lines containing "Warning" are extracted; the message line is not
@@ -233,7 +233,7 @@ class TestBuildDiagnosticContext:
             "          reason: Error pulling image\n"
         )
 
-        context = build_diagnostic_context(tmp_path)
+        context = build_artifacts_context(tmp_path)
 
         assert "Failed" in context
         assert "Error pulling image" in context
@@ -241,7 +241,7 @@ class TestBuildDiagnosticContext:
 
     def test_empty_directory_returns_note(self, tmp_path: Path) -> None:
         """Empty directory returns the 'no issues found' note."""
-        context = build_diagnostic_context(tmp_path)
+        context = build_artifacts_context(tmp_path)
 
         assert "No errors, warnings, or status issues found" in context
 
@@ -255,7 +255,7 @@ class TestBuildDiagnosticContext:
         log_file.write_text("".join(lines))
 
         max_lines = 10
-        context = build_diagnostic_context(tmp_path, max_lines=max_lines)
+        context = build_artifacts_context(tmp_path, max_lines=max_lines)
 
         assert "truncated" in context.lower()
         # The total line count in the output should not greatly exceed max_lines
@@ -269,7 +269,7 @@ class TestCleanupExtractDir:
 
     def test_cleanup_removes_directory(self, tmp_path: Path) -> None:
         """Cleanup removes the target directory tree."""
-        target = tmp_path / "diagnostic-archive-abc123"
+        target = tmp_path / "jenkins-artifacts-abc123"
         target.mkdir()
         (target / "nested").mkdir()
         (target / "nested" / "file.txt").write_text("data")
@@ -377,7 +377,7 @@ class TestStoreArtifact:
     ) -> None:
         """Archive file is extracted into a subdirectory."""
         # Monkeypatch EXTRACT_BASE so validate_and_extract_archive uses tmp_path
-        monkeypatch.setattr(diagnostic_archive, "EXTRACT_BASE", tmp_path)
+        monkeypatch.setattr(jenkins_artifacts, "EXTRACT_BASE", tmp_path)
 
         tar_data = _make_tar_gz({"inner/file.txt": "extracted content\n"})
 
@@ -411,7 +411,7 @@ class TestProcessBuildArtifacts:
         """Override EXTRACT_BASE to use tmp_path."""
         base = tmp_path / "extract-base"
         base.mkdir()
-        monkeypatch.setattr(diagnostic_archive, "EXTRACT_BASE", base)
+        monkeypatch.setattr(jenkins_artifacts, "EXTRACT_BASE", base)
         return base
 
     @pytest.fixture
@@ -464,7 +464,7 @@ class TestProcessBuildArtifacts:
         # Both artifacts should be stored
         assert (artifacts_dir / "logs" / "app.log").exists()
         assert (artifacts_dir / "config.yaml").exists()
-        # Context should contain diagnostic output from the stored files
+        # Context should contain artifacts output from the stored files
         assert "BUILD ARTIFACTS CONTEXT" in context
         # The error line from the log should appear in context
         assert "something failed" in context
