@@ -78,7 +78,7 @@ Configure the service using environment variables. The service is tied to a sing
 | `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
 | **Build Artifact Analysis (Optional)** | | | |
 | `GET_JOB_ARTIFACTS` | No | `true` | Download all build artifacts for AI artifacts context |
-| `JENKINS_ARTIFACTS_MAX_SIZE_MB` | No | `500` | Maximum Jenkins artifacts (tar/zip) file size in MB |
+| `JENKINS_ARTIFACTS_MAX_SIZE_MB` | No | `500` | Maximum size per downloaded artifact in MB |
 | `JENKINS_ARTIFACTS_CONTEXT_LINES` | No | `200` | Maximum artifacts context lines for AI prompt |
 
 ### Jenkins Configuration
@@ -246,7 +246,7 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `JIRA_MAX_RESULTS`   | `jira_max_results`   | No       | Both                   | Maximum Jira results per search (default: 5)                   |
 | **Build Artifact Analysis** |                    |          |                        |                                                                |
 | `GET_JOB_ARTIFACTS` | `get_job_artifacts` | No | `/analyze` | Download all build artifacts for AI context (default: true) |
-| `JENKINS_ARTIFACTS_MAX_SIZE_MB` | `jenkins_artifacts_max_size_mb` | No       | `/analyze`             | Maximum Jenkins artifacts (tar/zip) size in MB (default: 500) |
+| `JENKINS_ARTIFACTS_MAX_SIZE_MB` | `jenkins_artifacts_max_size_mb` | No       | `/analyze`             | Maximum size per downloaded artifact in MB (default: 500) |
 | `JENKINS_ARTIFACTS_CONTEXT_LINES` | `jenkins_artifacts_context_lines` | No       | `/analyze`             | Maximum context lines for AI prompt (default: 200)             |
 
 *Jenkins fields are required for `/analyze` but must be configured in at least one place (environment variable or request body). *Either `failures` or `raw_xml` must be provided for `/analyze-failures` (mutually exclusive).
@@ -486,7 +486,7 @@ This context helps the AI distinguish between test infrastructure issues (CODE I
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GET_JOB_ARTIFACTS` | `true` | Download all build artifacts (set `false` to disable) |
-| `JENKINS_ARTIFACTS_MAX_SIZE_MB` | `500` | Maximum archive (tar/zip) file size in MB |
+| `JENKINS_ARTIFACTS_MAX_SIZE_MB` | `500` | Maximum size per downloaded artifact in MB |
 | `JENKINS_ARTIFACTS_CONTEXT_LINES` | `200` | Maximum lines of artifacts context included in AI prompt |
 
 ## API Endpoints
