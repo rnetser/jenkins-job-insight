@@ -319,22 +319,27 @@ def validate_and_extract_archive(
 
 def _discover_files(
     extract_path: Path,
-) -> tuple[list[Path], list[Path], list[Path], list[str]]:
+) -> tuple[list[Path], list[Path], list[Path], list[tuple[str, int]]]:
     """Discover and classify files in extracted archive.
 
     Returns:
         Tuple of (log_files, event_files, yaml_json_files, all_files).
+        all_files contains (relative_path, size_in_bytes) tuples.
     """
     log_files: list[Path] = []
     yaml_json_files: list[Path] = []
     event_files: list[Path] = []
-    all_files: list[str] = []
+    all_files: list[tuple[str, int]] = []
 
     for file_path in extract_path.rglob("*"):
         if not file_path.is_file():
             continue
         relative = str(file_path.relative_to(extract_path))
-        all_files.append(relative)
+        try:
+            size = file_path.stat().st_size
+        except OSError:
+            size = 0
+        all_files.append((relative, size))
         name_lower = file_path.name.lower()
         if (
             name_lower.endswith((".log", ".txt"))
@@ -411,9 +416,11 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
     logger.info(f"Building diagnostic context from {extract_path}")
 
     log_files, event_files, yaml_json_files, all_files = _discover_files(extract_path)
+    total_size = sum(size for _, size in all_files)
+    total_size_mb = total_size / (1024 * 1024)
 
     logger.info(
-        f"Archive file discovery: {len(all_files)} total files, "
+        f"Archive file discovery: {len(all_files)} total files ({total_size_mb:.1f} MB), "
         f"{len(log_files)} log files, {len(event_files)} event files, "
         f"{len(yaml_json_files)} yaml/json files"
     )
@@ -428,7 +435,7 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
         "=== BUILD ARTIFACTS CONTEXT ===",
         f"Artifacts directory: {extract_path}",
         "Also accessible at: build-artifacts/ (or current working directory if no test repo)",
-        f"Contains {len(all_files)} files.",
+        f"Contains {len(all_files)} files ({total_size_mb:.1f} MB total).",
         "",
         "IMPORTANT: You MUST explore the build-artifacts/ directory (or the absolute path above).",
         "The summary below is only a preview. Read the actual files for full evidence.",
@@ -456,7 +463,10 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
         )
         sections.append("")
         sections.append("--- Files in Archive ---")
-        sections.extend(all_files)
+        sections.extend(
+            f"{path} ({size / 1024:.1f} KB)" if size >= 1024 else f"{path} ({size} B)"
+            for path, size in all_files
+        )
         sections.append("")
 
     if len(sections) > max_lines:
