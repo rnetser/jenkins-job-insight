@@ -916,6 +916,12 @@ async function loadEnrichments() {{
 }}
 
 document.addEventListener('DOMContentLoaded', async function() {{
+    document.querySelectorAll('.reviewed-toggle input[type="checkbox"]').forEach(cb => {{
+        cb.addEventListener('change', function(event) {{
+            event.stopPropagation();
+            toggleReviewed(this.closest('.reviewed-toggle'));
+        }});
+    }});
     await loadCommentsAndReviews();
     await loadEnrichments();
 }});
@@ -1255,7 +1261,7 @@ def _render_group_card(
 """)
     for f in failures:
         parts.append(
-            f'{indent}        <li><label class="reviewed-toggle" data-job-id="{e(job_id)}" data-test-name="{e(f.test_name)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="event.stopPropagation(); toggleReviewed(this)"><input type="checkbox"> <code style="font-family:var(--font-mono);font-size:12px;color:var(--text-primary)">{e(f.test_name)}</code></label></li>\n'
+            f'{indent}        <li><label class="reviewed-toggle" data-job-id="{e(job_id)}" data-test-name="{e(f.test_name)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}"><input type="checkbox"> <code style="font-family:var(--font-mono);font-size:12px;color:var(--text-primary)">{e(f.test_name)}</code></label></li>\n'
         )
     parts.append(f"""{indent}      </ul>
 {indent}    </div>

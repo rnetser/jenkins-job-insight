@@ -220,7 +220,7 @@ class FailureAnalysis(BaseModel):
     analysis: AnalysisDetail = Field(description="Structured AI analysis output")
     error_signature: str = Field(
         default="",
-        description="MD5 hash of error + stack trace for deduplication",
+        description="SHA-256 hash of error + stack trace for deduplication",
     )
 
     @field_validator("analysis", mode="before")

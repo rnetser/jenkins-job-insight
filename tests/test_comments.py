@@ -52,6 +52,7 @@ class TestCommentCRUD:
                 test_name="tests.TestFoo.test_bar",
                 comment="Fix PR merged",
                 child_job_name="child-job-1",
+                child_build_number=42,
             )
             assert isinstance(comment_id, int)
 

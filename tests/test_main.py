@@ -1811,3 +1811,59 @@ class TestReviewStatusEndpoint:
         assert data["total_failures"] == 2
         assert data["reviewed_count"] == 1
         assert data["comment_count"] == 1
+
+
+class TestChildScopeValidation:
+    @pytest.mark.asyncio
+    async def test_comment_child_job_without_build_number_rejected(self, test_client):
+        """child_job_name without child_build_number should be rejected (422)."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-val-1", "http://jenkins", "completed", result_data
+        )
+        response = test_client.post(
+            "/results/job-val-1/comments",
+            json={
+                "test_name": "test_foo",
+                "child_job_name": "child-1",
+                "comment": "test",
+            },
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_comment_build_number_without_child_job_rejected(self, test_client):
+        """child_build_number without child_job_name should be rejected (422)."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-val-2", "http://jenkins", "completed", result_data
+        )
+        response = test_client.post(
+            "/results/job-val-2/comments",
+            json={
+                "test_name": "test_foo",
+                "child_build_number": 42,
+                "comment": "test",
+            },
+        )
+        assert response.status_code == 422

@@ -398,11 +398,11 @@ Each analyzed test failure supports user comments and a "Reviewed" checkbox for 
 }
 ```
 
-#### Configuration
+#### Comment Enrichment Settings
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GITHUB_TOKEN` | No | - | GitHub API token for private repo PR status (public repos work without token). Can also be set per-request via `github_token` in the payload. |
+| `GITHUB_TOKEN` | No | - | GitHub API token for fetching PR status from private repositories. Public repositories work without a token. This value can also be set per-request via the `github_token` field in the payload. |
 
 Jira enrichment reuses existing Jira configuration (`JIRA_URL`, `JIRA_EMAIL` + `JIRA_API_TOKEN` (Cloud), `JIRA_PAT` (Server/DC)).
 

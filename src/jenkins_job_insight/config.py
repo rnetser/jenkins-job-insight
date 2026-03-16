@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     get_job_artifacts: bool = True
 
     # GitHub (optional) -- for comment enrichment (PR status)
-    github_token: str | None = None
+    github_token: SecretStr | None = None
 
     @property
     def jira_enabled(self) -> bool:

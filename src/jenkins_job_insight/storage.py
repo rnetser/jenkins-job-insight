@@ -93,6 +93,16 @@ async def init_db() -> None:
         await db.commit()
 
 
+def _validate_child_identifier_pairing(
+    child_job_name: str, child_build_number: int
+) -> None:
+    """Validate that child_job_name and child_build_number are either both set or both empty."""
+    if child_job_name and child_build_number == 0:
+        raise ValueError("child_build_number is required when child_job_name is set")
+    if not child_job_name and child_build_number != 0:
+        raise ValueError("child_job_name is required when child_build_number is set")
+
+
 async def add_comment(
     job_id: str,
     test_name: str,
@@ -102,6 +112,7 @@ async def add_comment(
     error_signature: str = "",
 ) -> int:
     """Add a comment to a test failure."""
+    _validate_child_identifier_pairing(child_job_name, child_build_number)
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "INSERT INTO comments (job_id, test_name, child_job_name, child_build_number, comment, error_signature) VALUES (?, ?, ?, ?, ?, ?)",
@@ -139,6 +150,7 @@ async def set_reviewed(
     child_build_number: int = 0,
 ) -> None:
     """Set or update the reviewed state for a test failure."""
+    _validate_child_identifier_pairing(child_job_name, child_build_number)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT OR REPLACE INTO failure_reviews (job_id, test_name, child_job_name, child_build_number, reviewed, updated_at) "
@@ -180,8 +192,11 @@ async def get_review_status(job_id: str) -> dict:
         row = await cursor.fetchone()
         total_failures = 0
         if row and row[0]:
-            result_data = json.loads(row[0])
-            total_failures = count_all_failures(result_data)
+            try:
+                result_data = json.loads(row[0])
+                total_failures = count_all_failures(result_data)
+            except (json.JSONDecodeError, TypeError):
+                total_failures = 0
 
         cursor = await db.execute(
             "SELECT COUNT(*) FROM failure_reviews WHERE job_id = ? AND reviewed = 1",
@@ -235,7 +250,7 @@ async def get_historical_comments(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            f"SELECT id, job_id, test_name, child_job_name, comment, error_signature, created_at "
+            f"SELECT id, job_id, test_name, child_job_name, child_build_number, comment, error_signature, created_at "
             f"FROM comments WHERE {where} ORDER BY created_at DESC",
             params,
         )

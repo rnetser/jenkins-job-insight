@@ -948,8 +948,9 @@ async def analyze_child_job(
     # Extract relevant console lines for context
     console_context = extract_relevant_console_lines(console_output)
 
-    # Build historical context for this child job's failures
-    child_historical_context = ""
+    # Build historical context for this child job's failures.
+    # Fetch all matching historical comments, then scope per failure group below.
+    child_historical: list[dict] = []
     try:
         from jenkins_job_insight import storage as _storage
 
@@ -964,19 +965,11 @@ async def analyze_child_job(
             error_signatures=child_error_sigs if child_error_sigs else None,
             exclude_job_id=None,
         )
-        if child_historical:
-            lines = [
-                f'- [{hc["created_at"]}] {hc["test_name"]}: "{hc["comment"]}"'
-                for hc in child_historical
-            ]
-            child_historical_context = (
-                "Previous human feedback for similar failures:\n" + "\n".join(lines)
-            )
     except Exception as exc:
         logger.debug("Failed to fetch historical context: %s", exc)
 
-    # Use child-specific historical context if available, otherwise fall back to parent's
-    effective_historical_context = child_historical_context or historical_context
+    # Use child-specific historical comments if available, otherwise fall back to parent's
+    effective_historical_context = historical_context
 
     # If we have test failures, group by signature and analyze unique groups
     if test_failures:
@@ -990,21 +983,45 @@ async def analyze_child_job(
             f"Grouped {len(test_failures)} failures into {len(failure_groups)} unique error types"
         )
 
-        # Analyze each unique failure group in parallel
-        tasks = [
-            analyze_failure_group(
-                failures=group,
-                console_context=console_context,
-                repo_path=repo_path,
-                ai_provider=ai_provider,
-                ai_model=ai_model,
-                ai_cli_timeout=ai_cli_timeout,
-                custom_prompt=custom_prompt,
-                artifacts_context=artifacts_context,
-                historical_context=effective_historical_context,
+        # Analyze each unique failure group in parallel,
+        # scoping historical comments to only the relevant tests/signatures per group
+        tasks = []
+        for sig, group in failure_groups.items():
+            group_historical_context = ""
+            source_comments = child_historical if child_historical else []
+            if source_comments:
+                group_test_names = {f.test_name for f in group}
+                group_sigs = {sig}
+                relevant = [
+                    hc
+                    for hc in source_comments
+                    if hc["test_name"] in group_test_names
+                    or hc.get("error_signature", "") in group_sigs
+                ]
+                if relevant:
+                    lines = [
+                        f'- [{hc["created_at"]}] {hc["test_name"]}: "{hc["comment"]}"'
+                        for hc in relevant
+                    ]
+                    group_historical_context = (
+                        "Previous human feedback for similar failures:\n"
+                        + "\n".join(lines)
+                    )
+            # Fall back to parent historical context if no child-specific matches
+            tasks.append(
+                analyze_failure_group(
+                    failures=group,
+                    console_context=console_context,
+                    repo_path=repo_path,
+                    ai_provider=ai_provider,
+                    ai_model=ai_model,
+                    ai_cli_timeout=ai_cli_timeout,
+                    custom_prompt=custom_prompt,
+                    artifacts_context=artifacts_context,
+                    historical_context=group_historical_context
+                    or effective_historical_context,
+                )
             )
-            for group in failure_groups.values()
-        ]
         group_results = await run_parallel_with_limit(tasks)
 
         # Flatten results and handle exceptions
@@ -1055,6 +1072,19 @@ async def analyze_child_job(
 
     artifacts_section = _build_artifacts_section(artifacts_context)
 
+    historical_section = ""
+    if child_historical:
+        lines = [
+            f'- [{hc["created_at"]}] {hc["test_name"]}: "{hc["comment"]}"'
+            for hc in child_historical
+        ]
+        historical_section = (
+            "\n\nHISTORICAL CONTEXT FROM PREVIOUS ANALYSES:\n"
+            "Previous human feedback for similar failures:\n" + "\n".join(lines) + "\n"
+        )
+    elif effective_historical_context:
+        historical_section = f"\n\nHISTORICAL CONTEXT FROM PREVIOUS ANALYSES:\n{effective_historical_context}\n"
+
     prompt = f"""Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
@@ -1064,7 +1094,7 @@ CONSOLE OUTPUT (errors/failures/warnings extracted):
 {artifacts_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-{custom_prompt_section}
+{custom_prompt_section}{historical_section}
 {_JSON_RESPONSE_SCHEMA}
 """
     success, analysis_output = await call_ai_cli(
@@ -1295,8 +1325,10 @@ async def analyze_job(
             )
             logger.info(f"Found {len(test_failures)} test failures to analyze")
 
-            # Build historical context from previous comments on similar failures
-            historical_context = ""
+            # Build historical context from previous comments on similar failures.
+            # We fetch ALL historical comments in one query, then filter per group
+            # to scope the context to only the relevant test names and signatures.
+            historical_comments: list[dict] = []
             try:
                 from jenkins_job_insight import storage as _storage
 
@@ -1314,15 +1346,6 @@ async def analyze_job(
                     error_signatures=error_sigs if error_sigs else None,
                     exclude_job_id=job_id,
                 )
-                if historical_comments:
-                    lines = [
-                        f'- [{hc["created_at"]}] {hc["test_name"]}: "{hc["comment"]}"'
-                        for hc in historical_comments
-                    ]
-                    historical_context = (
-                        "Previous human feedback for similar failures:\n"
-                        + "\n".join(lines)
-                    )
             except Exception as exc:
                 logger.debug("Failed to fetch historical context: %s", exc)
 
@@ -1368,21 +1391,42 @@ async def analyze_job(
                     f"Grouped {len(test_failures)} failures into {unique_errors} unique error types"
                 )
 
-                # Analyze each unique failure group in parallel
-                failure_tasks = [
-                    analyze_failure_group(
-                        failures=group,
-                        console_context=console_context,
-                        repo_path=repo_path,
-                        ai_provider=ai_provider,
-                        ai_model=ai_model,
-                        ai_cli_timeout=settings.ai_cli_timeout,
-                        custom_prompt=custom_prompt,
-                        artifacts_context=artifacts_context,
-                        historical_context=historical_context,
+                # Analyze each unique failure group in parallel,
+                # scoping historical comments to only the relevant tests/signatures per group
+                failure_tasks = []
+                for sig, group in failure_groups.items():
+                    group_historical_context = ""
+                    if historical_comments:
+                        group_test_names = {f.test_name for f in group}
+                        group_sigs = {sig}
+                        relevant = [
+                            hc
+                            for hc in historical_comments
+                            if hc["test_name"] in group_test_names
+                            or hc.get("error_signature", "") in group_sigs
+                        ]
+                        if relevant:
+                            lines = [
+                                f'- [{hc["created_at"]}] {hc["test_name"]}: "{hc["comment"]}"'
+                                for hc in relevant
+                            ]
+                            group_historical_context = (
+                                "Previous human feedback for similar failures:\n"
+                                + "\n".join(lines)
+                            )
+                    failure_tasks.append(
+                        analyze_failure_group(
+                            failures=group,
+                            console_context=console_context,
+                            repo_path=repo_path,
+                            ai_provider=ai_provider,
+                            ai_model=ai_model,
+                            ai_cli_timeout=settings.ai_cli_timeout,
+                            custom_prompt=custom_prompt,
+                            artifacts_context=artifacts_context,
+                            historical_context=group_historical_context,
+                        )
                     )
-                    for group in failure_groups.values()
-                ]
                 group_results = await run_parallel_with_limit(failure_tasks)
 
                 # Flatten results and handle exceptions
@@ -1413,6 +1457,19 @@ async def analyze_job(
 
                 artifacts_section = _build_artifacts_section(artifacts_context)
 
+                historical_section = ""
+                if historical_comments:
+                    lines = [
+                        f'- [{hc["created_at"]}] {hc["test_name"]}: "{hc["comment"]}"'
+                        for hc in historical_comments
+                    ]
+                    historical_section = (
+                        "\n\nHISTORICAL CONTEXT FROM PREVIOUS ANALYSES:\n"
+                        "Previous human feedback for similar failures:\n"
+                        + "\n".join(lines)
+                        + "\n"
+                    )
+
                 prompt = f"""Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
@@ -1423,7 +1480,7 @@ CONSOLE OUTPUT (errors/failures/warnings extracted):
 {artifacts_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-{custom_prompt_section}
+{custom_prompt_section}{historical_section}
 {_JSON_RESPONSE_SCHEMA}
 """
                 success, analysis_output = await call_ai_cli(

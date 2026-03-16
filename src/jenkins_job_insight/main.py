@@ -250,7 +250,6 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         "jenkins_artifacts_max_size_mb",
         "jenkins_artifacts_context_lines",
         "get_job_artifacts",
-        "github_token",
     ]
     for field in direct_fields:
         value = getattr(body, field, None)
@@ -262,6 +261,8 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         overrides["jira_api_token"] = SecretStr(body.jira_api_token)
     if body.jira_pat is not None:
         overrides["jira_pat"] = SecretStr(body.jira_pat)
+    if body.github_token is not None:
+        overrides["github_token"] = SecretStr(body.github_token)
 
     # AnalyzeRequest-specific fields (Jenkins overrides)
     if isinstance(body, AnalyzeRequest):
@@ -883,70 +884,79 @@ async def enrich_comments(
     )
 
     comments = await storage.get_comments_for_job(job_id)
-    enrichments: dict[str, list[dict]] = {}
+
+    # Detect Cloud vs Server/DC auth once, matching JiraClient logic:
+    # - Cloud: email + api_token -> httpx Basic auth tuple
+    # - Server/DC: pat only (no email) -> Bearer header
+    auth: tuple[str, str] | None = None
+    auth_headers: dict[str, str] = {}
+    jira_url: str | None = settings.jira_url if settings.jira_enabled else None
+    jira_active = bool(jira_url)
+
+    if jira_active and jira_url:
+        if settings.jira_email and settings.jira_api_token:
+            # Cloud: Basic auth with email:api_token
+            auth = (
+                settings.jira_email,
+                settings.jira_api_token.get_secret_value(),
+            )
+        elif settings.jira_pat:
+            # Server/DC: Bearer PAT (no email check)
+            auth_headers["Authorization"] = (
+                f"Bearer {settings.jira_pat.get_secret_value()}"
+            )
+
+    github_token = (
+        settings.github_token.get_secret_value() if settings.github_token else None
+    )
+
+    # Collect all enrichment tasks for parallel execution
+    tasks: list = []
+    task_map: dict[int, tuple[str, dict]] = {}
 
     for c in comments:
-        comment_enrichments: list[dict] = []
-
         for pr in detect_github_prs(c["comment"]):
-            status = await fetch_github_pr_status(
-                pr["owner"],
-                pr["repo"],
-                pr["number"],
-                token=settings.github_token,
-            )
-            if status:
-                comment_enrichments.append(
-                    {
-                        "type": "github_pr",
-                        "key": f"{pr['owner']}/{pr['repo']}#{pr['number']}",
-                        "status": status,
-                    }
-                )
-
-        if settings.jira_enabled and settings.jira_url:
-            # Detect Cloud vs Server/DC auth, matching JiraClient logic:
-            # - Cloud: email + (api_token or pat) -> httpx Basic auth tuple
-            # - Server/DC: pat only (no email) -> Bearer header
-            auth: tuple[str, str] | None = None
-            auth_headers: dict[str, str] = {}
-
-            jira_token = (
-                settings.jira_api_token.get_secret_value()
-                if settings.jira_api_token
-                else (
-                    settings.jira_pat.get_secret_value() if settings.jira_pat else None
+            idx = len(tasks)
+            tasks.append(
+                fetch_github_pr_status(
+                    pr["owner"],
+                    pr["repo"],
+                    pr["number"],
+                    token=github_token,
                 )
             )
+            task_map[idx] = (
+                str(c["id"]),
+                {
+                    "type": "github_pr",
+                    "key": f"{pr['owner']}/{pr['repo']}#{pr['number']}",
+                },
+            )
 
-            if settings.jira_email and jira_token:
-                # Cloud: Basic auth with email:token
-                auth = (settings.jira_email, jira_token)
-            elif settings.jira_pat:
-                # Server/DC: Bearer PAT
-                auth_headers["Authorization"] = (
-                    f"Bearer {settings.jira_pat.get_secret_value()}"
-                )
-
+        if jira_active and jira_url:
             for key in detect_jira_keys(c["comment"]):
-                status = await fetch_jira_ticket_status(
-                    settings.jira_url,
-                    key,
-                    auth_headers,
-                    ssl_verify=settings.jira_ssl_verify,
-                    auth=auth,
-                )
-                if status:
-                    comment_enrichments.append(
-                        {
-                            "type": "jira",
-                            "key": key,
-                            "status": status,
-                        }
+                idx = len(tasks)
+                tasks.append(
+                    fetch_jira_ticket_status(
+                        jira_url,
+                        key,
+                        auth_headers,
+                        ssl_verify=settings.jira_ssl_verify,
+                        auth=auth,
                     )
+                )
+                task_map[idx] = (str(c["id"]), {"type": "jira", "key": key})
 
-        if comment_enrichments:
-            enrichments[str(c["id"])] = comment_enrichments
+    enrichments: dict[str, list[dict]] = {}
+
+    if tasks:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, result in enumerate(results):
+            if isinstance(result, Exception) or result is None:
+                continue
+            comment_id, info = task_map[i]
+            info["status"] = result
+            enrichments.setdefault(comment_id, []).append(info)
 
     return {"enrichments": enrichments}
 
