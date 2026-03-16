@@ -414,7 +414,7 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
     sections: list[str] = [
         "=== BUILD ARTIFACTS CONTEXT ===",
         f"Artifacts directory: {extract_path}",
-        "Also accessible at: build-artifacts/ (relative to working directory)",
+        "Also accessible at: build-artifacts/ (or current working directory if no test repo)",
         f"Contains {len(all_files)} files.",
         "",
         "IMPORTANT: You MUST explore the build-artifacts/ directory (or the absolute path above).",
@@ -452,7 +452,7 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
 
     sections.append(f"--- Full artifacts available at: {extract_path} ---")
     sections.append(
-        "Explore build-artifacts/ directory for complete evidence before classifying."
+        "Explore the build-artifacts/ directory (or current working directory) for complete evidence before classifying."
     )
 
     context = "\n".join(sections)

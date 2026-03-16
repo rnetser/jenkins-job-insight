@@ -1154,7 +1154,17 @@ async def analyze_job(
                 ai_provider, ai_model, cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, [])
             )
             if not ok:
-                raise RuntimeError(f"Analysis failed: {err}")
+                return AnalysisResult(
+                    job_id=job_id,
+                    job_name=request.job_name,
+                    build_number=request.build_number,
+                    jenkins_url=HttpUrl(jenkins_build_url),
+                    status="failed",
+                    summary=err,
+                    ai_provider=ai_provider,
+                    ai_model=ai_model,
+                    failures=[],
+                )
 
             # Analyze failed child jobs IN PARALLEL with bounded concurrency
             if failed_child_jobs:
@@ -1311,7 +1321,18 @@ You have access to the repository if one was cloned. Explore to understand the f
                 )
 
                 if not success:
-                    raise RuntimeError(f"Analysis failed: {analysis_output}")
+                    return AnalysisResult(
+                        job_id=job_id,
+                        job_name=request.job_name,
+                        build_number=request.build_number,
+                        jenkins_url=HttpUrl(jenkins_build_url),
+                        status="failed",
+                        summary=analysis_output,
+                        ai_provider=ai_provider,
+                        ai_model=ai_model,
+                        failures=[],
+                        child_job_analyses=child_job_analyses,
+                    )
 
                 failures = [
                     FailureAnalysis(

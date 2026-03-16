@@ -357,7 +357,7 @@ async def process_analysis_with_id(
         result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
 
         # Save to storage
-        await update_status(job_id, "completed", result_data)
+        await update_status(job_id, result.status, result_data)
         logger.info(
             f"Analysis completed for {body.job_name} #{body.build_number} "
             f"(job_id: {job_id})"
@@ -416,7 +416,7 @@ async def analyze(
             merged.jenkins_url, body.job_name, body.build_number
         )
         await save_result(
-            result.job_id, jenkins_url, "completed", result.model_dump(mode="json")
+            result.job_id, jenkins_url, result.status, result.model_dump(mode="json")
         )
         logger.info(
             f"Sync analysis completed for {body.job_name} #{body.build_number} "
