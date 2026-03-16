@@ -104,13 +104,13 @@ class AnalyzeRequest(BaseAnalysisRequest):
         default=None,
         description="Jenkins SSL verification (overrides JENKINS_SSL_VERIFY env var)",
     )
-    jenkins_archive_max_size_mb: Annotated[int, Field(gt=0)] | None = Field(
+    jenkins_artifacts_max_size_mb: Annotated[int, Field(gt=0)] | None = Field(
         default=None,
-        description="Maximum Jenkins archive size in MB (overrides JENKINS_ARCHIVE_MAX_SIZE_MB env var)",
+        description="Maximum Jenkins artifacts size in MB (overrides JENKINS_ARTIFACTS_MAX_SIZE_MB env var)",
     )
-    jenkins_archive_context_lines: Annotated[int, Field(gt=0)] | None = Field(
+    jenkins_artifacts_context_lines: Annotated[int, Field(gt=0)] | None = Field(
         default=None,
-        description="Maximum Jenkins archive context lines for AI prompt (overrides JENKINS_ARCHIVE_CONTEXT_LINES env var)",
+        description="Maximum Jenkins artifacts context lines for AI prompt (overrides JENKINS_ARTIFACTS_CONTEXT_LINES env var)",
     )
     get_job_artifacts: bool | None = Field(
         default=None,

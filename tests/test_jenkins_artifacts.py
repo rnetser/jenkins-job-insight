@@ -1,4 +1,4 @@
-"""Tests for Jenkins archive tar/zip extraction and context building."""
+"""Tests for Jenkins artifacts tar/zip extraction and context building."""
 
 import io
 import shutil
@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from jenkins_job_insight import jenkins_archive
-from jenkins_job_insight.jenkins_archive import (
+from jenkins_job_insight import jenkins_artifacts
+from jenkins_job_insight.jenkins_artifacts import (
     build_artifacts_context,
     cleanup_extract_dir,
     download_artifact,
@@ -25,7 +25,7 @@ def extract_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Override EXTRACT_BASE to use tmp_path so tests never leave files in /tmp."""
     base = tmp_path / "extract-base"
     base.mkdir()
-    monkeypatch.setattr(jenkins_archive, "EXTRACT_BASE", base)
+    monkeypatch.setattr(jenkins_artifacts, "EXTRACT_BASE", base)
     return base
 
 
@@ -269,7 +269,7 @@ class TestCleanupExtractDir:
 
     def test_cleanup_removes_directory(self, tmp_path: Path) -> None:
         """Cleanup removes the target directory tree."""
-        target = tmp_path / "jenkins-archive-abc123"
+        target = tmp_path / "jenkins-artifacts-abc123"
         target.mkdir()
         (target / "nested").mkdir()
         (target / "nested" / "file.txt").write_text("data")
@@ -377,7 +377,7 @@ class TestStoreArtifact:
     ) -> None:
         """Archive file is extracted into a subdirectory."""
         # Monkeypatch EXTRACT_BASE so validate_and_extract_archive uses tmp_path
-        monkeypatch.setattr(jenkins_archive, "EXTRACT_BASE", tmp_path)
+        monkeypatch.setattr(jenkins_artifacts, "EXTRACT_BASE", tmp_path)
 
         tar_data = _make_tar_gz({"inner/file.txt": "extracted content\n"})
 
@@ -411,7 +411,7 @@ class TestProcessBuildArtifacts:
         """Override EXTRACT_BASE to use tmp_path."""
         base = tmp_path / "extract-base"
         base.mkdir()
-        monkeypatch.setattr(jenkins_archive, "EXTRACT_BASE", base)
+        monkeypatch.setattr(jenkins_artifacts, "EXTRACT_BASE", base)
         return base
 
     @pytest.fixture

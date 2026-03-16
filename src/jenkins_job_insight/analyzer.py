@@ -20,7 +20,7 @@ from fastapi import HTTPException
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.config import Settings
-from jenkins_job_insight.jenkins_archive import (
+from jenkins_job_insight.jenkins_artifacts import (
     ERROR_PATTERN,
     cleanup_extract_dir,
     process_build_artifacts,
@@ -683,7 +683,7 @@ async def analyze_failure_group(
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
         custom_prompt: Additional instructions from request or repo-level file.
-        artifacts_context: Jenkins archive context for AI analysis (optional).
+        artifacts_context: Jenkins artifacts context for AI analysis (optional).
 
     Returns:
         List of FailureAnalysis objects, one per failure in the group.
@@ -720,7 +720,7 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
 
     if artifacts_context:
         logger.info(
-            f"Prompt includes Jenkins archive context ({len(artifacts_context)} chars)"
+            f"Prompt includes Jenkins artifacts context ({len(artifacts_context)} chars)"
         )
 
     logger.info(
@@ -782,7 +782,7 @@ async def analyze_child_job(
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
         custom_prompt: Additional instructions from request or repo-level file.
-        artifacts_context: Jenkins archive context for AI analysis (optional).
+        artifacts_context: Jenkins artifacts context for AI analysis (optional).
 
     Returns:
         ChildJobAnalysis with analysis results or nested child analyses.
@@ -1083,8 +1083,8 @@ async def analyze_job(
                         jenkins_client.session,
                         build_url,
                         artifacts,
-                        settings.jenkins_archive_max_size_mb,
-                        settings.jenkins_archive_context_lines,
+                        settings.jenkins_artifacts_max_size_mb,
+                        settings.jenkins_artifacts_context_lines,
                     )
                 except Exception as exc:
                     logger.warning(f"Failed to process artifacts: {exc}")

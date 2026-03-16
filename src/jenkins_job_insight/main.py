@@ -244,8 +244,8 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         "jira_max_results",
         "ai_cli_timeout",
         "enable_jira",
-        "jenkins_archive_max_size_mb",
-        "jenkins_archive_context_lines",
+        "jenkins_artifacts_max_size_mb",
+        "jenkins_artifacts_context_lines",
         "get_job_artifacts",
     ]
     for field in direct_fields:

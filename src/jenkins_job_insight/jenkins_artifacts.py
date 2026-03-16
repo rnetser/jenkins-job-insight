@@ -1,4 +1,4 @@
-"""Jenkins archive extraction and context building for test failure analysis."""
+"""Jenkins artifacts extraction and context building for test failure analysis."""
 
 import io
 import os
@@ -24,7 +24,7 @@ ERROR_PATTERN = re.compile(
 )
 
 # Maximum ratio of extracted size to compressed size. Typical compression ratios
-# for Jenkins archives (logs, YAML, JSON) range from 3-8x; 10x provides safe
+# for Jenkins artifacts (logs, YAML, JSON) range from 3-8x; 10x provides safe
 # headroom while still catching decompression bombs.
 EXTRACT_SIZE_MULTIPLIER = 10
 
@@ -274,7 +274,7 @@ def validate_and_extract_archive(
         return None
 
     if extract_dir is None:
-        extract_dir = EXTRACT_BASE / f"jenkins-archive-{uuid.uuid4().hex[:8]}"
+        extract_dir = EXTRACT_BASE / f"jenkins-artifacts-{uuid.uuid4().hex[:8]}"
     extract_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Extracting archive ({size_mb:.1f} MB) to {extract_dir}")
 
