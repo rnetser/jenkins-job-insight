@@ -5,6 +5,7 @@ import shutil
 import tarfile
 import zipfile
 from pathlib import Path
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -12,6 +13,9 @@ from jenkins_job_insight import diagnostic_archive
 from jenkins_job_insight.diagnostic_archive import (
     build_diagnostic_context,
     cleanup_extract_dir,
+    download_artifact,
+    process_build_artifacts,
+    store_artifact,
     validate_and_extract_archive,
 )
 
@@ -281,3 +285,213 @@ class TestCleanupExtractDir:
 
         # Should not raise; errors are logged as warnings and swallowed
         cleanup_extract_dir(nonexistent)
+
+
+class TestDownloadArtifact:
+    """Tests for download_artifact."""
+
+    @pytest.fixture
+    def session(self) -> MagicMock:
+        """Create a mock requests.Session."""
+        return MagicMock()
+
+    def test_download_artifact_success(self, session: MagicMock) -> None:
+        """Successful download returns concatenated chunk bytes."""
+        response = Mock()
+        response.status_code = 200
+        response.iter_content.return_value = [b"chunk1", b"chunk2", b"chunk3"]
+        response.close = Mock()
+        session.get.return_value = response
+
+        result = download_artifact(
+            session, "https://jenkins.example.com/job/test/1", "artifacts/report.tar.gz"
+        )
+
+        assert result == b"chunk1chunk2chunk3"
+        session.get.assert_called_once_with(
+            "https://jenkins.example.com/job/test/1/artifact/artifacts/report.tar.gz",
+            stream=True,
+            timeout=60,
+        )
+        response.close.assert_called_once()
+
+    def test_download_artifact_http_error(self, session: MagicMock) -> None:
+        """Non-200 response returns None."""
+        response = Mock()
+        response.status_code = 404
+        response.close = Mock()
+        session.get.return_value = response
+
+        result = download_artifact(
+            session, "https://jenkins.example.com/job/test/1", "missing.tar.gz"
+        )
+
+        assert result is None
+        response.close.assert_called_once()
+
+    def test_download_artifact_size_exceeded(self, session: MagicMock) -> None:
+        """Download exceeding max_size_mb returns None."""
+        response = Mock()
+        response.status_code = 200
+        # Each chunk is 1 MB; max_size_mb=1 so second chunk exceeds limit
+        one_mb = b"x" * (1024 * 1024)
+        response.iter_content.return_value = [one_mb, one_mb]
+        response.close = Mock()
+        session.get.return_value = response
+
+        result = download_artifact(
+            session,
+            "https://jenkins.example.com/job/test/1",
+            "huge.tar.gz",
+            max_size_mb=1,
+        )
+
+        assert result is None
+        response.close.assert_called_once()
+
+    def test_download_artifact_exception(self, session: MagicMock) -> None:
+        """Network exception returns None without crashing."""
+        session.get.side_effect = ConnectionError("connection refused")
+
+        result = download_artifact(
+            session, "https://jenkins.example.com/job/test/1", "artifact.tar.gz"
+        )
+
+        assert result is None
+
+
+class TestStoreArtifact:
+    """Tests for store_artifact."""
+
+    def test_store_artifact_raw_file(self, tmp_path: Path) -> None:
+        """Non-archive file is written to disk as-is."""
+        data = b"plain text content"
+
+        store_artifact("reports/output.txt", data, tmp_path)
+
+        dest = tmp_path / "reports" / "output.txt"
+        assert dest.exists()
+        assert dest.read_bytes() == data
+
+    def test_store_artifact_archive(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Archive file is extracted into a subdirectory."""
+        # Monkeypatch EXTRACT_BASE so validate_and_extract_archive uses tmp_path
+        monkeypatch.setattr(diagnostic_archive, "EXTRACT_BASE", tmp_path)
+
+        tar_data = _make_tar_gz({"inner/file.txt": "extracted content\n"})
+
+        store_artifact("logs/must-gather.tar.gz", tar_data, tmp_path)
+
+        # The archive should be extracted into a directory named after the archive
+        # minus its extension
+        extract_dir = tmp_path / "logs" / "must-gather"
+        assert extract_dir.exists()
+        assert (extract_dir / "inner" / "file.txt").read_text() == "extracted content\n"
+        # The raw .tar.gz file should NOT exist (extraction succeeded)
+        assert not (tmp_path / "logs" / "must-gather.tar.gz").exists()
+
+    def test_store_artifact_failed_archive_fallback(self, tmp_path: Path) -> None:
+        """Invalid archive data falls back to storing as raw file."""
+        bad_data = b"this is not a valid zip"
+
+        store_artifact("data/archive.zip", bad_data, tmp_path)
+
+        # Should be stored as a raw file since extraction fails
+        dest = tmp_path / "data" / "archive.zip"
+        assert dest.exists()
+        assert dest.read_bytes() == bad_data
+
+
+class TestProcessBuildArtifacts:
+    """Tests for process_build_artifacts."""
+
+    @pytest.fixture
+    def extract_base(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """Override EXTRACT_BASE to use tmp_path."""
+        base = tmp_path / "extract-base"
+        base.mkdir()
+        monkeypatch.setattr(diagnostic_archive, "EXTRACT_BASE", base)
+        return base
+
+    @pytest.fixture
+    def session(self) -> MagicMock:
+        """Create a mock requests.Session."""
+        return MagicMock()
+
+    def test_process_build_artifacts_empty_list(
+        self, session: MagicMock, extract_base: Path
+    ) -> None:
+        """Empty artifact list returns empty context and None path."""
+        context, artifacts_dir = process_build_artifacts(
+            session, "https://jenkins.example.com/job/test/1", []
+        )
+
+        assert context == ""
+        assert artifacts_dir is None
+
+    def test_process_build_artifacts_downloads_and_stores(
+        self, session: MagicMock, extract_base: Path
+    ) -> None:
+        """Artifacts are downloaded, stored, and context is built."""
+        artifact_list = [
+            {"relativePath": "logs/app.log"},
+            {"relativePath": "config.yaml"},
+        ]
+
+        def fake_get(url: str, **kwargs):
+            response = Mock()
+            response.status_code = 200
+            response.close = Mock()
+            if "app.log" in url:
+                response.iter_content.return_value = [
+                    b"2024-01-01 ERROR something failed\n"
+                ]
+            else:
+                response.iter_content.return_value = [b"key: value\n"]
+            return response
+
+        session.get.side_effect = fake_get
+
+        context, artifacts_dir = process_build_artifacts(
+            session,
+            "https://jenkins.example.com/job/test/1",
+            artifact_list,
+        )
+
+        assert artifacts_dir is not None
+        assert artifacts_dir.exists()
+        # Both artifacts should be stored
+        assert (artifacts_dir / "logs" / "app.log").exists()
+        assert (artifacts_dir / "config.yaml").exists()
+        # Context should contain diagnostic output from the stored files
+        assert "DIAGNOSTIC ARCHIVE CONTEXT" in context
+        # The error line from the log should appear in context
+        assert "something failed" in context
+
+        # Cleanup
+        shutil.rmtree(artifacts_dir, ignore_errors=True)
+
+    def test_process_build_artifacts_all_downloads_fail(
+        self, session: MagicMock, extract_base: Path
+    ) -> None:
+        """When all downloads fail, returns failure note and None path."""
+        artifact_list = [
+            {"relativePath": "artifact1.tar.gz"},
+            {"relativePath": "artifact2.zip"},
+        ]
+
+        response = Mock()
+        response.status_code = 404
+        response.close = Mock()
+        session.get.return_value = response
+
+        context, artifacts_dir = process_build_artifacts(
+            session,
+            "https://jenkins.example.com/job/test/1",
+            artifact_list,
+        )
+
+        assert "No artifacts could be downloaded" in context
+        assert artifacts_dir is None

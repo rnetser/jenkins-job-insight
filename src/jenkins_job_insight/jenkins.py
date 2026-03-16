@@ -4,6 +4,7 @@ import os
 from urllib.parse import urlparse
 
 import jenkins
+import requests
 import urllib3
 from pydantic import HttpUrl
 from simple_logger.logger import get_logger
@@ -31,6 +32,11 @@ class JenkinsClient(jenkins.Jenkins):
             self._session.verify = False
             # Suppress InsecureRequestWarning
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    @property
+    def session(self) -> "requests.Session":
+        """Authenticated requests session for direct API calls."""
+        return self._session
 
     def get_build_console(self, job_name: str, build_number: int) -> str:
         """Get console output for a build.

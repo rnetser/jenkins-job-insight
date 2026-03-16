@@ -1051,6 +1051,21 @@ async def analyze_job(
     except Exception as e:
         handle_jenkins_exception(e, job_name, build_number)
 
+    # Check if build passed - return early if yes
+    build_result = build_info.get("result")
+    if build_result == "SUCCESS":
+        return AnalysisResult(
+            job_id=job_id,
+            job_name=request.job_name,
+            build_number=request.build_number,
+            jenkins_url=HttpUrl(jenkins_build_url),
+            status="completed",
+            summary="Build passed successfully. No failures to analyze.",
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            failures=[],
+        )
+
     # Download build artifacts for diagnostic context
     diagnostic_context = ""
     extract_path: Path | None = None
@@ -1062,7 +1077,7 @@ async def analyze_job(
                 try:
                     diagnostic_context, extract_path = await asyncio.to_thread(
                         process_build_artifacts,
-                        jenkins_client._session,
+                        jenkins_client.session,
                         build_url,
                         artifacts,
                         settings.diagnostic_archive_max_size_mb,
@@ -1070,21 +1085,6 @@ async def analyze_job(
                     )
                 except Exception as exc:
                     logger.warning(f"Failed to process artifacts: {exc}")
-
-        # Check if build passed - return early if yes
-        build_result = build_info.get("result")
-        if build_result == "SUCCESS":
-            return AnalysisResult(
-                job_id=job_id,
-                job_name=request.job_name,
-                build_number=request.build_number,
-                jenkins_url=HttpUrl(jenkins_build_url),
-                status="completed",
-                summary="Build passed successfully. No failures to analyze.",
-                ai_provider=ai_provider,
-                ai_model=ai_model,
-                failures=[],
-            )
 
         # Only fetch console output if build failed
         console_output: str = ""
