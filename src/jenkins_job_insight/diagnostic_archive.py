@@ -442,6 +442,44 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
         "",
     ]
 
+    # Always show directory structure so AI knows what to explore
+    dirs = sorted(
+        {
+            str(Path(path).parent)
+            for path, _ in all_files
+            if str(Path(path).parent) != "."
+        }
+    )
+    if dirs:
+        sections.append("--- Directory Structure ---")
+        for d in dirs:
+            # Count files in this directory
+            file_count = sum(1 for path, _ in all_files if str(Path(path).parent) == d)
+            dir_size = sum(
+                size for path, size in all_files if str(Path(path).parent) == d
+            )
+            if dir_size >= 1024 * 1024:
+                sections.append(
+                    f"  {d}/ ({file_count} files, {dir_size / (1024 * 1024):.1f} MB)"
+                )
+            elif dir_size >= 1024:
+                sections.append(
+                    f"  {d}/ ({file_count} files, {dir_size / 1024:.1f} KB)"
+                )
+            else:
+                sections.append(f"  {d}/ ({file_count} files, {dir_size} B)")
+        # Also list root-level files
+        root_files = [
+            (path, size) for path, size in all_files if str(Path(path).parent) == "."
+        ]
+        if root_files:
+            for path, size in root_files:
+                if size >= 1024:
+                    sections.append(f"  {path} ({size / 1024:.1f} KB)")
+                else:
+                    sections.append(f"  {path} ({size} B)")
+        sections.append("")
+
     if error_lines:
         sections.append("--- Error/Warning Lines from Logs ---")
         sections.extend(error_lines)
@@ -460,12 +498,6 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
     if not error_lines and not event_lines and not status_issues:
         sections.append(
             "No errors, warnings, or status issues found in build artifacts."
-        )
-        sections.append("")
-        sections.append("--- Files in Archive ---")
-        sections.extend(
-            f"{path} ({size / 1024:.1f} KB)" if size >= 1024 else f"{path} ({size} B)"
-            for path, size in all_files
         )
         sections.append("")
 
