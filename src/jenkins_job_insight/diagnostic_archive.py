@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import tarfile
+import urllib.parse
 import uuid
 import zipfile
 from pathlib import Path
@@ -31,8 +32,6 @@ EXTRACT_SIZE_MULTIPLIER = 10
 class _SizeLimitExceeded(Exception):
     """Raised when archive extraction exceeds size limit."""
 
-    pass
-
 
 def download_artifact(
     session: requests.Session,
@@ -51,7 +50,7 @@ def download_artifact(
     Returns:
         Raw bytes of the artifact, or None if download fails.
     """
-    url = f"{build_url.rstrip('/')}/artifact/{relative_path}"
+    url = f"{build_url.rstrip('/')}/artifact/{urllib.parse.quote(relative_path, safe='/')}"
     logger.info(f"Downloading artifact: {url}")
 
     try:
@@ -297,7 +296,7 @@ def validate_and_extract_archive(
         shutil.rmtree(extract_dir)
         logger.warning(
             f"Extracted size ({extracted_size / (1024 * 1024):.1f} MB) exceeds maximum "
-            f"allowed ({max_size_mb * 10} MB). Possible decompression bomb."
+            f"allowed ({max_size_mb * EXTRACT_SIZE_MULTIPLIER} MB). Possible decompression bomb."
         )
         return None
 
@@ -305,23 +304,14 @@ def validate_and_extract_archive(
     return extract_dir
 
 
-def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
-    """Walk an extracted archive directory and build a structured diagnostic summary.
-
-    Discovers log files, YAML/JSON resource dumps, and event files, then
-    extracts error/warning lines, abnormal status indicators, and warning
-    events into a human-readable context string.
-
-    Args:
-        extract_path: Root directory of the extracted archive.
-        max_lines: Maximum number of lines in the returned context string.
+def _discover_files(
+    extract_path: Path,
+) -> tuple[list[Path], list[Path], list[Path], list[str]]:
+    """Discover and classify files in extracted archive.
 
     Returns:
-        A structured text summary with sections for log errors, warning
-        events, and abnormal status indicators. Returns a note if no relevant content is found.
+        Tuple of (log_files, event_files, yaml_json_files, all_files).
     """
-    logger.info(f"Building diagnostic context from {extract_path}")
-
     log_files: list[Path] = []
     yaml_json_files: list[Path] = []
     event_files: list[Path] = []
@@ -330,11 +320,9 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
     for file_path in extract_path.rglob("*"):
         if not file_path.is_file():
             continue
-
         relative = str(file_path.relative_to(extract_path))
         all_files.append(relative)
         name_lower = file_path.name.lower()
-
         if (
             name_lower.endswith((".log", ".txt"))
             or "/logs/" in relative
@@ -347,65 +335,90 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
             else:
                 yaml_json_files.append(file_path)
 
+    return log_files, event_files, yaml_json_files, all_files
+
+
+def _extract_error_lines(
+    log_files: list[Path], extract_path: Path, seen: set[str]
+) -> list[str]:
+    """Extract deduplicated error/warning lines from log files."""
+    lines: list[str] = []
+    for log_file in log_files:
+        try:
+            text = log_file.read_text(errors="replace")
+            name = str(log_file.relative_to(extract_path))
+            for line in text.splitlines():
+                if ERROR_PATTERN.search(line):
+                    key = line.strip()
+                    if key not in seen:
+                        seen.add(key)
+                        lines.append(f"[{name}]: {line.rstrip()}")
+        except OSError:
+            continue
+    return lines
+
+
+def _extract_event_lines(event_files: list[Path], extract_path: Path) -> list[str]:
+    """Extract warning event lines from event files."""
+    lines: list[str] = []
+    for event_file in event_files:
+        try:
+            text = event_file.read_text(errors="replace")
+            name = str(event_file.relative_to(extract_path))
+            for line in text.splitlines():
+                if "Warning" in line or "warning" in line:
+                    lines.append(f"[{name}]: {line.rstrip()}")
+        except OSError:
+            continue
+    return lines
+
+
+def _extract_status_issues(
+    yaml_json_files: list[Path], extract_path: Path, seen: set[str]
+) -> list[str]:
+    """Extract error/status lines from YAML/JSON files."""
+    lines: list[str] = []
+    for resource_file in yaml_json_files:
+        try:
+            text = resource_file.read_text(errors="replace")
+            name = str(resource_file.relative_to(extract_path))
+            for line in text.splitlines():
+                if ERROR_PATTERN.search(line):
+                    key = line.strip()
+                    if key not in seen:
+                        seen.add(key)
+                        lines.append(f"[{name}]: {line.strip()}")
+        except OSError:
+            continue
+    return lines
+
+
+def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
+    """Walk an extracted archive directory and build a structured diagnostic summary."""
+    logger.info(f"Building diagnostic context from {extract_path}")
+
+    log_files, event_files, yaml_json_files, all_files = _discover_files(extract_path)
+
     logger.info(
         f"Archive file discovery: {len(all_files)} total files, "
         f"{len(log_files)} log files, {len(event_files)} event files, "
         f"{len(yaml_json_files)} yaml/json files"
     )
-    error_lines: list[str] = []
-    event_lines: list[str] = []
-    status_issues: list[str] = []
+
     seen_errors: set[str] = set()
-
-    # Extract error/warning lines from log files (deduplicated)
-    for log_file in log_files:
-        try:
-            text = log_file.read_text(errors="replace")
-            relative_name = str(log_file.relative_to(extract_path))
-            for line in text.splitlines():
-                if ERROR_PATTERN.search(line):
-                    dedup_key = line.strip()
-                    if dedup_key in seen_errors:
-                        continue
-                    seen_errors.add(dedup_key)
-                    error_lines.append(f"[{relative_name}]: {line.rstrip()}")
-        except OSError:
-            continue
-
-    # Extract warning events
-    for event_file in event_files:
-        try:
-            text = event_file.read_text(errors="replace")
-            relative_name = str(event_file.relative_to(extract_path))
-            for line in text.splitlines():
-                if "Warning" in line or "warning" in line:
-                    event_lines.append(f"[{relative_name}]: {line.rstrip()}")
-        except OSError:
-            continue
-
-    # Scan YAML/JSON files for errors and abnormal status
-    for resource_file in yaml_json_files:
-        try:
-            text = resource_file.read_text(errors="replace")
-            relative_name = str(resource_file.relative_to(extract_path))
-            for line in text.splitlines():
-                if ERROR_PATTERN.search(line):
-                    dedup_key = line.strip()
-                    if dedup_key in seen_errors:
-                        continue
-                    seen_errors.add(dedup_key)
-                    status_issues.append(f"[{relative_name}]: {line.strip()}")
-        except OSError:
-            continue
+    error_lines = _extract_error_lines(log_files, extract_path, seen_errors)
+    event_lines = _extract_event_lines(event_files, extract_path)
+    status_issues = _extract_status_issues(yaml_json_files, extract_path, seen_errors)
 
     # Build the structured context
     sections: list[str] = [
-        "=== DIAGNOSTIC ARCHIVE CONTEXT ===",
-        f"Extracted archive path: {extract_path}",
-        f"Archive contains {len(all_files)} files.",
+        "=== BUILD ARTIFACTS CONTEXT ===",
+        f"Artifacts directory: {extract_path}",
+        "Also accessible at: build-artifacts/ (relative to working directory)",
+        f"Contains {len(all_files)} files.",
         "",
-        "IMPORTANT: You MUST read the files at the path above. The summary below is only a preview.",
-        "Use the extracted path to read full log files, events, and resource status.",
+        "IMPORTANT: You MUST explore the build-artifacts/ directory (or the absolute path above).",
+        "The summary below is only a preview. Read the actual files for full evidence.",
         "",
     ]
 
@@ -426,22 +439,21 @@ def build_diagnostic_context(extract_path: Path, max_lines: int = 1000) -> str:
 
     if not error_lines and not event_lines and not status_issues:
         sections.append(
-            "No errors, warnings, or status issues found in diagnostic archive."
+            "No errors, warnings, or status issues found in build artifacts."
         )
-        # Include file listing so AI knows what's available
         sections.append("")
         sections.append("--- Files in Archive ---")
         sections.extend(all_files)
         sections.append("")
 
-    # Truncate to max_lines
     if len(sections) > max_lines:
         sections = sections[:max_lines]
         sections.append("... [truncated to max_lines limit]")
 
-    # Always end with the path reminder
-    sections.append(f"--- Full archive available at: {extract_path} ---")
-    sections.append("You MUST explore the files above before classifying any failure.")
+    sections.append(f"--- Full artifacts available at: {extract_path} ---")
+    sections.append(
+        "Explore build-artifacts/ directory for complete evidence before classifying."
+    )
 
     context = "\n".join(sections)
     logger.info(

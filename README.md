@@ -454,7 +454,7 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
   }'
 ```
 
-To disable artifact download or use legacy single-artifact mode:
+To disable artifact download entirely:
 
 ```bash
 # Disable artifact download

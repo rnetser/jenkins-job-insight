@@ -211,12 +211,11 @@ class TestBuildDiagnosticContext:
         context = build_diagnostic_context(tmp_path)
 
         assert "Warning" in context
-        assert (
-            "Back-off restarting failed container" not in context
-            or "Warning" in context
-        )
-        # The Warning line itself should be captured
+        # Only lines containing "Warning" are extracted; the message line is not
         assert "type: Warning" in context
+        # Normal events should not appear
+        assert "type: Normal" not in context
+        assert "Scheduled successfully" not in context
 
     def test_detects_status_issues(self, tmp_path: Path) -> None:
         """YAML files with error/failure keywords appear in abnormal status indicators."""
@@ -466,7 +465,7 @@ class TestProcessBuildArtifacts:
         assert (artifacts_dir / "logs" / "app.log").exists()
         assert (artifacts_dir / "config.yaml").exists()
         # Context should contain diagnostic output from the stored files
-        assert "DIAGNOSTIC ARCHIVE CONTEXT" in context
+        assert "BUILD ARTIFACTS CONTEXT" in context
         # The error line from the log should appear in context
         assert "something failed" in context
 

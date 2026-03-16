@@ -845,7 +845,7 @@ async def analyze_child_job(
                 ai_model,
                 ai_cli_timeout,
                 custom_prompt,
-                diagnostic_context=diagnostic_context,
+                diagnostic_context="",
             )
             for child_name, child_num in failed_children
         ]
@@ -1130,22 +1130,31 @@ async def analyze_job(
 
             custom_prompt = _resolve_custom_prompt(request.raw_prompt, repo_path)
 
+            # Make artifacts accessible in the AI working directory
+            if extract_path:
+                if repo_path:
+                    # Symlink artifacts into the repo dir so AI can access them
+                    artifacts_link = repo_path / "build-artifacts"
+                    try:
+                        artifacts_link.symlink_to(extract_path)
+                        logger.info(
+                            f"Linked artifacts into workspace: {artifacts_link}"
+                        )
+                    except OSError as exc:
+                        logger.warning(
+                            f"Could not link artifacts into workspace: {exc}"
+                        )
+                else:
+                    # No repo — use artifacts dir as the AI working directory
+                    repo_path = extract_path
+                    logger.info(f"Using artifacts dir as AI workspace: {repo_path}")
+
             # Pre-flight: verify AI CLI is reachable before spawning parallel tasks
             ok, err = await check_ai_cli_available(
                 ai_provider, ai_model, cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, [])
             )
             if not ok:
-                return AnalysisResult(
-                    job_id=job_id,
-                    job_name=request.job_name,
-                    build_number=request.build_number,
-                    jenkins_url=HttpUrl(jenkins_build_url),
-                    status="failed",
-                    summary=err,
-                    ai_provider=ai_provider,
-                    ai_model=ai_model,
-                    failures=[],
-                )
+                raise RuntimeError(f"Analysis failed: {err}")
 
             # Analyze failed child jobs IN PARALLEL with bounded concurrency
             if failed_child_jobs:
@@ -1162,7 +1171,7 @@ async def analyze_job(
                         ai_model=ai_model,
                         ai_cli_timeout=settings.ai_cli_timeout,
                         custom_prompt=custom_prompt,
-                        diagnostic_context=diagnostic_context,
+                        diagnostic_context="",
                     )
                     for child_name, child_num in failed_child_jobs
                 ]
@@ -1302,18 +1311,7 @@ You have access to the repository if one was cloned. Explore to understand the f
                 )
 
                 if not success:
-                    return AnalysisResult(
-                        job_id=job_id,
-                        job_name=request.job_name,
-                        build_number=request.build_number,
-                        jenkins_url=HttpUrl(jenkins_build_url),
-                        status="failed",
-                        summary=analysis_output,
-                        ai_provider=ai_provider,
-                        ai_model=ai_model,
-                        failures=[],
-                        child_job_analyses=child_job_analyses,
-                    )
+                    raise RuntimeError(f"Analysis failed: {analysis_output}")
 
                 failures = [
                     FailureAnalysis(
