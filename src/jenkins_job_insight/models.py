@@ -104,6 +104,18 @@ class AnalyzeRequest(BaseAnalysisRequest):
         default=None,
         description="Jenkins SSL verification (overrides JENKINS_SSL_VERIFY env var)",
     )
+    diagnostic_archive_max_size_mb: Annotated[int, Field(gt=0)] | None = Field(
+        default=None,
+        description="Maximum diagnostic archive size in MB (overrides DIAGNOSTIC_ARCHIVE_MAX_SIZE_MB env var)",
+    )
+    diagnostic_archive_context_lines: Annotated[int, Field(gt=0)] | None = Field(
+        default=None,
+        description="Maximum diagnostic context lines for AI prompt (overrides DIAGNOSTIC_ARCHIVE_CONTEXT_LINES env var)",
+    )
+    get_job_artifacts: bool | None = Field(
+        default=None,
+        description="Download all build artifacts for AI context (default: true, overrides GET_JOB_ARTIFACTS env var)",
+    )
 
 
 class TestFailure(BaseModel):
@@ -168,6 +180,10 @@ class AnalysisDetail(BaseModel):
         default_factory=list, description="List of affected test names"
     )
     details: str = Field(default="", description="Detailed analysis text")
+    artifacts_evidence: str = Field(
+        default="",
+        description="Verbatim log lines from build artifacts supporting the analysis (not a summary)",
+    )
     code_fix: CodeFix | bool | None = Field(
         default=False, description="Code fix (if CODE ISSUE)"
     )

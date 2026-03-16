@@ -76,6 +76,10 @@ Configure the service using environment variables. The service is tied to a sing
 | `JIRA_PROJECT_KEY` | No | - | Scope Jira searches to a specific project |
 | `JIRA_SSL_VERIFY` | No | `true` | SSL certificate verification for Jira |
 | `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
+| **Build Artifact Analysis (Optional)** | | | |
+| `GET_JOB_ARTIFACTS` | No | `true` | Download all build artifacts for AI diagnostic context |
+| `DIAGNOSTIC_ARCHIVE_MAX_SIZE_MB` | No | `500` | Maximum diagnostic archive (tar/zip) file size in MB |
+| `DIAGNOSTIC_ARCHIVE_CONTEXT_LINES` | No | `200` | Maximum diagnostic context lines for AI prompt |
 
 ### Jenkins Configuration
 
@@ -240,6 +244,10 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `JIRA_PROJECT_KEY`   | `jira_project_key`   | No       | Both                   | Scope Jira searches to a specific project                      |
 | `JIRA_SSL_VERIFY`    | `jira_ssl_verify`    | No       | Both                   | SSL certificate verification for Jira (default: true)          |
 | `JIRA_MAX_RESULTS`   | `jira_max_results`   | No       | Both                   | Maximum Jira results per search (default: 5)                   |
+| **Build Artifact Analysis** |                    |          |                        |                                                                |
+| `GET_JOB_ARTIFACTS` | `get_job_artifacts` | No | `/analyze` | Download all build artifacts for AI context (default: true) |
+| `DIAGNOSTIC_ARCHIVE_MAX_SIZE_MB` | `diagnostic_archive_max_size_mb` | No       | `/analyze`             | Maximum diagnostic archive (tar/zip) size in MB (default: 500) |
+| `DIAGNOSTIC_ARCHIVE_CONTEXT_LINES` | `diagnostic_archive_context_lines` | No       | `/analyze`             | Maximum context lines for AI prompt (default: 200)             |
 
 *Jenkins fields are required for `/analyze` but must be configured in at least one place (environment variable or request body). *Either `failures` or `raw_xml` must be provided for `/analyze-failures` (mutually exclusive).
 
@@ -418,6 +426,68 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
 ```
 
 No server configuration is needed — the prompt file lives in your tests repository and is picked up automatically.
+
+### Build Artifact Analysis
+
+By default, the service downloads all build artifacts from the Jenkins build and uses them as additional diagnostic context for AI analysis. This happens automatically without any extra configuration.
+
+#### How It Works
+
+1. The service lists all artifacts from the Jenkins build API
+2. Each artifact is downloaded using existing Jenkins credentials
+3. Archive files (tar.gz, zip) are automatically extracted; non-archive files are stored as-is
+4. Artifacts are exposed as `build-artifacts/` in the AI workspace:
+   - **With test repo configured**: artifacts are symlinked as `build-artifacts/` inside the cloned test repo directory
+   - **Without test repo**: the artifacts directory itself becomes the AI working directory
+5. Specific artifact types are scanned (log files for errors/warnings, event files for warnings, YAML/JSON for status issues) and a diagnostic summary is injected into the AI prompt
+6. The AI can directly explore the full artifact files under `build-artifacts/` for additional evidence during analysis
+
+#### Usage
+
+No special configuration is needed. All build artifacts are downloaded by default:
+
+```bash
+curl -X POST "http://localhost:8000/analyze?sync=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_name": "my-test-job",
+    "build_number": 42,
+    "ai_provider": "claude",
+    "ai_model": "sonnet"
+  }'
+```
+
+To disable artifact download entirely:
+
+```bash
+# Disable artifact download
+curl -X POST "http://localhost:8000/analyze?sync=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_name": "my-test-job",
+    "build_number": 42,
+    "ai_provider": "claude",
+    "ai_model": "sonnet",
+    "get_job_artifacts": false
+  }'
+```
+
+#### What Gets Analyzed
+
+The service extracts and summarizes:
+- **Log files** (`*.log`): Error, warning, and exception lines
+- **Warning events**: Events indicating abnormal conditions
+- **Status indicators**: Abnormal status conditions in diagnostic data
+
+This context helps the AI distinguish between test infrastructure issues (CODE ISSUE) and actual product problems (PRODUCT BUG).
+
+#### Build Artifact Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GET_JOB_ARTIFACTS` | `true` | Download all build artifacts (set `false` to disable) |
+| `DIAGNOSTIC_ARCHIVE_MAX_SIZE_MB` | `500` | Maximum archive (tar/zip) file size in MB |
+| `DIAGNOSTIC_ARCHIVE_CONTEXT_LINES` | `200` | Maximum lines of diagnostic context included in AI prompt |
 
 ## API Endpoints
 

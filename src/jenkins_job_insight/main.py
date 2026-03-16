@@ -244,6 +244,9 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         "jira_max_results",
         "ai_cli_timeout",
         "enable_jira",
+        "diagnostic_archive_max_size_mb",
+        "diagnostic_archive_context_lines",
+        "get_job_artifacts",
     ]
     for field in direct_fields:
         value = getattr(body, field, None)
@@ -332,7 +335,11 @@ async def process_analysis_with_id(
         ai_provider, ai_model = _resolve_ai_config(body)
 
         result = await analyze_job(
-            body, settings, ai_provider=ai_provider, ai_model=ai_model, job_id=job_id
+            body,
+            settings,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            job_id=job_id,
         )
 
         # Enrich PRODUCT BUG failures with Jira matches
@@ -350,7 +357,7 @@ async def process_analysis_with_id(
         result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
 
         # Save to storage
-        await update_status(job_id, "completed", result_data)
+        await update_status(job_id, result.status, result_data)
         logger.info(
             f"Analysis completed for {body.job_name} #{body.build_number} "
             f"(job_id: {job_id})"
@@ -390,7 +397,10 @@ async def analyze(
         ai_provider, ai_model = _resolve_ai_config(body)
 
         result = await analyze_job(
-            body, merged, ai_provider=ai_provider, ai_model=ai_model
+            body,
+            merged,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
         )
 
         # Enrich PRODUCT BUG failures with Jira matches
@@ -406,7 +416,7 @@ async def analyze(
             merged.jenkins_url, body.job_name, body.build_number
         )
         await save_result(
-            result.job_id, jenkins_url, "completed", result.model_dump(mode="json")
+            result.job_id, jenkins_url, result.status, result.model_dump(mode="json")
         )
         logger.info(
             f"Sync analysis completed for {body.job_name} #{body.build_number} "

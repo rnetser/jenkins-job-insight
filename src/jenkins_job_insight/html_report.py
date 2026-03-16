@@ -797,6 +797,7 @@ def _render_failure_card(
     # Product Bug Report details
     if isinstance(detail.product_bug_report, ProductBugReport):
         bug = detail.product_bug_report
+
         parts.append(f"""{indent}    <h4>Product Bug Report</h4>
 {indent}    <div class="detail-grid">
 {indent}      <span class="detail-label">Title:</span><span class="detail-value">{e(bug.title)}</span>
@@ -809,6 +810,9 @@ def _render_failure_card(
         # Jira matches
         if bug.jira_matches:
             _render_jira_matches(parts, bug.jira_matches, e, indent)
+
+    # Artifacts evidence
+    _render_artifacts_evidence(parts, detail, e, indent)
 
     # Affected tests
     if detail.affected_tests:
@@ -900,6 +904,7 @@ def _render_group_card(
     # Product Bug Report details (improvement over reference)
     if isinstance(detail.product_bug_report, ProductBugReport):
         bug = detail.product_bug_report
+
         parts.append(f"""{indent}    <h4>Product Bug Report</h4>
 {indent}    <div class="detail-grid">
 {indent}      <span class="detail-label">Title:</span><span class="detail-value">{e(bug.title)}</span>
@@ -912,6 +917,9 @@ def _render_group_card(
         # Jira matches
         if bug.jira_matches:
             _render_jira_matches(parts, bug.jira_matches, e, indent)
+
+    # Artifacts evidence
+    _render_artifacts_evidence(parts, detail, e, indent)
 
     # Affected Tests
     parts.append(f"""{indent}    <div class="bug-tests">
@@ -933,6 +941,18 @@ def _render_group_card(
 
     parts.append(f"""{indent}  </div>
 {indent}</details>
+""")
+
+
+def _render_artifacts_evidence(
+    parts: list[str], detail: AnalysisDetail, e: Callable, indent: str
+) -> None:
+    """Render artifacts_evidence into the HTML parts list if present."""
+    if not detail.artifacts_evidence:
+        return
+    parts.append(f"""{indent}    <div class="detail-grid">
+{indent}      <span class="detail-label">Artifacts Evidence:</span><pre class="detail-value" style="white-space: pre-wrap; margin: 0;">{e(detail.artifacts_evidence)}</pre>
+{indent}    </div>
 """)
 
 
