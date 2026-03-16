@@ -1,6 +1,5 @@
 """Jenkins API client wrapper."""
 
-import io
 import os
 from urllib.parse import urlparse
 
@@ -89,89 +88,6 @@ class JenkinsClient(jenkins.Jenkins):
                 err,
             )
             raise
-
-    def download_build_artifacts(
-        self, job_name: str, build_number: int, max_size_mb: int = 500
-    ) -> list[tuple[str, bytes]]:
-        """Download all artifacts for a build.
-
-        Gets the build info from Jenkins API, iterates over all artifacts,
-        and downloads each one using the authenticated session.
-
-        Args:
-            job_name: Name of the Jenkins job.
-            build_number: Build number to retrieve.
-            max_size_mb: Maximum allowed size per artifact in megabytes.
-
-        Returns:
-            List of (relative_path, data) tuples for successfully downloaded artifacts.
-            Returns empty list if no artifacts or on error.
-        """
-        try:
-            build_info = self.get_build_info_safe(job_name, build_number)
-            artifacts = build_info.get("artifacts", [])
-            if not artifacts:
-                logger.debug(f"No artifacts found for {job_name} #{build_number}")
-                return []
-
-            build_url = build_info.get("url", "").rstrip("/")
-            if not build_url:
-                logger.warning(f"No build URL found for {job_name} #{build_number}")
-                return []
-
-            logger.info(
-                f"Downloading {len(artifacts)} artifacts from {job_name} #{build_number}"
-            )
-            results: list[tuple[str, bytes]] = []
-            max_bytes = max_size_mb * 1024 * 1024
-
-            for artifact in artifacts:
-                relative_path = artifact.get("relativePath", "")
-                if not relative_path:
-                    continue
-
-                url = f"{build_url}/artifact/{relative_path}"
-                try:
-                    response = self._session.get(url, stream=True, timeout=60)
-                    try:
-                        if response.status_code != 200:
-                            logger.warning(
-                                f"Failed to download artifact '{relative_path}': "
-                                f"HTTP {response.status_code}"
-                            )
-                            continue
-
-                        buffer = io.BytesIO()
-                        downloaded = 0
-                        for chunk in response.iter_content(chunk_size=8192):
-                            downloaded += len(chunk)
-                            if downloaded > max_bytes:
-                                logger.warning(
-                                    f"Artifact '{relative_path}' exceeded max size ({max_size_mb} MB), skipping"
-                                )
-                                break
-                            buffer.write(chunk)
-                        else:
-                            results.append((relative_path, buffer.getvalue()))
-                            continue
-                        # If we broke out of the for loop (size exceeded), skip this artifact
-                    finally:
-                        response.close()
-
-                except Exception as exc:
-                    logger.warning(
-                        f"Failed to download artifact '{relative_path}': {exc}"
-                    )
-                    continue
-
-            logger.info(f"Downloaded {len(results)}/{len(artifacts)} artifacts")
-            return results
-
-        except Exception as exc:
-            logger.warning(
-                f"Failed to download artifacts for {job_name} #{build_number}: {exc}"
-            )
-            return []
 
     @staticmethod
     def parse_jenkins_url(url: str | HttpUrl) -> tuple[str, int]:
