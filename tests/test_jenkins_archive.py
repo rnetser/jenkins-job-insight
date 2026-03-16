@@ -11,7 +11,7 @@ import pytest
 
 from jenkins_job_insight import jenkins_archive
 from jenkins_job_insight.jenkins_archive import (
-    build_diagnostic_context,
+    build_artifacts_context,
     cleanup_extract_dir,
     download_artifact,
     process_build_artifacts,
@@ -174,8 +174,8 @@ class TestExtractZip:
             shutil.rmtree(extract_path, ignore_errors=True)
 
 
-class TestBuildDiagnosticContext:
-    """Tests for build_diagnostic_context."""
+class TestBuildArtifactsContext:
+    """Tests for build_artifacts_context."""
 
     def test_extracts_error_lines_from_logs(self, tmp_path: Path) -> None:
         """Error and failure lines from .log files appear in context."""
@@ -189,7 +189,7 @@ class TestBuildDiagnosticContext:
             "2024-01-01 FAILURE Something broke\n"
         )
 
-        context = build_diagnostic_context(tmp_path)
+        context = build_artifacts_context(tmp_path)
 
         assert "Connection refused" in context
         assert "FAILURE Something broke" in context
@@ -208,7 +208,7 @@ class TestBuildDiagnosticContext:
             "message: Scheduled successfully\n"
         )
 
-        context = build_diagnostic_context(tmp_path)
+        context = build_artifacts_context(tmp_path)
 
         assert "Warning" in context
         # Only lines containing "Warning" are extracted; the message line is not
@@ -233,7 +233,7 @@ class TestBuildDiagnosticContext:
             "          reason: Error pulling image\n"
         )
 
-        context = build_diagnostic_context(tmp_path)
+        context = build_artifacts_context(tmp_path)
 
         assert "Failed" in context
         assert "Error pulling image" in context
@@ -241,7 +241,7 @@ class TestBuildDiagnosticContext:
 
     def test_empty_directory_returns_note(self, tmp_path: Path) -> None:
         """Empty directory returns the 'no issues found' note."""
-        context = build_diagnostic_context(tmp_path)
+        context = build_artifacts_context(tmp_path)
 
         assert "No errors, warnings, or status issues found" in context
 
@@ -255,7 +255,7 @@ class TestBuildDiagnosticContext:
         log_file.write_text("".join(lines))
 
         max_lines = 10
-        context = build_diagnostic_context(tmp_path, max_lines=max_lines)
+        context = build_artifacts_context(tmp_path, max_lines=max_lines)
 
         assert "truncated" in context.lower()
         # The total line count in the output should not greatly exceed max_lines
@@ -464,7 +464,7 @@ class TestProcessBuildArtifacts:
         # Both artifacts should be stored
         assert (artifacts_dir / "logs" / "app.log").exists()
         assert (artifacts_dir / "config.yaml").exists()
-        # Context should contain diagnostic output from the stored files
+        # Context should contain artifacts output from the stored files
         assert "BUILD ARTIFACTS CONTEXT" in context
         # The error line from the log should appear in context
         assert "something failed" in context

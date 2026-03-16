@@ -133,16 +133,16 @@ jira_search_keywords rules:
 - Think: "what would someone title a Jira bug for this exact issue?\""""
 
 
-def _build_diagnostic_section(diagnostic_context: str) -> str:
+def _build_artifacts_section(artifacts_context: str) -> str:
     """Build the artifact context prompt section."""
-    if not diagnostic_context:
+    if not artifacts_context:
         return ""
     return f"""
 
 === BUILD ARTIFACTS ===
 The following is a PREVIEW of build artifact contents. The full files are available at build-artifacts/ in your working directory.
 
-{diagnostic_context}
+{artifacts_context}
 
 IMPORTANT INSTRUCTIONS FOR ARTIFACT ANALYSIS:
 1. READ the actual files under build-artifacts/ — the preview above is incomplete
@@ -668,7 +668,7 @@ async def analyze_failure_group(
     ai_model: str = "",
     ai_cli_timeout: int | None = None,
     custom_prompt: str = "",
-    diagnostic_context: str = "",
+    artifacts_context: str = "",
 ) -> list[FailureAnalysis]:
     """Analyze a group of failures with the same error signature.
 
@@ -683,7 +683,7 @@ async def analyze_failure_group(
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
         custom_prompt: Additional instructions from request or repo-level file.
-        diagnostic_context: Jenkins archive context for AI analysis (optional).
+        artifacts_context: Jenkins archive context for AI analysis (optional).
 
     Returns:
         List of FailureAnalysis objects, one per failure in the group.
@@ -696,7 +696,7 @@ async def analyze_failure_group(
         f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
     )
 
-    diagnostic_section = _build_diagnostic_section(diagnostic_context)
+    artifacts_section = _build_artifacts_section(artifacts_context)
 
     prompt = f"""Analyze this test failure from a Jenkins CI job.
 
@@ -709,7 +709,7 @@ STACK TRACE:
 
 CONSOLE CONTEXT:
 {console_context}
-{diagnostic_section}
+{artifacts_section}
 
 You have access to the test repository. Explore the code to understand the failure.
 
@@ -718,9 +718,9 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
 {_JSON_RESPONSE_SCHEMA}
 """
 
-    if diagnostic_context:
+    if artifacts_context:
         logger.info(
-            f"Prompt includes Jenkins archive context ({len(diagnostic_context)} chars)"
+            f"Prompt includes Jenkins archive context ({len(artifacts_context)} chars)"
         )
 
     logger.info(
@@ -764,7 +764,7 @@ async def analyze_child_job(
     ai_model: str = "",
     ai_cli_timeout: int | None = None,
     custom_prompt: str = "",
-    diagnostic_context: str = "",
+    artifacts_context: str = "",
 ) -> ChildJobAnalysis:
     """Analyze a single child job, recursively analyzing its failed children.
 
@@ -782,7 +782,7 @@ async def analyze_child_job(
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
         custom_prompt: Additional instructions from request or repo-level file.
-        diagnostic_context: Jenkins archive context for AI analysis (optional).
+        artifacts_context: Jenkins archive context for AI analysis (optional).
 
     Returns:
         ChildJobAnalysis with analysis results or nested child analyses.
@@ -848,7 +848,7 @@ async def analyze_child_job(
                 ai_model,
                 ai_cli_timeout,
                 custom_prompt,
-                diagnostic_context="",
+                artifacts_context="",
             )
             for child_name, child_num in failed_children
         ]
@@ -922,7 +922,7 @@ async def analyze_child_job(
                 ai_model=ai_model,
                 ai_cli_timeout=ai_cli_timeout,
                 custom_prompt=custom_prompt,
-                diagnostic_context=diagnostic_context,
+                artifacts_context=artifacts_context,
             )
             for group in failure_groups.values()
         ]
@@ -973,7 +973,7 @@ async def analyze_child_job(
         f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
     )
 
-    diagnostic_section = _build_diagnostic_section(diagnostic_context)
+    artifacts_section = _build_artifacts_section(artifacts_context)
 
     prompt = f"""Analyze this failed Jenkins job:
 
@@ -981,7 +981,7 @@ Job: {job_name} #{build_number}
 
 CONSOLE OUTPUT (errors/failures/warnings extracted):
 {console_context}
-{diagnostic_section}
+{artifacts_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
 {custom_prompt_section}
@@ -1069,8 +1069,8 @@ async def analyze_job(
             failures=[],
         )
 
-    # Download build artifacts for diagnostic context
-    diagnostic_context = ""
+    # Download build artifacts for context
+    artifacts_context = ""
     extract_path: Path | None = None
     try:
         if settings.get_job_artifacts:
@@ -1078,7 +1078,7 @@ async def analyze_job(
             build_url = build_info.get("url", "").rstrip("/")
             if artifacts and build_url:
                 try:
-                    diagnostic_context, extract_path = await asyncio.to_thread(
+                    artifacts_context, extract_path = await asyncio.to_thread(
                         process_build_artifacts,
                         jenkins_client.session,
                         build_url,
@@ -1184,7 +1184,7 @@ async def analyze_job(
                         ai_model=ai_model,
                         ai_cli_timeout=settings.ai_cli_timeout,
                         custom_prompt=custom_prompt,
-                        diagnostic_context="",
+                        artifacts_context="",
                     )
                     for child_name, child_num in failed_child_jobs
                 ]
@@ -1267,7 +1267,7 @@ async def analyze_job(
                         ai_model=ai_model,
                         ai_cli_timeout=settings.ai_cli_timeout,
                         custom_prompt=custom_prompt,
-                        diagnostic_context=diagnostic_context,
+                        artifacts_context=artifacts_context,
                     )
                     for group in failure_groups.values()
                 ]
@@ -1299,7 +1299,7 @@ async def analyze_job(
                     else ""
                 )
 
-                diagnostic_section = _build_diagnostic_section(diagnostic_context)
+                artifacts_section = _build_artifacts_section(artifacts_context)
 
                 prompt = f"""Analyze this failed Jenkins job:
 
@@ -1308,7 +1308,7 @@ Job: {job_name} #{build_number}
 CONSOLE OUTPUT (errors/failures/warnings extracted):
 {console_context}
 {repo_context}
-{diagnostic_section}
+{artifacts_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
 {custom_prompt_section}

@@ -77,9 +77,9 @@ Configure the service using environment variables. The service is tied to a sing
 | `JIRA_SSL_VERIFY` | No | `true` | SSL certificate verification for Jira |
 | `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
 | **Build Artifact Analysis (Optional)** | | | |
-| `GET_JOB_ARTIFACTS` | No | `true` | Download all build artifacts for AI diagnostic context |
+| `GET_JOB_ARTIFACTS` | No | `true` | Download all build artifacts for AI artifacts context |
 | `JENKINS_ARCHIVE_MAX_SIZE_MB` | No | `500` | Maximum Jenkins archive (tar/zip) file size in MB |
-| `JENKINS_ARCHIVE_CONTEXT_LINES` | No | `200` | Maximum diagnostic context lines for AI prompt |
+| `JENKINS_ARCHIVE_CONTEXT_LINES` | No | `200` | Maximum artifacts context lines for AI prompt |
 
 ### Jenkins Configuration
 
@@ -429,7 +429,7 @@ No server configuration is needed — the prompt file lives in your tests reposi
 
 ### Build Artifact Analysis
 
-By default, the service downloads all build artifacts from the Jenkins build and uses them as additional diagnostic context for AI analysis. This happens automatically without any extra configuration.
+By default, the service downloads all build artifacts from the Jenkins build and uses them as additional artifacts context for AI analysis. This happens automatically without any extra configuration.
 
 #### How It Works
 
@@ -439,7 +439,7 @@ By default, the service downloads all build artifacts from the Jenkins build and
 4. Artifacts are exposed as `build-artifacts/` in the AI workspace:
    - **With test repo configured**: artifacts are symlinked as `build-artifacts/` inside the cloned test repo directory
    - **Without test repo**: the artifacts directory itself becomes the AI working directory
-5. Specific artifact types are scanned (log files for errors/warnings, event files for warnings, YAML/JSON for status issues) and a diagnostic summary is injected into the AI prompt
+5. Specific artifact types are scanned (log files for errors/warnings, event files for warnings, YAML/JSON for status issues) and an artifacts summary is injected into the AI prompt
 6. The AI can directly explore the full artifact files under `build-artifacts/` for additional evidence during analysis
 
 #### Usage
@@ -477,7 +477,7 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
 The service extracts and summarizes:
 - **Log files** (`*.log`): Error, warning, and exception lines
 - **Warning events**: Events indicating abnormal conditions
-- **Status indicators**: Abnormal status conditions in diagnostic data
+- **Status indicators**: Abnormal status conditions in artifacts data
 
 This context helps the AI distinguish between test infrastructure issues (CODE ISSUE) and actual product problems (PRODUCT BUG).
 
@@ -487,7 +487,7 @@ This context helps the AI distinguish between test infrastructure issues (CODE I
 |----------|---------|-------------|
 | `GET_JOB_ARTIFACTS` | `true` | Download all build artifacts (set `false` to disable) |
 | `JENKINS_ARCHIVE_MAX_SIZE_MB` | `500` | Maximum archive (tar/zip) file size in MB |
-| `JENKINS_ARCHIVE_CONTEXT_LINES` | `200` | Maximum lines of diagnostic context included in AI prompt |
+| `JENKINS_ARCHIVE_CONTEXT_LINES` | `200` | Maximum lines of artifacts context included in AI prompt |
 
 ## API Endpoints
 
