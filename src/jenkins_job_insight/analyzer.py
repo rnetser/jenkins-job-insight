@@ -100,7 +100,7 @@ If CODE ISSUE:
   "classification": "CODE ISSUE",
   "affected_tests": ["test_name_1", "test_name_2"],
   "details": "Your detailed analysis of what caused this failure",
-  "artifacts_evidence": "VERBATIM lines from build artifact logs that confirm this is a CODE ISSUE, not a product bug. For example: artifact logs showing the product/service is healthy, no crashes or errors on the product side, or evidence that the test environment or test code itself caused the failure.",
+  "artifacts_evidence": "VERBATIM lines from files under build-artifacts/ that support your analysis. Format each line as [file-path]: content. Example: [build-artifacts/logs/app.log]: 2026-03-16 INFO Service started successfully. Include evidence showing the product is healthy or that the test code caused the failure.",
   "code_fix": {
     "file": "exact/file/path.py",
     "line": "line number",
@@ -113,7 +113,7 @@ If PRODUCT BUG:
   "classification": "PRODUCT BUG",
   "affected_tests": ["test_name_1", "test_name_2"],
   "details": "Your detailed analysis of what caused this failure",
-  "artifacts_evidence": "VERBATIM lines from build artifact files that prove the product defect. Include relevant error messages, stack traces, service logs, or status information from the artifacts.",
+  "artifacts_evidence": "VERBATIM lines from files under build-artifacts/ that prove the product defect. Format each line as [file-path]: content. Example: [build-artifacts/logs/error.log]: 2026-03-16 ERROR NullPointerException in AuthService. Include the specific log lines showing the product failure.",
   "product_bug_report": {
     "title": "concise bug title",
     "severity": "critical/high/medium/low",
@@ -134,18 +134,21 @@ jira_search_keywords rules:
 
 
 def _build_diagnostic_section(diagnostic_context: str) -> str:
-    """Build the diagnostic archive prompt section.
-
-    Returns an empty string when no diagnostic context is available,
-    ensuring no misleading instructions appear in the AI prompt.
-    """
+    """Build the artifact context prompt section."""
     if not diagnostic_context:
         return ""
     return f"""
 
+=== BUILD ARTIFACTS ===
+The following is a PREVIEW of build artifact contents. The full files are available at build-artifacts/ in your working directory.
+
 {diagnostic_context}
 
-If DIAGNOSTIC ARCHIVE CONTEXT is provided above, use that evidence in your analysis. The archive contains logs from the actual test run — this is critical data for understanding what happened. Do NOT classify based solely on the error message. Analyze the log evidence to determine the actual root cause."""
+IMPORTANT INSTRUCTIONS FOR ARTIFACT ANALYSIS:
+1. READ the actual files under build-artifacts/ — the preview above is incomplete
+2. Look for error messages, stack traces, service logs, and status information
+3. In your artifacts_evidence field, include VERBATIM lines with the file path, e.g.: [build-artifacts/logs/app.log]: actual error line here
+4. Do NOT classify based solely on the test error message — check the artifact logs for the real root cause"""
 
 
 def get_failure_signature(failure: TestFailure) -> str:
