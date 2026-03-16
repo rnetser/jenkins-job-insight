@@ -99,8 +99,21 @@ def store_artifact(
         artifacts_dir: Root directory to store artifacts in.
         max_size_mb: Maximum allowed extracted archive size in megabytes.
     """
+    # Validate path doesn't escape artifacts_dir
+    root = artifacts_dir.resolve()
+    resolved = (artifacts_dir / relative_path).resolve()
+    if not str(resolved).startswith(str(root) + os.sep):
+        logger.warning(f"Skipping artifact with unsafe path: {relative_path}")
+        return
+
     if _is_archive(relative_path):
         extract_subdir = artifacts_dir / _strip_archive_extension(relative_path)
+        extract_resolved = extract_subdir.resolve()
+        if not str(extract_resolved).startswith(str(root) + os.sep):
+            logger.warning(
+                f"Skipping artifact with unsafe extraction path: {relative_path}"
+            )
+            return
         if (
             validate_and_extract_archive(data, max_size_mb, extract_dir=extract_subdir)
             is not None
@@ -499,6 +512,11 @@ def process_build_artifacts(
     for artifact in artifact_list:
         relative_path = artifact.get("relativePath", "")
         if not relative_path:
+            continue
+
+        # Reject absolute paths and traversal attempts
+        if relative_path.startswith("/") or ".." in relative_path.split("/"):
+            logger.warning(f"Skipping artifact with unsafe path: {relative_path}")
             continue
 
         data = download_artifact(session, build_url, relative_path, max_size_mb)

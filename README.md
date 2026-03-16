@@ -436,8 +436,11 @@ By default, the service downloads all build artifacts from the Jenkins build and
 1. The service lists all artifacts from the Jenkins build API
 2. Each artifact is downloaded using existing Jenkins credentials
 3. Archive files (tar.gz, zip) are automatically extracted; non-archive files are stored as-is
-4. All artifact content is scanned for error logs, warning events, and abnormal status indicators
-5. Diagnostic context is injected into the AI prompt for better failure classification
+4. Artifacts are exposed as `build-artifacts/` in the AI workspace:
+   - **With test repo configured**: artifacts are symlinked as `build-artifacts/` inside the cloned test repo directory
+   - **Without test repo**: the artifacts directory itself becomes the AI working directory
+5. All artifact content is scanned and a diagnostic summary is injected into the AI prompt
+6. The AI can directly explore the full artifact files under `build-artifacts/` for additional evidence during analysis
 
 #### Usage
 
