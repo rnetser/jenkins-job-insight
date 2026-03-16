@@ -7,6 +7,7 @@ without external dependencies.
 
 import base64
 import html
+import json
 from collections.abc import Callable
 
 from jenkins_job_insight.models import (
@@ -110,7 +111,7 @@ body {
 }"""
 
 
-def format_result_as_html(result: AnalysisResult) -> str:
+def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str:
     """Generate a self-contained HTML report for an analysis result.
 
     Produces a complete HTML document with inline CSS using a dark
@@ -119,6 +120,7 @@ def format_result_as_html(result: AnalysisResult) -> str:
 
     Args:
         result: The analysis result to render.
+        completed_at: Optional timestamp string for when the analysis completed.
 
     Returns:
         A complete HTML document as a string.
@@ -489,6 +491,123 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 }}
 .no-failures svg {{ margin-bottom: 16px; }}
 
+/* Reviewed toggle */
+.reviewed-toggle {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}}
+.reviewed-toggle:hover {{
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+}}
+.reviewed-toggle.checked {{
+    background: rgba(63, 185, 80, 0.15);
+    border-color: var(--accent-green);
+    color: var(--accent-green);
+}}
+
+/* Comments section */
+.comments-section {{
+    margin-top: 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}}
+.comments-header {{
+    background: var(--bg-tertiary);
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}}
+.comment-item {{
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}}
+.comment-timestamp {{
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}}
+.comment-text {{
+    color: var(--text-secondary);
+}}
+.comment-text a {{
+    color: var(--accent-blue);
+    text-decoration: none;
+}}
+.comment-text a:hover {{ text-decoration: underline; }}
+.enrichment-badge {{
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    margin-left: 6px;
+}}
+.comment-input-row {{
+    padding: 10px 16px;
+    background: var(--bg-primary);
+    display: flex;
+    gap: 8px;
+}}
+.comment-input {{
+    flex: 1;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    outline: none;
+    transition: border-color 0.15s;
+}}
+.comment-input::placeholder {{ color: var(--text-muted); }}
+.comment-input:focus {{ border-color: var(--accent-blue); }}
+.comment-add-btn {{
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent-blue);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}}
+.comment-add-btn:hover {{
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+}}
+.comment-test-select {{
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: var(--font-mono);
+}}
+
 /* Responsive (page-specific) */
 @media (max-width: 768px) {{
     .env-chips {{ margin-left: 0; }}
@@ -512,6 +631,7 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
       <span class="env-chip">Build: #{e(build_number)}</span>
       <span class="env-chip">Status: {e(result.status)}</span>
       <span class="env-chip">AI: {e(provider_info)}</span>
+      {f'<span class="env-chip">Analyzed: {e(completed_at)}</span>' if completed_at else ""}
       {f'<span class="env-chip"><a href="{e(jenkins_url_str)}" target="_blank" rel="noopener">Jenkins</a></span>' if jenkins_url_str else ""}
       <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
     </div>
@@ -549,12 +669,12 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
         groups = _group_failures(result.failures)
         parts.append('<h2 class="section-title">Root Cause Analysis</h2>')
         for group in groups:
-            _render_group_card(parts, group, e)
+            _render_group_card(parts, group, e, job_id=result.job_id)
 
     # --- CHILD JOB ANALYSES ---
     if result.child_job_analyses:
         parts.append('<h2 class="section-title">Child Job Analyses</h2>')
-        _render_child_jobs(parts, result.child_job_analyses, e)
+        _render_child_jobs(parts, result.child_job_analyses, e, job_id=result.job_id)
 
     # --- ALL FAILURES TABLE ---
     if result.failures:
@@ -600,6 +720,207 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     _append_footer(
         parts, job_name, build_number, result.job_id, provider_info, jenkins_url_str, e
     )
+
+    # --- INLINE JAVASCRIPT ---
+    parts.append(f"""
+<script>
+const JOB_ID = "{e(result.job_id)}";
+// Derive base path for API calls (works behind reverse proxies with path prefixes)
+const BASE_PATH = window.location.pathname.replace(/\\/results\\/.*$/, '');
+
+async function loadCommentsAndReviews() {{
+    try {{
+        const resp = await fetch(`${{BASE_PATH}}/results/${{JOB_ID}}/comments`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        data.comments.forEach(c => {{
+            const childJob = c.child_job_name || '';
+            const childBuildNumber = c.child_build_number || 0;
+            const testNames = c.test_name;
+            document.querySelectorAll('.comments-section').forEach(section => {{
+                const sectionTests = JSON.parse(section.dataset.testNames || '[]');
+                const sectionChild = section.dataset.childJob || '';
+                const sectionChildBuild = parseInt(section.dataset.childBuild || '0');
+                if (sectionTests.includes(testNames) && sectionChild === childJob && sectionChildBuild === childBuildNumber) {{
+                    appendCommentToList(section, c);
+                }}
+            }});
+        }});
+
+        document.querySelectorAll('.comments-section').forEach(section => {{
+            const count = section.querySelectorAll('.comment-item').length;
+            section.querySelector('.comment-count').textContent = count;
+        }});
+
+        for (const [key, review] of Object.entries(data.reviews)) {{
+            if (review.reviewed) {{
+                document.querySelectorAll('.reviewed-toggle').forEach(toggle => {{
+                    const testName = toggle.dataset.testName;
+                    const childJob = toggle.dataset.childJob || '';
+                    const toggleChildBuild = parseInt(toggle.dataset.childBuild || '0');
+                    const toggleKey = childJob ? childJob + '#' + toggleChildBuild + '::' + testName : testName;
+                    if (toggleKey === key) {{
+                        toggle.classList.add('checked');
+                        toggle.querySelector('input').checked = true;
+                    }}
+                }});
+            }}
+        }}
+    }} catch (err) {{
+        console.warn('Failed to load comments:', err);
+    }}
+}}
+
+function appendCommentToList(section, comment) {{
+    const list = section.querySelector('.comment-list');
+    const item = document.createElement('div');
+    item.className = 'comment-item';
+    if (comment.id) item.dataset.commentId = comment.id;
+    const text = autoLink(escapeHtml(comment.comment));
+    var testLabel = comment.test_name ? '<span style="font-family:var(--font-mono);font-size:11px;color:var(--accent-blue);margin-right:6px;">' + escapeHtml(comment.test_name) + '</span>' : '';
+    // Safe: escapeHtml sanitizes all user content, autoLink only adds <a> tags for URL patterns
+    item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + '</div><div class="comment-text">' + testLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
+    list.appendChild(item);
+}}
+
+function escapeHtml(str) {{
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}}
+
+function autoLink(text) {{
+    // GitHub PR URLs -> org/repo#number
+    text = text.replace(
+        /https?:\\/\\/github\\.com\\/([^\\/]+)\\/([^\\/]+)\\/pull\\/(\\d+)(?:[^\\s<]*)/g,
+        '<a href="https://github.com/$1/$2/pull/$3" target="_blank" rel="noopener">$1/$2#$3</a>'
+    );
+    // Jira browse URLs -> TICKET-KEY (strip query params)
+    text = text.replace(
+        /https?:\\/\\/[^\\s<]*\\/browse\\/([A-Z][A-Z0-9]+-\\d+)(?:\\?[^\\s<]*)?/g,
+        function(match, key) {{
+            var cleanUrl = match.split('?')[0];
+            return '<a href="' + cleanUrl + '" target="_blank" rel="noopener">' + key + '</a>';
+        }}
+    );
+    // Other URLs -> clickable with full URL text
+    text = text.replace(
+        /(https?:\\/\\/[^\\s<]+)/g,
+        function(match) {{
+            if (match.includes('github.com') && match.includes('/pull/')) return match;
+            if (match.includes('/browse/')) return match;
+            return '<a href="' + match + '" target="_blank" rel="noopener">' + match + '</a>';
+        }}
+    );
+    return text;
+}}
+
+async function toggleReviewed(label) {{
+    const checkbox = label.querySelector('input');
+    const testName = label.dataset.testName;
+    const childJob = label.dataset.childJob || '';
+    const childBuild = parseInt(label.dataset.childBuild || '0');
+    const reviewed = checkbox.checked;
+
+    try {{
+        const resp = await fetch(`${{BASE_PATH}}/results/${{JOB_ID}}/reviewed`, {{
+            method: 'PUT',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{test_name: testName, child_job_name: childJob, child_build_number: childBuild, reviewed: reviewed}}),
+        }});
+        if (resp.ok) {{
+            label.classList.toggle('checked', reviewed);
+        }} else {{
+            checkbox.checked = !reviewed;
+            console.warn('Failed to toggle reviewed: server returned', resp.status);
+        }}
+    }} catch (err) {{
+        checkbox.checked = !reviewed;
+        console.warn('Failed to toggle reviewed:', err);
+    }}
+}}
+
+async function addComment(btn) {{
+    const row = btn.closest('.comment-input-row');
+    const input = row.querySelector('.comment-input');
+    const comment = input.value.trim();
+    if (!comment) return;
+
+    const section = btn.closest('.comments-section');
+    const selector = section.querySelector('.comment-test-select');
+    const testName = selector.value;
+    const childJob = section.dataset.childJob || '';
+    const childBuild = parseInt(section.dataset.childBuild || '0');
+
+    try {{
+        const resp = await fetch(`${{BASE_PATH}}/results/${{JOB_ID}}/comments`, {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{test_name: testName, child_job_name: childJob, child_build_number: childBuild, comment: comment}}),
+        }});
+        if (resp.ok) {{
+            const result = await resp.json();
+            const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+            appendCommentToList(section, {{id: result.id, comment: comment, created_at: now, test_name: testName}});
+            const count = section.querySelectorAll('.comment-item').length;
+            section.querySelector('.comment-count').textContent = count;
+            input.value = '';
+            await loadEnrichments();
+        }}
+    }} catch (err) {{
+        console.warn('Failed to add comment:', err);
+    }}
+}}
+
+async function loadEnrichments() {{
+    try {{
+        const resp = await fetch(`${{BASE_PATH}}/results/${{JOB_ID}}/enrich-comments`, {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+        }});
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        // Remove existing enrichment badges to avoid duplicates on re-runs
+        document.querySelectorAll('.enrichment-badge').forEach(el => el.remove());
+
+        for (const [commentId, enrichments] of Object.entries(data.enrichments)) {{
+            const commentEl = document.querySelector(`.comment-item[data-comment-id="${{commentId}}"]`);
+            if (!commentEl) continue;
+            const textEl = commentEl.querySelector('.comment-text');
+            for (const e of enrichments) {{
+                const badge = document.createElement('span');
+                badge.className = 'enrichment-badge';
+                const statusUpper = e.status.toUpperCase();
+                if (e.status === 'merged') {{
+                    badge.style.background = 'rgba(63,185,80,0.15)';
+                    badge.style.color = 'var(--accent-green)';
+                }} else if (e.status === 'open') {{
+                    badge.style.background = 'rgba(63,185,80,0.15)';
+                    badge.style.color = 'var(--accent-green)';
+                }} else if (e.status === 'closed') {{
+                    badge.style.background = 'rgba(248,81,73,0.15)';
+                    badge.style.color = 'var(--accent-red)';
+                }} else {{
+                    badge.style.background = 'rgba(88,166,255,0.12)';
+                    badge.style.color = 'var(--accent-blue)';
+                }}
+                badge.textContent = statusUpper;
+                textEl.appendChild(badge);
+            }}
+        }}
+    }} catch (err) {{
+        console.warn('Failed to load enrichments:', err);
+    }}
+}}
+
+document.addEventListener('DOMContentLoaded', async function() {{
+    await loadCommentsAndReviews();
+    await loadEnrichments();
+}});
+</script>
+""")
 
     parts.append("</div>\n</body>\n</html>")
     return "\n".join(parts)
@@ -835,6 +1156,9 @@ def _render_group_card(
     group: dict,
     e: Callable[[str], str],
     indent: str = "",
+    job_id: str = "",
+    child_job_name: str = "",
+    child_build_number: int = 0,
 ) -> None:
     """Render a collapsible card for a group of failures sharing the same analysis.
 
@@ -843,6 +1167,9 @@ def _render_group_card(
         group: Dict with keys 'analysis' (AnalysisDetail), 'failures' (list), 'bug_id' (str).
         e: HTML escape function reference.
         indent: HTML indentation prefix for nested cards.
+        job_id: The job identifier for reviewed toggle data attributes.
+        child_job_name: The child job name for reviewed toggle data attributes.
+        child_build_number: The child build number for reviewed toggle data attributes.
     """
     detail = group["analysis"]
     bug_id = group["bug_id"]
@@ -927,7 +1254,9 @@ def _render_group_card(
 {indent}      <ul>
 """)
     for f in failures:
-        parts.append(f"{indent}        <li><code>{e(f.test_name)}</code></li>\n")
+        parts.append(
+            f'{indent}        <li><label class="reviewed-toggle" data-job-id="{e(job_id)}" data-test-name="{e(f.test_name)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="event.stopPropagation(); toggleReviewed(this)"><input type="checkbox"> <code style="font-family:var(--font-mono);font-size:12px;color:var(--text-primary)">{e(f.test_name)}</code></label></li>\n'
+        )
     parts.append(f"""{indent}      </ul>
 {indent}    </div>
 """)
@@ -936,6 +1265,28 @@ def _render_group_card(
     parts.append(f"""{indent}    <div class="bug-error">
 {indent}      <h4>Error</h4>
 {indent}      <pre class="error-pre">{e(failures[0].error)}</pre>
+{indent}    </div>
+""")
+
+    # Comments section (populated by JavaScript)
+    # Build test name selector for multi-test groups
+    if len(failures) > 1:
+        select_html = f'{indent}        <select class="comment-test-select">'
+        for f in failures:
+            select_html += f'<option value="{e(f.test_name)}">{e(f.test_name)}</option>'
+        select_html += "</select>"
+    else:
+        select_html = f'<input type="hidden" class="comment-test-select" value="{e(failures[0].test_name)}">'
+
+    all_test_names = e(json.dumps([f.test_name for f in failures]))
+    parts.append(f"""{indent}    <div class="comments-section" data-test-names="{all_test_names}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}">
+{indent}      <div class="comments-header">Comments (<span class="comment-count">0</span>)</div>
+{indent}      <div class="comment-list"></div>
+{indent}      <div class="comment-input-row">
+{indent}        {select_html}
+{indent}        <input class="comment-input" type="text" placeholder="Add a comment (bug link, PR, notes...)">
+{indent}        <button class="comment-add-btn" onclick="addComment(this)">Add</button>
+{indent}      </div>
 {indent}    </div>
 """)
 
@@ -989,6 +1340,7 @@ def _render_child_jobs(
     e: Callable[[str], str],
     depth: int = 0,
     max_depth: int = 10,
+    job_id: str = "",
 ) -> None:
     """Render child job analysis sections recursively.
 
@@ -998,6 +1350,7 @@ def _render_child_jobs(
         e: HTML escape function reference.
         depth: Current recursion depth.
         max_depth: Maximum recursion depth for nested children.
+        job_id: The job identifier for reviewed toggle data attributes.
     """
     for child in children:
         child_failures_count = len(child.failures)
@@ -1039,12 +1392,25 @@ def _render_child_jobs(
 
         if child_groups:
             for group in child_groups:
-                _render_group_card(parts, group, e, indent="    ")
+                _render_group_card(
+                    parts,
+                    group,
+                    e,
+                    indent="    ",
+                    job_id=job_id,
+                    child_job_name=child.job_name,
+                    child_build_number=child.build_number,
+                )
 
         # Recurse into nested children
         if child.failed_children and depth < max_depth:
             _render_child_jobs(
-                parts, child.failed_children, e, depth=depth + 1, max_depth=max_depth
+                parts,
+                child.failed_children,
+                e,
+                depth=depth + 1,
+                max_depth=max_depth,
+                job_id=job_id,
             )
 
         parts.append("  </div>\n</details>\n")
@@ -1861,6 +2227,37 @@ def _render_dashboard_card(
         parts.append(
             f'    <span class="child-jobs-badge">'
             f"{child_job_count} child job{'s' if child_job_count != 1 else ''}"
+            f"</span>"
+        )
+
+    # Review status chip (only for cards with failures)
+    reviewed_count = job.get("reviewed_count", 0)
+    comment_count = job.get("comment_count", 0)
+    if failure_count is not None and failure_count > 0:
+        if reviewed_count >= failure_count:
+            parts.append(
+                '    <span class="status-chip" '
+                'style="background: rgba(63,185,80,0.15); color: var(--accent-green)">'
+                "\u2713 Fully Reviewed</span>"
+            )
+        elif reviewed_count > 0:
+            parts.append(
+                '    <span class="status-chip" '
+                'style="background: rgba(210,153,34,0.15); color: var(--accent-yellow)">'
+                f"{reviewed_count}/{failure_count} Reviewed</span>"
+            )
+        else:
+            parts.append(
+                '    <span class="status-chip" '
+                'style="background: rgba(248,81,73,0.12); color: var(--accent-red)">'
+                "Needs Review</span>"
+            )
+
+    # Comment count badge
+    if comment_count > 0:
+        parts.append(
+            f'    <span class="card-build-chip">'
+            f"{comment_count} comment{'s' if comment_count != 1 else ''}"
             f"</span>"
         )
 

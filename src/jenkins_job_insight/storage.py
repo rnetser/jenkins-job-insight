@@ -30,7 +30,217 @@ async def init_db() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                test_name TEXT NOT NULL,
+                child_job_name TEXT NOT NULL DEFAULT '',
+                child_build_number INTEGER NOT NULL DEFAULT 0,
+                comment TEXT NOT NULL,
+                error_signature TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comments_job_id ON comments (job_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comments_test_name ON comments (test_name)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comments_error_signature ON comments (error_signature)"
+        )
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS failure_reviews (
+                job_id TEXT NOT NULL,
+                test_name TEXT NOT NULL,
+                child_job_name TEXT NOT NULL DEFAULT '',
+                child_build_number INTEGER NOT NULL DEFAULT 0,
+                reviewed BOOLEAN DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (job_id, test_name, child_job_name, child_build_number)
+            )
+        """)
+
+        # Migration: add child_build_number to existing tables
+        # (needed when upgrading from versions without this column)
+        logger.info("Running database migrations...")
+        for table in ("comments", "failure_reviews"):
+            cursor = await db.execute(f"PRAGMA table_info({table})")
+            columns = {row[1] for row in await cursor.fetchall()}
+            if "child_build_number" not in columns:
+                await db.execute(
+                    f"ALTER TABLE {table} ADD COLUMN child_build_number INTEGER NOT NULL DEFAULT 0"
+                )
+                logger.info(f"Migration: added child_build_number column to {table}")
+            else:
+                logger.debug(
+                    f"Migration: {table} already has child_build_number column"
+                )
+
+        # Migration: add error_signature to comments table
+        cursor = await db.execute("PRAGMA table_info(comments)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "error_signature" not in columns:
+            await db.execute(
+                "ALTER TABLE comments ADD COLUMN error_signature TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added error_signature column to comments")
+        else:
+            logger.debug("Migration: comments already has error_signature column")
+
         await db.commit()
+
+
+async def add_comment(
+    job_id: str,
+    test_name: str,
+    comment: str,
+    child_job_name: str = "",
+    child_build_number: int = 0,
+    error_signature: str = "",
+) -> int:
+    """Add a comment to a test failure."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO comments (job_id, test_name, child_job_name, child_build_number, comment, error_signature) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                job_id,
+                test_name,
+                child_job_name,
+                child_build_number,
+                comment,
+                error_signature,
+            ),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def get_comments_for_job(job_id: str) -> list[dict]:
+    """Get all comments for a specific job."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT id, job_id, test_name, child_job_name, child_build_number, comment, error_signature, created_at "
+            "FROM comments WHERE job_id = ? ORDER BY created_at ASC",
+            (job_id,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+async def set_reviewed(
+    job_id: str,
+    test_name: str,
+    reviewed: bool,
+    child_job_name: str = "",
+    child_build_number: int = 0,
+) -> None:
+    """Set or update the reviewed state for a test failure."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO failure_reviews (job_id, test_name, child_job_name, child_build_number, reviewed, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            (job_id, test_name, child_job_name, child_build_number, reviewed),
+        )
+        await db.commit()
+
+
+async def get_reviews_for_job(job_id: str) -> dict[str, dict]:
+    """Get all review states for a specific job."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT test_name, child_job_name, child_build_number, reviewed, updated_at "
+            "FROM failure_reviews WHERE job_id = ?",
+            (job_id,),
+        )
+        rows = await cursor.fetchall()
+        result = {}
+        for row in rows:
+            if row["child_job_name"] != "":
+                key = f"{row['child_job_name']}#{row['child_build_number']}::{row['test_name']}"
+            else:
+                key = row["test_name"]
+            result[key] = {
+                "reviewed": bool(row["reviewed"]),
+                "updated_at": row["updated_at"],
+            }
+        return result
+
+
+async def get_review_status(job_id: str) -> dict:
+    """Get review summary for a job (used by dashboard)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT result_json FROM results WHERE job_id = ?", (job_id,)
+        )
+        row = await cursor.fetchone()
+        total_failures = 0
+        if row and row[0]:
+            result_data = json.loads(row[0])
+            total_failures = count_all_failures(result_data)
+
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM failure_reviews WHERE job_id = ? AND reviewed = 1",
+            (job_id,),
+        )
+        reviewed_count = (await cursor.fetchone())[0]
+
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM comments WHERE job_id = ?", (job_id,)
+        )
+        comment_count = (await cursor.fetchone())[0]
+
+        return {
+            "total_failures": total_failures,
+            "reviewed_count": reviewed_count,
+            "comment_count": comment_count,
+        }
+
+
+async def get_historical_comments(
+    test_names: list[str] | None = None,
+    error_signatures: list[str] | None = None,
+    exclude_job_id: str | None = None,
+) -> list[dict]:
+    """Get historical comments for similar failures across jobs.
+
+    Matches by test name OR by error signature.
+    No arbitrary limit -- returns all matching comments.
+    """
+    conditions: list[str] = []
+    params: list[str] = []
+
+    if test_names:
+        placeholders = ",".join("?" for _ in test_names)
+        conditions.append(f"test_name IN ({placeholders})")
+        params.extend(test_names)
+
+    if error_signatures:
+        placeholders = ",".join("?" for _ in error_signatures)
+        conditions.append(f"error_signature IN ({placeholders})")
+        params.extend(error_signatures)
+
+    if not conditions:
+        return []
+
+    where = " OR ".join(conditions)
+    if exclude_job_id:
+        where = f"({where}) AND job_id != ?"
+        params.append(exclude_job_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            f"SELECT id, job_id, test_name, child_job_name, comment, error_signature, created_at "
+            f"FROM comments WHERE {where} ORDER BY created_at DESC",
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
 
 
 async def save_result(
@@ -209,9 +419,13 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """
-            SELECT job_id, jenkins_url, status, result_json, created_at
-            FROM results
-            ORDER BY created_at DESC
+            SELECT r.job_id, r.jenkins_url, r.status, r.result_json, r.created_at,
+                (SELECT COUNT(*) FROM failure_reviews fr
+                 WHERE fr.job_id = r.job_id AND fr.reviewed = 1) AS reviewed_count,
+                (SELECT COUNT(*) FROM comments c
+                 WHERE c.job_id = r.job_id) AS comment_count
+            FROM results r
+            ORDER BY r.created_at DESC
             LIMIT ?
             """,
             (limit,),
@@ -224,6 +438,8 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
                 "jenkins_url": row["jenkins_url"],
                 "status": row["status"],
                 "created_at": row["created_at"],
+                "reviewed_count": row["reviewed_count"],
+                "comment_count": row["comment_count"],
             }
             if row["result_json"]:
                 try:

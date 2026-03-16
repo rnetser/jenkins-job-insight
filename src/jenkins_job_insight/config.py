@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # Artifact download toggle
     get_job_artifacts: bool = True
 
+    # GitHub (optional) -- for comment enrichment (PR status)
+    github_token: str | None = None
+
     @property
     def jira_enabled(self) -> bool:
         """Check if Jira integration is enabled and configured with valid credentials."""

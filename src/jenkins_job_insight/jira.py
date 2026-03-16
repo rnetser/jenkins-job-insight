@@ -45,7 +45,11 @@ class JiraClient:
     """HTTP client for Jira REST API.
 
     Auto-detects Cloud (email + API token, REST API v3) vs
-    Server/DC (PAT, REST API v2) based on provided credentials.
+    Server/DC (PAT only, REST API v2) based on provided credentials.
+
+    Cloud detection: both ``jira_email`` and ``jira_api_token`` are set.
+
+    Server/DC detection: only ``jira_pat`` is set (no email or no api_token).
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -56,20 +60,28 @@ class JiraClient:
         # Detect Cloud vs Server/DC
         self._auth: tuple[str, str] | None
         if settings.jira_email and settings.jira_api_token:
-            # Cloud: Basic auth with email:token, API v3
+            # Cloud: email + API token -> Basic auth, API v3
             self._auth = (
                 settings.jira_email,
                 settings.jira_api_token.get_secret_value(),
             )
+            self._search_path = "/rest/api/3/search/jql"
             self._api_path = "/rest/api/3"
             self._headers: dict[str, str] = {}
-        else:
-            # Server/DC: PAT bearer token, API v2
+        elif settings.jira_pat:
+            # Server/DC: PAT only -> Bearer auth, API v2
             self._auth = None
+            self._search_path = "/rest/api/2/search"
             self._api_path = "/rest/api/2"
             self._headers = {
-                "Authorization": f"Bearer {settings.jira_pat.get_secret_value() if settings.jira_pat else ''}"
+                "Authorization": f"Bearer {settings.jira_pat.get_secret_value()}"
             }
+        else:
+            # No valid auth configured
+            self._auth = None
+            self._search_path = "/rest/api/2/search"
+            self._api_path = "/rest/api/2"
+            self._headers = {}
 
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
@@ -122,7 +134,7 @@ class JiraClient:
         }
 
         response = await self._client.get(
-            f"{self._api_path}/search",
+            self._search_path,
             params=params,
         )
         response.raise_for_status()

@@ -80,6 +80,8 @@ Configure the service using environment variables. The service is tied to a sing
 | `GET_JOB_ARTIFACTS` | No | `true` | Download all build artifacts for AI artifacts context |
 | `JENKINS_ARTIFACTS_MAX_SIZE_MB` | No | `500` | Maximum size per downloaded artifact in MB |
 | `JENKINS_ARTIFACTS_CONTEXT_LINES` | No | `200` | Maximum artifacts context lines for AI prompt |
+| **GitHub** | | | |
+| `GITHUB_TOKEN` | No | - | GitHub API token for private repo PR status in comments |
 
 ### Jenkins Configuration
 
@@ -248,8 +250,14 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `GET_JOB_ARTIFACTS` | `get_job_artifacts` | No | `/analyze` | Download all build artifacts for AI context (default: true) |
 | `JENKINS_ARTIFACTS_MAX_SIZE_MB` | `jenkins_artifacts_max_size_mb` | No       | `/analyze`             | Maximum size per downloaded artifact in MB (default: 500) |
 | `JENKINS_ARTIFACTS_CONTEXT_LINES` | `jenkins_artifacts_context_lines` | No       | `/analyze`             | Maximum context lines for AI prompt (default: 200)             |
+| **GitHub**           |                      |          |                        |                                                                |
+| `GITHUB_TOKEN`       | `github_token`       | No       | Both                   | GitHub API token for private repo PR status in comments        |
 
 *Jenkins fields are required for `/analyze` but must be configured in at least one place (environment variable or request body). *Either `failures` or `raw_xml` must be provided for `/analyze-failures` (mutually exclusive).
+
+**Server-level only** (no per-request equivalent):
+- `DEBUG` — server reload toggle
+- `LOG_LEVEL` — server log verbosity
 
 **Priority**: Request values take precedence over environment variable defaults. "Both" means the field works with `/analyze` and `/analyze-failures` endpoints.
 
@@ -355,6 +363,48 @@ When Jira finds matching bugs, the response includes `jira_matches` in the produ
 | `enable_jira` | bool or null | `true` to enable, `false` to disable, omit to auto-detect from environment |
 
 When omitted, Jira integration is automatically enabled if `JIRA_URL` and authentication are configured via environment variables.
+
+### Per-Failure Comments & Review Tracking
+
+Each analyzed test failure supports user comments and a "Reviewed" checkbox for team collaboration.
+
+#### Features
+
+- **Comments**: Add free-text comments to any failed test (bug links, PR links, notes). Comments are threaded with timestamps and persist across page loads.
+- **Reviewed Checkbox**: Mark individual failures as reviewed so team members know which failures have been triaged.
+- **Dashboard Status**: The dashboard shows review progress per job — "Fully Reviewed", "X/Y Reviewed", or "Needs Review" — plus comment counts.
+- **Comment Enrichment**: GitHub PR URLs and Jira ticket keys in comments are automatically detected and display live status badges (Merged, Open, Closed, etc.).
+- **AI Context**: Historical comments from previous analyses of similar failures are fed to the AI, helping it reference existing bugs and PRs instead of suggesting duplicates.
+- **Git Log Regression Check**: For CODE ISSUE classifications, the AI checks the test repo's recent git log for commits that may have caused a regression.
+
+#### API Endpoints
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/results/{job_id}/comments` | Get all comments and review states for a job |
+| `POST` | `/results/{job_id}/comments` | Add a comment to a test failure |
+| `PUT` | `/results/{job_id}/reviewed` | Toggle reviewed state for a test failure |
+| `GET` | `/results/{job_id}/review-status` | Get review summary (for dashboard) |
+| `POST` | `/results/{job_id}/enrich-comments` | Fetch live PR/Jira statuses for comments |
+
+#### Comment Request Body
+
+```json
+{
+  "test_name": "tests.network.TestDNS.test_lookup",
+  "child_job_name": "",
+  "child_build_number": 0,
+  "comment": "Opened bug: OCPBUGS-12345"
+}
+```
+
+#### Configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GITHUB_TOKEN` | No | - | GitHub API token for private repo PR status (public repos work without token). Can also be set per-request via `github_token` in the payload. |
+
+Jira enrichment reuses existing Jira configuration (`JIRA_URL`, `JIRA_EMAIL` + `JIRA_API_TOKEN` (Cloud), `JIRA_PAT` (Server/DC)).
 
 ### SSL Verification
 

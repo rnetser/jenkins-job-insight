@@ -22,6 +22,7 @@ from jenkins_job_insight.analyzer import (
 from jenkins_job_insight.config import Settings, get_settings
 from jenkins_job_insight.jira import enrich_with_jira_matches
 from jenkins_job_insight.models import (
+    AddCommentRequest,
     AnalysisResult,
     AnalyzeFailuresRequest,
     AnalyzeRequest,
@@ -29,6 +30,7 @@ from jenkins_job_insight.models import (
     ChildJobAnalysis,
     FailureAnalysis,
     FailureAnalysisResult,
+    SetReviewedRequest,
 )
 from jenkins_job_insight.xml_enrichment import (
     build_enriched_xml,
@@ -42,6 +44,7 @@ from jenkins_job_insight.html_report import (
 )
 from jenkins_job_insight.output import send_callback
 from jenkins_job_insight.repository import RepositoryManager
+from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
     get_html_report,
     get_result,
@@ -247,6 +250,7 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         "jenkins_artifacts_max_size_mb",
         "jenkins_artifacts_context_lines",
         "get_job_artifacts",
+        "github_token",
     ]
     for field in direct_fields:
         value = getattr(body, field, None)
@@ -682,7 +686,9 @@ async def get_job_report(
     result_data = result.get("result")
     if result_data and status == "completed":
         analysis_result = _build_analysis_result(job_id, result_data)
-        html_content = format_result_as_html(analysis_result)
+        html_content = format_result_as_html(
+            analysis_result, completed_at=result.get("created_at", "")
+        )
         try:
             await save_html_report(job_id, html_content)
         except OSError:
@@ -715,6 +721,240 @@ async def get_job_result(request: Request, job_id: str) -> dict:
                 f"{base_url}{result_data['html_report_url']}"
             )
     return result
+
+
+def _find_test_in_children(
+    children: list[dict],
+    test_name: str,
+    child_job_name: str,
+    child_build_number: int = 0,
+) -> bool:
+    """Recursively search child job analyses for a test."""
+    for child in children:
+        if child.get("job_name") == child_job_name and (
+            child_build_number == 0 or child.get("build_number") == child_build_number
+        ):
+            for f in child.get("failures", []):
+                if f.get("test_name") == test_name:
+                    return True
+        if _find_test_in_children(
+            child.get("failed_children", []),
+            test_name,
+            child_job_name,
+            child_build_number,
+        ):
+            return True
+    return False
+
+
+async def _validate_test_name_in_result(
+    job_id: str, test_name: str, child_job_name: str = "", child_build_number: int = 0
+) -> None:
+    """Validate that a test_name exists in the stored result."""
+    stored = await storage.get_result(job_id)
+    if not stored:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    result_data = stored.get("result") or {}
+
+    if child_job_name:
+        if _find_test_in_children(
+            result_data.get("child_job_analyses", []),
+            test_name,
+            child_job_name,
+            child_build_number,
+        ):
+            return
+        raise HTTPException(
+            status_code=400,
+            detail=f"Test '{test_name}' not found in child job '{child_job_name}' of job {job_id}",
+        )
+    else:
+        for f in result_data.get("failures", []):
+            if f.get("test_name") == test_name:
+                return
+        raise HTTPException(
+            status_code=400, detail=f"Test '{test_name}' not found in job {job_id}"
+        )
+
+
+def _find_error_signature_in_children(
+    children: list[dict],
+    test_name: str,
+    child_job_name: str,
+    child_build_number: int = 0,
+) -> str:
+    """Recursively find error_signature for a test in child job analyses."""
+    for child in children:
+        if child.get("job_name") == child_job_name and (
+            child_build_number == 0 or child.get("build_number") == child_build_number
+        ):
+            for f in child.get("failures", []):
+                if f.get("test_name") == test_name:
+                    return f.get("error_signature", "")
+        result = _find_error_signature_in_children(
+            child.get("failed_children", []),
+            test_name,
+            child_job_name,
+            child_build_number,
+        )
+        if result:
+            return result
+    return ""
+
+
+async def _invalidate_cached_html(job_id: str) -> None:
+    """Delete cached HTML report so next request regenerates it."""
+    report_path = storage.REPORTS_DIR / f"{job_id}.html"
+    await asyncio.to_thread(lambda: report_path.unlink(missing_ok=True))
+
+
+@app.get("/results/{job_id}/comments")
+async def get_comments(job_id: str) -> dict:
+    """Get all comments and review states for a job."""
+    comments = await storage.get_comments_for_job(job_id)
+    reviews = await storage.get_reviews_for_job(job_id)
+    return {"comments": comments, "reviews": reviews}
+
+
+@app.post("/results/{job_id}/comments", status_code=201)
+async def add_comment(job_id: str, body: AddCommentRequest) -> dict:
+    """Add a comment to a test failure."""
+    await _validate_test_name_in_result(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+
+    # Read pre-computed error_signature from stored analysis
+    error_signature = ""
+    stored = await storage.get_result(job_id)
+    if stored and stored.get("result"):
+        if body.child_job_name:
+            error_signature = _find_error_signature_in_children(
+                stored["result"].get("child_job_analyses", []),
+                body.test_name,
+                body.child_job_name,
+                body.child_build_number,
+            )
+        else:
+            for f in stored["result"].get("failures", []):
+                if f.get("test_name") == body.test_name:
+                    error_signature = f.get("error_signature", "")
+                    break
+
+    comment_id = await storage.add_comment(
+        job_id=job_id,
+        test_name=body.test_name,
+        comment=body.comment,
+        child_job_name=body.child_job_name,
+        child_build_number=body.child_build_number,
+        error_signature=error_signature,
+    )
+    await _invalidate_cached_html(job_id)
+    return {"id": comment_id}
+
+
+@app.put("/results/{job_id}/reviewed")
+async def set_reviewed(job_id: str, body: SetReviewedRequest) -> dict:
+    """Toggle the reviewed state for a test failure."""
+    await _validate_test_name_in_result(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+    await storage.set_reviewed(
+        job_id=job_id,
+        test_name=body.test_name,
+        reviewed=body.reviewed,
+        child_job_name=body.child_job_name,
+        child_build_number=body.child_build_number,
+    )
+    await _invalidate_cached_html(job_id)
+    return {"status": "ok"}
+
+
+@app.post("/results/{job_id}/enrich-comments")
+async def enrich_comments(
+    job_id: str, settings: Settings = Depends(get_settings)
+) -> dict:
+    """Fetch live statuses for GitHub PRs and Jira tickets found in comments."""
+    from jenkins_job_insight.comment_enrichment import (
+        detect_github_prs,
+        detect_jira_keys,
+        fetch_github_pr_status,
+        fetch_jira_ticket_status,
+    )
+
+    comments = await storage.get_comments_for_job(job_id)
+    enrichments: dict[str, list[dict]] = {}
+
+    for c in comments:
+        comment_enrichments: list[dict] = []
+
+        for pr in detect_github_prs(c["comment"]):
+            status = await fetch_github_pr_status(
+                pr["owner"],
+                pr["repo"],
+                pr["number"],
+                token=settings.github_token,
+            )
+            if status:
+                comment_enrichments.append(
+                    {
+                        "type": "github_pr",
+                        "key": f"{pr['owner']}/{pr['repo']}#{pr['number']}",
+                        "status": status,
+                    }
+                )
+
+        if settings.jira_enabled and settings.jira_url:
+            # Detect Cloud vs Server/DC auth, matching JiraClient logic:
+            # - Cloud: email + (api_token or pat) -> httpx Basic auth tuple
+            # - Server/DC: pat only (no email) -> Bearer header
+            auth: tuple[str, str] | None = None
+            auth_headers: dict[str, str] = {}
+
+            jira_token = (
+                settings.jira_api_token.get_secret_value()
+                if settings.jira_api_token
+                else (
+                    settings.jira_pat.get_secret_value() if settings.jira_pat else None
+                )
+            )
+
+            if settings.jira_email and jira_token:
+                # Cloud: Basic auth with email:token
+                auth = (settings.jira_email, jira_token)
+            elif settings.jira_pat:
+                # Server/DC: Bearer PAT
+                auth_headers["Authorization"] = (
+                    f"Bearer {settings.jira_pat.get_secret_value()}"
+                )
+
+            for key in detect_jira_keys(c["comment"]):
+                status = await fetch_jira_ticket_status(
+                    settings.jira_url,
+                    key,
+                    auth_headers,
+                    ssl_verify=settings.jira_ssl_verify,
+                    auth=auth,
+                )
+                if status:
+                    comment_enrichments.append(
+                        {
+                            "type": "jira",
+                            "key": key,
+                            "status": status,
+                        }
+                    )
+
+        if comment_enrichments:
+            enrichments[str(c["id"])] = comment_enrichments
+
+    return {"enrichments": enrichments}
+
+
+@app.get("/results/{job_id}/review-status")
+async def get_review_status(job_id: str) -> dict:
+    """Get review summary for a job (used by dashboard)."""
+    return await storage.get_review_status(job_id)
 
 
 @app.get("/results")
