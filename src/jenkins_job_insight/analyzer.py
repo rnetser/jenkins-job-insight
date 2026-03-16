@@ -1019,7 +1019,7 @@ async def analyze_job(
     ai_provider: str,
     ai_model: str,
     job_id: str | None = None,
-) -> tuple[AnalysisResult, Path | None]:
+) -> AnalysisResult:
     """Analyze a Jenkins job failure."""
     if job_id is None:
         job_id = str(uuid.uuid4())
@@ -1054,23 +1054,23 @@ async def analyze_job(
     # Download build artifacts for diagnostic context
     diagnostic_context = ""
     extract_path: Path | None = None
-    if settings.get_job_artifacts:
-        artifacts = build_info.get("artifacts", [])
-        build_url = build_info.get("url", "").rstrip("/")
-        if artifacts and build_url:
-            try:
-                diagnostic_context, extract_path = await asyncio.to_thread(
-                    process_build_artifacts,
-                    jenkins_client._session,
-                    build_url,
-                    artifacts,
-                    settings.diagnostic_archive_max_size_mb,
-                    settings.diagnostic_archive_context_lines,
-                )
-            except Exception as exc:
-                logger.warning(f"Failed to process artifacts: {exc}")
-
     try:
+        if settings.get_job_artifacts:
+            artifacts = build_info.get("artifacts", [])
+            build_url = build_info.get("url", "").rstrip("/")
+            if artifacts and build_url:
+                try:
+                    diagnostic_context, extract_path = await asyncio.to_thread(
+                        process_build_artifacts,
+                        jenkins_client._session,
+                        build_url,
+                        artifacts,
+                        settings.diagnostic_archive_max_size_mb,
+                        settings.diagnostic_archive_context_lines,
+                    )
+                except Exception as exc:
+                    logger.warning(f"Failed to process artifacts: {exc}")
+
         # Check if build passed - return early if yes
         build_result = build_info.get("result")
         if build_result == "SUCCESS":
@@ -1084,7 +1084,7 @@ async def analyze_job(
                 ai_provider=ai_provider,
                 ai_model=ai_model,
                 failures=[],
-            ), extract_path
+            )
 
         # Only fetch console output if build failed
         console_output: str = ""
@@ -1145,7 +1145,7 @@ async def analyze_job(
                     ai_provider=ai_provider,
                     ai_model=ai_model,
                     failures=[],
-                ), extract_path
+                )
 
             # Analyze failed child jobs IN PARALLEL with bounded concurrency
             if failed_child_jobs:
@@ -1216,7 +1216,7 @@ async def analyze_job(
                     ai_model=ai_model,
                     failures=[],  # Pipeline has no direct failures
                     child_job_analyses=child_job_analyses,
-                ), extract_path
+                )
 
             # Extract relevant console lines for context
             console_context = extract_relevant_console_lines(console_output)
@@ -1313,7 +1313,7 @@ You have access to the repository if one was cloned. Explore to understand the f
                         ai_model=ai_model,
                         failures=[],
                         child_job_analyses=child_job_analyses,
-                    ), extract_path
+                    )
 
                 failures = [
                     FailureAnalysis(
@@ -1352,8 +1352,7 @@ You have access to the repository if one was cloned. Explore to understand the f
                 ai_model=ai_model,
                 failures=failures,
                 child_job_analyses=child_job_analyses,
-            ), extract_path
-    except Exception:
+            )
+    finally:
         if extract_path:
             cleanup_extract_dir(extract_path)
-        raise

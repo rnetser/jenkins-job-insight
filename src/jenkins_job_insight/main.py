@@ -21,7 +21,6 @@ from jenkins_job_insight.analyzer import (
 )
 from jenkins_job_insight.config import Settings, get_settings
 from jenkins_job_insight.jira import enrich_with_jira_matches
-from jenkins_job_insight.diagnostic_archive import cleanup_extract_dir
 from jenkins_job_insight.models import (
     AnalysisResult,
     AnalyzeFailuresRequest,
@@ -330,13 +329,12 @@ async def process_analysis_with_id(
         f"Analysis request received for {body.job_name} #{body.build_number} "
         f"(job_id: {job_id})"
     )
-    extract_path_to_clean = None
     try:
         await update_status(job_id, "running")
 
         ai_provider, ai_model = _resolve_ai_config(body)
 
-        result, extract_path_to_clean = await analyze_job(
+        result = await analyze_job(
             body,
             settings,
             ai_provider=ai_provider,
@@ -371,10 +369,6 @@ async def process_analysis_with_id(
         logger.exception(f"Analysis failed for job {job_id}")
         await update_status(job_id, "failed", {"error": str(e)})
 
-    finally:
-        if extract_path_to_clean:
-            cleanup_extract_dir(extract_path_to_clean)
-
 
 @app.post("/analyze", status_code=202, response_model=None)
 async def analyze(
@@ -402,46 +396,41 @@ async def analyze(
         merged = _merge_settings(body, settings)
         ai_provider, ai_model = _resolve_ai_config(body)
 
-        extract_path_to_clean = None
-        try:
-            result, extract_path_to_clean = await analyze_job(
-                body,
+        result = await analyze_job(
+            body,
+            merged,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+        )
+
+        # Enrich PRODUCT BUG failures with Jira matches
+        if _resolve_enable_jira(body, merged):
+            await _enrich_result_with_jira(
+                result.failures + list(result.child_job_analyses),
                 merged,
-                ai_provider=ai_provider,
-                ai_model=ai_model,
+                ai_provider,
+                ai_model,
             )
 
-            # Enrich PRODUCT BUG failures with Jira matches
-            if _resolve_enable_jira(body, merged):
-                await _enrich_result_with_jira(
-                    result.failures + list(result.child_job_analyses),
-                    merged,
-                    ai_provider,
-                    ai_model,
-                )
+        jenkins_url = build_jenkins_url(
+            merged.jenkins_url, body.job_name, body.build_number
+        )
+        await save_result(
+            result.job_id, jenkins_url, "completed", result.model_dump(mode="json")
+        )
+        logger.info(
+            f"Sync analysis completed for {body.job_name} #{body.build_number} "
+            f"(job_id: {result.job_id})"
+        )
 
-            jenkins_url = build_jenkins_url(
-                merged.jenkins_url, body.job_name, body.build_number
-            )
-            await save_result(
-                result.job_id, jenkins_url, "completed", result.model_dump(mode="json")
-            )
-            logger.info(
-                f"Sync analysis completed for {body.job_name} #{body.build_number} "
-                f"(job_id: {result.job_id})"
-            )
+        await deliver_results(result, body, merged)
 
-            await deliver_results(result, body, merged)
+        content = result.model_dump(mode="json")
+        content["base_url"] = base_url
+        content["result_url"] = f"{base_url}/results/{result.job_id}"
+        content["html_report_url"] = f"{base_url}/results/{result.job_id}.html"
 
-            content = result.model_dump(mode="json")
-            content["base_url"] = base_url
-            content["result_url"] = f"{base_url}/results/{result.job_id}"
-            content["html_report_url"] = f"{base_url}/results/{result.job_id}.html"
-
-            return JSONResponse(content=content, status_code=200)
-        finally:
-            if extract_path_to_clean:
-                cleanup_extract_dir(extract_path_to_clean)
+        return JSONResponse(content=content, status_code=200)
 
     # Async mode - queue background task
     # Generate job_id here so we can return it to the client for polling

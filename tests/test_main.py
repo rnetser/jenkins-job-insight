@@ -100,7 +100,7 @@ class TestAnalyzeEndpoint:
                     summary="Analysis complete",
                     failures=[],
                 )
-                mock_analyze.return_value = (mock_result, None)
+                mock_analyze.return_value = mock_result
 
                 response = test_client.post(
                     "/analyze?sync=true",
@@ -219,7 +219,7 @@ class TestAnalyzeEndpoint:
                 with patch(
                     "jenkins_job_insight.main.send_callback", new_callable=AsyncMock
                 ) as mock_callback:
-                    mock_analyze.return_value = (mock_result, None)
+                    mock_analyze.return_value = mock_result
 
                     response = test_client.post(
                         "/analyze?sync=true",
