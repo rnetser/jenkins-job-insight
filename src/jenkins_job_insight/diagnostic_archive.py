@@ -51,7 +51,7 @@ def download_artifact(
         Raw bytes of the artifact, or None if download fails.
     """
     url = f"{build_url.rstrip('/')}/artifact/{urllib.parse.quote(relative_path, safe='/')}"
-    logger.info(f"Downloading artifact: {url}")
+    logger.debug(f"Downloading artifact: {url}")
 
     try:
         response = session.get(url, stream=True, timeout=60)
