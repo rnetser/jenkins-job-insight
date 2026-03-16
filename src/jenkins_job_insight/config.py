@@ -51,9 +51,9 @@ class Settings(BaseSettings):
     # AI CLI timeout in minutes
     ai_cli_timeout: int = Field(default=10, gt=0)
 
-    # Diagnostic archive configuration
-    diagnostic_archive_max_size_mb: int = Field(default=500, gt=0)
-    diagnostic_archive_context_lines: int = Field(default=200, gt=0)
+    # Jenkins archive configuration
+    jenkins_archive_max_size_mb: int = Field(default=500, gt=0)
+    jenkins_archive_context_lines: int = Field(default=200, gt=0)
 
     # Artifact download toggle
     get_job_artifacts: bool = True
