@@ -14,7 +14,7 @@ For each failure, the service provides detailed explanations and either fix sugg
 ## Features
 
 - **Async and sync analysis modes**: Submit jobs for background processing or wait for immediate results
-- **AI-powered classification**: Distinguishes between test code issues and product bugs
+- **AI-powered classification**: Distinguishes between test code issues and product bugs, and classifies tests as FLAKY, REGRESSION, INFRASTRUCTURE, KNOWN_BUG, or INTERMITTENT
 - **Multiple AI providers**: Supports Claude CLI, Gemini CLI, and Cursor Agent CLI
 - **Optional Jira integration**: Searches Jira for matching bugs on PRODUCT BUG failures with AI-powered relevance filtering
 - **SQLite result storage**: Persists analysis results for later retrieval
@@ -386,6 +386,7 @@ Each analyzed test failure supports user comments and a "Reviewed" checkbox for 
 |--------|----------|---------|
 | `GET` | `/results/{job_id}/comments` | Get all comments and review states for a job |
 | `POST` | `/results/{job_id}/comments` | Add a comment to a test failure |
+| `DELETE` | `/results/{job_id}/comments/{comment_id}` | Delete a comment (only by the user who created it) |
 | `PUT` | `/results/{job_id}/reviewed` | Toggle reviewed state for a test failure |
 | `GET` | `/results/{job_id}/review-status` | Get review summary (for dashboard) |
 | `POST` | `/results/{job_id}/enrich-comments` | Fetch live PR/Jira statuses for comments |
@@ -421,15 +422,18 @@ The service maintains a history of all analyzed test failures and exposes it thr
 | `GET` | `/history/search?signature={sig}` | Find all tests that failed with the same error signature, with occurrence counts and last classification |
 | `GET` | `/history/stats/{job_name}` | Aggregate statistics for a specific job: overall health, most common failures, failure trend direction |
 | `GET` | `/history/trends` | Daily or weekly failure rate data points over time |
+| `POST` | `/history/classify` | Classify a test as FLAKY, REGRESSION, INFRASTRUCTURE, KNOWN_BUG, or INTERMITTENT (used by AI and humans) |
+| `GET` | `/history/classifications` | Query existing test classifications, filterable by test_name, classification, and job_name |
 
 #### QUERY.md -- AI Skill File
 
-The file `src/jenkins_job_insight/QUERY.md` is injected into the AI prompt during analysis. It teaches the AI how to use `curl` to query the history endpoints before classifying each failure. This allows the AI to:
+The file `src/jenkins_job_insight/QUERY.md` is injected into the AI prompt during analysis. It provides step-by-step instructions that the AI follows for each failure: check test history, search for similar errors, check existing classifications, review job statistics, and finally classify the test via `POST /history/classify`. This allows the AI to:
 
 - Use raw history data to judge whether a test is flaky, a regression, or a persistent issue
 - Reference existing comments and bug tickets instead of suggesting duplicates
 - Correlate error signatures across multiple tests
 - Compare failure patterns with git log to identify regressions
+- Classify tests as FLAKY, REGRESSION, INFRASTRUCTURE, KNOWN_BUG, or INTERMITTENT based on evidence
 
 #### What the AI Can Detect with History
 
@@ -439,6 +443,7 @@ The file `src/jenkins_job_insight/QUERY.md` is injected into the AI prompt durin
 | **Regressions** | Queries `/history/test/{name}` for recent consecutive failures and cross-references with git log |
 | **Ongoing failures** | Checks consecutive failure count in `/history/test/{name}` to flag persistent issues |
 | **Duplicate bugs** | Searches `/history/search?signature=...` to find other tests hitting the same error, then references existing comments and Jira tickets |
+| **Test classification** | After analysis, classifies tests via `POST /history/classify` as FLAKY, REGRESSION, INFRASTRUCTURE, KNOWN_BUG, or INTERMITTENT; checks existing classifications via `GET /history/classifications` to avoid contradicting prior decisions |
 
 #### History Page
 
@@ -583,14 +588,26 @@ This context helps the AI distinguish between test infrastructure issues (CODE I
 |--------------------------|--------|---------------------------------------------------|
 | `/analyze`               | POST   | Submit analysis job (async, returns 202)          |
 | `/analyze?sync=true`     | POST   | Submit and wait for result (returns JSON)         |
+| `/analyze-failures`      | POST   | Analyze raw test failures directly (no Jenkins)   |
 | `/results/{job_id}`      | GET    | Retrieve stored result (JSON)                     |
 | `/results/{job_id}.html` | GET    | Retrieve stored result as an HTML report (supports `?refresh=1`) |
-| `/dashboard`             | GET    | HTML dashboard listing all analysis reports       |
 | `/results`               | GET    | List recent analysis jobs (default: 50, max: 100) |
+| `/results/{job_id}/comments` | GET | Get all comments and review states for a job     |
+| `/results/{job_id}/comments` | POST | Add a comment to a test failure                 |
+| `/results/{job_id}/comments/{comment_id}` | DELETE | Delete a comment (owner only)       |
+| `/results/{job_id}/reviewed` | PUT | Toggle reviewed state for a test failure          |
+| `/results/{job_id}/review-status` | GET | Get review summary for dashboard             |
+| `/results/{job_id}/enrich-comments` | POST | Fetch live PR/Jira statuses for comments   |
+| `/dashboard`             | GET    | HTML dashboard listing all analysis reports       |
 | `/history`               | GET    | Interactive failure history page (HTML)            |
+| `/history/test/{test_name}` | GET | Pass/fail history for a specific test              |
+| `/history/search`        | GET    | Find tests by error signature                     |
+| `/history/stats/{job_name}` | GET | Aggregate statistics for a job                     |
+| `/history/trends`        | GET    | Failure rate data over time                        |
+| `/history/classify`      | POST   | Classify a test (FLAKY, REGRESSION, etc.)          |
+| `/history/classifications` | GET  | Query existing test classifications                |
 | `/health`                | GET    | Health check endpoint                             |
 | `/favicon.ico`           | GET    | Application favicon (SVG)                         |
-| `/analyze-failures`      | POST   | Analyze raw test failures directly (no Jenkins)   |
 
 The service connects to the Jenkins instance configured via the `JENKINS_URL` environment variable. All analysis requests specify only the job name and build number.
 
