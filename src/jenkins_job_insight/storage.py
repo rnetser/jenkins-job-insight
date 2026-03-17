@@ -847,6 +847,71 @@ async def get_test_history(
     }
 
 
+async def search_by_signature(signature: str) -> dict:
+    """Find all tests that failed with the same error signature.
+
+    Args:
+        signature: Error signature hash to search for.
+
+    Returns:
+        Dict with signature, total_occurrences, unique_tests, tests list,
+        last_classification, and comments.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Total occurrences
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM failure_history WHERE error_signature = ?",
+            (signature,),
+        )
+        total_occurrences = (await cursor.fetchone())[0]
+
+        if total_occurrences == 0:
+            return {
+                "signature": signature,
+                "total_occurrences": 0,
+                "unique_tests": 0,
+                "tests": [],
+                "last_classification": "",
+                "comments": [],
+            }
+
+        # Tests with this signature and their occurrence counts
+        cursor = await db.execute(
+            "SELECT test_name, COUNT(*) as occurrences FROM failure_history "
+            "WHERE error_signature = ? GROUP BY test_name ORDER BY occurrences DESC",
+            (signature,),
+        )
+        tests = [dict(row) for row in await cursor.fetchall()]
+        unique_tests = len(tests)
+
+        # Last classification
+        cursor = await db.execute(
+            "SELECT classification FROM failure_history "
+            "WHERE error_signature = ? ORDER BY analyzed_at DESC LIMIT 1",
+            (signature,),
+        )
+        last_classification = (await cursor.fetchone())[0] or ""
+
+        # Comments related to this signature
+        cursor = await db.execute(
+            "SELECT comment, username, created_at FROM comments "
+            "WHERE error_signature = ? ORDER BY created_at DESC",
+            (signature,),
+        )
+        comments = [dict(row) for row in await cursor.fetchall()]
+
+    return {
+        "signature": signature,
+        "total_occurrences": total_occurrences,
+        "unique_tests": unique_tests,
+        "tests": tests,
+        "last_classification": last_classification,
+        "comments": comments,
+    }
+
+
 async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
     """List recent analysis results with summary data for dashboard display.
 

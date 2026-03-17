@@ -479,3 +479,43 @@ class TestGetTestHistory:
             assert result["test_name"] == "nonexistent.test"
             assert result["failures"] == 0
             assert result["recent_runs"] == []
+
+
+class TestSearchBySignature:
+    async def test_search_finds_matching_tests(self, setup_test_db):
+        import aiosqlite
+
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            async with aiosqlite.connect(setup_test_db) as db:
+                # Two different tests with the same error signature
+                for test_name, count in [
+                    ("tests.TestA.test_one", 3),
+                    ("tests.TestB.test_two", 2),
+                ]:
+                    for i in range(count):
+                        await db.execute(
+                            """INSERT INTO failure_history
+                               (job_id, job_name, build_number, test_name, error_signature, classification)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            (
+                                f"job-sig-{test_name}-{i}",
+                                "ocp-e2e",
+                                i + 1,
+                                test_name,
+                                "sig-shared",
+                                "PRODUCT BUG",
+                            ),
+                        )
+                await db.commit()
+
+            result = await storage.search_by_signature("sig-shared")
+            assert result["signature"] == "sig-shared"
+            assert result["total_occurrences"] == 5
+            assert result["unique_tests"] == 2
+            assert len(result["tests"]) == 2
+
+    async def test_search_nonexistent_signature(self, setup_test_db):
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            result = await storage.search_by_signature("nonexistent-sig")
+            assert result["total_occurrences"] == 0
+            assert result["tests"] == []
