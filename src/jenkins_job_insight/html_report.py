@@ -1459,9 +1459,9 @@ document.addEventListener('DOMContentLoaded', async function() {{
             }}
         }});
     }});
+    await loadClassifications();
     await loadCommentsAndReviews();
     await loadEnrichments();
-    await loadClassifications();
 }});
 </script>
 <script>
