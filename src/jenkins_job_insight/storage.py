@@ -224,6 +224,9 @@ async def add_comment(
     username: str = "",
 ) -> int:
     """Add a comment to a test failure."""
+    logger.debug(
+        f"add_comment: job_id={job_id}, test_name={test_name}, comment_length={len(comment)}, username={username}"
+    )
     _validate_child_identifier_pairing(child_job_name, child_build_number)
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
@@ -247,17 +250,21 @@ async def delete_comment(comment_id: int, username: str) -> bool:
 
     Returns True if deleted, False if not found or not owned by user.
     """
+    logger.debug(f"delete_comment: comment_id={comment_id}, username={username}")
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "DELETE FROM comments WHERE id = ? AND username = ?",
             (comment_id, username),
         )
         await db.commit()
-        return cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
+        logger.debug(f"delete_comment: comment_id={comment_id}, deleted={deleted}")
+        return deleted
 
 
 async def get_comments_for_job(job_id: str) -> list[dict]:
     """Get all comments for a specific job."""
+    logger.debug(f"get_comments_for_job: job_id={job_id}")
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
@@ -266,7 +273,9 @@ async def get_comments_for_job(job_id: str) -> list[dict]:
             (job_id,),
         )
         rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        logger.debug(f"get_comments_for_job: job_id={job_id}, count={len(result)}")
+        return result
 
 
 async def set_reviewed(
@@ -278,6 +287,9 @@ async def set_reviewed(
     username: str = "",
 ) -> None:
     """Set or update the reviewed state for a test failure."""
+    logger.debug(
+        f"set_reviewed: job_id={job_id}, test_name={test_name}, reviewed={reviewed}, username={username}"
+    )
     _validate_child_identifier_pairing(child_job_name, child_build_number)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -290,6 +302,7 @@ async def set_reviewed(
 
 async def get_reviews_for_job(job_id: str) -> dict[str, dict]:
     """Get all review states for a specific job."""
+    logger.debug(f"get_reviews_for_job: job_id={job_id}")
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
@@ -309,11 +322,13 @@ async def get_reviews_for_job(job_id: str) -> dict[str, dict]:
                 "username": row["username"],
                 "updated_at": row["updated_at"],
             }
+        logger.debug(f"get_reviews_for_job: job_id={job_id}, count={len(result)}")
         return result
 
 
 async def get_review_status(job_id: str) -> dict:
     """Get review summary for a job (used by dashboard)."""
+    logger.debug(f"get_review_status: job_id={job_id}")
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT result_json FROM results WHERE job_id = ?", (job_id,)
@@ -338,6 +353,9 @@ async def get_review_status(job_id: str) -> dict:
         )
         comment_count = (await cursor.fetchone())[0]
 
+        logger.debug(
+            f"get_review_status: job_id={job_id}, total_failures={total_failures}, reviewed_count={reviewed_count}, comment_count={comment_count}"
+        )
         return {
             "total_failures": total_failures,
             "reviewed_count": reviewed_count,
@@ -355,6 +373,9 @@ async def get_historical_comments(
     Matches by test name OR by error signature.
     No arbitrary limit -- returns all matching comments.
     """
+    logger.debug(
+        f"get_historical_comments: test_names_count={len(test_names) if test_names else 0}, signatures_count={len(error_signatures) if error_signatures else 0}, exclude_job_id={exclude_job_id}"
+    )
     conditions: list[str] = []
     params: list[str] = []
 
@@ -384,7 +405,9 @@ async def get_historical_comments(
             params,
         )
         rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        logger.debug(f"get_historical_comments: count={len(result)}")
+        return result
 
 
 async def save_result(
@@ -465,6 +488,7 @@ async def get_result(job_id: str) -> dict | None:
     Returns:
         Result dictionary if found, None otherwise.
     """
+    logger.debug(f"get_result: job_id={job_id}")
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
@@ -473,6 +497,9 @@ async def get_result(job_id: str) -> dict | None:
         )
         row = await cursor.fetchone()
         if row:
+            logger.debug(
+                f"get_result: job_id={job_id}, found=True, status={row['status']}"
+            )
             return {
                 "job_id": row["job_id"],
                 "jenkins_url": row["jenkins_url"],
@@ -482,6 +509,7 @@ async def get_result(job_id: str) -> dict | None:
                 else None,
                 "created_at": row["created_at"],
             }
+        logger.debug(f"get_result: job_id={job_id}, found=False")
         return None
 
 
@@ -655,11 +683,15 @@ async def populate_failure_history(job_id: str, result_data: dict) -> None:
         job_id: Unique identifier for the analysis job.
         result_data: Parsed result dictionary from result_json.
     """
+    logger.debug(f"populate_failure_history: job_id={job_id}")
     job_name = result_data.get("job_name", "")
     build_number = result_data.get("build_number", 0)
 
     rows = _extract_failures_for_history(result_data, job_id, job_name, build_number)
     if not rows:
+        logger.debug(
+            f"populate_failure_history: job_id={job_id}, no failures to insert"
+        )
         return
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -747,6 +779,9 @@ async def get_test_history(
         first_seen, last_seen, last_classification, classifications,
         recent_runs, comments, consecutive_failures, note.
     """
+    logger.debug(
+        f"get_test_history: test_name={test_name}, limit={limit}, job_name={job_name}"
+    )
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
@@ -863,6 +898,9 @@ async def get_test_history(
         )
         comments = [dict(row) for row in await cursor.fetchall()]
 
+    logger.debug(
+        f"get_test_history: test_name={test_name}, failures={failures}, passes={passes}, recent_runs={len(recent_runs)}"
+    )
     return {
         "test_name": test_name,
         "total_runs": total_runs,
@@ -891,6 +929,9 @@ async def search_by_signature(signature: str, exclude_job_id: str = "") -> dict:
         Dict with signature, total_occurrences, unique_tests, tests list,
         last_classification, and comments.
     """
+    logger.debug(
+        f"search_by_signature: signature={signature}, exclude_job_id={exclude_job_id}"
+    )
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
@@ -943,6 +984,9 @@ async def search_by_signature(signature: str, exclude_job_id: str = "") -> dict:
         )
         comments = [dict(row) for row in await cursor.fetchall()]
 
+    logger.debug(
+        f"search_by_signature: signature={signature}, total_occurrences={total_occurrences}, unique_tests={unique_tests}"
+    )
     return {
         "signature": signature,
         "total_occurrences": total_occurrences,
@@ -964,6 +1008,7 @@ async def get_job_stats(job_name: str, exclude_job_id: str = "") -> dict:
         Dict with job_name, total_builds_analyzed, builds_with_failures,
         overall_failure_rate, most_common_failures, and recent_trend.
     """
+    logger.debug(f"get_job_stats: job_name={job_name}, exclude_job_id={exclude_job_id}")
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
@@ -1065,6 +1110,7 @@ async def get_trends(
         Dict with period and data list, where each entry has date,
         failures, unique_tests, total_tests, and failure_rate.
     """
+    logger.debug(f"get_trends: period={period}, days={days}, job_name={job_name}")
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
     if period == "weekly":
@@ -1197,6 +1243,9 @@ async def set_test_classification(
 
     Can be set by the AI during analysis or by humans.
     """
+    logger.debug(
+        f"set_test_classification: test_name={test_name}, classification={classification}, created_by={created_by}"
+    )
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "INSERT INTO test_classifications (test_name, job_name, classification, reason, created_by) "
@@ -1213,6 +1262,9 @@ async def get_test_classifications(
     job_name: str = "",
 ) -> list[dict]:
     """Get test classifications, optionally filtered."""
+    logger.debug(
+        f"get_test_classifications: test_name={test_name!r}, classification={classification!r}, job_name={job_name!r}"
+    )
     conditions = []
     params = []
 
@@ -1236,7 +1288,9 @@ async def get_test_classifications(
             params,
         )
         rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        logger.debug(f"get_test_classifications: count={len(result)}")
+        return result
 
 
 async def get_all_failures(
@@ -1260,6 +1314,9 @@ async def get_all_failures(
     Returns:
         Dict with ``failures`` (list of row dicts) and ``total`` (int).
     """
+    logger.debug(
+        f"get_all_failures: search={search!r}, job_name={job_name!r}, classification={classification!r}, limit={limit}, offset={offset}"
+    )
     conditions: list[str] = []
     params: list[str | int] = []
 
@@ -1294,6 +1351,7 @@ async def get_all_failures(
             [*params, limit, offset],
         )
         rows = await cursor.fetchall()
+        logger.debug(f"get_all_failures: total={total}, returned={len(rows)}")
         return {
             "failures": [dict(row) for row in rows],
             "total": total,

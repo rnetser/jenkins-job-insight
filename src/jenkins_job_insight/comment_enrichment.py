@@ -23,7 +23,9 @@ def detect_github_prs(text: str) -> list[dict]:
         List of dicts with 'owner', 'repo', and 'number' keys.
     """
     matches = _GITHUB_PR_PATTERN.findall(text)
-    return [{"owner": m[0], "repo": m[1], "number": int(m[2])} for m in matches]
+    result = [{"owner": m[0], "repo": m[1], "number": int(m[2])} for m in matches]
+    logger.debug(f"detect_github_prs: found={len(result)}")
+    return result
 
 
 def detect_jira_keys(text: str) -> list[str]:
@@ -35,7 +37,9 @@ def detect_jira_keys(text: str) -> list[str]:
     Returns:
         List of Jira ticket keys (e.g. ['OCPBUGS-12345', 'CNV-200']).
     """
-    return _JIRA_KEY_PATTERN.findall(text)
+    keys = _JIRA_KEY_PATTERN.findall(text)
+    logger.debug(f"detect_jira_keys: found={len(keys)}")
+    return keys
 
 
 async def fetch_github_pr_status(
@@ -55,6 +59,7 @@ async def fetch_github_pr_status(
     Returns:
         'open', 'closed', 'merged', or None if fetch fails.
     """
+    logger.debug(f"fetch_github_pr_status: owner={owner}, repo={repo}, number={number}")
     headers: dict[str, str] = {"Accept": "application/vnd.github.v3+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -66,12 +71,25 @@ async def fetch_github_pr_status(
                 headers=headers,
             )
             if resp.status_code != 200:
+                logger.debug(
+                    f"fetch_github_pr_status: {owner}/{repo}#{number} returned status {resp.status_code}"
+                )
                 return None
             data = resp.json()
             if data.get("merged"):
+                logger.debug(
+                    f"fetch_github_pr_status: {owner}/{repo}#{number} status=merged"
+                )
                 return "merged"
-            return data.get("state")
+            status = data.get("state")
+            logger.debug(
+                f"fetch_github_pr_status: {owner}/{repo}#{number} status={status}"
+            )
+            return status
     except Exception:
+        logger.debug(
+            f"fetch_github_pr_status: {owner}/{repo}#{number} failed", exc_info=True
+        )
         return None
 
 
@@ -115,6 +133,9 @@ async def fetch_jira_ticket_status(
     Returns:
         Status string (e.g. 'Open', 'Closed') or None if fetch fails.
     """
+    logger.debug(
+        f"fetch_jira_ticket_status: jira_url={jira_url}, ticket_key={ticket_key}"
+    )
     base = jira_url.rstrip("/")
     jql = f'key = "{ticket_key}"'
     search_params = {"jql": jql, "maxResults": 1, "fields": "status"}
@@ -132,7 +153,11 @@ async def fetch_jira_ticket_status(
             for i, url in enumerate(endpoints):
                 resp = await client.get(url, params=search_params)
                 if resp.status_code == 200:
-                    return _extract_status_from_issues(resp.json())
+                    status = _extract_status_from_issues(resp.json())
+                    logger.debug(
+                        f"fetch_jira_ticket_status: ticket_key={ticket_key}, status={status}"
+                    )
+                    return status
                 logger.debug(
                     "Jira endpoint %s returned status %d", url, resp.status_code
                 )

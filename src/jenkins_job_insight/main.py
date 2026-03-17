@@ -86,6 +86,7 @@ async def deliver_results(
         body: The original analyze request containing optional callback URL.
         settings: Application settings with default callback URL.
     """
+    logger.debug(f"deliver_results: job_id={result.job_id}, status={result.status}")
     callback_url = body.callback_url or settings.callback_url
     callback_headers = body.callback_headers or settings.callback_headers
     if callback_url:
@@ -392,9 +393,15 @@ async def process_analysis_with_id(
         f"(job_id: {job_id})"
     )
     try:
+        logger.debug(
+            f"process_analysis_with_id: updating status to running, job_id={job_id}"
+        )
         await update_status(job_id, "running")
 
         ai_provider, ai_model = _resolve_ai_config(body)
+        logger.debug(
+            f"process_analysis_with_id: ai_provider={ai_provider}, ai_model={ai_model}"
+        )
 
         # Build server URL for AI history API access
         server_url = base_url or f"http://localhost:{os.environ.get('PORT', '8000')}"
@@ -411,6 +418,9 @@ async def process_analysis_with_id(
 
         # Enrich PRODUCT BUG failures with Jira matches
         if _resolve_enable_jira(body, settings):
+            logger.debug(
+                f"process_analysis_with_id: enriching with Jira matches, job_id={job_id}"
+            )
             await _enrich_result_with_jira(
                 result.failures + list(result.child_job_analyses),
                 settings,
@@ -418,6 +428,9 @@ async def process_analysis_with_id(
                 ai_model,
             )
 
+        logger.debug(
+            f"process_analysis_with_id: saving completed result, job_id={job_id}"
+        )
         result_data = result.model_dump(mode="json")
         result_data["base_url"] = base_url
         result_data["result_url"] = f"{base_url}/results/{job_id}"
@@ -571,6 +584,9 @@ async def analyze_failures(
     When raw_xml is provided, failures are extracted from the XML and the enriched
     XML with analysis results is included in the response.
     """
+    logger.debug(
+        f"POST /analyze-failures: failures_count={len(body.failures) if body.failures else 0}, has_raw_xml={body.raw_xml is not None}"
+    )
     base_url = _extract_base_url(request)
 
     if raw_xml := body.raw_xml:
@@ -770,6 +786,7 @@ async def get_job_report(
     Reports are generated lazily from stored results and cached to disk.
     Pass ``?refresh=1`` to force regeneration (e.g. after a code update).
     """
+    logger.debug(f"GET /results/{job_id}.html: refresh={refresh}")
     # Try disk cache first (skip when refresh requested)
     if not refresh:
         html_content = await get_html_report(job_id)
@@ -816,6 +833,7 @@ async def get_job_report(
 @app.get("/results/{job_id}", response_model=None)
 async def get_job_result(request: Request, job_id: str) -> dict:
     """Retrieve stored result by job_id."""
+    logger.debug(f"GET /results/{job_id}")
     result = await get_result(job_id)
     if not result:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -860,6 +878,9 @@ async def _validate_test_name_in_result(
     job_id: str, test_name: str, child_job_name: str = "", child_build_number: int = 0
 ) -> None:
     """Validate that a test_name exists in the stored result."""
+    logger.debug(
+        f"_validate_test_name_in_result: job_id={job_id}, test_name={test_name}, child_job_name={child_job_name}"
+    )
     stored = await storage.get_result(job_id)
     if not stored:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
@@ -914,6 +935,7 @@ def _find_error_signature_in_children(
 
 async def _invalidate_cached_html(job_id: str) -> None:
     """Delete cached HTML report so next request regenerates it."""
+    logger.debug(f"_invalidate_cached_html: job_id={job_id}")
     try:
         report_path = storage.REPORTS_DIR / f"{job_id}.html"
         await asyncio.to_thread(lambda: report_path.unlink(missing_ok=True))
@@ -924,6 +946,7 @@ async def _invalidate_cached_html(job_id: str) -> None:
 @app.get("/results/{job_id}/comments")
 async def get_comments(job_id: str) -> dict:
     """Get all comments and review states for a job."""
+    logger.debug(f"GET /results/{job_id}/comments")
     comments = await storage.get_comments_for_job(job_id)
     reviews = await storage.get_reviews_for_job(job_id)
     return {"comments": comments, "reviews": reviews}
@@ -932,6 +955,7 @@ async def get_comments(job_id: str) -> dict:
 @app.post("/results/{job_id}/comments", status_code=201)
 async def add_comment(job_id: str, body: AddCommentRequest, request: Request) -> dict:
     """Add a comment to a test failure."""
+    logger.debug(f"POST /results/{job_id}/comments: test_name={body.test_name}")
     await _validate_test_name_in_result(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
@@ -975,6 +999,7 @@ async def delete_comment_endpoint(
     job_id: str, comment_id: int, request: Request
 ) -> dict:
     """Delete a comment (only by the user who created it)."""
+    logger.debug(f"DELETE /results/{job_id}/comments/{comment_id}")
     username = request.cookies.get("jji_username", "")
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
@@ -992,6 +1017,9 @@ async def delete_comment_endpoint(
 @app.put("/results/{job_id}/reviewed")
 async def set_reviewed(job_id: str, body: SetReviewedRequest, request: Request) -> dict:
     """Toggle the reviewed state for a test failure."""
+    logger.debug(
+        f"PUT /results/{job_id}/reviewed: test_name={body.test_name}, reviewed={body.reviewed}"
+    )
     await _validate_test_name_in_result(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
@@ -1016,6 +1044,7 @@ async def enrich_comments(
     job_id: str, settings: Settings = Depends(get_settings)
 ) -> dict:
     """Fetch live statuses for GitHub PRs and Jira tickets found in comments."""
+    logger.debug(f"POST /results/{job_id}/enrich-comments")
     from jenkins_job_insight.comment_enrichment import (
         detect_github_prs,
         detect_jira_keys,
@@ -1024,6 +1053,7 @@ async def enrich_comments(
     )
 
     comments = await storage.get_comments_for_job(job_id)
+    logger.debug(f"enrich_comments: job_id={job_id}, comments_count={len(comments)}")
 
     # Detect Cloud vs Server/DC auth once, matching JiraClient logic:
     # - Cloud: jira_email is set -> Basic auth with email:token
@@ -1090,6 +1120,7 @@ async def enrich_comments(
                 task_map[idx] = (str(c["id"]), {"type": "jira", "key": key})
 
     enrichments: dict[str, list[dict]] = {}
+    logger.debug(f"enrich_comments: job_id={job_id}, enrichment_tasks={len(tasks)}")
 
     if tasks:
         results = await run_parallel_with_limit(tasks)
@@ -1103,18 +1134,23 @@ async def enrich_comments(
             info["status"] = result
             enrichments.setdefault(comment_id, []).append(info)
 
+    logger.debug(
+        f"enrich_comments: job_id={job_id}, enrichments_count={len(enrichments)}"
+    )
     return {"enrichments": enrichments}
 
 
 @app.get("/results/{job_id}/review-status")
 async def get_review_status(job_id: str) -> dict:
     """Get review summary for a job (used by dashboard)."""
+    logger.debug(f"GET /results/{job_id}/review-status")
     return await storage.get_review_status(job_id)
 
 
 @app.get("/results")
 async def list_job_results(limit: int = Query(50, le=100)) -> list[dict]:
     """List recent analysis jobs."""
+    logger.debug(f"GET /results: limit={limit}")
     return await list_results(limit)
 
 
@@ -1129,8 +1165,10 @@ async def dashboard(
         request: The incoming request (used for base URL detection).
         limit: Maximum number of jobs to load from the database.
     """
+    logger.debug(f"GET /dashboard: limit={limit}")
     base_url = _extract_base_url(request)
     jobs = await list_results_for_dashboard(limit)
+    logger.debug(f"GET /dashboard: jobs_count={len(jobs)}")
     html_content = generate_dashboard_html(jobs, base_url, limit=limit)
     return HTMLResponse(html_content)
 
@@ -1138,6 +1176,7 @@ async def dashboard(
 @app.get("/history", response_class=HTMLResponse)
 async def history_page(request: Request) -> HTMLResponse:
     """Serve the failure history page."""
+    logger.debug("GET /history")
     base_url = _extract_base_url(request)
     html_content = generate_history_html(base_url)
     return HTMLResponse(html_content)
@@ -1152,6 +1191,9 @@ async def get_all_failures_endpoint(
     offset: int = Query(default=0, ge=0),
 ) -> dict:
     """Get paginated failure history."""
+    logger.debug(
+        f"GET /history/failures: search={search!r}, job_name={job_name!r}, classification={classification!r}, limit={limit}, offset={offset}"
+    )
     return await storage.get_all_failures(
         search=search,
         job_name=job_name,
@@ -1171,6 +1213,7 @@ async def get_test_history_endpoint(
     ),
 ) -> dict:
     """Get pass/fail history for a specific test."""
+    logger.debug(f"GET /history/test/{test_name}: limit={limit}, job_name={job_name!r}")
     return await storage.get_test_history(
         test_name, limit=limit, job_name=job_name, exclude_job_id=exclude_job_id
     )
@@ -1184,6 +1227,7 @@ async def search_by_signature_endpoint(
     ),
 ) -> dict:
     """Find all tests that failed with the same error signature."""
+    logger.debug(f"GET /history/search: signature={signature}")
     return await storage.search_by_signature(signature, exclude_job_id=exclude_job_id)
 
 
@@ -1195,6 +1239,7 @@ async def get_job_stats_endpoint(
     ),
 ) -> dict:
     """Get aggregate statistics for a specific job."""
+    logger.debug(f"GET /history/stats/{job_name}")
     return await storage.get_job_stats(job_name, exclude_job_id=exclude_job_id)
 
 
@@ -1208,6 +1253,9 @@ async def get_trends_endpoint(
     ),
 ) -> dict:
     """Get failure rate trends over time."""
+    logger.debug(
+        f"GET /history/trends: period={period}, days={days}, job_name={job_name!r}"
+    )
     return await storage.get_trends(
         period=period, days=days, job_name=job_name, exclude_job_id=exclude_job_id
     )
@@ -1216,6 +1264,7 @@ async def get_trends_endpoint(
 @app.post("/history/classify", status_code=201)
 async def classify_test(request: Request, body: dict) -> dict:
     """Classify a test as FLAKY, REGRESSION, etc. Used by AI and humans."""
+    logger.debug(f"POST /history/classify: body_keys={list(body.keys())}")
     test_name = body.get("test_name", "")
     classification = body.get("classification", "")
     reason = body.get("reason", "")
@@ -1258,6 +1307,9 @@ async def get_classifications(
     job_name: str = Query(default=""),
 ) -> dict:
     """Get test classifications."""
+    logger.debug(
+        f"GET /history/classifications: test_name={test_name!r}, classification={classification!r}, job_name={job_name!r}"
+    )
     classifications = await storage.get_test_classifications(
         test_name=test_name,
         classification=classification,
