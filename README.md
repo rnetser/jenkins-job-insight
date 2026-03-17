@@ -368,7 +368,7 @@ When omitted, Jira integration is automatically enabled if `JIRA_URL` and authen
 
 Each analyzed test failure supports user comments and a "Reviewed" checkbox for team collaboration.
 
-#### Features
+#### Capabilities
 
 - **Comments**: Add free-text comments to any failed test (bug links, PR links, notes). Comments are threaded with timestamps and persist across page loads.
 - **Reviewed Checkbox**: Mark individual failures as reviewed so team members know which failures have been triaged.

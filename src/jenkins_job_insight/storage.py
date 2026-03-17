@@ -97,9 +97,11 @@ def _validate_child_identifier_pairing(
     child_job_name: str, child_build_number: int
 ) -> None:
     """Validate that child_job_name and child_build_number are either both set or both empty."""
-    if child_job_name and child_build_number == 0:
-        raise ValueError("child_build_number is required when child_job_name is set")
-    if not child_job_name and child_build_number != 0:
+    if child_job_name and child_build_number <= 0:
+        raise ValueError(
+            "child_build_number must be positive when child_job_name is set"
+        )
+    if not child_job_name and child_build_number > 0:
         raise ValueError("child_job_name is required when child_build_number is set")
 
 
@@ -195,7 +197,7 @@ async def get_review_status(job_id: str) -> dict:
             try:
                 result_data = json.loads(row[0])
                 total_failures = count_all_failures(result_data)
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, AttributeError):
                 total_failures = 0
 
         cursor = await db.execute(

@@ -339,11 +339,11 @@ class _ChildJobFieldsValidator(BaseModel):
 
     @model_validator(mode="after")
     def validate_child_fields(self):
-        if self.child_job_name and self.child_build_number == 0:
+        if self.child_job_name and self.child_build_number <= 0:
             raise ValueError(
-                "child_build_number is required when child_job_name is set"
+                "child_build_number must be positive when child_job_name is set"
             )
-        if not self.child_job_name and self.child_build_number != 0:
+        if not self.child_job_name and self.child_build_number > 0:
             raise ValueError(
                 "child_job_name is required when child_build_number is set"
             )

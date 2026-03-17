@@ -842,14 +842,17 @@ async def add_comment(job_id: str, body: AddCommentRequest) -> dict:
                     error_signature = f.get("error_signature", "")
                     break
 
-    comment_id = await storage.add_comment(
-        job_id=job_id,
-        test_name=body.test_name,
-        comment=body.comment,
-        child_job_name=body.child_job_name,
-        child_build_number=body.child_build_number,
-        error_signature=error_signature,
-    )
+    try:
+        comment_id = await storage.add_comment(
+            job_id=job_id,
+            test_name=body.test_name,
+            comment=body.comment,
+            child_job_name=body.child_job_name,
+            child_build_number=body.child_build_number,
+            error_signature=error_signature,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     await _invalidate_cached_html(job_id)
     return {"id": comment_id}
 
@@ -860,13 +863,16 @@ async def set_reviewed(job_id: str, body: SetReviewedRequest) -> dict:
     await _validate_test_name_in_result(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
-    await storage.set_reviewed(
-        job_id=job_id,
-        test_name=body.test_name,
-        reviewed=body.reviewed,
-        child_job_name=body.child_job_name,
-        child_build_number=body.child_build_number,
-    )
+    try:
+        await storage.set_reviewed(
+            job_id=job_id,
+            test_name=body.test_name,
+            reviewed=body.reviewed,
+            child_job_name=body.child_job_name,
+            child_build_number=body.child_build_number,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     await _invalidate_cached_html(job_id)
     return {"status": "ok"}
 
@@ -952,7 +958,10 @@ async def enrich_comments(
     if tasks:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for i, result in enumerate(results):
-            if isinstance(result, Exception) or result is None:
+            if isinstance(result, Exception):
+                logger.debug("Enrichment task %d failed: %s", i, result)
+                continue
+            if result is None:
                 continue
             comment_id, info = task_map[i]
             info["status"] = result

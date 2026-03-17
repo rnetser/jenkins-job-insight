@@ -1440,6 +1440,7 @@ async def analyze_job(
                                 FailureAnalysis(
                                     test_name=tf.test_name,
                                     error=tf.error_message,
+                                    error_signature=get_failure_signature(tf),
                                     analysis=AnalysisDetail(
                                         details=f"Analysis failed: {result}"
                                     ),
