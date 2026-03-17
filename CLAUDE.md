@@ -10,15 +10,18 @@
 - Use everything you create: imports, variables, clones, instantiations
 - Remove unused code rather than leaving it dormant
 
-## No Duplicate Code (DRY)
+## No Duplicate Code — MANDATORY
 
-- Never copy-paste code — extract shared helpers, base classes, or utility functions
-- If the same logic appears in 2+ places, it MUST be extracted into a reusable function
-- This applies to Python, JavaScript, CSS, and HTML templates alike
-- CSS shared across pages → extract into a helper function (e.g., `_common_css()`)
-- JavaScript shared across pages → extract into a helper function (e.g., `_modal_js()`)
-- Prompt-building logic → extract into a shared builder function
-- Always check existing helpers before writing new code — reuse first
+**ZERO tolerance for duplicate code. This is a hard rule, not a guideline.**
+
+- If the same logic exists in 2+ places, it is a BUG. Extract it immediately.
+- Before writing ANY code, search for existing helpers that do the same thing. Reuse first.
+- This applies to ALL code: Python, JavaScript, CSS, HTML templates, SQL queries.
+- Shared CSS → `_common_css()`, `_controls_css()`, `_modal_css()` helpers
+- Shared JavaScript → `_modal_js()`, `_user_badge_js()` helpers
+- Shared Python logic → extract functions, base classes, or mixins
+- Copy-paste is NEVER acceptable. Not even "just this once." Not even "it's small."
+- Every PR review will check for duplication. Duplicates found = code rejected.
 
 ## Smart Context Management
 
