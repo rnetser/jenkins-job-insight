@@ -510,6 +510,150 @@ def _count_child_failures_recursive(child: dict) -> int:
     return count
 
 
+def _extract_failures_for_history(
+    result_data: dict,
+    job_id: str,
+    job_name: str,
+    build_number: int,
+) -> list[tuple]:
+    """Extract all failures from result_data into flat tuples for insertion.
+
+    Walks top-level failures and recursively walks child_job_analyses
+    and nested failed_children, using the same traversal as
+    count_all_failures().
+
+    Args:
+        result_data: Parsed result dictionary from result_json.
+        job_id: The job identifier.
+        job_name: Top-level job name.
+        build_number: Top-level build number.
+
+    Returns:
+        List of tuples ready for INSERT:
+        (job_id, job_name, build_number, test_name, error_message,
+         error_signature, classification, child_job_name, child_build_number)
+    """
+    rows: list[tuple] = []
+
+    # Top-level failures (no child context)
+    for f in result_data.get("failures", []):
+        analysis = f.get("analysis", {})
+        if isinstance(analysis, str):
+            classification = ""
+        else:
+            classification = analysis.get("classification", "")
+        rows.append(
+            (
+                job_id,
+                job_name,
+                build_number,
+                f.get("test_name", ""),
+                f.get("error", ""),
+                f.get("error_signature", ""),
+                classification,
+                "",  # child_job_name
+                0,  # child_build_number
+            )
+        )
+
+    # Child job analyses (recursive)
+    for child in result_data.get("child_job_analyses", []):
+        _extract_child_failures_for_history(child, job_id, job_name, build_number, rows)
+
+    return rows
+
+
+def _extract_child_failures_for_history(
+    child: dict,
+    job_id: str,
+    job_name: str,
+    build_number: int,
+    rows: list[tuple],
+) -> None:
+    """Recursively extract failures from a child job analysis dict.
+
+    Args:
+        child: A single child job analysis dictionary.
+        job_id: The top-level job identifier.
+        job_name: Top-level job name.
+        build_number: Top-level build number.
+        rows: Accumulator list for insertion tuples.
+    """
+    child_job = child.get("job_name", "")
+    child_build = child.get("build_number", 0)
+
+    for f in child.get("failures", []):
+        analysis = f.get("analysis", {})
+        if isinstance(analysis, str):
+            classification = ""
+        else:
+            classification = analysis.get("classification", "")
+        rows.append(
+            (
+                job_id,
+                job_name,
+                build_number,
+                f.get("test_name", ""),
+                f.get("error", ""),
+                f.get("error_signature", ""),
+                classification,
+                child_job,
+                child_build,
+            )
+        )
+
+    for nested in child.get("failed_children", []):
+        _extract_child_failures_for_history(
+            nested, job_id, job_name, build_number, rows
+        )
+
+
+async def populate_failure_history(job_id: str, result_data: dict) -> None:
+    """Populate failure_history from a completed analysis result.
+
+    Extracts all failures (top-level and nested children) and inserts
+    them into the failure_history table. Idempotent: skips if rows
+    already exist for this job_id.
+
+    Args:
+        job_id: Unique identifier for the analysis job.
+        result_data: Parsed result dictionary from result_json.
+    """
+    job_name = result_data.get("job_name", "")
+    build_number = result_data.get("build_number", 0)
+
+    rows = _extract_failures_for_history(result_data, job_id, job_name, build_number)
+    if not rows:
+        return
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Idempotency check: skip if already populated for this job_id
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM failure_history WHERE job_id = ?",
+            (job_id,),
+        )
+        existing_count = (await cursor.fetchone())[0]
+        if existing_count > 0:
+            logger.debug(
+                f"failure_history already populated for job_id={job_id}, skipping"
+            )
+            return
+
+        await db.executemany(
+            """
+            INSERT INTO failure_history
+                (job_id, job_name, build_number, test_name, error_message,
+                 error_signature, classification, child_job_name, child_build_number)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        await db.commit()
+        logger.info(
+            f"Populated failure_history with {len(rows)} rows for job_id={job_id}"
+        )
+
+
 async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
     """List recent analysis results with summary data for dashboard display.
 
