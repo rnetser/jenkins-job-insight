@@ -623,6 +623,68 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     font-family: var(--font-mono);
 }}
 
+/* Modal popup */
+.modal-overlay {{
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}}
+.modal-dialog {{
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+}}
+.modal-dialog h3 {{
+    font-size: 16px;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}}
+.modal-dialog p {{
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+}}
+.modal-actions {{
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}}
+.modal-btn {{
+    padding: 8px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    transition: background 0.15s, border-color 0.15s;
+}}
+.modal-btn-cancel {{
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}}
+.modal-btn-cancel:hover {{
+    background: var(--bg-hover);
+}}
+.modal-btn-danger {{
+    background: rgba(248,81,73,0.12);
+    color: var(--accent-red);
+    border-color: var(--accent-red);
+}}
+.modal-btn-danger:hover {{
+    background: rgba(248,81,73,0.25);
+}}
+
 /* Responsive (page-specific) */
 @media (max-width: 768px) {{
     .env-chips {{ margin-left: 0; }}
@@ -922,47 +984,50 @@ function appendCommentToList(section, comment) {{
     var currentUser = '';
     try {{ currentUser = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
     if (comment.username && comment.username === currentUser && comment.id) {{
-        deleteBtn = ' <button class="comment-delete-btn" data-comment-id="' + comment.id + '" onclick="deleteComment(this, ' + comment.id + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor=&#39;var(--accent-red)&#39;" onmouseout="this.style.borderColor=&#39;transparent&#39;">Delete</button>';
+        deleteBtn = ' <button onclick="deleteComment(this, ' + comment.id + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;">Delete</button>';
     }}
     // Safe: escapeHtml sanitizes all user content, autoLink only adds <a> tags for URL patterns
     item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + deleteBtn + '</div><div class="comment-text">' + userLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
     list.appendChild(item);
 }}
 
+function showConfirmModal(title, message, onConfirm) {{
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = '<div class="modal-dialog">' +
+        '<h3>' + title + '</h3>' +
+        '<p>' + message + '</p>' +
+        '<div class="modal-actions">' +
+        '<button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>' +
+        '<button class="modal-btn modal-btn-danger" id="modal-confirm">Delete</button>' +
+        '</div></div>';
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#modal-cancel').onclick = function() {{ overlay.remove(); }};
+    overlay.querySelector('#modal-confirm').onclick = function() {{ overlay.remove(); onConfirm(); }};
+    overlay.onclick = function(e) {{ if (e.target === overlay) overlay.remove(); }};
+}}
+
 async function deleteComment(btn, commentId) {{
-    // Replace button with inline confirmation
-    var parent = btn.parentNode;
-    btn.outerHTML = '<span class="delete-confirm" data-comment-id="' + commentId + '" style="font-size:11px;">' +
-        '<span style="color:var(--text-muted);margin-right:4px;">Delete?</span>' +
-        '<button onclick="confirmDelete(this, ' + commentId + ')" style="font-size:11px;padding:2px 6px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid var(--accent-red);color:var(--accent-red);cursor:pointer;margin-right:4px;">Yes</button>' +
-        '<button onclick="cancelDelete(this)" style="font-size:11px;padding:2px 6px;border-radius:4px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;">No</button>' +
-        '</span>';
-}}
-
-async function confirmDelete(btn, commentId) {{
-    try {{
-        var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + '/comments/' + commentId, {{
-            method: 'DELETE',
-        }});
-        if (resp.ok) {{
-            var item = btn.closest('.comment-item');
-            var section = item.closest('.comments-section');
-            item.remove();
-            var count = section.querySelectorAll('.comment-item').length;
-            section.querySelector('.comment-count').textContent = count;
-        }} else {{
-            var data = await resp.json();
-            alert(data.detail || 'Failed to delete');
+    showConfirmModal('Delete Comment', 'Are you sure you want to delete this comment?', async function() {{
+        try {{
+            var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + '/comments/' + commentId, {{
+                method: 'DELETE',
+            }});
+            if (resp.ok) {{
+                var item = btn.closest('.comment-item');
+                var section = item.closest('.comments-section');
+                item.remove();
+                var count = section.querySelectorAll('.comment-item').length;
+                section.querySelector('.comment-count').textContent = count;
+            }} else {{
+                var data = await resp.json();
+                alert(data.detail || 'Failed to delete');
+            }}
+        }} catch (err) {{
+            console.warn('Failed to delete comment:', err);
         }}
-    }} catch (err) {{
-        console.warn('Failed to delete comment:', err);
-    }}
-}}
-
-function cancelDelete(btn) {{
-    var span = btn.closest('.delete-confirm');
-    var commentId = span.dataset.commentId;
-    span.outerHTML = '<button class="comment-delete-btn" data-comment-id="' + commentId + '" onclick="deleteComment(this, ' + commentId + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;">Delete</button>';
+    }});
 }}
 
 function escapeHtml(str) {{
@@ -2328,6 +2393,68 @@ def generate_dashboard_html(
     margin-top: 8px;
 }}
 
+/* Modal popup */
+.modal-overlay {{
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}}
+.modal-dialog {{
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+}}
+.modal-dialog h3 {{
+    font-size: 16px;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}}
+.modal-dialog p {{
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+}}
+.modal-actions {{
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}}
+.modal-btn {{
+    padding: 8px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    transition: background 0.15s, border-color 0.15s;
+}}
+.modal-btn-cancel {{
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}}
+.modal-btn-cancel:hover {{
+    background: var(--bg-hover);
+}}
+.modal-btn-danger {{
+    background: rgba(248,81,73,0.12);
+    color: var(--accent-red);
+    border-color: var(--accent-red);
+}}
+.modal-btn-danger:hover {{
+    background: rgba(248,81,73,0.25);
+}}
+
 /* Responsive (page-specific) */
 @media (max-width: 768px) {{
     .dashboard-card {{ flex-direction: column; align-items: flex-start; gap: 10px; }}
@@ -2620,39 +2747,43 @@ def generate_dashboard_html(
     # --- DELETE JOB JS ---
     parts.append("""
 <script>
+function showConfirmModal(title, message, onConfirm) {
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = '<div class="modal-dialog">' +
+        '<h3>' + title + '</h3>' +
+        '<p>' + message + '</p>' +
+        '<div class="modal-actions">' +
+        '<button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>' +
+        '<button class="modal-btn modal-btn-danger" id="modal-confirm">Delete</button>' +
+        '</div></div>';
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#modal-cancel').onclick = function() { overlay.remove(); };
+    overlay.querySelector('#modal-confirm').onclick = function() { overlay.remove(); onConfirm(); };
+    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+}
+
 function deleteJob(btn, jobId) {
-    var card = btn.closest('.dashboard-card');
-    btn.outerHTML = '<span class="delete-confirm" style="display:inline-flex;gap:4px;align-items:center;font-size:11px;">' +
-        '<span style="color:var(--text-muted);">Delete?</span>' +
-        '<button onclick="event.preventDefault();event.stopPropagation();confirmDeleteJob(this,&#39;' + jobId + '&#39;)" style="font-size:11px;padding:2px 6px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid var(--accent-red);color:var(--accent-red);cursor:pointer;">Yes</button>' +
-        '<button onclick="event.preventDefault();event.stopPropagation();cancelDeleteJob(this)" style="font-size:11px;padding:2px 6px;border-radius:4px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;">No</button>' +
-        '</span>';
-}
-
-async function confirmDeleteJob(btn, jobId) {
-    var BASE = window.location.pathname.replace(/\\/dashboard.*$/, '');
-    try {
-        var resp = await fetch(BASE + '/results/' + jobId, { method: 'DELETE' });
-        if (resp.ok) {
-            var card = btn.closest('.dashboard-card');
-            card.style.transition = 'opacity 0.3s';
-            card.style.opacity = '0';
-            setTimeout(function() { card.remove(); }, 300);
-            var badge = document.querySelector('.jobs-badge');
-            if (badge) {
-                var count = document.querySelectorAll('.dashboard-card').length;
-                badge.textContent = count + ' jobs';
+    showConfirmModal('Delete Analysis', 'Are you sure you want to delete this analysis? All comments, reviews, and history data will be permanently removed.', async function() {
+        var BASE = window.location.pathname.replace(/\\/dashboard.*$/, '');
+        try {
+            var resp = await fetch(BASE + '/results/' + jobId, { method: 'DELETE' });
+            if (resp.ok) {
+                var card = btn.closest('.dashboard-card');
+                card.style.transition = 'opacity 0.3s';
+                card.style.opacity = '0';
+                setTimeout(function() { card.remove(); }, 300);
+                var badge = document.querySelector('.jobs-badge');
+                if (badge) {
+                    var count = document.querySelectorAll('.dashboard-card').length;
+                    badge.textContent = count + ' jobs';
+                }
             }
+        } catch (err) {
+            console.warn('Failed to delete job:', err);
         }
-    } catch (err) {
-        console.warn('Failed to delete job:', err);
-    }
-}
-
-function cancelDeleteJob(btn) {
-    var span = btn.closest('.delete-confirm');
-    var jobId = span.parentNode.querySelector('[data-job-id]').dataset.jobId;
-    span.outerHTML = '<button class="delete-job-btn" data-job-id="' + jobId + '" onclick="event.preventDefault();event.stopPropagation();deleteJob(this,&#39;' + jobId + '&#39;)" style="background:none;border:1px solid transparent;border-radius:4px;color:var(--text-muted);cursor:pointer;padding:4px 6px;transition:all 0.15s;display:inline-flex;align-items:center;" onmouseover="this.style.color=&#39;var(--accent-red)&#39;;this.style.borderColor=&#39;var(--accent-red)&#39;;this.style.background=&#39;rgba(248,81,73,0.12)&#39;" onmouseout="this.style.color=&#39;var(--text-muted)&#39;;this.style.borderColor=&#39;transparent&#39;;this.style.background=&#39;none&#39;" title="Delete this analysis"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>';
+    });
 }
 </script>
 """)
