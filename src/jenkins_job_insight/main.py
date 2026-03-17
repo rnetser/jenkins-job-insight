@@ -1163,6 +1163,18 @@ async def list_job_results(limit: int = Query(50, le=100)) -> list[dict]:
     return await list_results(limit)
 
 
+@app.delete("/results/{job_id}")
+async def delete_job_endpoint(job_id: str, request: Request) -> dict:
+    """Delete an analyzed job and all related data."""
+    result = await storage.get_result(job_id)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    await storage.delete_job(job_id)
+    logger.info(f"Deleted job {job_id}")
+    return {"status": "deleted", "job_id": job_id}
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(
     request: Request,

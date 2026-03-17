@@ -1435,6 +1435,25 @@ async def get_all_failures(
         }
 
 
+async def delete_job(job_id: str) -> bool:
+    """Delete an analyzed job and all its related data."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Delete from all related tables
+        await db.execute("DELETE FROM comments WHERE job_id = ?", (job_id,))
+        await db.execute("DELETE FROM failure_reviews WHERE job_id = ?", (job_id,))
+        await db.execute("DELETE FROM failure_history WHERE job_id = ?", (job_id,))
+        await db.execute("DELETE FROM test_classifications WHERE job_id = ?", (job_id,))
+        await db.execute("DELETE FROM results WHERE job_id = ?", (job_id,))
+        await db.commit()
+
+        # Delete cached HTML report
+        report_path = REPORTS_DIR / f"{job_id}.html"
+        if report_path.exists():
+            report_path.unlink()
+
+        return True
+
+
 async def get_html_report(job_id: str) -> str | None:
     """Read an HTML report from disk.
 

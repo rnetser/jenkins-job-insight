@@ -2617,6 +2617,46 @@ def generate_dashboard_html(
 </script>
 """)
 
+    # --- DELETE JOB JS ---
+    parts.append("""
+<script>
+function deleteJob(btn, jobId) {
+    var card = btn.closest('.dashboard-card');
+    btn.outerHTML = '<span class="delete-confirm" style="display:inline-flex;gap:4px;align-items:center;font-size:11px;">' +
+        '<span style="color:var(--text-muted);">Delete?</span>' +
+        '<button onclick="event.preventDefault();event.stopPropagation();confirmDeleteJob(this,&#39;' + jobId + '&#39;)" style="font-size:11px;padding:2px 6px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid var(--accent-red);color:var(--accent-red);cursor:pointer;">Yes</button>' +
+        '<button onclick="event.preventDefault();event.stopPropagation();cancelDeleteJob(this)" style="font-size:11px;padding:2px 6px;border-radius:4px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;">No</button>' +
+        '</span>';
+}
+
+async function confirmDeleteJob(btn, jobId) {
+    var BASE = window.location.pathname.replace(/\\/dashboard.*$/, '');
+    try {
+        var resp = await fetch(BASE + '/results/' + jobId, { method: 'DELETE' });
+        if (resp.ok) {
+            var card = btn.closest('.dashboard-card');
+            card.style.transition = 'opacity 0.3s';
+            card.style.opacity = '0';
+            setTimeout(function() { card.remove(); }, 300);
+            var badge = document.querySelector('.jobs-badge');
+            if (badge) {
+                var count = document.querySelectorAll('.dashboard-card').length;
+                badge.textContent = count + ' jobs';
+            }
+        }
+    } catch (err) {
+        console.warn('Failed to delete job:', err);
+    }
+}
+
+function cancelDeleteJob(btn) {
+    var span = btn.closest('.delete-confirm');
+    var jobId = span.parentNode.querySelector('[data-job-id]').dataset.jobId;
+    span.outerHTML = '<button class="delete-job-btn" data-job-id="' + jobId + '" onclick="event.preventDefault();event.stopPropagation();deleteJob(this,&#39;' + jobId + '&#39;)" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;opacity:0.5;" title="Delete this analysis">\u2715</button>';
+}
+</script>
+""")
+
     parts.append("</div>\n</body>\n</html>")
     return "\n".join(parts)
 
@@ -2752,6 +2792,16 @@ def _render_dashboard_card(
         f'    <span class="card-job-id" title="{e(job_id)}">{e(short_id)}</span>'
     )
     parts.append(f'    <span class="card-timestamp">{e(created_at)}</span>')
+
+    parts.append(
+        f'    <button class="delete-job-btn" data-job-id="{e(job_id)}"'
+        f' onclick="event.preventDefault(); event.stopPropagation(); deleteJob(this, &#39;{e(job_id)}&#39;)"'
+        ' style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;opacity:0.5;'
+        'transition:opacity 0.15s,color 0.15s;"'
+        ' onmouseover="this.style.opacity=&#39;1&#39;;this.style.color=&#39;var(--accent-red)&#39;"'
+        ' onmouseout="this.style.opacity=&#39;0.5&#39;;this.style.color=&#39;var(--text-muted)&#39;"'
+        ' title="Delete this analysis">\u2715</button>'
+    )
 
     if jenkins_url:
         parts.append(
