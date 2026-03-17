@@ -417,34 +417,32 @@ The service maintains a history of all analyzed test failures and exposes it thr
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/history/test/{test_name}` | Pass/fail history for a specific test, including failure rate, classifications breakdown, flakiness indicator, recent runs, and related comments |
+| `GET` | `/history/test/{test_name}` | Pass/fail history for a specific test, including failure rate, classifications breakdown, recent runs, and related comments |
 | `GET` | `/history/search?signature={sig}` | Find all tests that failed with the same error signature, with occurrence counts and last classification |
 | `GET` | `/history/stats/{job_name}` | Aggregate statistics for a specific job: overall health, most common failures, failure trend direction |
-| `GET` | `/history/flaky` | Tests with intermittent pass/fail behavior (failure rate between 20-80%) |
-| `GET` | `/history/regressions` | Tests that recently started failing after previously passing |
 | `GET` | `/history/trends` | Daily or weekly failure rate data points over time |
 
 #### QUERY.md -- AI Skill File
 
 The file `src/jenkins_job_insight/QUERY.md` is injected into the AI prompt during analysis. It teaches the AI how to use `curl` to query the history endpoints before classifying each failure. This allows the AI to:
 
-- Check whether a test is already known to be flaky
+- Use raw history data to judge whether a test is flaky, a regression, or a persistent issue
 - Reference existing comments and bug tickets instead of suggesting duplicates
 - Correlate error signatures across multiple tests
-- Identify regressions by comparing with recent pass history
+- Compare failure patterns with git log to identify regressions
 
 #### What the AI Can Detect with History
 
 | Pattern | How It Uses History |
 |---------|-------------------|
-| **Flaky tests** | Queries `/history/flaky` and `/history/test/{name}` to identify intermittent failures (20-80% failure rate) |
-| **Regressions** | Queries `/history/regressions` and cross-references with git log to find the causing commit |
+| **Flaky tests** | Queries `/history/test/{name}` and examines failure_rate to identify intermittent failures |
+| **Regressions** | Queries `/history/test/{name}` for recent consecutive failures and cross-references with git log |
 | **Ongoing failures** | Checks consecutive failure count in `/history/test/{name}` to flag persistent issues |
 | **Duplicate bugs** | Searches `/history/search?signature=...` to find other tests hitting the same error, then references existing comments and Jira tickets |
 
 #### History Page
 
-The `/history` endpoint serves an interactive HTML page accessible from the dashboard header. It provides a UI for exploring flaky tests, regressions, and failure trends without using the API directly.
+The `/history` endpoint serves an interactive HTML page accessible from the dashboard header. It provides a UI for exploring failure trends and searching test history.
 
 ### SSL Verification
 

@@ -643,8 +643,6 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     <h1>{e(job_name)}</h1>
     <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
     <span id="overall-review-status" class="status-chip" style="display:none"></span>
-    <span id="flaky-count-badge" class="status-chip" style="display:none"></span>
-    <span id="regression-count-badge" class="status-chip" style="display:none"></span>
     <div class="env-chips">
       <span class="env-chip">Build: #{e(build_number)}</span>
       <span class="env-chip">Status: {e(result.status)}</span>
@@ -743,7 +741,6 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     parts.append(f"""
 <script>
 const JOB_ID = "{e(result.job_id)}";
-const JOB_NAME = "{e(result.job_name or "")}";
 // Derive base path for API calls (works behind reverse proxies with path prefixes)
 const BASE_PATH = window.location.pathname.replace(/\\/results\\/.*$/, '');
 
@@ -878,7 +875,7 @@ function appendCommentToList(section, comment) {{
     var currentUser = '';
     try {{ currentUser = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
     if (comment.username && comment.username === currentUser && comment.id) {{
-        deleteBtn = ' <button onclick="deleteComment(this, ' + comment.id + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor=&#39;var(--accent-red)&#39;" onmouseout="this.style.borderColor=&#39;transparent&#39;">Delete</button>';
+        deleteBtn = ' <button class="comment-delete-btn" data-comment-id="' + comment.id + '" onclick="deleteComment(this, ' + comment.id + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor=&#39;var(--accent-red)&#39;" onmouseout="this.style.borderColor=&#39;transparent&#39;">Delete</button>';
     }}
     // Safe: escapeHtml sanitizes all user content, autoLink only adds <a> tags for URL patterns
     item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + deleteBtn + '</div><div class="comment-text">' + userLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
@@ -886,24 +883,39 @@ function appendCommentToList(section, comment) {{
 }}
 
 async function deleteComment(btn, commentId) {{
-    if (!confirm('Delete this comment?')) return;
+    // Replace button with inline confirmation
+    var parent = btn.parentNode;
+    btn.outerHTML = '<span class="delete-confirm" data-comment-id="' + commentId + '" style="font-size:11px;">' +
+        '<span style="color:var(--text-muted);margin-right:4px;">Delete?</span>' +
+        '<button onclick="confirmDelete(this, ' + commentId + ')" style="font-size:11px;padding:2px 6px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid var(--accent-red);color:var(--accent-red);cursor:pointer;margin-right:4px;">Yes</button>' +
+        '<button onclick="cancelDelete(this)" style="font-size:11px;padding:2px 6px;border-radius:4px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;">No</button>' +
+        '</span>';
+}}
+
+async function confirmDelete(btn, commentId) {{
     try {{
-        const resp = await fetch(BASE_PATH + '/results/' + JOB_ID + '/comments/' + commentId, {{
+        var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + '/comments/' + commentId, {{
             method: 'DELETE',
         }});
         if (resp.ok) {{
-            const item = btn.closest('.comment-item');
-            const section = item.closest('.comments-section');
+            var item = btn.closest('.comment-item');
+            var section = item.closest('.comments-section');
             item.remove();
-            const count = section.querySelectorAll('.comment-item').length;
+            var count = section.querySelectorAll('.comment-item').length;
             section.querySelector('.comment-count').textContent = count;
         }} else {{
-            const data = await resp.json();
+            var data = await resp.json();
             alert(data.detail || 'Failed to delete');
         }}
     }} catch (err) {{
         console.warn('Failed to delete comment:', err);
     }}
+}}
+
+function cancelDelete(btn) {{
+    var span = btn.closest('.delete-confirm');
+    var commentId = span.dataset.commentId;
+    span.outerHTML = '<button class="comment-delete-btn" data-comment-id="' + commentId + '" onclick="deleteComment(this, ' + commentId + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;">Delete</button>';
 }}
 
 function escapeHtml(str) {{
@@ -1075,71 +1087,7 @@ document.addEventListener('DOMContentLoaded', async function() {{
     }});
     await loadCommentsAndReviews();
     await loadEnrichments();
-    await loadHistoryBadges();
 }});
-
-async function loadHistoryBadges() {{
-    try {{
-        const [flakyResp, regResp] = await Promise.all([
-            fetch(BASE_PATH + '/history/flaky?job_name=' + encodeURIComponent(JOB_NAME)),
-            fetch(BASE_PATH + '/history/regressions?job_name=' + encodeURIComponent(JOB_NAME))
-        ]);
-
-        const flakyTests = new Set();
-        const regressionTests = new Set();
-
-        if (flakyResp.ok) {{
-            const flakyData = await flakyResp.json();
-            (flakyData.flaky_tests || []).forEach(t => flakyTests.add(t.test_name));
-        }}
-        if (regResp.ok) {{
-            const regData = await regResp.json();
-            (regData.regressions || []).forEach(t => regressionTests.add(t.test_name));
-        }}
-
-        // Add badges to reviewed-toggle labels (which contain test names)
-        document.querySelectorAll('.reviewed-toggle').forEach(toggle => {{
-            const testName = toggle.dataset.testName;
-            if (!testName) return;
-
-            if (flakyTests.has(testName)) {{
-                const badge = document.createElement('span');
-                badge.className = 'classification-tag';
-                badge.style.cssText = 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);margin-left:6px;';
-                badge.textContent = 'FLAKY';
-                toggle.appendChild(badge);
-            }}
-            if (regressionTests.has(testName)) {{
-                const badge = document.createElement('span');
-                badge.className = 'classification-tag';
-                badge.style.cssText = 'background:rgba(248,81,73,0.12);color:var(--accent-red);margin-left:6px;';
-                badge.textContent = 'REGRESSION';
-                toggle.appendChild(badge);
-            }}
-        }});
-
-        if (flakyTests.size > 0) {{
-            const badge = document.getElementById('flaky-count-badge');
-            if (badge) {{
-                badge.style.display = '';
-                badge.textContent = flakyTests.size + ' Flaky';
-                badge.style.background = 'rgba(210,153,34,0.15)';
-                badge.style.color = 'var(--accent-yellow)';
-            }}
-        }}
-        if (regressionTests.size > 0) {{
-            const badge = document.getElementById('regression-count-badge');
-            if (badge) {{
-                badge.style.display = '';
-                badge.textContent = regressionTests.size + ' Regression';
-                badge.style.background = 'rgba(248,81,73,0.12)';
-                badge.style.color = 'var(--accent-red)';
-            }}
-        }}
-    }} catch (err) {{
-        console.warn('Failed to load history badges:', err);
-    }}
-}}
 </script>
 """)
 
@@ -2187,8 +2135,6 @@ def generate_dashboard_html(
   <div class="header-content">
     <h1>Jenkins Job Insight</h1>
     <span id="jobs-badge" class="jobs-badge">{total_jobs} job{"s" if total_jobs != 1 else ""}{e(limit_note)}</span>
-    <a id="flaky-badge" href="{e(base_url)}/history" style="display:none;font-size:12px;font-weight:700;padding:4px 10px;border-radius:12px;background:rgba(210,153,34,0.15);color:var(--accent-yellow);text-decoration:none;font-family:var(--font-mono);"></a>
-    <a id="regression-badge" href="{e(base_url)}/history" style="display:none;font-size:12px;font-weight:700;padding:4px 10px;border-radius:12px;background:rgba(248,81,73,0.15);color:var(--accent-red);text-decoration:none;font-family:var(--font-mono);"></a>
     <a href="{e(base_url)}/history" style="color:var(--accent-blue);text-decoration:none;font-size:14px;">History</a>
   </div>
 </div>
@@ -2384,68 +2330,6 @@ def generate_dashboard_html(
 </script>
 """)
 
-    # --- HISTORY BADGES (always, regardless of job count) ---
-    parts.append(f"""
-<script>
-(function() {{
-  var base = '{html.escape(base_url)}';
-  function fetchJson(url) {{
-    return fetch(url).then(function(r) {{ return r.ok ? r.json() : null; }}).catch(function() {{ return null; }});
-  }}
-  fetchJson(base + '/history/flaky').then(function(data) {{
-    if (!data) return;
-    var flakyTests = data.flaky_tests || [];
-    var count = flakyTests.length;
-    if (count > 0) {{
-      var el = document.getElementById('flaky-badge');
-      if (el) {{
-        el.textContent = count + ' flaky test' + (count !== 1 ? 's' : '');
-        el.style.display = '';
-      }}
-      var flakyByJob = {{}};
-      flakyTests.forEach(function(t) {{
-        (t.job_names || []).forEach(function(jn) {{
-          flakyByJob[jn] = (flakyByJob[jn] || 0) + 1;
-        }});
-      }});
-      document.querySelectorAll('.flaky-job-badge').forEach(function(badge) {{
-        var jobName = badge.dataset.jobName;
-        if (flakyByJob[jobName]) {{
-          badge.textContent = flakyByJob[jobName] + ' flaky';
-          badge.style.cssText = 'display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;background:rgba(210,153,34,0.15);color:var(--accent-yellow);white-space:nowrap;';
-        }}
-      }});
-    }}
-  }});
-  fetchJson(base + '/history/regressions').then(function(data) {{
-    if (!data) return;
-    var regressions = data.regressions || [];
-    var count = regressions.length;
-    if (count > 0) {{
-      var el = document.getElementById('regression-badge');
-      if (el) {{
-        el.textContent = count + ' regression' + (count !== 1 ? 's' : '');
-        el.style.display = '';
-      }}
-      var regByJob = {{}};
-      regressions.forEach(function(t) {{
-        var jobParts = (t.first_failure_job || '').split(' #');
-        var jn = jobParts[0];
-        if (jn) regByJob[jn] = (regByJob[jn] || 0) + 1;
-      }});
-      document.querySelectorAll('.regression-job-badge').forEach(function(badge) {{
-        var jobName = badge.dataset.jobName;
-        if (regByJob[jobName]) {{
-          badge.textContent = regByJob[jobName] + ' regression' + (regByJob[jobName] > 1 ? 's' : '');
-          badge.style.cssText = 'display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;background:rgba(248,81,73,0.12);color:var(--accent-red);white-space:nowrap;';
-        }}
-      }});
-    }}
-  }});
-}})();
-</script>
-""")
-
     parts.append("</div>\n</body>\n</html>")
     return "\n".join(parts)
 
@@ -2569,16 +2453,6 @@ def _render_dashboard_card(
             f"{comment_count} comment{'s' if comment_count != 1 else ''}"
             f"</span>"
         )
-
-    # Per-job flaky & regression badge placeholders (populated by JS)
-    parts.append(
-        f'    <span class="flaky-job-badge" data-job-name="{e(job_name)}"'
-        f' style="display:none"></span>'
-    )
-    parts.append(
-        f'    <span class="regression-job-badge" data-job-name="{e(job_name)}"'
-        f' style="display:none"></span>'
-    )
 
     parts.append("  </div>")
     parts.append('  <div class="card-meta">')
@@ -2899,18 +2773,6 @@ def generate_history_html(base_url: str = "") -> str:
 </div>
 <div id="search-results"></div>
 
-<!-- Regressions -->
-<h2 class="section-title">Recent Regressions</h2>
-<div id="regressions-section">
-  <div class="empty-msg">Loading regressions...</div>
-</div>
-
-<!-- Flaky Tests -->
-<h2 class="section-title">Flaky Tests</h2>
-<div id="flaky-section">
-  <div class="empty-msg">Loading flaky tests...</div>
-</div>
-
 <!-- Trends -->
 <h2 class="section-title">Failure Trends (Last 30 Days)</h2>
 <div id="trends-section">
@@ -2965,7 +2827,6 @@ def generate_history_html(base_url: str = "") -> str:
         h += '<span class="badge-green">' + data.passes + ' passes</span>';
         var pct = (data.failure_rate * 100).toFixed(1);
         h += '<span class="badge-yellow">' + pct + '% failure rate</span>';
-        if (data.is_flaky) h += '<span class="badge-yellow">FLAKY</span>';
         if (data.last_classification) {{
           h += '<span class="badge-blue">' + escapeHtml(data.last_classification) + '</span>';
         }}
@@ -3011,65 +2872,6 @@ def generate_history_html(base_url: str = "") -> str:
   searchInput.addEventListener('keydown', function(ev) {{
     if (ev.key === 'Enter') doSearch();
   }});
-
-  /* ---- Regressions ---- */
-  fetchJson(BASE + '/history/regressions')
-    .then(function(data) {{
-      var section = document.getElementById('regressions-section');
-      var items = data.regressions || [];
-      if (items.length === 0) {{
-        section.innerHTML = '<div class="empty-msg">No recent regressions detected.</div>';
-        return;
-      }}
-      var h = '<div class="table-container"><table>';
-      h += '<tr><th>Test Name</th><th>Job</th><th>Consecutive Failures</th><th>First Failed</th><th>Classification</th></tr>';
-      for (var i = 0; i < items.length; i++) {{
-        var r = items[i];
-        h += '<tr>';
-        h += '<td><span class="test-link" onclick="document.getElementById(\\'test-search\\').value=this.textContent;document.getElementById(\\'search-btn\\').click();">' + escapeHtml(r.test_name) + '</span></td>';
-        h += '<td>' + escapeHtml(r.job_name || '') + '</td>';
-        h += '<td class="mono"><span class="badge-red">' + r.consecutive_failures + '</span></td>';
-        h += '<td class="mono">' + escapeHtml(r.first_failure_date || '') + '</td>';
-        h += '<td><span class="badge-blue">' + escapeHtml(r.classification || '') + '</span></td>';
-        h += '</tr>';
-      }}
-      h += '</table></div>';
-      section.innerHTML = h;
-    }})
-    .catch(function(err) {{
-      document.getElementById('regressions-section').innerHTML =
-        '<div class="empty-msg">Failed to load regressions: ' + escapeHtml(err.message) + '</div>';
-    }});
-
-  /* ---- Flaky Tests ---- */
-  fetchJson(BASE + '/history/flaky')
-    .then(function(data) {{
-      var section = document.getElementById('flaky-section');
-      var items = data.flaky_tests || [];
-      if (items.length === 0) {{
-        section.innerHTML = '<div class="empty-msg">No flaky tests detected.</div>';
-        return;
-      }}
-      var h = '<div class="table-container"><table>';
-      h += '<tr><th>Test Name</th><th>Failure Rate</th><th>Failures</th><th>Total Runs</th><th>Jobs</th></tr>';
-      for (var i = 0; i < items.length; i++) {{
-        var f = items[i];
-        var pct = (f.failure_rate * 100).toFixed(1);
-        h += '<tr>';
-        h += '<td><span class="test-link" onclick="document.getElementById(\\'test-search\\').value=this.textContent;document.getElementById(\\'search-btn\\').click();">' + escapeHtml(f.test_name) + '</span></td>';
-        h += '<td class="mono"><span class="badge-yellow">' + pct + '%</span></td>';
-        h += '<td class="mono">' + f.failures + '</td>';
-        h += '<td class="mono">' + f.total_runs + '</td>';
-        h += '<td>' + escapeHtml((f.job_names || []).join(', ')) + '</td>';
-        h += '</tr>';
-      }}
-      h += '</table></div>';
-      section.innerHTML = h;
-    }})
-    .catch(function(err) {{
-      document.getElementById('flaky-section').innerHTML =
-        '<div class="empty-msg">Failed to load flaky tests: ' + escapeHtml(err.message) + '</div>';
-    }});
 
   /* ---- Trends ---- */
   fetchJson(BASE + '/history/trends?period=daily&days=30')

@@ -1906,24 +1906,6 @@ class TestHistoryEndpoints:
         assert data["job_name"] == "my-job"
 
     @pytest.mark.asyncio
-    async def test_get_flaky_tests(self, test_client) -> None:
-        """Test that /history/flaky returns expected structure."""
-        response = test_client.get("/history/flaky")
-        assert response.status_code == 200
-        data = response.json()
-        assert "flaky_tests" in data
-        assert isinstance(data["flaky_tests"], list)
-
-    @pytest.mark.asyncio
-    async def test_get_regressions(self, test_client) -> None:
-        """Test that /history/regressions returns expected structure."""
-        response = test_client.get("/history/regressions")
-        assert response.status_code == 200
-        data = response.json()
-        assert "regressions" in data
-        assert isinstance(data["regressions"], list)
-
-    @pytest.mark.asyncio
     async def test_get_trends(self, test_client) -> None:
         """Test that /history/trends returns expected structure."""
         response = test_client.get("/history/trends")

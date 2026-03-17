@@ -1176,48 +1176,6 @@ async def get_job_stats_endpoint(
     return await storage.get_job_stats(job_name, exclude_job_id=exclude_job_id)
 
 
-@app.get("/history/flaky")
-async def get_flaky_tests_endpoint(
-    min_runs: int = Query(default=5, ge=1),
-    min_rate: float = Query(default=0.2, ge=0.0, le=1.0),
-    max_rate: float = Query(default=0.8, ge=0.0, le=1.0),
-    job_name: str = Query(default=""),
-    exclude_job_id: str = Query(
-        default="", description="Exclude results from this job ID"
-    ),
-) -> dict:
-    """Get known flaky tests."""
-    return {
-        "flaky_tests": await storage.get_flaky_tests(
-            min_runs=min_runs,
-            min_rate=min_rate,
-            max_rate=max_rate,
-            job_name=job_name,
-            exclude_job_id=exclude_job_id,
-        )
-    }
-
-
-@app.get("/history/regressions")
-async def get_regressions_endpoint(
-    days: int = Query(default=7, ge=1),
-    min_previous_passes: int = Query(default=3, ge=1),
-    job_name: str = Query(default=""),
-    exclude_job_id: str = Query(
-        default="", description="Exclude results from this job ID"
-    ),
-) -> dict:
-    """Get recent test regressions."""
-    return {
-        "regressions": await storage.get_regressions(
-            days=days,
-            min_previous_passes=min_previous_passes,
-            job_name=job_name,
-            exclude_job_id=exclude_job_id,
-        )
-    }
-
-
 @app.get("/history/trends")
 async def get_trends_endpoint(
     period: str = Query(default="daily"),

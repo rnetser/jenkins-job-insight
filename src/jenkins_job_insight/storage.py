@@ -727,7 +727,7 @@ async def get_test_history(
     Returns:
         Dict with test_name, total_runs, failures, passes, failure_rate,
         first_seen, last_seen, last_classification, classifications,
-        recent_runs, comments, is_flaky, consecutive_failures, note.
+        recent_runs, comments, consecutive_failures, note.
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -762,7 +762,6 @@ async def get_test_history(
                 "classifications": {},
                 "recent_runs": [],
                 "comments": [],
-                "is_flaky": False,
                 "consecutive_failures": 0,
                 "note": "No failure records found for this test.",
             }
@@ -826,9 +825,6 @@ async def get_test_history(
         passes = max(0, total_runs - failures)
         failure_rate = failures / total_runs if total_runs > 0 else 0.0
 
-        # Flaky detection
-        is_flaky = total_runs >= 5 and 0.2 <= failure_rate <= 0.8
-
         # Collect error signatures for comment lookup
         signatures = {
             r["error_signature"] for r in recent_runs if r.get("error_signature")
@@ -861,7 +857,6 @@ async def get_test_history(
         "classifications": classifications,
         "recent_runs": recent_runs,
         "comments": comments,
-        "is_flaky": is_flaky,
         "consecutive_failures": consecutive_failures,
         "note": "Pass count is estimated from total analyzed builds minus recorded failures.",
     }
@@ -1032,229 +1027,6 @@ async def get_job_stats(job_name: str, exclude_job_id: str = "") -> dict:
         "most_common_failures": most_common,
         "recent_trend": recent_trend,
     }
-
-
-async def get_flaky_tests(
-    min_runs: int = 5,
-    min_rate: float = 0.2,
-    max_rate: float = 0.8,
-    job_name: str = "",
-    exclude_job_id: str = "",
-) -> list[dict]:
-    """Find tests with intermittent pass/fail behavior.
-
-    A test is considered flaky if its failure rate is between min_rate and
-    max_rate across at least min_runs builds.
-
-    Args:
-        min_runs: Minimum number of builds a test must appear in.
-        min_rate: Minimum failure rate to be considered flaky.
-        max_rate: Maximum failure rate to be considered flaky.
-        job_name: Optional filter by job name.
-        exclude_job_id: Exclude results from this job ID.
-
-    Returns:
-        List of dicts with test_name, failure_rate, total_runs, failures,
-        passes, last_status, and job_names.
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-
-        # Get total builds count for estimating pass rate
-        if job_name:
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM results WHERE result_json LIKE ?",
-                (f'%"job_name": "{job_name}"%',),
-            )
-        else:
-            cursor = await db.execute("SELECT COUNT(*) FROM results")
-        total_builds = (await cursor.fetchone())[0]
-
-        if total_builds < min_runs:
-            return []
-
-        # Get failure counts per test
-        job_filter = ""
-        params: list = []
-        if job_name:
-            job_filter = " WHERE job_name = ?"
-            params.append(job_name)
-        if exclude_job_id:
-            job_filter += " AND job_id != ?" if job_filter else " WHERE job_id != ?"
-            params.append(exclude_job_id)
-
-        cursor = await db.execute(
-            f"SELECT test_name, COUNT(*) as failures, "
-            f"GROUP_CONCAT(DISTINCT job_name) as job_names "
-            f"FROM failure_history{job_filter} "
-            f"GROUP BY test_name",
-            params,
-        )
-        rows = await cursor.fetchall()
-
-        flaky_tests = []
-        for row in rows:
-            failures = row["failures"]
-            failure_rate = failures / total_builds if total_builds > 0 else 0.0
-            passes = total_builds - failures
-
-            if total_builds >= min_runs and min_rate <= failure_rate <= max_rate:
-                # Get last status (most recent failure entry)
-                exclude_sub = ""
-                sub_params: list = [row["test_name"]]
-                if job_name:
-                    exclude_sub += " AND job_name = ?"
-                    sub_params.append(job_name)
-                if exclude_job_id:
-                    exclude_sub += " AND job_id != ?"
-                    sub_params.append(exclude_job_id)
-                cursor = await db.execute(
-                    f"SELECT classification FROM failure_history "
-                    f"WHERE test_name = ?{exclude_sub} "
-                    f"ORDER BY analyzed_at DESC LIMIT 1",
-                    sub_params,
-                )
-                last_row = await cursor.fetchone()
-                last_status = last_row[0] if last_row else ""
-
-                flaky_tests.append(
-                    {
-                        "test_name": row["test_name"],
-                        "failure_rate": round(failure_rate, 4),
-                        "total_runs": total_builds,
-                        "failures": failures,
-                        "passes": passes,
-                        "last_status": last_status,
-                        "job_names": row["job_names"].split(",")
-                        if row["job_names"]
-                        else [],
-                    }
-                )
-
-        # Sort by failure rate descending
-        flaky_tests.sort(key=lambda x: x["failure_rate"], reverse=True)
-        return flaky_tests
-
-
-async def get_regressions(
-    days: int = 7,
-    min_previous_passes: int = 3,
-    job_name: str = "",
-    exclude_job_id: str = "",
-) -> list[dict]:
-    """Find tests that recently started failing.
-
-    A regression is a test whose first recorded failure occurred within
-    the lookback period.
-
-    Args:
-        days: Number of days to look back for new failures.
-        min_previous_passes: Minimum previous passing builds required
-            (set to 0 to include all new failures).
-        job_name: Optional filter by job name.
-        exclude_job_id: Exclude results from this job ID.
-
-    Returns:
-        List of dicts with test_name, first_failure, first_failure_job,
-        consecutive_failures, previous_passes, classification, and
-        error_signature.
-    """
-    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-
-        # Build optional job_name filter
-        job_filter = ""
-        params: list = [cutoff]
-        if job_name:
-            job_filter = " AND job_name = ?"
-            params.append(job_name)
-        if exclude_job_id:
-            job_filter += " AND job_id != ?"
-            params.append(exclude_job_id)
-
-        # Find tests whose first failure is within the lookback window
-        cursor = await db.execute(
-            f"SELECT test_name, MIN(analyzed_at) as first_failure, "
-            f"COUNT(*) as consecutive_failures "
-            f"FROM failure_history "
-            f"WHERE analyzed_at >= ?{job_filter} "
-            f"GROUP BY test_name "
-            f"HAVING MIN(analyzed_at) >= ?",
-            params + [cutoff],
-        )
-        candidates = await cursor.fetchall()
-
-        regressions = []
-        for candidate in candidates:
-            test_name = candidate["test_name"]
-
-            # Check that the test has no failures before the cutoff window
-            check_params: list = [test_name, cutoff]
-            check_filter = ""
-            if job_name:
-                check_filter += " AND job_name = ?"
-                check_params.append(job_name)
-            if exclude_job_id:
-                check_filter += " AND job_id != ?"
-                check_params.append(exclude_job_id)
-            cursor = await db.execute(
-                f"SELECT COUNT(*) FROM failure_history "
-                f"WHERE test_name = ? AND analyzed_at < ?{check_filter}",
-                check_params,
-            )
-            old_failures = (await cursor.fetchone())[0]
-            if old_failures > 0:
-                # Not a new regression, it failed before the window too
-                continue
-
-            # Estimate previous passes (total builds minus failures)
-            if job_name:
-                cursor = await db.execute(
-                    "SELECT COUNT(*) FROM results WHERE result_json LIKE ?",
-                    (f'%"job_name": "{job_name}"%',),
-                )
-            else:
-                cursor = await db.execute("SELECT COUNT(*) FROM results")
-            total_builds = (await cursor.fetchone())[0]
-            previous_passes = max(0, total_builds - candidate["consecutive_failures"])
-
-            if previous_passes < min_previous_passes:
-                continue
-
-            # Get classification and error_signature from first failure
-            first_failure_params: list = [test_name]
-            first_failure_filter = ""
-            if job_name:
-                first_failure_filter += " AND job_name = ?"
-                first_failure_params.append(job_name)
-            if exclude_job_id:
-                first_failure_filter += " AND job_id != ?"
-                first_failure_params.append(exclude_job_id)
-            cursor = await db.execute(
-                f"SELECT classification, error_signature, job_name as first_failure_job "
-                f"FROM failure_history WHERE test_name = ?{first_failure_filter} "
-                f"ORDER BY analyzed_at ASC LIMIT 1",
-                first_failure_params,
-            )
-            detail = await cursor.fetchone()
-
-            regressions.append(
-                {
-                    "test_name": test_name,
-                    "first_failure": candidate["first_failure"],
-                    "first_failure_job": detail["first_failure_job"] if detail else "",
-                    "consecutive_failures": candidate["consecutive_failures"],
-                    "previous_passes": previous_passes,
-                    "classification": detail["classification"] if detail else "",
-                    "error_signature": detail["error_signature"] if detail else "",
-                }
-            )
-
-        # Sort by consecutive_failures descending
-        regressions.sort(key=lambda x: x["consecutive_failures"], reverse=True)
-        return regressions
 
 
 async def get_trends(
