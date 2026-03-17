@@ -68,6 +68,19 @@ curl -s -X POST "{server_url}/history/classify" \
 | `KNOWN_BUG` | Failure matches a known, already-reported bug. Reference the bug in the reason. |
 | `INTERMITTENT` | Similar to flaky but with a known trigger (e.g., timing, resource contention). |
 
+### KNOWN_BUG Restriction (STRICT)
+
+KNOWN_BUG can ONLY be used when the history API provides concrete evidence:
+- A Jira ticket key found in historical comments (from /history/test/ response)
+- A prior KNOWN_BUG classification with a Jira reference (from /history/classifications)
+
+You MUST NOT classify as KNOWN_BUG based on:
+- Your own training knowledge about product defects
+- Pattern recognition from the error message alone
+- Similarity to other failures in the SAME job run
+
+If the history API returns no bug references, use REGRESSION, INFRASTRUCTURE, or INTERMITTENT instead.
+
 ### Classification Rules
 
 1. You MUST classify EVERY test. No exceptions.
@@ -84,7 +97,7 @@ Every classification MUST include evidence in the `reason` field:
 
 | Classification | Required Evidence |
 |---|---|
-| KNOWN_BUG | Jira ticket key (e.g., MTV-2385), bug URL, or reference from historical comments |
+| KNOWN_BUG | ONLY if the history API returned a matching Jira ticket key from historical comments, or a prior KNOWN_BUG classification with a Jira reference. Your own knowledge about product defects does NOT count. If /history/test/ and /history/classifications return no Jira tickets or bug references, you CANNOT use KNOWN_BUG. Use REGRESSION or INFRASTRUCTURE instead. |
 | REGRESSION | The date/build when the test started failing, what was passing before, correlation with git commits if available |
 | FLAKY | Failure rate statistics, specific builds where it passed vs failed |
 | INFRASTRUCTURE | The infrastructure error (e.g., "cluster not deployed", "node not ready"), evidence that multiple unrelated tests failed with the same root cause |
