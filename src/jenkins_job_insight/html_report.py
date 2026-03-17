@@ -1027,8 +1027,8 @@ document.addEventListener('DOMContentLoaded', async function() {{
             var chips = headerContent.querySelector('.env-chips');
             if (chips) {{
                 var userChip = document.createElement('span');
-                userChip.className = 'env-chip';
-                userChip.textContent = 'User: ' + uname;
+                userChip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
+                userChip.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escapeHtml(uname);
                 chips.appendChild(userChip);
             }}
         }}
@@ -2276,9 +2276,10 @@ def generate_dashboard_html(
         var headerContent = document.querySelector('.header-content');
         if (headerContent) {
             var userChip = document.createElement('span');
-            userChip.className = 'env-chip';
-            userChip.style.marginLeft = 'auto';
-            userChip.textContent = 'User: ' + uname;
+            userChip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;margin-left:auto;';
+            var escapedName = document.createElement('span');
+            escapedName.textContent = uname;
+            userChip.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escapedName.innerHTML;
             headerContent.appendChild(userChip);
         }
     }
