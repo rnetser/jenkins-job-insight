@@ -806,8 +806,11 @@ def _find_error_signature_in_children(
 
 async def _invalidate_cached_html(job_id: str) -> None:
     """Delete cached HTML report so next request regenerates it."""
-    report_path = storage.REPORTS_DIR / f"{job_id}.html"
-    await asyncio.to_thread(lambda: report_path.unlink(missing_ok=True))
+    try:
+        report_path = storage.REPORTS_DIR / f"{job_id}.html"
+        await asyncio.to_thread(lambda: report_path.unlink(missing_ok=True))
+    except OSError:
+        pass  # Cache cleanup is best-effort
 
 
 @app.get("/results/{job_id}/comments")

@@ -97,6 +97,8 @@ def _validate_child_identifier_pairing(
     child_job_name: str, child_build_number: int
 ) -> None:
     """Validate that child_job_name and child_build_number are either both set or both empty."""
+    if child_build_number < 0:
+        raise ValueError("child_build_number must not be negative")
     if child_job_name and child_build_number <= 0:
         raise ValueError(
             "child_build_number must be positive when child_job_name is set"
