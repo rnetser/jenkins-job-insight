@@ -1221,7 +1221,7 @@ async function loadClassifications() {{
                 if (jiraMatch) badgeLabel = 'KNOWN BUG: ' + jiraMatch[1];
             }}
             badge.textContent = badgeLabel;
-            badge.title = (cls.reason || '') + (cls.references_info ? '\nRef: ' + cls.references_info : '');
+            badge.title = (cls.reason || '') + (cls.references_info ? '\\nRef: ' + cls.references_info : '');
             toggle.appendChild(badge);
         }});
 
@@ -1241,7 +1241,7 @@ async function loadClassifications() {{
                     if (!cardReasons[cls]) cardReasons[cls] = [];
                     var r = byTest[tn][0].reason || '';
                     var ri = byTest[tn][0].references_info || '';
-                    var tip = r + (ri ? '\nRef: ' + ri : '');
+                    var tip = r + (ri ? '\\nRef: ' + ri : '');
                     if (tip && cardReasons[cls].indexOf(tip) === -1) cardReasons[cls].push(tip);
                     if (cls === 'KNOWN_BUG') {{
                         var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
@@ -1290,7 +1290,7 @@ async function loadClassifications() {{
                     if (!childReasons[cls]) childReasons[cls] = [];
                     var r = byTest[tn][0].reason || '';
                     var ri = byTest[tn][0].references_info || '';
-                    var tip = r + (ri ? '\nRef: ' + ri : '');
+                    var tip = r + (ri ? '\\nRef: ' + ri : '');
                     if (tip && childReasons[cls].indexOf(tip) === -1) childReasons[cls].push(tip);
                     if (cls === 'KNOWN_BUG') {{
                         var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
