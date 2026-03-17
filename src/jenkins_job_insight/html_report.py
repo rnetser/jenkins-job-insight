@@ -2416,37 +2416,34 @@ def generate_dashboard_html(
 </script>
 """)
 
-    # --- CLASSIFICATION BADGES (always, regardless of job count) ---
+    # --- CLASSIFICATION BADGES (global header summary) ---
     parts.append("""
 <script>
 (function() {
     var BASE = window.location.pathname.replace(/\\/dashboard.*$/, '');
     fetch(BASE + '/history/classifications').then(function(r) { return r.json(); }).then(function(data) {
-        var byJob = {};
+        var counts = {};
         (data.classifications || []).forEach(function(c) {
-            var jn = c.job_name || '';
-            if (!byJob[jn]) byJob[jn] = {};
-            byJob[jn][c.classification] = (byJob[jn][c.classification] || 0) + 1;
+            counts[c.classification] = (counts[c.classification] || 0) + 1;
         });
-        document.querySelectorAll('.classification-job-badges').forEach(function(span) {
-            var jobName = span.dataset.jobName;
-            if (!byJob[jobName]) return;
-            var html = '';
-            var colors = {
-                'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)',
-                'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red)',
-                'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange)',
-                'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple)',
-                'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)'
-            };
-            for (var cls in byJob[jobName]) {
-                var count = byJob[jobName][cls];
-                var color = colors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)';
-                html += '<span style="display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;' + color + ';white-space:nowrap;margin-right:4px;">' + count + ' ' + cls.replace('_', ' ') + '</span>';
+
+        var colors = {
+            'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)',
+            'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red)',
+            'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange)',
+            'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple)',
+            'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)'
+        };
+
+        var headerContent = document.querySelector('.header-content');
+        if (headerContent) {
+            for (var cls in counts) {
+                var badge = document.createElement('span');
+                badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;white-space:nowrap;' + (colors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)');
+                badge.textContent = counts[cls] + ' ' + cls.replace('_', ' ');
+                headerContent.appendChild(badge);
             }
-            span.style.display = '';
-            span.innerHTML = html;
-        });
+        }
     }).catch(function() {});
 })();
 </script>
@@ -2575,10 +2572,6 @@ def _render_dashboard_card(
             f"{comment_count} comment{'s' if comment_count != 1 else ''}"
             f"</span>"
         )
-
-    parts.append(
-        f'    <span class="classification-job-badges" data-job-name="{e(job_name)}" style="display:none"></span>'
-    )
 
     parts.append("  </div>")
     parts.append('  <div class="card-meta">')
