@@ -52,6 +52,8 @@ _QUERY_MD_CONTENT = ""
 if _QUERY_MD_PATH.exists():
     _QUERY_MD_CONTENT = _QUERY_MD_PATH.read_text()
 
+logger.debug(f"QUERY.MD loaded: {len(_QUERY_MD_CONTENT)} bytes")
+
 JOB_INSIGHT_PROMPT_FILENAME = "JOB_INSIGHT_PROMPT.md"
 
 
@@ -730,6 +732,10 @@ async def analyze_failure_group(
     Returns:
         List of FailureAnalysis objects, one per failure in the group.
     """
+    logger.debug(
+        f"analyze_failure_group called with server_url='{server_url}', job_id='{job_id}'"
+    )
+
     # Use the first failure as representative
     representative = failures[0]
     test_names = [f.test_name for f in failures]
@@ -760,6 +766,15 @@ async def analyze_failure_group(
             query_content = query_content.replace("{job_id}", job_id)
         query_section = "\n\n" + query_content + "\n"
 
+    if query_section:
+        logger.debug(
+            f"query_section built: {len(query_section)} chars with server_url={server_url}"
+        )
+    else:
+        logger.debug(
+            f"query_section is EMPTY (server_url='{server_url}', _QUERY_MD_CONTENT={len(_QUERY_MD_CONTENT)} bytes)"
+        )
+
     prompt = f"""Analyze this test failure from a Jenkins CI job.
 
 AFFECTED TESTS ({len(failures)} tests with same error):
@@ -785,6 +800,7 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
             f"Prompt includes Jenkins artifacts context ({len(artifacts_context)} chars)"
         )
 
+    logger.debug(f"AI prompt length: {len(prompt)} chars")
     logger.info(
         f"Calling {ai_provider.upper()} CLI for failure group ({len(failures)} tests with same error)"
     )
@@ -1119,6 +1135,15 @@ async def analyze_child_job(
             query_content = query_content.replace("{job_id}", job_id)
         query_section = "\n\n" + query_content + "\n"
 
+    if query_section:
+        logger.debug(
+            f"query_section built: {len(query_section)} chars with server_url={server_url}"
+        )
+    else:
+        logger.debug(
+            f"query_section is EMPTY (server_url='{server_url}', _QUERY_MD_CONTENT={len(_QUERY_MD_CONTENT)} bytes)"
+        )
+
     prompt = f"""Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
@@ -1131,6 +1156,7 @@ You have access to the repository if one was cloned. Explore to understand the f
 {custom_prompt_section}{historical_section}{query_section}
 {_JSON_RESPONSE_SCHEMA}
 """
+    logger.debug(f"AI prompt length: {len(prompt)} chars")
     success, analysis_output = await call_ai_cli(
         prompt,
         cwd=repo_path,
@@ -1522,6 +1548,15 @@ async def analyze_job(
                         query_content = query_content.replace("{job_id}", job_id)
                     query_section = "\n\n" + query_content + "\n"
 
+                if query_section:
+                    logger.debug(
+                        f"query_section built: {len(query_section)} chars with server_url={server_url}"
+                    )
+                else:
+                    logger.debug(
+                        f"query_section is EMPTY (server_url='{server_url}', _QUERY_MD_CONTENT={len(_QUERY_MD_CONTENT)} bytes)"
+                    )
+
                 prompt = f"""Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
@@ -1535,6 +1570,7 @@ You have access to the repository if one was cloned. Explore to understand the f
 {custom_prompt_section}{historical_section}{query_section}
 {_JSON_RESPONSE_SCHEMA}
 """
+                logger.debug(f"AI prompt length: {len(prompt)} chars")
                 success, analysis_output = await call_ai_cli(
                     prompt,
                     cwd=repo_path,

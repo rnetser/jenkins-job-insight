@@ -398,6 +398,7 @@ async def process_analysis_with_id(
 
         # Build server URL for AI history API access
         server_url = base_url or f"http://localhost:{os.environ.get('PORT', '8000')}"
+        logger.debug(f"Built server_url={server_url} for analyze_job")
 
         result = await analyze_job(
             body,
@@ -463,6 +464,7 @@ async def analyze(
     By default (async mode), returns immediately with a job_id.
     With ?sync=true, blocks until analysis is complete and returns the full result.
     """
+    logger.debug(f"Starting analysis for {body.job_name} #{body.build_number}")
     base_url = _extract_base_url(request)
 
     if sync:
@@ -475,6 +477,7 @@ async def analyze(
 
         # Build server URL for AI history API access
         server_url = base_url or f"http://localhost:{os.environ.get('PORT', '8000')}"
+        logger.debug(f"Built server_url={server_url} for analyze_job")
 
         result = await analyze_job(
             body,
@@ -630,6 +633,7 @@ async def analyze_failures(
 
         # Build server URL for AI history API access
         server_url = base_url or f"http://localhost:{os.environ.get('PORT', '8000')}"
+        logger.debug(f"Built server_url={server_url} for analyze_job")
 
         # Analyze each unique failure group in parallel
         coroutines = [
