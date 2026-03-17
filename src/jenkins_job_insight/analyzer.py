@@ -754,6 +754,7 @@ async def analyze_failure_group(
 
     query_section = ""
     if server_url and _QUERY_MD_CONTENT:
+        logger.info(f"Injecting QUERY.md into prompt with server_url={server_url}")
         query_content = _QUERY_MD_CONTENT.replace("{server_url}", server_url)
         if job_id:
             query_content = query_content.replace("{job_id}", job_id)
@@ -1112,6 +1113,7 @@ async def analyze_child_job(
 
     query_section = ""
     if server_url and _QUERY_MD_CONTENT:
+        logger.info(f"Injecting QUERY.md into prompt with server_url={server_url}")
         query_content = _QUERY_MD_CONTENT.replace("{server_url}", server_url)
         if job_id:
             query_content = query_content.replace("{job_id}", job_id)
@@ -1510,6 +1512,9 @@ async def analyze_job(
 
                 query_section = ""
                 if server_url and _QUERY_MD_CONTENT:
+                    logger.info(
+                        f"Injecting QUERY.md into prompt with server_url={server_url}"
+                    )
                     query_content = _QUERY_MD_CONTENT.replace(
                         "{server_url}", server_url
                     )
