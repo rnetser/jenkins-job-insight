@@ -10,6 +10,16 @@
 - Use everything you create: imports, variables, clones, instantiations
 - Remove unused code rather than leaving it dormant
 
+## No Duplicate Code (DRY)
+
+- Never copy-paste code — extract shared helpers, base classes, or utility functions
+- If the same logic appears in 2+ places, it MUST be extracted into a reusable function
+- This applies to Python, JavaScript, CSS, and HTML templates alike
+- CSS shared across pages → extract into a helper function (e.g., `_common_css()`)
+- JavaScript shared across pages → extract into a helper function (e.g., `_modal_js()`)
+- Prompt-building logic → extract into a shared builder function
+- Always check existing helpers before writing new code — reuse first
+
 ## Smart Context Management
 
 - Prefer structured data (test reports, APIs) over raw logs
