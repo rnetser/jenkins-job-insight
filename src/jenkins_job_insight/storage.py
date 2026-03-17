@@ -700,6 +700,7 @@ async def get_test_history(
     test_name: str,
     limit: int = 20,
     job_name: str = "",
+    exclude_job_id: str = "",
 ) -> dict:
     """Get pass/fail history for a specific test.
 
@@ -707,6 +708,7 @@ async def get_test_history(
         test_name: Full test name to look up.
         limit: Maximum number of recent runs to return.
         job_name: Optional filter by job name.
+        exclude_job_id: Exclude results from this job ID.
 
     Returns:
         Dict with test_name, total_runs, failures, passes, failure_rate,
@@ -722,6 +724,9 @@ async def get_test_history(
         if job_name:
             job_filter = " AND job_name = ?"
             params.append(job_name)
+        if exclude_job_id:
+            job_filter += " AND job_id != ?"
+            params.append(exclude_job_id)
 
         # Failure count
         cursor = await db.execute(
@@ -848,11 +853,12 @@ async def get_test_history(
     }
 
 
-async def search_by_signature(signature: str) -> dict:
+async def search_by_signature(signature: str, exclude_job_id: str = "") -> dict:
     """Find all tests that failed with the same error signature.
 
     Args:
         signature: Error signature hash to search for.
+        exclude_job_id: Exclude results from this job ID.
 
     Returns:
         Dict with signature, total_occurrences, unique_tests, tests list,
@@ -861,10 +867,17 @@ async def search_by_signature(signature: str) -> dict:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
+        # Build optional exclude filter
+        exclude_filter = ""
+        base_params: list = [signature]
+        if exclude_job_id:
+            exclude_filter = " AND job_id != ?"
+            base_params.append(exclude_job_id)
+
         # Total occurrences
         cursor = await db.execute(
-            "SELECT COUNT(*) FROM failure_history WHERE error_signature = ?",
-            (signature,),
+            f"SELECT COUNT(*) FROM failure_history WHERE error_signature = ?{exclude_filter}",
+            base_params,
         )
         total_occurrences = (await cursor.fetchone())[0]
 
@@ -880,18 +893,18 @@ async def search_by_signature(signature: str) -> dict:
 
         # Tests with this signature and their occurrence counts
         cursor = await db.execute(
-            "SELECT test_name, COUNT(*) as occurrences FROM failure_history "
-            "WHERE error_signature = ? GROUP BY test_name ORDER BY occurrences DESC",
-            (signature,),
+            f"SELECT test_name, COUNT(*) as occurrences FROM failure_history "
+            f"WHERE error_signature = ?{exclude_filter} GROUP BY test_name ORDER BY occurrences DESC",
+            base_params,
         )
         tests = [dict(row) for row in await cursor.fetchall()]
         unique_tests = len(tests)
 
         # Last classification
         cursor = await db.execute(
-            "SELECT classification FROM failure_history "
-            "WHERE error_signature = ? ORDER BY analyzed_at DESC LIMIT 1",
-            (signature,),
+            f"SELECT classification FROM failure_history "
+            f"WHERE error_signature = ?{exclude_filter} ORDER BY analyzed_at DESC LIMIT 1",
+            base_params,
         )
         last_classification = (await cursor.fetchone())[0] or ""
 
@@ -913,11 +926,12 @@ async def search_by_signature(signature: str) -> dict:
     }
 
 
-async def get_job_stats(job_name: str) -> dict:
+async def get_job_stats(job_name: str, exclude_job_id: str = "") -> dict:
     """Get aggregate statistics for a specific job name.
 
     Args:
         job_name: The job name to get statistics for.
+        exclude_job_id: Exclude results from this job ID.
 
     Returns:
         Dict with job_name, total_builds_analyzed, builds_with_failures,
@@ -925,6 +939,13 @@ async def get_job_stats(job_name: str) -> dict:
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+
+        # Build optional exclude filter
+        exclude_filter = ""
+        exclude_params: list = []
+        if exclude_job_id:
+            exclude_filter = " AND job_id != ?"
+            exclude_params = [exclude_job_id]
 
         # Total builds analyzed (from results table, matching job_name in JSON)
         cursor = await db.execute(
@@ -945,8 +966,8 @@ async def get_job_stats(job_name: str) -> dict:
 
         # Builds with failures (distinct job_ids in failure_history for this job)
         cursor = await db.execute(
-            "SELECT COUNT(DISTINCT job_id) FROM failure_history WHERE job_name = ?",
-            (job_name,),
+            f"SELECT COUNT(DISTINCT job_id) FROM failure_history WHERE job_name = ?{exclude_filter}",
+            [job_name] + exclude_params,
         )
         builds_with_failures = (await cursor.fetchone())[0]
 
@@ -956,10 +977,10 @@ async def get_job_stats(job_name: str) -> dict:
 
         # Most common failures
         cursor = await db.execute(
-            "SELECT test_name, COUNT(*) as count, classification "
-            "FROM failure_history WHERE job_name = ? "
-            "GROUP BY test_name ORDER BY count DESC LIMIT 10",
-            (job_name,),
+            f"SELECT test_name, COUNT(*) as count, classification "
+            f"FROM failure_history WHERE job_name = ?{exclude_filter} "
+            f"GROUP BY test_name ORDER BY count DESC LIMIT 10",
+            [job_name] + exclude_params,
         )
         most_common = [dict(row) for row in await cursor.fetchall()]
 
@@ -969,16 +990,16 @@ async def get_job_stats(job_name: str) -> dict:
         fourteen_days_ago = (now - timedelta(days=14)).strftime("%Y-%m-%d %H:%M:%S")
 
         cursor = await db.execute(
-            "SELECT COUNT(DISTINCT job_id) FROM failure_history "
-            "WHERE job_name = ? AND analyzed_at >= ?",
-            (job_name, seven_days_ago),
+            f"SELECT COUNT(DISTINCT job_id) FROM failure_history "
+            f"WHERE job_name = ? AND analyzed_at >= ?{exclude_filter}",
+            [job_name, seven_days_ago] + exclude_params,
         )
         recent_failures = (await cursor.fetchone())[0]
 
         cursor = await db.execute(
-            "SELECT COUNT(DISTINCT job_id) FROM failure_history "
-            "WHERE job_name = ? AND analyzed_at >= ? AND analyzed_at < ?",
-            (job_name, fourteen_days_ago, seven_days_ago),
+            f"SELECT COUNT(DISTINCT job_id) FROM failure_history "
+            f"WHERE job_name = ? AND analyzed_at >= ? AND analyzed_at < ?{exclude_filter}",
+            [job_name, fourteen_days_ago, seven_days_ago] + exclude_params,
         )
         previous_failures = (await cursor.fetchone())[0]
 
@@ -1004,6 +1025,7 @@ async def get_flaky_tests(
     min_rate: float = 0.2,
     max_rate: float = 0.8,
     job_name: str = "",
+    exclude_job_id: str = "",
 ) -> list[dict]:
     """Find tests with intermittent pass/fail behavior.
 
@@ -1015,6 +1037,7 @@ async def get_flaky_tests(
         min_rate: Minimum failure rate to be considered flaky.
         max_rate: Maximum failure rate to be considered flaky.
         job_name: Optional filter by job name.
+        exclude_job_id: Exclude results from this job ID.
 
     Returns:
         List of dicts with test_name, failure_rate, total_runs, failures,
@@ -1042,6 +1065,9 @@ async def get_flaky_tests(
         if job_name:
             job_filter = " WHERE job_name = ?"
             params.append(job_name)
+        if exclude_job_id:
+            job_filter += " AND job_id != ?" if job_filter else " WHERE job_id != ?"
+            params.append(exclude_job_id)
 
         cursor = await db.execute(
             f"SELECT test_name, COUNT(*) as failures, "
@@ -1060,11 +1086,19 @@ async def get_flaky_tests(
 
             if total_builds >= min_runs and min_rate <= failure_rate <= max_rate:
                 # Get last status (most recent failure entry)
+                exclude_sub = ""
+                sub_params: list = [row["test_name"]]
+                if job_name:
+                    exclude_sub += " AND job_name = ?"
+                    sub_params.append(job_name)
+                if exclude_job_id:
+                    exclude_sub += " AND job_id != ?"
+                    sub_params.append(exclude_job_id)
                 cursor = await db.execute(
                     f"SELECT classification FROM failure_history "
-                    f"WHERE test_name = ?{' AND job_name = ?' if job_name else ''} "
+                    f"WHERE test_name = ?{exclude_sub} "
                     f"ORDER BY analyzed_at DESC LIMIT 1",
-                    [row["test_name"]] + ([job_name] if job_name else []),
+                    sub_params,
                 )
                 last_row = await cursor.fetchone()
                 last_status = last_row[0] if last_row else ""
@@ -1092,6 +1126,7 @@ async def get_regressions(
     days: int = 7,
     min_previous_passes: int = 3,
     job_name: str = "",
+    exclude_job_id: str = "",
 ) -> list[dict]:
     """Find tests that recently started failing.
 
@@ -1103,6 +1138,7 @@ async def get_regressions(
         min_previous_passes: Minimum previous passing builds required
             (set to 0 to include all new failures).
         job_name: Optional filter by job name.
+        exclude_job_id: Exclude results from this job ID.
 
     Returns:
         List of dicts with test_name, first_failure, first_failure_job,
@@ -1120,6 +1156,9 @@ async def get_regressions(
         if job_name:
             job_filter = " AND job_name = ?"
             params.append(job_name)
+        if exclude_job_id:
+            job_filter += " AND job_id != ?"
+            params.append(exclude_job_id)
 
         # Find tests whose first failure is within the lookback window
         cursor = await db.execute(
@@ -1139,11 +1178,16 @@ async def get_regressions(
 
             # Check that the test has no failures before the cutoff window
             check_params: list = [test_name, cutoff]
+            check_filter = ""
             if job_name:
+                check_filter += " AND job_name = ?"
                 check_params.append(job_name)
+            if exclude_job_id:
+                check_filter += " AND job_id != ?"
+                check_params.append(exclude_job_id)
             cursor = await db.execute(
                 f"SELECT COUNT(*) FROM failure_history "
-                f"WHERE test_name = ? AND analyzed_at < ?{' AND job_name = ?' if job_name else ''}",
+                f"WHERE test_name = ? AND analyzed_at < ?{check_filter}",
                 check_params,
             )
             old_failures = (await cursor.fetchone())[0]
@@ -1167,11 +1211,16 @@ async def get_regressions(
 
             # Get classification and error_signature from first failure
             first_failure_params: list = [test_name]
+            first_failure_filter = ""
             if job_name:
+                first_failure_filter += " AND job_name = ?"
                 first_failure_params.append(job_name)
+            if exclude_job_id:
+                first_failure_filter += " AND job_id != ?"
+                first_failure_params.append(exclude_job_id)
             cursor = await db.execute(
                 f"SELECT classification, error_signature, job_name as first_failure_job "
-                f"FROM failure_history WHERE test_name = ?{' AND job_name = ?' if job_name else ''} "
+                f"FROM failure_history WHERE test_name = ?{first_failure_filter} "
                 f"ORDER BY analyzed_at ASC LIMIT 1",
                 first_failure_params,
             )
@@ -1198,6 +1247,7 @@ async def get_trends(
     period: str = "daily",
     days: int = 30,
     job_name: str = "",
+    exclude_job_id: str = "",
 ) -> dict:
     """Get failure rate over time grouped by period.
 
@@ -1205,6 +1255,7 @@ async def get_trends(
         period: Grouping period, either "daily" or "weekly".
         days: Number of days to look back.
         job_name: Optional filter by job name.
+        exclude_job_id: Exclude results from this job ID.
 
     Returns:
         Dict with period and data list, where each entry has date,
@@ -1226,6 +1277,9 @@ async def get_trends(
         if job_name:
             job_filter = " AND job_name = ?"
             params.append(job_name)
+        if exclude_job_id:
+            job_filter += " AND job_id != ?"
+            params.append(exclude_job_id)
 
         cursor = await db.execute(
             f"SELECT {date_expr} as date, "

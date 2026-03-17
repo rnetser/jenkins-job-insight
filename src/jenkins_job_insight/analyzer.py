@@ -707,6 +707,7 @@ async def analyze_failure_group(
     artifacts_context: str = "",
     historical_context: str = "",
     server_url: str = "",
+    job_id: str = "",
 ) -> list[FailureAnalysis]:
     """Analyze a group of failures with the same error signature.
 
@@ -724,6 +725,7 @@ async def analyze_failure_group(
         artifacts_context: Jenkins artifacts context for AI analysis (optional).
         historical_context: Previous human feedback for similar failures.
         server_url: Base URL of this server for AI history API access.
+        job_id: Current job ID to exclude from history queries.
 
     Returns:
         List of FailureAnalysis objects, one per failure in the group.
@@ -752,9 +754,10 @@ async def analyze_failure_group(
 
     query_section = ""
     if server_url and _QUERY_MD_CONTENT:
-        query_section = (
-            "\n\n" + _QUERY_MD_CONTENT.replace("{server_url}", server_url) + "\n"
-        )
+        query_content = _QUERY_MD_CONTENT.replace("{server_url}", server_url)
+        if job_id:
+            query_content = query_content.replace("{job_id}", job_id)
+        query_section = "\n\n" + query_content + "\n"
 
     prompt = f"""Analyze this test failure from a Jenkins CI job.
 
@@ -826,6 +829,7 @@ async def analyze_child_job(
     artifacts_context: str = "",
     historical_context: str = "",
     server_url: str = "",
+    job_id: str = "",
 ) -> ChildJobAnalysis:
     """Analyze a single child job, recursively analyzing its failed children.
 
@@ -846,6 +850,7 @@ async def analyze_child_job(
         artifacts_context: Jenkins artifacts context for AI analysis (optional).
         historical_context: Previous human feedback for similar failures.
         server_url: Base URL of this server for AI history API access.
+        job_id: Current job ID to exclude from history queries.
 
     Returns:
         ChildJobAnalysis with analysis results or nested child analyses.
@@ -914,6 +919,7 @@ async def analyze_child_job(
                 artifacts_context="",
                 historical_context=historical_context,
                 server_url=server_url,
+                job_id=job_id,
             )
             for child_name, child_num in failed_children
         ]
@@ -1038,6 +1044,7 @@ async def analyze_child_job(
                     historical_context=group_historical_context
                     or effective_historical_context,
                     server_url=server_url,
+                    job_id=job_id,
                 )
             )
         group_results = await run_parallel_with_limit(tasks)
@@ -1105,9 +1112,10 @@ async def analyze_child_job(
 
     query_section = ""
     if server_url and _QUERY_MD_CONTENT:
-        query_section = (
-            "\n\n" + _QUERY_MD_CONTENT.replace("{server_url}", server_url) + "\n"
-        )
+        query_content = _QUERY_MD_CONTENT.replace("{server_url}", server_url)
+        if job_id:
+            query_content = query_content.replace("{job_id}", job_id)
+        query_section = "\n\n" + query_content + "\n"
 
     prompt = f"""Analyze this failed Jenkins job:
 
@@ -1321,6 +1329,7 @@ async def analyze_job(
                         custom_prompt=custom_prompt,
                         artifacts_context="",
                         server_url=server_url,
+                        job_id=job_id,
                     )
                     for child_name, child_num in failed_child_jobs
                 ]
@@ -1452,6 +1461,7 @@ async def analyze_job(
                             artifacts_context=artifacts_context,
                             historical_context=group_historical_context,
                             server_url=server_url,
+                            job_id=job_id,
                         )
                     )
                 group_results = await run_parallel_with_limit(failure_tasks)
@@ -1500,11 +1510,12 @@ async def analyze_job(
 
                 query_section = ""
                 if server_url and _QUERY_MD_CONTENT:
-                    query_section = (
-                        "\n\n"
-                        + _QUERY_MD_CONTENT.replace("{server_url}", server_url)
-                        + "\n"
+                    query_content = _QUERY_MD_CONTENT.replace(
+                        "{server_url}", server_url
                     )
+                    if job_id:
+                        query_content = query_content.replace("{job_id}", job_id)
+                    query_section = "\n\n" + query_content + "\n"
 
                 prompt = f"""Analyze this failed Jenkins job:
 

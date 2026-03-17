@@ -2,41 +2,50 @@
 
 You have access to the failure history API. Use curl to query these endpoints before classifying failures.
 
+## IMPORTANT: Exclude Current Job
+
+When querying history, ALWAYS add `?exclude_job_id={job_id}` to exclude the current job being analyzed. This prevents seeing stale data from previous analyses of the same job.
+
+Example:
+```bash
+curl -s "{server_url}/history/test/{test_name}?exclude_job_id={job_id}" | python3 -m json.tool
+```
+
 ## Available Endpoints
 
 ### Check test history
 ```bash
-curl -s {server_url}/history/test/{test_name} | python3 -m json.tool
+curl -s "{server_url}/history/test/{test_name}?exclude_job_id={job_id}" | python3 -m json.tool
 ```
 Returns: pass/fail history, failure rate, classifications breakdown, flakiness indicator, recent runs, related comments.
 
 ### Find similar errors by signature
 ```bash
-curl -s "{server_url}/history/search?signature={error_signature}" | python3 -m json.tool
+curl -s "{server_url}/history/search?signature={error_signature}&exclude_job_id={job_id}" | python3 -m json.tool
 ```
 Returns: all tests that failed with the same error pattern, occurrence counts, last classification.
 
 ### Check for flaky tests
 ```bash
-curl -s {server_url}/history/flaky | python3 -m json.tool
+curl -s "{server_url}/history/flaky?exclude_job_id={job_id}" | python3 -m json.tool
 ```
 Returns: tests with intermittent pass/fail behavior (failure rate 20-80%).
 
 ### Check for regressions
 ```bash
-curl -s {server_url}/history/regressions | python3 -m json.tool
+curl -s "{server_url}/history/regressions?exclude_job_id={job_id}" | python3 -m json.tool
 ```
 Returns: tests that recently started failing after previously passing.
 
 ### Job statistics
 ```bash
-curl -s {server_url}/history/stats/{job_name} | python3 -m json.tool
+curl -s "{server_url}/history/stats/{job_name}?exclude_job_id={job_id}" | python3 -m json.tool
 ```
 Returns: overall job health, most common failures, failure trend direction.
 
 ### Failure trends over time
 ```bash
-curl -s {server_url}/history/trends | python3 -m json.tool
+curl -s "{server_url}/history/trends?exclude_job_id={job_id}" | python3 -m json.tool
 ```
 Returns: daily or weekly failure rate data points.
 

@@ -636,6 +636,7 @@ async def analyze_failures(
                 ai_cli_timeout=merged.ai_cli_timeout,
                 custom_prompt=custom_prompt,
                 server_url=server_url,
+                job_id=job_id,
             )
             for group_failures in groups.values()
         ]
@@ -1118,23 +1119,36 @@ async def get_test_history_endpoint(
     test_name: str,
     limit: int = Query(default=20, le=100),
     job_name: str = Query(default=""),
+    exclude_job_id: str = Query(
+        default="", description="Exclude results from this job ID"
+    ),
 ) -> dict:
     """Get pass/fail history for a specific test."""
-    return await storage.get_test_history(test_name, limit=limit, job_name=job_name)
+    return await storage.get_test_history(
+        test_name, limit=limit, job_name=job_name, exclude_job_id=exclude_job_id
+    )
 
 
 @app.get("/history/search")
 async def search_by_signature_endpoint(
     signature: str = Query(...),
+    exclude_job_id: str = Query(
+        default="", description="Exclude results from this job ID"
+    ),
 ) -> dict:
     """Find all tests that failed with the same error signature."""
-    return await storage.search_by_signature(signature)
+    return await storage.search_by_signature(signature, exclude_job_id=exclude_job_id)
 
 
 @app.get("/history/stats/{job_name:path}")
-async def get_job_stats_endpoint(job_name: str) -> dict:
+async def get_job_stats_endpoint(
+    job_name: str,
+    exclude_job_id: str = Query(
+        default="", description="Exclude results from this job ID"
+    ),
+) -> dict:
     """Get aggregate statistics for a specific job."""
-    return await storage.get_job_stats(job_name)
+    return await storage.get_job_stats(job_name, exclude_job_id=exclude_job_id)
 
 
 @app.get("/history/flaky")
@@ -1143,11 +1157,18 @@ async def get_flaky_tests_endpoint(
     min_rate: float = Query(default=0.2, ge=0.0, le=1.0),
     max_rate: float = Query(default=0.8, ge=0.0, le=1.0),
     job_name: str = Query(default=""),
+    exclude_job_id: str = Query(
+        default="", description="Exclude results from this job ID"
+    ),
 ) -> dict:
     """Get known flaky tests."""
     return {
         "flaky_tests": await storage.get_flaky_tests(
-            min_runs=min_runs, min_rate=min_rate, max_rate=max_rate, job_name=job_name
+            min_runs=min_runs,
+            min_rate=min_rate,
+            max_rate=max_rate,
+            job_name=job_name,
+            exclude_job_id=exclude_job_id,
         )
     }
 
@@ -1157,11 +1178,17 @@ async def get_regressions_endpoint(
     days: int = Query(default=7, ge=1),
     min_previous_passes: int = Query(default=3, ge=1),
     job_name: str = Query(default=""),
+    exclude_job_id: str = Query(
+        default="", description="Exclude results from this job ID"
+    ),
 ) -> dict:
     """Get recent test regressions."""
     return {
         "regressions": await storage.get_regressions(
-            days=days, min_previous_passes=min_previous_passes, job_name=job_name
+            days=days,
+            min_previous_passes=min_previous_passes,
+            job_name=job_name,
+            exclude_job_id=exclude_job_id,
         )
     }
 
@@ -1171,9 +1198,14 @@ async def get_trends_endpoint(
     period: str = Query(default="daily"),
     days: int = Query(default=30, ge=1),
     job_name: str = Query(default=""),
+    exclude_job_id: str = Query(
+        default="", description="Exclude results from this job ID"
+    ),
 ) -> dict:
     """Get failure rate trends over time."""
-    return await storage.get_trends(period=period, days=days, job_name=job_name)
+    return await storage.get_trends(
+        period=period, days=days, job_name=job_name, exclude_job_id=exclude_job_id
+    )
 
 
 @app.get("/health")
