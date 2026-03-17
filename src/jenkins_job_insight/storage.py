@@ -695,6 +695,158 @@ async def backfill_failure_history() -> None:
     logger.info(f"Backfill complete: processed {backfilled}/{len(rows)} results")
 
 
+async def get_test_history(
+    test_name: str,
+    limit: int = 20,
+    job_name: str = "",
+) -> dict:
+    """Get pass/fail history for a specific test.
+
+    Args:
+        test_name: Full test name to look up.
+        limit: Maximum number of recent runs to return.
+        job_name: Optional filter by job name.
+
+    Returns:
+        Dict with test_name, total_runs, failures, passes, failure_rate,
+        first_seen, last_seen, last_classification, classifications,
+        recent_runs, comments, is_flaky, consecutive_failures, note.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Build optional job_name filter
+        job_filter = ""
+        params: list = [test_name]
+        if job_name:
+            job_filter = " AND job_name = ?"
+            params.append(job_name)
+
+        # Failure count
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM failure_history WHERE test_name = ?{job_filter}",
+            params,
+        )
+        failures = (await cursor.fetchone())[0]
+
+        if failures == 0:
+            return {
+                "test_name": test_name,
+                "total_runs": 0,
+                "failures": 0,
+                "passes": 0,
+                "failure_rate": 0.0,
+                "first_seen": None,
+                "last_seen": None,
+                "last_classification": "",
+                "classifications": {},
+                "recent_runs": [],
+                "comments": [],
+                "is_flaky": False,
+                "consecutive_failures": 0,
+                "note": "No failure records found for this test.",
+            }
+
+        # First and last seen
+        cursor = await db.execute(
+            f"SELECT MIN(analyzed_at), MAX(analyzed_at) FROM failure_history WHERE test_name = ?{job_filter}",
+            params,
+        )
+        row = await cursor.fetchone()
+        first_seen = row[0]
+        last_seen = row[1]
+
+        # Last classification (most recent failure)
+        cursor = await db.execute(
+            f"SELECT classification FROM failure_history WHERE test_name = ?{job_filter} ORDER BY analyzed_at DESC LIMIT 1",
+            params,
+        )
+        last_classification = (await cursor.fetchone())[0] or ""
+
+        # Classification breakdown
+        cursor = await db.execute(
+            f"SELECT classification, COUNT(*) FROM failure_history WHERE test_name = ?{job_filter} GROUP BY classification",
+            params,
+        )
+        classifications = {}
+        for row in await cursor.fetchall():
+            if row[0]:
+                classifications[row[0]] = row[1]
+
+        # Recent runs (failures only, since we only track failures)
+        cursor = await db.execute(
+            f"""SELECT job_id, job_name, build_number, error_message, error_signature,
+                       classification, child_job_name, child_build_number, analyzed_at
+                FROM failure_history WHERE test_name = ?{job_filter}
+                ORDER BY analyzed_at DESC LIMIT ?""",
+            params + [limit],
+        )
+        recent_runs = [dict(row) for row in await cursor.fetchall()]
+
+        # Consecutive failures (count from most recent backwards)
+        consecutive_failures = 0
+        for run in recent_runs:
+            if run.get("classification"):
+                consecutive_failures += 1
+            else:
+                break
+        # If all runs are failures, count them all
+        if consecutive_failures == 0 and recent_runs:
+            consecutive_failures = len(recent_runs)
+
+        # Estimate total runs from distinct job_ids in results table
+        if job_name:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM results WHERE result_json LIKE ?",
+                (f'%"job_name": "{job_name}"%',),
+            )
+        else:
+            cursor = await db.execute("SELECT COUNT(*) FROM results")
+        total_runs = (await cursor.fetchone())[0]
+        passes = max(0, total_runs - failures)
+        failure_rate = failures / total_runs if total_runs > 0 else 0.0
+
+        # Flaky detection
+        is_flaky = total_runs >= 5 and 0.2 <= failure_rate <= 0.8
+
+        # Collect error signatures for comment lookup
+        signatures = {
+            r["error_signature"] for r in recent_runs if r.get("error_signature")
+        }
+
+        # Comments related to this test (by test name or error signature)
+        comment_conditions = ["test_name = ?"]
+        comment_params: list = [test_name]
+        if signatures:
+            placeholders = ",".join("?" for _ in signatures)
+            comment_conditions.append(f"error_signature IN ({placeholders})")
+            comment_params.extend(signatures)
+
+        comment_where = " OR ".join(comment_conditions)
+        cursor = await db.execute(
+            f"SELECT comment, username, created_at FROM comments WHERE {comment_where} ORDER BY created_at DESC",
+            comment_params,
+        )
+        comments = [dict(row) for row in await cursor.fetchall()]
+
+    return {
+        "test_name": test_name,
+        "total_runs": total_runs,
+        "failures": failures,
+        "passes": passes,
+        "failure_rate": round(failure_rate, 4),
+        "first_seen": first_seen,
+        "last_seen": last_seen,
+        "last_classification": last_classification,
+        "classifications": classifications,
+        "recent_runs": recent_runs,
+        "comments": comments,
+        "is_flaky": is_flaky,
+        "consecutive_failures": consecutive_failures,
+        "note": "Pass count is estimated from total analyzed builds minus recorded failures.",
+    }
+
+
 async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
     """List recent analysis results with summary data for dashboard display.
 

@@ -375,3 +375,107 @@ class TestBackfillFailureHistory:
                 cursor = await db.execute("SELECT COUNT(*) FROM failure_history")
                 count = (await cursor.fetchone())[0]
                 assert count == 0
+
+
+class TestGetTestHistory:
+    async def _seed_failures(self, db_path):
+        """Helper to seed failure_history with test data."""
+        import aiosqlite
+
+        async with aiosqlite.connect(db_path) as db:
+            # Insert results rows for pass inference
+            for i in range(5):
+                await db.execute(
+                    "INSERT INTO results (job_id, jenkins_url, status, result_json) VALUES (?, ?, ?, ?)",
+                    (
+                        f"job-{i}",
+                        "https://jenkins.example.com/job/test/1/",
+                        "completed",
+                        json.dumps(
+                            {
+                                "job_name": "ocp-4.16-e2e",
+                                "build_number": i + 1,
+                                "failures": [],
+                                "child_job_analyses": [],
+                            }
+                        ),
+                    ),
+                )
+
+            # Insert failure_history rows: test_lookup failed in jobs 0,1,2 (passed in 3,4)
+            for i in range(3):
+                await db.execute(
+                    """INSERT INTO failure_history
+                       (job_id, job_name, build_number, test_name, error_message, error_signature, classification, analyzed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        f"job-{i}",
+                        "ocp-4.16-e2e",
+                        i + 1,
+                        "tests.network.TestDNS.test_lookup",
+                        "DNS resolution failed",
+                        "sig-dns",
+                        "PRODUCT BUG",
+                        f"2026-03-{15 + i:02d} 10:00:00",
+                    ),
+                )
+
+            # Insert a comment for the test
+            await db.execute(
+                "INSERT INTO comments (job_id, test_name, comment, error_signature, username, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "job-0",
+                    "tests.network.TestDNS.test_lookup",
+                    "Opened bug: OCPBUGS-12345",
+                    "sig-dns",
+                    "motti",
+                    "2026-03-15 09:00:00",
+                ),
+            )
+            await db.commit()
+
+    async def test_get_test_history_basic(self, setup_test_db):
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await self._seed_failures(setup_test_db)
+            result = await storage.get_test_history("tests.network.TestDNS.test_lookup")
+
+            assert result["test_name"] == "tests.network.TestDNS.test_lookup"
+            assert result["failures"] == 3
+            assert result["last_classification"] == "PRODUCT BUG"
+            assert result["classifications"]["PRODUCT BUG"] == 3
+            assert len(result["recent_runs"]) == 3
+            assert result["comments"][0]["comment"] == "Opened bug: OCPBUGS-12345"
+
+    async def test_get_test_history_with_job_name_filter(self, setup_test_db):
+        import aiosqlite
+
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await self._seed_failures(setup_test_db)
+            # Add a failure for a different job
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    """INSERT INTO failure_history
+                       (job_id, job_name, build_number, test_name, error_signature, classification)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        "job-other",
+                        "other-job",
+                        1,
+                        "tests.network.TestDNS.test_lookup",
+                        "sig-dns",
+                        "CODE ISSUE",
+                    ),
+                )
+                await db.commit()
+
+            result = await storage.get_test_history(
+                "tests.network.TestDNS.test_lookup", job_name="ocp-4.16-e2e"
+            )
+            assert result["failures"] == 3  # Only from ocp-4.16-e2e
+
+    async def test_get_test_history_nonexistent(self, setup_test_db):
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            result = await storage.get_test_history("nonexistent.test")
+            assert result["test_name"] == "nonexistent.test"
+            assert result["failures"] == 0
+            assert result["recent_runs"] == []
