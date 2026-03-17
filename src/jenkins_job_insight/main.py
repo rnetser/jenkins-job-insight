@@ -1191,6 +1191,59 @@ async def get_trends_endpoint(
     )
 
 
+@app.post("/history/classify", status_code=201)
+async def classify_test(request: Request, body: dict) -> dict:
+    """Classify a test as FLAKY, REGRESSION, etc. Used by AI and humans."""
+    test_name = body.get("test_name", "")
+    classification = body.get("classification", "")
+    reason = body.get("reason", "")
+    job_name = body.get("job_name", "")
+
+    if not test_name or not classification:
+        raise HTTPException(
+            status_code=400, detail="test_name and classification are required"
+        )
+
+    valid_classifications = {
+        "FLAKY",
+        "REGRESSION",
+        "INFRASTRUCTURE",
+        "KNOWN_BUG",
+        "INTERMITTENT",
+    }
+    if classification.upper() not in valid_classifications:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid classification. Valid: {', '.join(sorted(valid_classifications))}",
+        )
+
+    created_by = request.cookies.get("jji_username", "ai")
+
+    classification_id = await storage.set_test_classification(
+        test_name=test_name,
+        classification=classification.upper(),
+        reason=reason,
+        job_name=job_name,
+        created_by=created_by,
+    )
+    return {"id": classification_id}
+
+
+@app.get("/history/classifications")
+async def get_classifications(
+    test_name: str = Query(default=""),
+    classification: str = Query(default=""),
+    job_name: str = Query(default=""),
+) -> dict:
+    """Get test classifications."""
+    classifications = await storage.get_test_classifications(
+        test_name=test_name,
+        classification=classification,
+        job_name=job_name,
+    )
+    return {"classifications": classifications}
+
+
 @app.get("/health")
 async def health_check() -> dict:
     """Health check endpoint."""

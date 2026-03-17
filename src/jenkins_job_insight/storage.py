@@ -176,6 +176,24 @@ async def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_fh_job_test ON failure_history (job_name, test_name)"
         )
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS test_classifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                test_name TEXT NOT NULL,
+                job_name TEXT NOT NULL DEFAULT '',
+                classification TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                created_by TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tc_test_name ON test_classifications (test_name)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tc_classification ON test_classifications (classification)"
+        )
+
         await db.commit()
 
     # Backfill failure_history from existing results (runs once when table is empty)
@@ -1166,6 +1184,59 @@ async def save_html_report(job_id: str, html_content: str) -> Path:
     report_path.write_text(html_content, encoding="utf-8")
     logger.debug(f"Saved HTML report for job_id: {job_id} at {report_path}")
     return report_path
+
+
+async def set_test_classification(
+    test_name: str,
+    classification: str,
+    reason: str = "",
+    job_name: str = "",
+    created_by: str = "",
+) -> int:
+    """Set a classification for a test (e.g., FLAKY, REGRESSION).
+
+    Can be set by the AI during analysis or by humans.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO test_classifications (test_name, job_name, classification, reason, created_by) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (test_name, job_name, classification, reason, created_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def get_test_classifications(
+    test_name: str = "",
+    classification: str = "",
+    job_name: str = "",
+) -> list[dict]:
+    """Get test classifications, optionally filtered."""
+    conditions = []
+    params = []
+
+    if test_name:
+        conditions.append("test_name = ?")
+        params.append(test_name)
+    if classification:
+        conditions.append("classification = ?")
+        params.append(classification)
+    if job_name:
+        conditions.append("job_name = ?")
+        params.append(job_name)
+
+    where = " AND ".join(conditions) if conditions else "1=1"
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            f"SELECT id, test_name, job_name, classification, reason, created_by, created_at "
+            f"FROM test_classifications WHERE {where} ORDER BY created_at DESC",
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
 
 
 async def get_html_report(job_id: str) -> str | None:
