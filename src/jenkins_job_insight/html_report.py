@@ -643,6 +643,7 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     <h1>{e(job_name)}</h1>
     <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
     <span id="overall-review-status" class="status-chip" style="display:none"></span>
+    <span id="overall-comment-count" class="status-chip" style="display:none"></span>
     <div class="env-chips">
       <span class="env-chip">Build: #{e(build_number)}</span>
       <span class="env-chip">Status: {e(result.status)}</span>
@@ -784,6 +785,52 @@ async function loadCommentsAndReviews() {{
             }}
         }}
         updateReviewBadges();
+
+        // Overall comment count
+        var totalComments = data.comments.length;
+        if (totalComments > 0) {{
+            var overallBadge = document.getElementById('overall-comment-count');
+            if (overallBadge) {{
+                overallBadge.style.display = '';
+                overallBadge.textContent = totalComments + ' comment' + (totalComments !== 1 ? 's' : '');
+                overallBadge.style.background = 'var(--bg-tertiary)';
+                overallBadge.style.color = 'var(--text-muted)';
+                overallBadge.style.border = '1px solid var(--border)';
+            }}
+        }}
+
+        // Per child job comment counts
+        var childCounts = {{}};
+        data.comments.forEach(function(c) {{
+            var key = c.child_job_name || '';
+            childCounts[key] = (childCounts[key] || 0) + 1;
+        }});
+        document.querySelectorAll('.child-comment-count').forEach(function(badge) {{
+            var childJob = badge.dataset.childJob || '';
+            if (childCounts[childJob]) {{
+                badge.style.display = '';
+                badge.textContent = childCounts[childJob] + ' comment' + (childCounts[childJob] !== 1 ? 's' : '');
+                badge.style.cssText = 'display:inline;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;';
+            }}
+        }});
+
+        // Per bug card comment counts
+        document.querySelectorAll('.group-comment-count').forEach(function(badge) {{
+            var testNames = JSON.parse(badge.dataset.testNames || '[]');
+            var childJob = badge.dataset.childJob || '';
+            var count = 0;
+            data.comments.forEach(function(c) {{
+                var cChild = c.child_job_name || '';
+                if (testNames.includes(c.test_name) && cChild === childJob) {{
+                    count++;
+                }}
+            }});
+            if (count > 0) {{
+                badge.style.display = '';
+                badge.textContent = count + ' comment' + (count !== 1 ? 's' : '');
+                badge.style.cssText = 'display:inline;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;';
+            }}
+        }});
     }} catch (err) {{
         console.warn('Failed to load comments:', err);
     }}
@@ -1367,6 +1414,7 @@ def _render_group_card(
     else:
         card_title = failures[0].error or failures[0].test_name
 
+    group_test_names = e(json.dumps([f.test_name for f in failures]))
     parts.append(f"""{indent}<details class="bug-card">
 {indent}  <summary class="bug-summary">
 {indent}    <span class="bug-id">{e(bug_id)}</span>
@@ -1375,6 +1423,7 @@ def _render_group_card(
 {indent}    <span class="classification-tag {e(cls_class)}">{e(cls)}</span>
 {indent}    <span class="severity-tag-inline {e(severity)}">{e(severity.upper())}</span>
 {indent}    <span class="group-review-status status-chip" style="display:none"></span>
+{indent}    <span class="group-comment-count" data-test-names="{group_test_names}" data-child-job="{e(child_job_name)}" style="display:none"></span>
 {indent}  </summary>
 {indent}  <div class="bug-body">
 """)
@@ -1542,6 +1591,7 @@ def _render_child_jobs(
     <span style="color:var(--text-muted)">#{child.build_number}</span>
     <span class="failure-badge" style="font-size:11px;padding:2px 8px">{badge_text}</span>
     <span class="child-review-status status-chip" data-child-job="{e(child.job_name)}" style="display:none"></span>
+    <span class="child-comment-count" data-child-job="{e(child.job_name)}" style="display:none"></span>
   </summary>
   <div class="child-job-body">
     <div class="child-job-meta">
