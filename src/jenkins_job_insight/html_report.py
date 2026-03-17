@@ -1007,23 +1007,27 @@ async function loadCommentsAndReviews() {{
             renderCommentBadge(overallBadge, totalComments);
         }}
 
-        // Per child job comment counts
+        // Per child job comment counts (dynamically appended after classifications)
         var childCounts = {{}};
         data.comments.forEach(function(c) {{
             var key = c.child_job_name || '';
             childCounts[key] = (childCounts[key] || 0) + 1;
         }});
-        document.querySelectorAll('.child-comment-count').forEach(function(badge) {{
-            var childJob = badge.dataset.childJob || '';
+        document.querySelectorAll('.child-job-summary').forEach(function(summary) {{
+            var reviewBadge = summary.querySelector('.child-review-status');
+            var childJob = reviewBadge ? reviewBadge.dataset.childJob : '';
             if (childCounts[childJob]) {{
+                var badge = document.createElement('span');
                 renderCommentBadge(badge, childCounts[childJob]);
+                summary.appendChild(badge);
             }}
         }});
 
-        // Per bug card comment counts
-        document.querySelectorAll('.group-comment-count').forEach(function(badge) {{
-            var testNames = JSON.parse(badge.dataset.testNames || '[]');
-            var childJob = badge.dataset.childJob || '';
+        // Per bug card comment counts (dynamically appended after classifications)
+        document.querySelectorAll('.bug-summary, .failure-summary').forEach(function(summary) {{
+            var testNames = [];
+            try {{ testNames = JSON.parse(summary.dataset.testNames || '[]'); }} catch(e) {{}}
+            var childJob = summary.dataset.childJob || '';
             var count = 0;
             data.comments.forEach(function(c) {{
                 var cChild = c.child_job_name || '';
@@ -1032,7 +1036,9 @@ async function loadCommentsAndReviews() {{
                 }}
             }});
             if (count > 0) {{
+                var badge = document.createElement('span');
                 renderCommentBadge(badge, count);
+                summary.appendChild(badge);
             }}
         }});
     }} catch (err) {{
@@ -1663,14 +1669,13 @@ def _render_group_card(
 
     group_test_names = e(json.dumps([f.test_name for f in failures]))
     parts.append(f"""{indent}<details class="bug-card">
-{indent}  <summary class="bug-summary">
+{indent}  <summary class="bug-summary" data-test-names="{group_test_names}" data-child-job="{e(child_job_name)}">
 {indent}    <span class="bug-id">{e(bug_id)}</span>
 {indent}    <span class="bug-title">{e(card_title)}</span>
 {indent}    <span class="bug-count">{e(test_label)}</span>
 {indent}    <span class="classification-tag {e(cls_class)}">{e(cls)}</span>
 {indent}    <span class="severity-tag-inline {e(severity)}">{e(severity.upper())}</span>
 {indent}    <span class="group-review-status status-chip" style="display:none"></span>
-{indent}    <span class="group-comment-count" data-test-names="{group_test_names}" data-child-job="{e(child_job_name)}" style="display:none"></span>
 {indent}  </summary>
 {indent}  <div class="bug-body">
 """)
@@ -1841,7 +1846,6 @@ def _render_child_jobs(
     <span style="color:var(--text-muted)">#{child.build_number}</span>
     <span class="failure-badge" style="font-size:11px;padding:2px 8px">{badge_text}</span>
     <span class="child-review-status status-chip" data-child-job="{e(child.job_name)}" style="display:none"></span>
-    <span class="child-comment-count" data-child-job="{e(child.job_name)}" style="display:none"></span>
   </summary>
   <div class="child-job-body">
     <div class="child-job-meta">
