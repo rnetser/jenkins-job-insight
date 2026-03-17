@@ -1239,6 +1239,67 @@ async def get_test_classifications(
         return [dict(row) for row in rows]
 
 
+async def get_all_failures(
+    search: str = "",
+    job_name: str = "",
+    classification: str = "",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Get paginated failure history with optional filters.
+
+    Returns dict with 'failures' list and 'total' count.
+
+    Args:
+        search: Free-text search across test_name, error_message, and job_name.
+        job_name: Exact match filter on job_name column.
+        classification: Exact match filter on classification column.
+        limit: Maximum number of rows to return.
+        offset: Number of rows to skip for pagination.
+
+    Returns:
+        Dict with ``failures`` (list of row dicts) and ``total`` (int).
+    """
+    conditions: list[str] = []
+    params: list[str | int] = []
+
+    if search:
+        conditions.append(
+            "(test_name LIKE ? OR error_message LIKE ? OR job_name LIKE ?)"
+        )
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+    if job_name:
+        conditions.append("job_name = ?")
+        params.append(job_name)
+    if classification:
+        conditions.append("classification = ?")
+        params.append(classification)
+
+    where = " AND ".join(conditions) if conditions else "1=1"
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Get total count
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM failure_history WHERE {where}",
+            params,
+        )
+        total = (await cursor.fetchone())[0]
+
+        # Get paginated results
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            f"SELECT id, job_id, job_name, build_number, test_name, error_message, "
+            f"error_signature, classification, child_job_name, child_build_number, analyzed_at "
+            f"FROM failure_history WHERE {where} ORDER BY analyzed_at DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        )
+        rows = await cursor.fetchall()
+        return {
+            "failures": [dict(row) for row in rows],
+            "total": total,
+        }
+
+
 async def get_html_report(job_id: str) -> str | None:
     """Read an HTML report from disk.
 

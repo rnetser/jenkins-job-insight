@@ -2611,10 +2611,11 @@ def generate_register_html() -> str:
 def generate_history_html(base_url: str = "") -> str:
     """Generate a self-contained HTML page for failure history exploration.
 
-    The page uses inline JavaScript to fetch data from the history API
-    endpoints and renders regressions, flaky tests, trends, and a test
-    search feature.  All dynamic content is escaped via ``escapeHtml()``
-    before DOM insertion.
+    The page uses inline JavaScript to fetch paginated failure data from
+    the ``/history/failures`` API endpoint with search and classification
+    filtering.  A trends section is shown below the main table when
+    multi-day data is available.  All dynamic content is escaped via
+    ``escapeHtml()`` before DOM insertion.
 
     Args:
         base_url: External base URL for constructing API request URLs.
@@ -2645,20 +2646,14 @@ def generate_history_html(base_url: str = "") -> str:
     text-decoration: none;
 }}
 .env-chip:hover {{ border-color: var(--accent-blue); color: var(--accent-blue); }}
-.section-title {{
-    font-size: 14px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--text-muted);
-    margin: 32px 0 16px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
-}}
-.search-bar {{
+
+/* Controls bar (search + filters + per-page) */
+.controls-bar {{
     display: flex;
-    gap: 8px;
-    margin-bottom: 24px;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
 }}
 .search-input {{
     flex: 1;
@@ -2675,23 +2670,20 @@ def generate_history_html(base_url: str = "") -> str:
 }}
 .search-input::placeholder {{ color: var(--text-muted); }}
 .search-input:focus {{ border-color: var(--accent-blue); }}
-.search-btn {{
-    padding: 10px 20px;
+.per-page-select {{
+    padding: 10px 14px;
     font-size: 14px;
-    font-weight: 600;
     font-family: var(--font-sans);
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    color: var(--accent-blue);
+    color: var(--text-primary);
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-    white-space: nowrap;
+    outline: none;
 }}
-.search-btn:hover {{
-    background: var(--bg-hover);
-    border-color: var(--accent-blue);
-}}
+.per-page-select:focus {{ border-color: var(--accent-blue); }}
+
+/* Table */
 .table-container {{
     overflow-x: auto;
     background: var(--bg-secondary);
@@ -2724,42 +2716,84 @@ def generate_history_html(base_url: str = "") -> str:
 }}
 .table-container tr:last-child td {{ border-bottom: none; }}
 .table-container tr:hover td {{ background: var(--bg-hover); }}
-.mono {{ font-family: var(--font-mono); font-size: 12px; }}
-.badge-red {{
+
+/* Classification tags */
+.classification-tag {{
     display: inline-block;
     font-size: 11px;
     font-weight: 700;
     padding: 2px 8px;
     border-radius: 4px;
+    white-space: nowrap;
+}}
+.classification-tag.product-bug {{
     background: rgba(248, 81, 73, 0.12);
     color: var(--accent-red);
 }}
-.badge-yellow {{
-    display: inline-block;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 4px;
+.classification-tag.code-issue {{
     background: rgba(210, 153, 34, 0.15);
     color: var(--accent-yellow);
 }}
-.badge-green {{
-    display: inline-block;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 4px;
-    background: rgba(63, 185, 80, 0.12);
-    color: var(--accent-green);
-}}
-.badge-blue {{
-    display: inline-block;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 4px;
+.classification-tag.unknown {{
     background: rgba(88, 166, 255, 0.12);
     color: var(--accent-blue);
+}}
+
+/* Test name column */
+.test-name {{
+    max-width: 400px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 12px;
+}}
+
+/* Pagination controls */
+.pagination-controls {{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-top: 24px;
+    padding: 16px 0;
+}}
+.pagination-btn {{
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}}
+.pagination-btn:hover:not(:disabled) {{
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+}}
+.pagination-btn:disabled {{
+    opacity: 0.4;
+    cursor: not-allowed;
+}}
+.page-info {{
+    font-size: 13px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+}}
+
+/* Section title (trends) */
+.section-title {{
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin: 32px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
 }}
 .empty-msg {{
     text-align: center;
@@ -2767,40 +2801,13 @@ def generate_history_html(base_url: str = "") -> str:
     color: var(--text-muted);
     font-size: 14px;
 }}
-.test-link {{
-    color: var(--accent-blue);
-    text-decoration: none;
-    cursor: pointer;
-}}
-.test-link:hover {{ text-decoration: underline; }}
-#search-results {{
-    display: none;
-    margin-bottom: 24px;
-}}
-#search-results .result-card {{
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-}}
-#search-results .result-header {{
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    margin-bottom: 16px;
-}}
-#search-results .result-title {{
-    font-weight: 600;
-    font-size: 15px;
-    font-family: var(--font-mono);
-    word-break: break-all;
-}}
+.mono {{ font-family: var(--font-mono); font-size: 12px; }}
 
 /* Responsive */
 @media (max-width: 768px) {{
-    .search-bar {{ flex-direction: column; }}
+    .controls-bar {{ flex-direction: column; }}
     .search-input {{ min-width: 100%; }}
+    .test-name {{ max-width: 200px; }}
 }}
 </style>
 </head>
@@ -2816,17 +2823,45 @@ def generate_history_html(base_url: str = "") -> str:
   </div>
 </div>
 
-<!-- Search -->
-<div class="search-bar">
-  <input type="text" id="test-search" class="search-input" placeholder="Search by test name (e.g. tests.network.TestDNS.test_lookup)">
-  <button id="search-btn" class="search-btn">Search</button>
+<!-- Controls -->
+<div class="controls-bar">
+    <input class="search-input" placeholder="Search by test name, job, or error..." id="search-input">
+    <select class="per-page-select" id="classification-filter">
+        <option value="">All Classifications</option>
+        <option value="PRODUCT BUG">PRODUCT BUG</option>
+        <option value="CODE ISSUE">CODE ISSUE</option>
+    </select>
+    <select class="per-page-select" id="per-page-select">
+        <option value="25">25 per page</option>
+        <option value="50" selected>50 per page</option>
+        <option value="100">100 per page</option>
+    </select>
 </div>
-<div id="search-results"></div>
 
-<!-- Trends -->
-<h2 class="section-title">Failure Trends (Last 30 Days)</h2>
-<div id="trends-section">
-  <div class="empty-msg">Loading trends...</div>
+<!-- Failures table -->
+<div class="table-container">
+<table>
+<thead>
+<tr><th>Test Name</th><th>Job</th><th>Build</th><th>Classification</th><th>Child Job</th><th>Date</th></tr>
+</thead>
+<tbody id="failures-tbody">
+<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px;">Loading failures...</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="pagination-controls">
+    <button class="pagination-btn" id="prev-btn" disabled>Previous</button>
+    <span class="page-info" id="page-info"></span>
+    <button class="pagination-btn" id="next-btn">Next</button>
+</div>
+
+<!-- Trends (shown only when multi-day data exists) -->
+<div id="trends-wrapper" style="display:none;">
+  <h2 class="section-title">Failure Trends (Last 30 Days)</h2>
+  <div id="trends-section">
+    <div class="empty-msg">Loading trends...</div>
+  </div>
 </div>
 
 <div class="report-footer">
@@ -2837,12 +2872,19 @@ def generate_history_html(base_url: str = "") -> str:
 
 <script>
 (function() {{
-  // Derive API base path from current URL (works behind reverse proxies with path prefixes)
   var BASE = window.location.pathname.replace(/\\/history$/, '');
 
+  var currentPage = 1;
+  var perPage = 50;
+  var totalItems = 0;
+  var currentSearch = '';
+  var currentClassification = '';
+  var searchTimer = null;
+
   function escapeHtml(s) {{
+    if (s == null) return '';
     var el = document.createElement('div');
-    el.textContent = s;
+    el.textContent = String(s);
     return el.innerHTML;
   }}
 
@@ -2853,85 +2895,101 @@ def generate_history_html(base_url: str = "") -> str:
     }});
   }}
 
-  /* ---- Search ---- */
-  var searchInput = document.getElementById('test-search');
-  var searchBtn = document.getElementById('search-btn');
-  var searchResults = document.getElementById('search-results');
-
-  function doSearch() {{
-    var q = searchInput.value.trim();
-    if (!q) return;
-    searchResults.style.display = 'block';
-    searchResults.innerHTML = '<div class="empty-msg">Searching...</div>';
-
-    fetchJson(BASE + '/history/test/' + encodeURIComponent(q))
-      .then(function(data) {{
-        if (data.failures === 0 && data.recent_runs.length === 0) {{
-          searchResults.innerHTML = '<div class="empty-msg">No history found for this test.</div>';
-          return;
-        }}
-        var h = '<div class="result-card">';
-        h += '<div class="result-header">';
-        h += '<span class="result-title">' + escapeHtml(data.test_name) + '</span>';
-        h += '<span class="badge-red">' + data.failures + ' failures</span>';
-        h += '<span class="badge-green">' + data.passes + ' passes</span>';
-        var pct = (data.failure_rate * 100).toFixed(1);
-        h += '<span class="badge-yellow">' + pct + '% failure rate</span>';
-        if (data.last_classification) {{
-          h += '<span class="badge-blue">' + escapeHtml(data.last_classification) + '</span>';
-        }}
-        h += '</div>';
-
-        if (data.recent_runs.length > 0) {{
-          h += '<div class="table-container"><table>';
-          h += '<tr><th>Job</th><th>Build</th><th>Classification</th><th>Error</th><th>Date</th></tr>';
-          for (var i = 0; i < data.recent_runs.length; i++) {{
-            var run = data.recent_runs[i];
-            h += '<tr>';
-            h += '<td>' + escapeHtml(run.job_name || '') + '</td>';
-            h += '<td class="mono">#' + escapeHtml(String(run.build_number || '')) + '</td>';
-            h += '<td><span class="badge-blue">' + escapeHtml(run.classification || '') + '</span></td>';
-            h += '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(run.error_message || '') + '">' + escapeHtml((run.error_message || '').substring(0, 120)) + '</td>';
-            h += '<td class="mono">' + escapeHtml(run.analyzed_at || '') + '</td>';
-            h += '</tr>';
-          }}
-          h += '</table></div>';
-        }}
-
-        if (data.comments && data.comments.length > 0) {{
-          h += '<h3 style="font-size:13px;color:var(--text-secondary);margin:12px 0 8px;">Comments</h3>';
-          for (var c = 0; c < data.comments.length; c++) {{
-            var cm = data.comments[c];
-            h += '<div style="padding:8px 12px;margin-bottom:4px;background:var(--bg-tertiary);border-radius:4px;font-size:12px;">';
-            h += '<strong>' + escapeHtml(cm.username || 'anonymous') + '</strong>';
-            h += ' <span style="color:var(--text-muted)">' + escapeHtml(cm.created_at || '') + '</span><br>';
-            h += escapeHtml(cm.comment || '');
-            h += '</div>';
-          }}
-        }}
-
-        h += '</div>';
-        searchResults.innerHTML = h;
-      }})
-      .catch(function(err) {{
-        searchResults.innerHTML = '<div class="empty-msg">Error: ' + escapeHtml(err.message) + '</div>';
-      }});
+  function classificationClass(c) {{
+    if (c === 'PRODUCT BUG') return 'product-bug';
+    if (c === 'CODE ISSUE') return 'code-issue';
+    return 'unknown';
   }}
 
-  searchBtn.addEventListener('click', doSearch);
-  searchInput.addEventListener('keydown', function(ev) {{
-    if (ev.key === 'Enter') doSearch();
+  function loadFailures() {{
+    var offset = (currentPage - 1) * perPage;
+    var url = BASE + '/history/failures?limit=' + perPage + '&offset=' + offset;
+    if (currentSearch) url += '&search=' + encodeURIComponent(currentSearch);
+    if (currentClassification) url += '&classification=' + encodeURIComponent(currentClassification);
+
+    fetch(url).then(function(r) {{ return r.json(); }}).then(function(data) {{
+      totalItems = data.total;
+      renderTable(data.failures);
+      renderPagination();
+    }}).catch(function(err) {{
+      document.getElementById('failures-tbody').innerHTML =
+        '<tr><td colspan="6" style="text-align:center;color:var(--accent-red);padding:20px;">Failed to load: ' + escapeHtml(err.message) + '</td></tr>';
+    }});
+  }}
+
+  function renderTable(failures) {{
+    var tbody = document.getElementById('failures-tbody');
+    if (failures.length === 0) {{
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px;">No failures found</td></tr>';
+      return;
+    }}
+    tbody.innerHTML = failures.map(function(f) {{
+      return '<tr>' +
+        '<td class="test-name"><a href="' + BASE + '/history/test/' + encodeURIComponent(f.test_name) + '" style="color:var(--accent-blue);text-decoration:none;" title="' + escapeHtml(f.test_name) + '">' + escapeHtml(f.test_name) + '</a></td>' +
+        '<td>' + escapeHtml(f.job_name) + '</td>' +
+        '<td>' + f.build_number + '</td>' +
+        '<td><span class="classification-tag ' + classificationClass(f.classification) + '">' + escapeHtml(f.classification) + '</span></td>' +
+        '<td>' + escapeHtml(f.child_job_name || '-') + '</td>' +
+        '<td style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted);white-space:nowrap;">' + escapeHtml(f.analyzed_at || '') + '</td>' +
+        '</tr>';
+    }}).join('');
+  }}
+
+  function renderPagination() {{
+    var totalPages = Math.max(1, Math.ceil(totalItems / perPage));
+    document.getElementById('page-info').textContent = 'Page ' + currentPage + ' of ' + totalPages + ' (' + totalItems + ' failures)';
+    document.getElementById('prev-btn').disabled = currentPage <= 1;
+    document.getElementById('next-btn').disabled = currentPage >= totalPages;
+  }}
+
+  /* ---- Event listeners ---- */
+  var searchInput = document.getElementById('search-input');
+  searchInput.addEventListener('keyup', function() {{
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function() {{
+      currentSearch = searchInput.value.trim();
+      currentPage = 1;
+      loadFailures();
+    }}, 300);
   }});
 
-  /* ---- Trends ---- */
+  document.getElementById('classification-filter').addEventListener('change', function() {{
+    currentClassification = this.value;
+    currentPage = 1;
+    loadFailures();
+  }});
+
+  document.getElementById('per-page-select').addEventListener('change', function() {{
+    perPage = parseInt(this.value, 10);
+    currentPage = 1;
+    loadFailures();
+  }});
+
+  document.getElementById('prev-btn').addEventListener('click', function() {{
+    if (currentPage > 1) {{
+      currentPage--;
+      loadFailures();
+    }}
+  }});
+
+  document.getElementById('next-btn').addEventListener('click', function() {{
+    var totalPages = Math.max(1, Math.ceil(totalItems / perPage));
+    if (currentPage < totalPages) {{
+      currentPage++;
+      loadFailures();
+    }}
+  }});
+
+  /* ---- Trends (only show when multi-day data exists) ---- */
   fetchJson(BASE + '/history/trends?period=daily&days=30')
     .then(function(data) {{
-      var section = document.getElementById('trends-section');
       var items = data.periods || [];
-      if (items.length === 0) {{
-        section.innerHTML = '<div class="empty-msg">No trend data available yet.</div>';
+      if (items.length <= 1) {{
+        // Single day or no data: keep trends hidden
         return;
       }}
+      document.getElementById('trends-wrapper').style.display = 'block';
+      var section = document.getElementById('trends-section');
       var h = '<div class="table-container"><table>';
       h += '<tr><th>Period</th><th>Total Failures</th><th>Unique Tests</th><th>Builds Analyzed</th></tr>';
       for (var i = 0; i < items.length; i++) {{
@@ -2947,9 +3005,11 @@ def generate_history_html(base_url: str = "") -> str:
       section.innerHTML = h;
     }})
     .catch(function(err) {{
-      document.getElementById('trends-section').innerHTML =
-        '<div class="empty-msg">Failed to load trends: ' + escapeHtml(err.message) + '</div>';
+      // Silently ignore trend load failures; the section stays hidden
     }});
+
+  /* ---- Initial load ---- */
+  loadFailures();
 }})();
 </script>
 </body>

@@ -1139,6 +1139,24 @@ async def history_page(request: Request) -> HTMLResponse:
     return HTMLResponse(html_content)
 
 
+@app.get("/history/failures")
+async def get_all_failures_endpoint(
+    search: str = Query(default=""),
+    job_name: str = Query(default=""),
+    classification: str = Query(default=""),
+    limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    """Get paginated failure history."""
+    return await storage.get_all_failures(
+        search=search,
+        job_name=job_name,
+        classification=classification,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @app.get("/history/test/{test_name:path}")
 async def get_test_history_endpoint(
     test_name: str,
