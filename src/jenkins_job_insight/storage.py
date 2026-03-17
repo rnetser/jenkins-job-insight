@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import aiosqlite
@@ -909,6 +910,92 @@ async def search_by_signature(signature: str) -> dict:
         "tests": tests,
         "last_classification": last_classification,
         "comments": comments,
+    }
+
+
+async def get_job_stats(job_name: str) -> dict:
+    """Get aggregate statistics for a specific job name.
+
+    Args:
+        job_name: The job name to get statistics for.
+
+    Returns:
+        Dict with job_name, total_builds_analyzed, builds_with_failures,
+        overall_failure_rate, most_common_failures, and recent_trend.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Total builds analyzed (from results table, matching job_name in JSON)
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM results WHERE result_json LIKE ?",
+            (f'%"job_name": "{job_name}"%',),
+        )
+        total_builds = (await cursor.fetchone())[0]
+
+        if total_builds == 0:
+            return {
+                "job_name": job_name,
+                "total_builds_analyzed": 0,
+                "builds_with_failures": 0,
+                "overall_failure_rate": 0.0,
+                "most_common_failures": [],
+                "recent_trend": "stable",
+            }
+
+        # Builds with failures (distinct job_ids in failure_history for this job)
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT job_id) FROM failure_history WHERE job_name = ?",
+            (job_name,),
+        )
+        builds_with_failures = (await cursor.fetchone())[0]
+
+        overall_failure_rate = (
+            builds_with_failures / total_builds if total_builds > 0 else 0.0
+        )
+
+        # Most common failures
+        cursor = await db.execute(
+            "SELECT test_name, COUNT(*) as count, classification "
+            "FROM failure_history WHERE job_name = ? "
+            "GROUP BY test_name ORDER BY count DESC LIMIT 10",
+            (job_name,),
+        )
+        most_common = [dict(row) for row in await cursor.fetchall()]
+
+        # Recent trend: compare last 7 days vs previous 7 days
+        now = datetime.now()
+        seven_days_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        fourteen_days_ago = (now - timedelta(days=14)).strftime("%Y-%m-%d %H:%M:%S")
+
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT job_id) FROM failure_history "
+            "WHERE job_name = ? AND analyzed_at >= ?",
+            (job_name, seven_days_ago),
+        )
+        recent_failures = (await cursor.fetchone())[0]
+
+        cursor = await db.execute(
+            "SELECT COUNT(DISTINCT job_id) FROM failure_history "
+            "WHERE job_name = ? AND analyzed_at >= ? AND analyzed_at < ?",
+            (job_name, fourteen_days_ago, seven_days_ago),
+        )
+        previous_failures = (await cursor.fetchone())[0]
+
+        if recent_failures < previous_failures:
+            recent_trend = "improving"
+        elif recent_failures > previous_failures:
+            recent_trend = "worsening"
+        else:
+            recent_trend = "stable"
+
+    return {
+        "job_name": job_name,
+        "total_builds_analyzed": total_builds,
+        "builds_with_failures": builds_with_failures,
+        "overall_failure_rate": round(overall_failure_rate, 4),
+        "most_common_failures": most_common,
+        "recent_trend": recent_trend,
     }
 
 

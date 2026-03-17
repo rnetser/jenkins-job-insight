@@ -519,3 +519,57 @@ class TestSearchBySignature:
             result = await storage.search_by_signature("nonexistent-sig")
             assert result["total_occurrences"] == 0
             assert result["tests"] == []
+
+
+class TestGetJobStats:
+    async def test_get_job_stats_basic(self, setup_test_db):
+        import aiosqlite
+
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            async with aiosqlite.connect(setup_test_db) as db:
+                # 3 builds, 2 with failures
+                for i in range(3):
+                    await db.execute(
+                        "INSERT INTO results (job_id, jenkins_url, status, result_json) VALUES (?, ?, ?, ?)",
+                        (
+                            f"stats-{i}",
+                            "https://j.example.com/job/test/1/",
+                            "completed",
+                            json.dumps(
+                                {
+                                    "job_name": "ocp-e2e",
+                                    "build_number": i + 1,
+                                    "failures": [],
+                                    "child_job_analyses": [],
+                                }
+                            ),
+                        ),
+                    )
+
+                # Failures in builds 0 and 1
+                for i in range(2):
+                    await db.execute(
+                        """INSERT INTO failure_history
+                           (job_id, job_name, build_number, test_name, error_signature, classification)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            f"stats-{i}",
+                            "ocp-e2e",
+                            i + 1,
+                            "tests.TestA.test_one",
+                            "sig-a",
+                            "PRODUCT BUG",
+                        ),
+                    )
+                await db.commit()
+
+            result = await storage.get_job_stats("ocp-e2e")
+            assert result["job_name"] == "ocp-e2e"
+            assert result["total_builds_analyzed"] == 3
+            assert result["builds_with_failures"] == 2
+            assert len(result["most_common_failures"]) >= 1
+
+    async def test_get_job_stats_nonexistent(self, setup_test_db):
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            result = await storage.get_job_stats("nonexistent-job")
+            assert result["total_builds_analyzed"] == 0
