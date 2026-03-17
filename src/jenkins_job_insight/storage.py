@@ -143,6 +143,38 @@ async def init_db() -> None:
                 await db.execute("DROP TABLE failure_reviews_old")
                 logger.info("Migration: failure_reviews table rebuilt successfully")
 
+        # failure_history: denormalized table for fast history queries
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS failure_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                job_name TEXT NOT NULL,
+                build_number INTEGER NOT NULL,
+                test_name TEXT NOT NULL,
+                error_message TEXT NOT NULL DEFAULT '',
+                error_signature TEXT NOT NULL DEFAULT '',
+                classification TEXT NOT NULL DEFAULT '',
+                child_job_name TEXT NOT NULL DEFAULT '',
+                child_build_number INTEGER NOT NULL DEFAULT 0,
+                analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fh_test_name ON failure_history (test_name)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fh_error_signature ON failure_history (error_signature)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fh_job_name ON failure_history (job_name)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fh_analyzed_at ON failure_history (analyzed_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fh_job_test ON failure_history (job_name, test_name)"
+        )
+
         await db.commit()
 
 
