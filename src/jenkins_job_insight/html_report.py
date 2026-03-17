@@ -871,9 +871,8 @@ function appendCommentToList(section, comment) {{
     if (comment.id) item.dataset.commentId = comment.id;
     const text = autoLink(escapeHtml(comment.comment));
     var userLabel = comment.username ? '<span style="font-family:var(--font-mono);font-size:11px;color:var(--accent-purple);margin-right:6px;">' + escapeHtml(comment.username) + '</span>' : '';
-    var testLabel = comment.test_name ? '<span style="font-family:var(--font-mono);font-size:11px;color:var(--accent-blue);margin-right:6px;">' + escapeHtml(comment.test_name) + '</span>' : '';
     // Safe: escapeHtml sanitizes all user content, autoLink only adds <a> tags for URL patterns
-    item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + '</div><div class="comment-text">' + userLabel + testLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
+    item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + '</div><div class="comment-text">' + userLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
     list.appendChild(item);
 }}
 
