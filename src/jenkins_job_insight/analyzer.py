@@ -627,6 +627,45 @@ def extract_failures_from_test_report(test_report: dict) -> list[TestFailure]:
     return failures
 
 
+def _build_prompt_sections(
+    custom_prompt: str,
+    artifacts_context: str,
+    repo_path: Path | None,
+    server_url: str,
+    job_id: str,
+) -> tuple[str, str, str, str]:
+    """Build common prompt sections used across all analysis flows.
+
+    Returns:
+        Tuple of (custom_prompt_section, artifacts_section, resources_section, query_section)
+    """
+    custom_prompt_section = (
+        f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
+    )
+
+    artifacts_section = _build_artifacts_section(artifacts_context)
+    resources_section = _build_resources_section(repo_path)
+
+    query_section = ""
+    if server_url and _QUERY_MD_PATH.exists():
+        logger.info(
+            f"Pointing AI to FAILURE_HISTORY_ANALYSIS.md with server_url={server_url}"
+        )
+        query_section = f"""
+
+MANDATORY: Before analyzing any failure, you MUST read and follow the instructions in {_QUERY_MD_PATH}.
+When executing curl commands from that file, use server_url={server_url} and job_id={job_id}.
+These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
+
+"""
+    else:
+        logger.debug(
+            f"query_section is EMPTY (server_url='{server_url}', FAILURE_HISTORY_ANALYSIS.md exists={_QUERY_MD_PATH.exists()})"
+        )
+
+    return custom_prompt_section, artifacts_section, resources_section, query_section
+
+
 def _build_resources_section(repo_path: Path | None) -> str:
     """Build a section telling the AI about available resources.
 
@@ -699,29 +738,11 @@ async def analyze_failure_group(
     representative = failures[0]
     test_names = [f.test_name for f in failures]
 
-    custom_prompt_section = (
-        f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
+    custom_prompt_section, artifacts_section, resources_section, query_section = (
+        _build_prompt_sections(
+            custom_prompt, artifacts_context, repo_path, server_url, job_id
+        )
     )
-
-    artifacts_section = _build_artifacts_section(artifacts_context)
-    resources_section = _build_resources_section(repo_path)
-
-    query_section = ""
-    if server_url and _QUERY_MD_PATH.exists():
-        logger.info(
-            f"Pointing AI to FAILURE_HISTORY_ANALYSIS.md with server_url={server_url}"
-        )
-        query_section = f"""
-
-MANDATORY: Before analyzing any failure, you MUST read and follow the instructions in {_QUERY_MD_PATH}.
-When executing curl commands from that file, use server_url={server_url} and job_id={job_id}.
-These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
-
-"""
-    else:
-        logger.debug(
-            f"query_section is EMPTY (server_url='{server_url}', FAILURE_HISTORY_ANALYSIS.md exists={_QUERY_MD_PATH.exists()})"
-        )
 
     prompt = f"""{query_section}
 Analyze this test failure from a Jenkins CI job.
@@ -1007,29 +1028,11 @@ async def analyze_child_job(
         )
 
     # No structured test failures - fall back to single Claude CLI analysis of console output
-    custom_prompt_section = (
-        f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
+    custom_prompt_section, artifacts_section, resources_section, query_section = (
+        _build_prompt_sections(
+            custom_prompt, artifacts_context, repo_path, server_url, job_id
+        )
     )
-
-    artifacts_section = _build_artifacts_section(artifacts_context)
-    resources_section = _build_resources_section(repo_path)
-
-    query_section = ""
-    if server_url and _QUERY_MD_PATH.exists():
-        logger.info(
-            f"Pointing AI to FAILURE_HISTORY_ANALYSIS.md with server_url={server_url}"
-        )
-        query_section = f"""
-
-MANDATORY: Before analyzing any failure, you MUST read and follow the instructions in {_QUERY_MD_PATH}.
-When executing curl commands from that file, use server_url={server_url} and job_id={job_id}.
-These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
-
-"""
-    else:
-        logger.debug(
-            f"query_section is EMPTY (server_url='{server_url}', FAILURE_HISTORY_ANALYSIS.md exists={_QUERY_MD_PATH.exists()})"
-        )
 
     prompt = f"""{query_section}
 Analyze this failed Jenkins job:
@@ -1358,31 +1361,14 @@ async def analyze_job(
                         failures.extend(result)
             else:
                 # No structured test failures - fall back to single Claude CLI analysis
-                custom_prompt_section = (
-                    f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n"
-                    if custom_prompt
-                    else ""
+                (
+                    custom_prompt_section,
+                    artifacts_section,
+                    resources_section,
+                    query_section,
+                ) = _build_prompt_sections(
+                    custom_prompt, artifacts_context, repo_path, server_url, job_id
                 )
-
-                artifacts_section = _build_artifacts_section(artifacts_context)
-                resources_section = _build_resources_section(repo_path)
-
-                query_section = ""
-                if server_url and _QUERY_MD_PATH.exists():
-                    logger.info(
-                        f"Pointing AI to FAILURE_HISTORY_ANALYSIS.md with server_url={server_url}"
-                    )
-                    query_section = f"""
-
-MANDATORY: Before analyzing any failure, you MUST read and follow the instructions in {_QUERY_MD_PATH}.
-When executing curl commands from that file, use server_url={server_url} and job_id={job_id}.
-These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
-
-"""
-                else:
-                    logger.debug(
-                        f"query_section is EMPTY (server_url='{server_url}', FAILURE_HISTORY_ANALYSIS.md exists={_QUERY_MD_PATH.exists()})"
-                    )
 
                 prompt = f"""{query_section}
 Analyze this failed Jenkins job:

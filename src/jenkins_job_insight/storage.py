@@ -630,6 +630,32 @@ def _count_child_failures_recursive(child: dict) -> int:
     return count
 
 
+def _failure_to_history_row(
+    failure: dict,
+    job_id: str,
+    job_name: str,
+    build_number: int,
+    child_job_name: str = "",
+    child_build_number: int = 0,
+) -> tuple:
+    """Convert a single failure dict to a failure_history row tuple."""
+    analysis = failure.get("analysis", {})
+    classification = (
+        "" if isinstance(analysis, str) else analysis.get("classification", "")
+    )
+    return (
+        job_id,
+        job_name,
+        build_number,
+        failure.get("test_name", ""),
+        failure.get("error", ""),
+        failure.get("error_signature", ""),
+        classification,
+        child_job_name,
+        child_build_number,
+    )
+
+
 def _extract_failures_for_history(
     result_data: dict,
     job_id: str,
@@ -657,24 +683,7 @@ def _extract_failures_for_history(
 
     # Top-level failures (no child context)
     for f in result_data.get("failures", []):
-        analysis = f.get("analysis", {})
-        if isinstance(analysis, str):
-            classification = ""
-        else:
-            classification = analysis.get("classification", "")
-        rows.append(
-            (
-                job_id,
-                job_name,
-                build_number,
-                f.get("test_name", ""),
-                f.get("error", ""),
-                f.get("error_signature", ""),
-                classification,
-                "",  # child_job_name
-                0,  # child_build_number
-            )
-        )
+        rows.append(_failure_to_history_row(f, job_id, job_name, build_number))
 
     # Child job analyses (recursive)
     for child in result_data.get("child_job_analyses", []):
@@ -703,22 +712,9 @@ def _extract_child_failures_for_history(
     child_build = child.get("build_number", 0)
 
     for f in child.get("failures", []):
-        analysis = f.get("analysis", {})
-        if isinstance(analysis, str):
-            classification = ""
-        else:
-            classification = analysis.get("classification", "")
         rows.append(
-            (
-                job_id,
-                job_name,
-                build_number,
-                f.get("test_name", ""),
-                f.get("error", ""),
-                f.get("error_signature", ""),
-                classification,
-                child_job,
-                child_build,
+            _failure_to_history_row(
+                f, job_id, job_name, build_number, child_job, child_build
             )
         )
 

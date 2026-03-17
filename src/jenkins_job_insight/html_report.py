@@ -183,6 +183,86 @@ def _modal_css() -> str:
 }"""
 
 
+def _controls_css() -> str:
+    """Return CSS for search, pagination, and per-page controls.
+
+    Used by both the dashboard and history pages.
+
+    Returns:
+        A CSS string (without ``<style>`` tags) ready to embed directly.
+    """
+    return """\
+/* Controls bar (search + per-page) */
+.controls-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+.search-input {
+    flex: 1;
+    min-width: 200px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color 0.15s;
+}
+.search-input::placeholder { color: var(--text-muted); }
+.search-input:focus { border-color: var(--accent-blue); }
+.per-page-select {
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    cursor: pointer;
+    outline: none;
+}
+.per-page-select:focus { border-color: var(--accent-blue); }
+/* Pagination controls */
+.pagination-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-top: 24px;
+    padding: 16px 0;
+}
+.pagination-btn {
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.pagination-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+}
+.pagination-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.page-info {
+    font-size: 13px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+}"""
+
+
 def _modal_js() -> str:
     """Return JavaScript for the ``showConfirmModal`` function.
 
@@ -1532,90 +1612,6 @@ def _group_failures(failures: list[FailureAnalysis]) -> list[dict]:
     return groups
 
 
-def _render_failure_card(
-    parts: list[str],
-    failure: FailureAnalysis,
-    e: Callable[[str], str],
-    indent: str = "",
-) -> None:
-    """Render a single collapsible failure card.
-
-    Args:
-        parts: List of HTML string parts to append to.
-        failure: A FailureAnalysis instance to render.
-        e: HTML escape function reference.
-        indent: HTML indentation prefix for nested cards.
-    """
-    detail = failure.analysis
-    cls = detail.classification or "Unknown"
-    cls_class = _classification_css_class(cls)
-
-    parts.append(f"""{indent}<details class="failure-card">
-{indent}  <summary class="failure-summary">
-{indent}    <span class="failure-title">{e(failure.test_name)}</span>
-{indent}    <span class="classification-tag {e(cls_class)}">{e(cls)}</span>
-{indent}  </summary>
-{indent}  <div class="failure-body">
-""")
-
-    # Error
-    parts.append(f"""{indent}    <h4>Error</h4>
-{indent}    <pre class="error-pre">{e(failure.error)}</pre>
-""")
-
-    # Analysis text
-    if detail.details:
-        parts.append(f"""{indent}    <h4>Analysis</h4>
-{indent}    <pre class="analysis-pre">{e(detail.details)}</pre>
-""")
-
-    # Code Fix details
-    if isinstance(detail.code_fix, CodeFix):
-        fix = detail.code_fix
-        parts.append(f"""{indent}    <h4>Code Fix</h4>
-{indent}    <div class="detail-grid">
-{indent}      <span class="detail-label">File:</span><span class="detail-value">{e(fix.file)}</span>
-{indent}      <span class="detail-label">Line:</span><span class="detail-value">{e(fix.line)}</span>
-{indent}      <span class="detail-label">Change:</span><span class="detail-value">{e(fix.change)}</span>
-{indent}    </div>
-""")
-
-    # Product Bug Report details
-    if isinstance(detail.product_bug_report, ProductBugReport):
-        bug = detail.product_bug_report
-
-        parts.append(f"""{indent}    <h4>Product Bug Report</h4>
-{indent}    <div class="detail-grid">
-{indent}      <span class="detail-label">Title:</span><span class="detail-value">{e(bug.title)}</span>
-{indent}      <span class="detail-label">Severity:</span><span class="detail-value">{e(bug.severity)}</span>
-{indent}      <span class="detail-label">Component:</span><span class="detail-value">{e(bug.component)}</span>
-{indent}      <span class="detail-label">Description:</span><span class="detail-value">{e(bug.description)}</span>
-{indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>
-{indent}    </div>
-""")
-        # Jira matches
-        if bug.jira_matches:
-            _render_jira_matches(parts, bug.jira_matches, e, indent)
-
-    # Artifacts evidence
-    _render_artifacts_evidence(parts, detail, e, indent)
-
-    # Affected tests
-    if detail.affected_tests:
-        parts.append(
-            f'{indent}    <h4>Affected Tests ({len(detail.affected_tests)})</h4>\n{indent}    <ul style="list-style:none;padding:0">\n'
-        )
-        for t in detail.affected_tests:
-            parts.append(
-                f'{indent}      <li style="padding:4px 0;font-size:13px;color:var(--text-secondary)"><code style="font-family:var(--font-mono);font-size:12px;color:var(--text-primary)">{e(t)}</code></li>\n'
-            )
-        parts.append(f"{indent}    </ul>\n")
-
-    parts.append(f"""{indent}  </div>
-{indent}</details>
-""")
-
-
 def _render_group_card(
     parts: list[str],
     group: dict,
@@ -2307,41 +2303,7 @@ def generate_dashboard_html(
     max-width: 120px;
 }}
 
-/* Controls bar (search + per-page) */
-.controls-bar {{
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-}}
-.search-input {{
-    flex: 1;
-    min-width: 200px;
-    padding: 10px 14px;
-    font-size: 14px;
-    font-family: var(--font-sans);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-    outline: none;
-    transition: border-color 0.15s;
-}}
-.search-input::placeholder {{ color: var(--text-muted); }}
-.search-input:focus {{ border-color: var(--accent-blue); }}
-.per-page-select {{
-    padding: 10px 14px;
-    font-size: 14px;
-    font-family: var(--font-sans);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-    cursor: pointer;
-    outline: none;
-}}
-.per-page-select:focus {{ border-color: var(--accent-blue); }}
+{_controls_css()}
 .limit-control {{
     display: flex;
     align-items: center;
@@ -2382,41 +2344,6 @@ def generate_dashboard_html(
 .limit-btn:hover {{
     background: var(--bg-hover);
     border-color: var(--accent-blue);
-}}
-
-/* Pagination controls */
-.pagination-controls {{
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    margin-top: 24px;
-    padding: 16px 0;
-}}
-.pagination-btn {{
-    padding: 8px 18px;
-    font-size: 13px;
-    font-weight: 600;
-    font-family: var(--font-sans);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-}}
-.pagination-btn:hover:not(:disabled) {{
-    background: var(--bg-hover);
-    border-color: var(--accent-blue);
-}}
-.pagination-btn:disabled {{
-    opacity: 0.4;
-    cursor: not-allowed;
-}}
-.page-info {{
-    font-size: 13px;
-    font-family: var(--font-mono);
-    color: var(--text-secondary);
 }}
 
 /* Empty state */
@@ -3037,41 +2964,7 @@ def generate_history_html(base_url: str = "") -> str:
 }}
 .env-chip:hover {{ border-color: var(--accent-blue); color: var(--accent-blue); }}
 
-/* Controls bar (search + filters + per-page) */
-.controls-bar {{
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-}}
-.search-input {{
-    flex: 1;
-    min-width: 200px;
-    padding: 10px 14px;
-    font-size: 14px;
-    font-family: var(--font-sans);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-    outline: none;
-    transition: border-color 0.15s;
-}}
-.search-input::placeholder {{ color: var(--text-muted); }}
-.search-input:focus {{ border-color: var(--accent-blue); }}
-.per-page-select {{
-    padding: 10px 14px;
-    font-size: 14px;
-    font-family: var(--font-sans);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-    cursor: pointer;
-    outline: none;
-}}
-.per-page-select:focus {{ border-color: var(--accent-blue); }}
+{_controls_css()}
 
 /* Table */
 .table-container {{
@@ -3137,41 +3030,6 @@ def generate_history_html(base_url: str = "") -> str:
     white-space: nowrap;
     font-family: var(--font-mono);
     font-size: 12px;
-}}
-
-/* Pagination controls */
-.pagination-controls {{
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    margin-top: 24px;
-    padding: 16px 0;
-}}
-.pagination-btn {{
-    padding: 8px 18px;
-    font-size: 13px;
-    font-weight: 600;
-    font-family: var(--font-sans);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-}}
-.pagination-btn:hover:not(:disabled) {{
-    background: var(--bg-hover);
-    border-color: var(--accent-blue);
-}}
-.pagination-btn:disabled {{
-    opacity: 0.4;
-    cursor: not-allowed;
-}}
-.page-info {{
-    font-size: 13px;
-    font-family: var(--font-mono);
-    color: var(--text-secondary);
 }}
 
 /* Section title (trends) */
