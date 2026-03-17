@@ -105,6 +105,32 @@ body {
 .report-footer a { color: var(--accent-blue); text-decoration: none; }
 .report-footer a:hover { text-decoration: underline; }
 
+/* Env chips */
+.env-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.env-chip {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    text-decoration: none;
+}
+.env-chip a { color: var(--accent-blue); text-decoration: none; }
+.env-chip a:hover { text-decoration: underline; }
+
+/* Section titles */
+.section-title {
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin: 32px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .header-content { flex-direction: column; align-items: flex-start; }
@@ -290,6 +316,30 @@ function showConfirmModal(title, message, onConfirm) {
 }"""
 
 
+def _user_badge_js() -> str:
+    """Return JavaScript for the fixed top-right user badge.
+
+    Used by the report page, dashboard, and history page.
+
+    Returns:
+        A JavaScript string (without ``<script>`` tags) ready to embed directly.
+    """
+    return """
+(function() {
+    var username = '';
+    try { username = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); } catch(e) {}
+    if (username) {
+        var userBadge = document.createElement('div');
+        userBadge.style.cssText = 'position:fixed;top:12px;right:24px;z-index:200;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
+        var escaped = document.createElement('span');
+        escaped.textContent = username;
+        userBadge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escaped.innerHTML;
+        document.body.appendChild(userBadge);
+    }
+})();
+"""
+
+
 def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str:
     """Generate a self-contained HTML report for an analysis result.
 
@@ -347,18 +397,6 @@ def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str
     align-items: center;
     gap: 4px;
 }}
-.env-chips {{ display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }}
-.env-chip {{
-    font-size: 12px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
-    color: var(--text-secondary);
-    text-decoration: none;
-}}
-.env-chip a {{ color: var(--accent-blue); text-decoration: none; }}
-.env-chip a:hover {{ text-decoration: underline; }}
 .regenerate-btn {{
     font-size: 12px;
     padding: 4px 10px;
@@ -376,18 +414,6 @@ def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str
 .regenerate-btn:hover {{
     background: var(--bg-hover);
     border-color: var(--accent-blue);
-}}
-
-/* Section titles */
-.section-title {{
-    font-size: 14px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--text-muted);
-    margin: 32px 0 16px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
 }}
 
 /* Failure cards */
@@ -1020,81 +1046,55 @@ async function loadCommentsAndReviews() {{
     }}
 }}
 
+function applyReviewBadge(badge, container) {{
+    if (!container) return;
+    var toggles = container.querySelectorAll('.reviewed-toggle');
+    var total = toggles.length;
+    var checked = container.querySelectorAll('.reviewed-toggle.checked').length;
+    if (total === 0) return;
+    badge.style.display = '';
+    if (checked >= total) {{
+        badge.textContent = '\u2713 Reviewed';
+        badge.style.background = 'rgba(63,185,80,0.15)';
+        badge.style.color = 'var(--accent-green)';
+    }} else if (checked > 0) {{
+        badge.textContent = checked + '/' + total;
+        badge.style.background = 'rgba(210,153,34,0.15)';
+        badge.style.color = 'var(--accent-yellow)';
+    }} else {{
+        badge.textContent = 'Needs Review';
+        badge.style.background = 'rgba(248,81,73,0.12)';
+        badge.style.color = 'var(--accent-red)';
+    }}
+}}
+
 function updateReviewBadges() {{
     // Overall job review status
-    const allToggles = document.querySelectorAll('.reviewed-toggle');
-    const totalTests = allToggles.length;
-    const reviewedTests = document.querySelectorAll('.reviewed-toggle.checked').length;
-
     const overallBadge = document.getElementById('overall-review-status');
-    if (overallBadge && totalTests > 0) {{
-        overallBadge.style.display = '';
+    if (overallBadge) {{
         overallBadge.style.fontSize = '13px';
         overallBadge.style.padding = '4px 12px';
         overallBadge.style.fontFamily = 'var(--font-mono)';
-        if (reviewedTests >= totalTests) {{
+        applyReviewBadge(overallBadge, document);
+        // Adjust text for overall: use "Fully Reviewed" instead of "Reviewed"
+        var allToggles = document.querySelectorAll('.reviewed-toggle');
+        var totalTests = allToggles.length;
+        var reviewedTests = document.querySelectorAll('.reviewed-toggle.checked').length;
+        if (totalTests > 0 && reviewedTests >= totalTests) {{
             overallBadge.textContent = '\u2713 Fully Reviewed';
-            overallBadge.style.background = 'rgba(63,185,80,0.15)';
-            overallBadge.style.color = 'var(--accent-green)';
-        }} else if (reviewedTests > 0) {{
+        }} else if (totalTests > 0 && reviewedTests > 0) {{
             overallBadge.textContent = reviewedTests + '/' + totalTests + ' Reviewed';
-            overallBadge.style.background = 'rgba(210,153,34,0.15)';
-            overallBadge.style.color = 'var(--accent-yellow)';
-        }} else {{
-            overallBadge.textContent = 'Needs Review';
-            overallBadge.style.background = 'rgba(248,81,73,0.12)';
-            overallBadge.style.color = 'var(--accent-red)';
         }}
     }}
 
     // Per child job review status
-    document.querySelectorAll('.child-review-status').forEach(badge => {{
-        const job = badge.closest('.child-job');
-        if (!job) return;
-        const toggles = job.querySelectorAll('.reviewed-toggle');
-        const total = toggles.length;
-        const checked = job.querySelectorAll('.reviewed-toggle.checked').length;
-        if (total === 0) return;
-
-        badge.style.display = '';
-        if (checked >= total) {{
-            badge.textContent = '\u2713 Reviewed';
-            badge.style.background = 'rgba(63,185,80,0.15)';
-            badge.style.color = 'var(--accent-green)';
-        }} else if (checked > 0) {{
-            badge.textContent = checked + '/' + total;
-            badge.style.background = 'rgba(210,153,34,0.15)';
-            badge.style.color = 'var(--accent-yellow)';
-        }} else {{
-            badge.textContent = 'Needs Review';
-            badge.style.background = 'rgba(248,81,73,0.12)';
-            badge.style.color = 'var(--accent-red)';
-        }}
+    document.querySelectorAll('.child-review-status').forEach(function(badge) {{
+        applyReviewBadge(badge, badge.closest('.child-job'));
     }});
 
     // Per bug card review status
-    document.querySelectorAll('.group-review-status').forEach(badge => {{
-        const card = badge.closest('.bug-card');
-        if (!card) return;
-        const toggles = card.querySelectorAll('.reviewed-toggle');
-        const total = toggles.length;
-        const checked = card.querySelectorAll('.reviewed-toggle.checked').length;
-        if (total === 0) return;
-
-        badge.style.display = '';
-        if (checked >= total) {{
-            badge.textContent = '\u2713 Reviewed';
-            badge.style.background = 'rgba(63,185,80,0.15)';
-            badge.style.color = 'var(--accent-green)';
-        }} else if (checked > 0) {{
-            badge.textContent = checked + '/' + total;
-            badge.style.background = 'rgba(210,153,34,0.15)';
-            badge.style.color = 'var(--accent-yellow)';
-        }} else {{
-            badge.textContent = 'Needs Review';
-            badge.style.background = 'rgba(248,81,73,0.12)';
-            badge.style.color = 'var(--accent-red)';
-        }}
+    document.querySelectorAll('.group-review-status').forEach(function(badge) {{
+        applyReviewBadge(badge, badge.closest('.bug-card') || badge.closest('.failure-card'));
     }});
 }}
 
@@ -1455,15 +1455,6 @@ document.addEventListener('DOMContentLoaded', async function() {{
             toggleReviewed(this.closest('.reviewed-toggle'));
         }});
     }});
-    // Show current user badge at fixed top-right
-    var username = '';
-    try {{ username = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
-    if (username) {{
-        var userBadge = document.createElement('div');
-        userBadge.style.cssText = 'position:fixed;top:12px;right:24px;z-index:200;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
-        userBadge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escapeHtml(username);
-        document.body.appendChild(userBadge);
-    }}
     // Enter to send, Shift+Enter for new line
     document.querySelectorAll('.comment-input').forEach(textarea => {{
         textarea.addEventListener('keydown', function(e) {{
@@ -1478,6 +1469,9 @@ document.addEventListener('DOMContentLoaded', async function() {{
     await loadEnrichments();
     await loadClassifications();
 }});
+</script>
+<script>
+{_user_badge_js()}
 </script>
 """)
 
@@ -2574,20 +2568,9 @@ def generate_dashboard_html(
 """)
 
     # --- USERNAME DISPLAY (always, regardless of job count) ---
-    parts.append("""
+    parts.append(f"""
 <script>
-(function() {
-    var username = '';
-    try { username = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); } catch(e) {}
-    if (username) {
-        var userBadge = document.createElement('div');
-        userBadge.style.cssText = 'position:fixed;top:12px;right:24px;z-index:200;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
-        var escapedName = document.createElement('span');
-        escapedName.textContent = username;
-        userBadge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escapedName.innerHTML;
-        document.body.appendChild(userBadge);
-    }
-})();
+{_user_badge_js()}
 </script>
 """)
 
@@ -2952,16 +2935,6 @@ def generate_history_html(base_url: str = "") -> str:
 <link rel="icon" href="{FAVICON_DATA_URI}">
 <style>
 {_common_css()}
-.env-chips {{ display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }}
-.env-chip {{
-    font-size: 12px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
-    color: var(--text-secondary);
-    text-decoration: none;
-}}
 .env-chip:hover {{ border-color: var(--accent-blue); color: var(--accent-blue); }}
 
 {_controls_css()}
@@ -3032,17 +3005,6 @@ def generate_history_html(base_url: str = "") -> str:
     font-size: 12px;
 }}
 
-/* Section title (trends) */
-.section-title {{
-    font-size: 14px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--text-muted);
-    margin: 32px 0 16px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
-}}
 .empty-msg {{
     text-align: center;
     padding: 32px 20px;
@@ -3266,16 +3228,7 @@ def generate_history_html(base_url: str = "") -> str:
 }})();
 </script>
 <script>
-(function() {{
-    var username = '';
-    try {{ username = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
-    if (username) {{
-        var userBadge = document.createElement('div');
-        userBadge.style.cssText = 'position:fixed;top:12px;right:24px;z-index:200;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
-        userBadge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escapeHtml(username);
-        document.body.appendChild(userBadge);
-    }}
-}})();
+{_user_badge_js()}
 </script>
 </body>
 </html>"""
