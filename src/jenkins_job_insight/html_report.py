@@ -1130,6 +1130,87 @@ async function loadClassifications() {{
             badge.title = cls.reason || '';
             toggle.appendChild(badge);
         }});
+
+        // Add classification badges to bug card summaries
+        document.querySelectorAll('.bug-summary, .failure-summary').forEach(function(summary) {{
+            var card = summary.closest('.bug-card, .failure-card');
+            if (!card) return;
+            var toggles = card.querySelectorAll('.reviewed-toggle');
+            var cardClassifications = {{}};
+            toggles.forEach(function(t) {{
+                var tn = t.dataset.testName;
+                if (tn && byTest[tn]) {{
+                    var cls = byTest[tn][0].classification;
+                    cardClassifications[cls] = (cardClassifications[cls] || 0) + 1;
+                }}
+            }});
+            for (var cls in cardClassifications) {{
+                var badge = document.createElement('span');
+                badge.className = 'classification-tag';
+                var clsColors = {{
+                    'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);',
+                    'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red);',
+                    'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange);',
+                    'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple);',
+                    'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);'
+                }};
+                badge.style.cssText = (clsColors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted);') + 'margin-left:6px;';
+                var count = cardClassifications[cls];
+                badge.textContent = count > 1 ? count + ' ' + cls.replace('_', ' ') : cls.replace('_', ' ');
+                summary.appendChild(badge);
+            }}
+        }});
+
+        // Add classification badges to child job summaries
+        document.querySelectorAll('.child-job-summary').forEach(function(summary) {{
+            var childCard = summary.closest('.child-job');
+            if (!childCard) return;
+            var toggles = childCard.querySelectorAll('.reviewed-toggle');
+            var childClassifications = {{}};
+            toggles.forEach(function(t) {{
+                var tn = t.dataset.testName;
+                if (tn && byTest[tn]) {{
+                    var cls = byTest[tn][0].classification;
+                    childClassifications[cls] = (childClassifications[cls] || 0) + 1;
+                }}
+            }});
+            for (var cls in childClassifications) {{
+                var badge = document.createElement('span');
+                badge.style.cssText = 'display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;white-space:nowrap;margin-left:6px;' + ({{
+                    'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)',
+                    'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red)',
+                    'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange)',
+                    'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple)',
+                    'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)'
+                }}[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)');
+                var count = childClassifications[cls];
+                badge.textContent = count > 1 ? count + ' ' + cls.replace('_', ' ') : cls.replace('_', ' ');
+                summary.appendChild(badge);
+            }}
+        }});
+
+        // Add classification summary to report header
+        var headerClassifications = {{}};
+        for (var tn in byTest) {{
+            var cls = byTest[tn][0].classification;
+            headerClassifications[cls] = (headerClassifications[cls] || 0) + 1;
+        }}
+        var headerChips = document.querySelector('.env-chips');
+        if (headerChips) {{
+            var hColors = {{
+                'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)',
+                'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red)',
+                'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange)',
+                'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple)',
+                'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)'
+            }};
+            for (var cls in headerClassifications) {{
+                var chip = document.createElement('span');
+                chip.style.cssText = 'display:inline-flex;align-items:center;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;white-space:nowrap;' + (hColors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)');
+                chip.textContent = headerClassifications[cls] + ' ' + cls.replace('_', ' ');
+                headerChips.appendChild(chip);
+            }}
+        }}
     }} catch (err) {{
         console.warn('Failed to load classifications:', err);
     }}
