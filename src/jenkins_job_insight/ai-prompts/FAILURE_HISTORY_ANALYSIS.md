@@ -117,3 +117,9 @@ A classification without evidence is INVALID. Always cite:
 - If many tests fail with the same infrastructure error (e.g., product not deployed), classify ALL as INFRASTRUCTURE.
 - Reference existing comments, bugs, and history in your analysis.
 - Your reason field should cite specific data from the history (failure rates, consecutive failures, first seen dates).
+
+## Additional Resources
+
+If a test repository is available as your working directory:
+- Run `git log --oneline -20` to check for recent commits that may have caused regressions
+- Check if a `JOB_INSIGHT_PROMPT.md` file exists in the repo root and follow its instructions

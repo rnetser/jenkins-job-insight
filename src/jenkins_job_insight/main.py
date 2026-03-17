@@ -15,7 +15,6 @@ from simple_logger.logger import get_logger
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
-    _resolve_custom_prompt,
     analyze_failure_group,
     analyze_job,
     get_failure_signature,
@@ -659,7 +658,7 @@ async def analyze_failures(
         if tests_repo_url:
             repo_path = await asyncio.to_thread(repo_manager.clone, str(tests_repo_url))
 
-        custom_prompt = _resolve_custom_prompt(body.raw_prompt, repo_path)
+        custom_prompt = (body.raw_prompt or "").strip()
 
         # AI runs inside the container, use internal port
         internal_port = os.environ.get("PORT", "8000")

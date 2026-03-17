@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import uuid
 from collections import defaultdict
 from pathlib import Path
@@ -50,42 +49,6 @@ FALLBACK_TAIL_LINES = 200
 _QUERY_MD_PATH = Path(__file__).parent / "ai-prompts" / "FAILURE_HISTORY_ANALYSIS.md"
 
 JOB_INSIGHT_PROMPT_FILENAME = "JOB_INSIGHT_PROMPT.md"
-
-
-def _read_repo_prompt(repo_path: Path | None) -> str:
-    """Read custom prompt file from cloned repository if it exists.
-
-    Looks for JOB_INSIGHT_PROMPT.md in the repository root.
-
-    Args:
-        repo_path: Path to cloned repository, or None.
-
-    Returns:
-        Prompt file content, or empty string if not found.
-    """
-    if not repo_path:
-        return ""
-
-    prompt_path = repo_path / JOB_INSIGHT_PROMPT_FILENAME
-    if not prompt_path.is_file():
-        return ""
-
-    try:
-        content = prompt_path.read_text(encoding="utf-8").strip()
-        logger.info("Using custom prompt from repo: %s", prompt_path)
-        return content
-    except (OSError, UnicodeDecodeError):
-        logger.warning("Failed to read prompt file: %s", prompt_path)
-        return ""
-
-
-def _resolve_custom_prompt(raw_prompt: str | None, repo_path: Path | None) -> str:
-    """Resolve additional AI instructions from request input or repo defaults."""
-    prompt = (raw_prompt or "").strip()
-    if prompt:
-        logger.info("Using raw prompt from request")
-        return prompt
-    return _read_repo_prompt(repo_path)
 
 
 # CLI flags that were previously hardcoded in provider command builders.
@@ -664,32 +627,35 @@ def extract_failures_from_test_report(test_report: dict) -> list[TestFailure]:
     return failures
 
 
-def _get_repo_git_log(repo_path: Path | None, max_commits: int = 20) -> str:
-    """Get recent git log from the test repo for regression detection.
+def _build_resources_section(repo_path: Path | None) -> str:
+    """Build a section telling the AI about available resources.
+
+    Instead of pre-fetching data (git log, custom prompt files), this tells the
+    AI what tools and files are available so it can access them on its own.
 
     Args:
-        repo_path: Path to cloned test repository.
-        max_commits: Maximum number of commits to retrieve.
+        repo_path: Path to cloned test repository, or None.
 
     Returns:
-        Formatted git log string, or empty string if unavailable.
+        Formatted resources section for the AI prompt, or empty string.
     """
-    if not repo_path or not repo_path.exists():
+    if not repo_path:
         return ""
 
-    try:
-        result = subprocess.run(
-            ["git", "log", "--oneline", f"-{max_commits}"],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
+    resources: list[str] = []
+    resources.append(
+        f"- Git repository at {repo_path} — you can run git commands (git log, git diff, etc.)"
+    )
+
+    job_insight_prompt = repo_path / JOB_INSIGHT_PROMPT_FILENAME
+    if job_insight_prompt.exists():
+        resources.append(
+            f"- Project-specific analysis instructions at {job_insight_prompt} — read and follow them"
         )
-        if result.returncode == 0 and result.stdout.strip():
-            return f"Recent commits in test repo (check for regressions):\n{result.stdout.strip()}"
-    except Exception as exc:
-        logger.debug("Failed to get git log from %s: %s", repo_path, exc)
+
+    if resources:
+        return "\n\nAVAILABLE RESOURCES:\n" + "\n".join(resources) + "\n"
+
     return ""
 
 
@@ -702,7 +668,6 @@ async def analyze_failure_group(
     ai_cli_timeout: int | None = None,
     custom_prompt: str = "",
     artifacts_context: str = "",
-    historical_context: str = "",
     server_url: str = "",
     job_id: str = "",
 ) -> list[FailureAnalysis]:
@@ -718,9 +683,8 @@ async def analyze_failure_group(
         ai_provider: AI provider to use.
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
-        custom_prompt: Additional instructions from request or repo-level file.
+        custom_prompt: Additional instructions from request payload (raw_prompt).
         artifacts_context: Jenkins artifacts context for AI analysis (optional).
-        historical_context: Previous human feedback for similar failures.
         server_url: Base URL of this server for AI history API access.
         job_id: Current job ID to exclude from history queries.
 
@@ -740,18 +704,7 @@ async def analyze_failure_group(
     )
 
     artifacts_section = _build_artifacts_section(artifacts_context)
-
-    historical_section = ""
-    if historical_context:
-        historical_section = (
-            f"\n\nHISTORICAL CONTEXT FROM PREVIOUS ANALYSES:\n{historical_context}\n"
-        )
-
-    git_log_section = ""
-    if repo_path:
-        git_log = _get_repo_git_log(repo_path)
-        if git_log:
-            git_log_section = f"\n\n{git_log}\n"
+    resources_section = _build_resources_section(repo_path)
 
     query_section = ""
     if server_url and _QUERY_MD_PATH.exists():
@@ -787,7 +740,7 @@ CONSOLE CONTEXT:
 You have access to the test repository. Explore the code to understand the failure.
 
 Note: Multiple tests failed with the same error. Provide ONE analysis that applies to all of them.
-{custom_prompt_section}{historical_section}{git_log_section}
+{custom_prompt_section}{resources_section}
 {_JSON_RESPONSE_SCHEMA}
 """
 
@@ -840,7 +793,6 @@ async def analyze_child_job(
     ai_cli_timeout: int | None = None,
     custom_prompt: str = "",
     artifacts_context: str = "",
-    historical_context: str = "",
     server_url: str = "",
     job_id: str = "",
 ) -> ChildJobAnalysis:
@@ -859,9 +811,8 @@ async def analyze_child_job(
         ai_provider: AI provider to use.
         ai_model: AI model to use.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
-        custom_prompt: Additional instructions from request or repo-level file.
+        custom_prompt: Additional instructions from request payload (raw_prompt).
         artifacts_context: Jenkins artifacts context for AI analysis (optional).
-        historical_context: Previous human feedback for similar failures.
         server_url: Base URL of this server for AI history API access.
         job_id: Current job ID to exclude from history queries.
 
@@ -930,7 +881,6 @@ async def analyze_child_job(
                 ai_cli_timeout,
                 custom_prompt,
                 artifacts_context="",
-                historical_context=historical_context,
                 server_url=server_url,
                 job_id=job_id,
             )
@@ -984,29 +934,6 @@ async def analyze_child_job(
     # Extract relevant console lines for context
     console_context = extract_relevant_console_lines(console_output)
 
-    # Build historical context for this child job's failures.
-    # Fetch all matching historical comments, then scope per failure group below.
-    child_historical: list[dict] = []
-    try:
-        from jenkins_job_insight import storage as _storage
-
-        child_test_names = [f.test_name for f in test_failures] if test_failures else []
-        child_error_sigs = (
-            list({get_failure_signature(f) for f in test_failures})
-            if test_failures
-            else []
-        )
-        child_historical = await _storage.get_historical_comments(
-            test_names=child_test_names if child_test_names else None,
-            error_signatures=child_error_sigs if child_error_sigs else None,
-            exclude_job_id=None,
-        )
-    except Exception as exc:
-        logger.debug("Failed to fetch historical context: %s", exc)
-
-    # Use child-specific historical comments if available, otherwise fall back to parent's
-    effective_historical_context = historical_context
-
     # If we have test failures, group by signature and analyze unique groups
     if test_failures:
         # Group failures by signature to avoid analyzing identical errors multiple times
@@ -1019,31 +946,9 @@ async def analyze_child_job(
             f"Grouped {len(test_failures)} failures into {len(failure_groups)} unique error types"
         )
 
-        # Analyze each unique failure group in parallel,
-        # scoping historical comments to only the relevant tests/signatures per group
+        # Analyze each unique failure group in parallel
         tasks = []
         for sig, group in failure_groups.items():
-            group_historical_context = ""
-            source_comments = child_historical if child_historical else []
-            if source_comments:
-                group_test_names = {f.test_name for f in group}
-                group_sigs = {sig}
-                relevant = [
-                    hc
-                    for hc in source_comments
-                    if hc["test_name"] in group_test_names
-                    or hc.get("error_signature", "") in group_sigs
-                ]
-                if relevant:
-                    lines = [
-                        f'- [{hc["created_at"]}] {hc["test_name"]}: "{hc["comment"]}"'
-                        for hc in relevant
-                    ]
-                    group_historical_context = (
-                        "Previous human feedback for similar failures:\n"
-                        + "\n".join(lines)
-                    )
-            # Fall back to parent historical context if no child-specific matches
             tasks.append(
                 analyze_failure_group(
                     failures=group,
@@ -1054,8 +959,6 @@ async def analyze_child_job(
                     ai_cli_timeout=ai_cli_timeout,
                     custom_prompt=custom_prompt,
                     artifacts_context=artifacts_context,
-                    historical_context=group_historical_context
-                    or effective_historical_context,
                     server_url=server_url,
                     job_id=job_id,
                 )
@@ -1109,19 +1012,7 @@ async def analyze_child_job(
     )
 
     artifacts_section = _build_artifacts_section(artifacts_context)
-
-    historical_section = ""
-    if child_historical:
-        lines = [
-            f'- [{hc["created_at"]}] {hc["test_name"]}: "{hc["comment"]}"'
-            for hc in child_historical
-        ]
-        historical_section = (
-            "\n\nHISTORICAL CONTEXT FROM PREVIOUS ANALYSES:\n"
-            "Previous human feedback for similar failures:\n" + "\n".join(lines) + "\n"
-        )
-    elif effective_historical_context:
-        historical_section = f"\n\nHISTORICAL CONTEXT FROM PREVIOUS ANALYSES:\n{effective_historical_context}\n"
+    resources_section = _build_resources_section(repo_path)
 
     query_section = ""
     if server_url and _QUERY_MD_PATH.exists():
@@ -1150,7 +1041,7 @@ CONSOLE OUTPUT (errors/failures/warnings extracted):
 {artifacts_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-{custom_prompt_section}{historical_section}
+{custom_prompt_section}{resources_section}
 {_JSON_RESPONSE_SCHEMA}
 """
     logger.debug(f"AI prompt length: {len(prompt)} chars")
@@ -1299,7 +1190,7 @@ async def analyze_job(
                     logger.warning(f"Failed to clone repository: {e}")
                     repo_context = f"\nFailed to clone repo: {e}"
 
-            custom_prompt = _resolve_custom_prompt(request.raw_prompt, repo_path)
+            custom_prompt = (request.raw_prompt or "").strip()
 
             # Make artifacts accessible in the AI working directory
             if extract_path:
@@ -1385,30 +1276,6 @@ async def analyze_job(
             )
             logger.info(f"Found {len(test_failures)} test failures to analyze")
 
-            # Build historical context from previous comments on similar failures.
-            # We fetch ALL historical comments in one query, then filter per group
-            # to scope the context to only the relevant test names and signatures.
-            historical_comments: list[dict] = []
-            try:
-                from jenkins_job_insight import storage as _storage
-
-                test_names = (
-                    [f.test_name for f in test_failures] if test_failures else []
-                )
-                error_sigs = (
-                    list({get_failure_signature(f) for f in test_failures})
-                    if test_failures
-                    else []
-                )
-
-                historical_comments = await _storage.get_historical_comments(
-                    test_names=test_names if test_names else None,
-                    error_signatures=error_sigs if error_sigs else None,
-                    exclude_job_id=job_id,
-                )
-            except Exception as exc:
-                logger.debug("Failed to fetch historical context: %s", exc)
-
             # If this job has failed children AND no test failures, it's a pipeline/orchestrator
             # Skip Claude CLI analysis - just return the child analyses
             if child_job_analyses and not test_failures:
@@ -1451,29 +1318,9 @@ async def analyze_job(
                     f"Grouped {len(test_failures)} failures into {unique_errors} unique error types"
                 )
 
-                # Analyze each unique failure group in parallel,
-                # scoping historical comments to only the relevant tests/signatures per group
+                # Analyze each unique failure group in parallel
                 failure_tasks = []
                 for sig, group in failure_groups.items():
-                    group_historical_context = ""
-                    if historical_comments:
-                        group_test_names = {f.test_name for f in group}
-                        group_sigs = {sig}
-                        relevant = [
-                            hc
-                            for hc in historical_comments
-                            if hc["test_name"] in group_test_names
-                            or hc.get("error_signature", "") in group_sigs
-                        ]
-                        if relevant:
-                            lines = [
-                                f'- [{hc["created_at"]}] {hc["test_name"]}: "{hc["comment"]}"'
-                                for hc in relevant
-                            ]
-                            group_historical_context = (
-                                "Previous human feedback for similar failures:\n"
-                                + "\n".join(lines)
-                            )
                     failure_tasks.append(
                         analyze_failure_group(
                             failures=group,
@@ -1484,7 +1331,6 @@ async def analyze_job(
                             ai_cli_timeout=settings.ai_cli_timeout,
                             custom_prompt=custom_prompt,
                             artifacts_context=artifacts_context,
-                            historical_context=group_historical_context,
                             server_url=server_url,
                             job_id=job_id,
                         )
@@ -1519,19 +1365,7 @@ async def analyze_job(
                 )
 
                 artifacts_section = _build_artifacts_section(artifacts_context)
-
-                historical_section = ""
-                if historical_comments:
-                    lines = [
-                        f'- [{hc["created_at"]}] {hc["test_name"]}: "{hc["comment"]}"'
-                        for hc in historical_comments
-                    ]
-                    historical_section = (
-                        "\n\nHISTORICAL CONTEXT FROM PREVIOUS ANALYSES:\n"
-                        "Previous human feedback for similar failures:\n"
-                        + "\n".join(lines)
-                        + "\n"
-                    )
+                resources_section = _build_resources_section(repo_path)
 
                 query_section = ""
                 if server_url and _QUERY_MD_PATH.exists():
@@ -1561,7 +1395,7 @@ CONSOLE OUTPUT (errors/failures/warnings extracted):
 {artifacts_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-{custom_prompt_section}{historical_section}
+{custom_prompt_section}{resources_section}
 {_JSON_RESPONSE_SCHEMA}
 """
                 logger.debug(f"AI prompt length: {len(prompt)} chars")
