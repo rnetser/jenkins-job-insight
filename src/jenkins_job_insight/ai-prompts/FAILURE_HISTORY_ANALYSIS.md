@@ -53,6 +53,7 @@ curl -s -X POST "{server_url}/history/classify" \
     "classification": "KNOWN_BUG",
     "reason": "Explain why with specific evidence from history data",
     "job_name": "{job_name}",
+    "job_id": "{job_id}",
     "references": "MTV-2385, https://github.com/org/repo/pull/123"
   }'
 ```

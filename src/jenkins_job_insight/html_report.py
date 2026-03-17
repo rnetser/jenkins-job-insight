@@ -1102,7 +1102,7 @@ async function loadEnrichments() {{
 
 async function loadClassifications() {{
     try {{
-        var resp = await fetch(BASE_PATH + '/history/classifications');
+        var resp = await fetch(BASE_PATH + '/history/classifications?job_id=' + encodeURIComponent(JOB_ID));
         if (!resp.ok) return;
         var data = await resp.json();
         var byTest = {{}};
@@ -1861,6 +1861,11 @@ def format_status_page(job_id: str, status: str, result: dict) -> str:
     jenkins_url = result.get("jenkins_url", "")
     created_at = result.get("created_at", "")
 
+    # Extract job_name and build_number from stored result data
+    result_data = result.get("result") or {}
+    job_name = result_data.get("job_name", "")
+    build_number = result_data.get("build_number", "")
+
     status_icon = "&#9203;" if status == "running" else "&#8987;"
     status_label = "Analyzing..." if status == "running" else "Queued"
     status_detail = (
@@ -1874,7 +1879,9 @@ def format_status_page(job_id: str, status: str, result: dict) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Analysis {e(status_label)} - {e(job_id)}</title>
+<title>Analysis {e(status_label)} - {
+        e(job_name) + " #" + e(str(build_number)) if job_name else e(job_id)
+    }</title>
 <link rel="icon" href="{FAVICON_DATA_URI}">
 <style>
 /* Minimal standalone styles — this lightweight status page intentionally
@@ -1972,9 +1979,21 @@ body {{
 <body>
 <div class="status-container">
     <div class="status-icon">{status_icon}</div>
+    {
+        f'<div style="font-size:16px;color:var(--text-secondary);margin-bottom:8px;font-weight:600;">{e(job_name)} #{e(str(build_number))}</div>'
+        if job_name
+        else ""
+    }
     <div class="status-label"><span class="spinner"></span>{e(status_label)}</div>
     <div class="status-detail">{e(status_detail)}</div>
-    <div class="info-card">
+    <div class="info-card">{
+        f'''<div class="info-row">
+            <span class="info-label">Job</span>
+            <span class="info-value">{e(job_name)} #{e(str(build_number))}</span>
+        </div>'''
+        if job_name
+        else ""
+    }
         <div class="info-row">
             <span class="info-label">Job ID</span>
             <span class="info-value">{e(job_id)}</span>
@@ -2529,26 +2548,26 @@ def generate_dashboard_html(
 </script>
 """)
 
-    # --- CLASSIFICATION BADGES (global header summary + per-card) ---
+    # --- CLASSIFICATION BADGES (global header summary + per-card by job_id) ---
     parts.append("""
 <script>
 (function() {
     var BASE = window.location.pathname.replace(/\\/dashboard.*$/, '');
     fetch(BASE + '/history/classifications').then(function(r) { return r.json(); }).then(function(data) {
         var counts = {};
-        var byParentJob = {};
-        var jiraKeysByJob = {};
+        var byJobId = {};
+        var jiraKeysByJobId = {};
         (data.classifications || []).forEach(function(c) {
             counts[c.classification] = (counts[c.classification] || 0) + 1;
-            var pjn = c.parent_job_name || c.job_name || '';
-            if (pjn) {
-                if (!byParentJob[pjn]) byParentJob[pjn] = {};
-                byParentJob[pjn][c.classification] = (byParentJob[pjn][c.classification] || 0) + 1;
+            var jid = c.job_id || '';
+            if (jid) {
+                if (!byJobId[jid]) byJobId[jid] = {};
+                byJobId[jid][c.classification] = (byJobId[jid][c.classification] || 0) + 1;
                 if (c.classification === 'KNOWN_BUG') {
                     var jm = (c.reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
                     if (jm) {
-                        if (!jiraKeysByJob[pjn]) jiraKeysByJob[pjn] = {};
-                        jiraKeysByJob[pjn][jm[1]] = true;
+                        if (!jiraKeysByJobId[jid]) jiraKeysByJobId[jid] = {};
+                        jiraKeysByJobId[jid][jm[1]] = true;
                     }
                 }
             }
@@ -2573,17 +2592,17 @@ def generate_dashboard_html(
             }
         }
 
-        // Per-card classification badges
+        // Per-card classification badges (matched by job_id)
         document.querySelectorAll('.classification-job-badges').forEach(function(span) {
-            var jobName = span.dataset.jobName;
-            if (!byParentJob[jobName]) return;
+            var cardJobId = span.dataset.jobId;
+            if (!cardJobId || !byJobId[cardJobId]) return;
             var html = '';
-            for (var cls in byParentJob[jobName]) {
-                var count = byParentJob[jobName][cls];
+            for (var cls in byJobId[cardJobId]) {
+                var count = byJobId[cardJobId][cls];
                 var color = colors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)';
                 var label = count + ' ' + cls.replace('_', ' ');
-                if (cls === 'KNOWN_BUG' && jiraKeysByJob[jobName]) {
-                    var keys = Object.keys(jiraKeysByJob[jobName]);
+                if (cls === 'KNOWN_BUG' && jiraKeysByJobId[cardJobId]) {
+                    var keys = Object.keys(jiraKeysByJobId[cardJobId]);
                     if (keys.length > 0) {
                         label = count + ' KNOWN BUG: ' + keys.join(', ');
                     }
@@ -2641,7 +2660,7 @@ def _render_dashboard_card(
             result_class = " result-passed"
 
     parts.append(
-        f'<a class="dashboard-card{result_class}" href="{e(report_href)}" target="_blank" rel="noopener">'
+        f'<a class="dashboard-card{result_class}" href="{e(report_href)}" data-job-id="{e(job_id)}" target="_blank" rel="noopener">'
     )
     parts.append('  <div class="card-main">')
 
@@ -2722,9 +2741,9 @@ def _render_dashboard_card(
             f"</span>"
         )
 
-    # Per-card classification badges (populated by JS using parent_job_name)
+    # Per-card classification badges (populated by JS using job_id)
     parts.append(
-        f'    <span class="classification-job-badges" data-job-name="{e(job_name)}" style="display:none"></span>'
+        f'    <span class="classification-job-badges" data-job-name="{e(job_name)}" data-job-id="{e(job_id)}" style="display:none"></span>'
     )
 
     parts.append("  </div>")

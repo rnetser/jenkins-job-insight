@@ -551,7 +551,13 @@ async def analyze(
         merged.jenkins_url, body.job_name, body.build_number
     )
     # Save initial pending state before queueing background task
-    await save_result(job_id, jenkins_url, "pending", None)
+    # Include job_name and build_number so the status page can display them
+    await save_result(
+        job_id,
+        jenkins_url,
+        "pending",
+        {"job_name": body.job_name, "build_number": body.build_number},
+    )
     background_tasks.add_task(process_analysis_with_id, job_id, body, merged, base_url)
     callback_url = body.callback_url or merged.callback_url
     message = "Analysis job queued."
@@ -1273,6 +1279,7 @@ async def classify_test(request: Request, body: dict) -> dict:
     reason = body.get("reason", "")
     job_name = body.get("job_name", "")
     references = body.get("references", "")
+    classify_job_id = body.get("job_id", "")
 
     if not test_name or not classification:
         raise HTTPException(
@@ -1305,6 +1312,7 @@ async def classify_test(request: Request, body: dict) -> dict:
         parent_job_name=parent_job_name,
         created_by=created_by,
         references=references,
+        job_id=classify_job_id,
     )
     return {"id": classification_id}
 
@@ -1315,17 +1323,19 @@ async def get_classifications(
     classification: str = Query(default=""),
     job_name: str = Query(default=""),
     parent_job_name: str = Query(default=""),
+    job_id: str = Query(default=""),
 ) -> dict:
     """Get test classifications."""
     logger.debug(
         f"GET /history/classifications: test_name={test_name!r}, classification={classification!r}, "
-        f"job_name={job_name!r}, parent_job_name={parent_job_name!r}"
+        f"job_name={job_name!r}, parent_job_name={parent_job_name!r}, job_id={job_id!r}"
     )
     classifications = await storage.get_test_classifications(
         test_name=test_name,
         classification=classification,
         job_name=job_name,
         parent_job_name=parent_job_name,
+        job_id=job_id,
     )
     return {"classifications": classifications}
 
