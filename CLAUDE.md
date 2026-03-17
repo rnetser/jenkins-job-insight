@@ -87,7 +87,7 @@ This principle applies to all AI integrations: failure history, test analysis, a
 ### Failure Deduplication
 
 When multiple tests fail with the same error:
-1. Failures are grouped by error signature (MD5 hash of error + stack trace)
+1. Failures are grouped by error signature (SHA-256 hash of error + stack trace)
 2. Only one AI CLI call per unique error type
 3. Analysis is applied to all failures with matching signature
 4. Reduces redundant API calls and output

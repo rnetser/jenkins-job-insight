@@ -71,10 +71,12 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "").lower()
 AI_MODEL = os.getenv("AI_MODEL", "")
 
 
+APP_PORT = int(os.environ.get("PORT", "8000"))
+
+
 def _build_internal_server_url() -> str:
     """Build the internal server URL for AI tool access."""
-    internal_port = os.environ.get("PORT", "8000")
-    url = f"http://localhost:{internal_port}"
+    url = f"http://localhost:{APP_PORT}"
     logger.debug(f"Built internal server_url={url} for AI tool access")
     return url
 
@@ -1173,12 +1175,19 @@ async def list_job_results(limit: int = Query(50, le=100)) -> list[dict]:
 @app.delete("/results/{job_id}")
 async def delete_job_endpoint(job_id: str, request: Request) -> dict:
     """Delete an analyzed job and all related data."""
+    username = request.cookies.get("jji_username")
+    if not username:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Please register a username first.",
+        )
+
     result = await storage.get_result(job_id)
     if not result:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
     await storage.delete_job(job_id)
-    logger.info(f"Deleted job {job_id}")
+    logger.info(f"Deleted job {job_id} by user {username}")
     return {"status": "deleted", "job_id": job_id}
 
 
@@ -1318,6 +1327,12 @@ async def classify_test(request: Request, body: dict) -> dict:
             detail=f"Invalid classification. Valid: {', '.join(sorted(valid_classifications))}",
         )
 
+    if classification.upper() == "KNOWN_BUG" and not str(references).strip():
+        raise HTTPException(
+            status_code=400,
+            detail="KNOWN_BUG requires non-empty references (e.g., Jira tickets or historical bug URLs).",
+        )
+
     created_by = request.cookies.get("jji_username", "ai")
 
     # Look up parent job name from failure_history
@@ -1382,5 +1397,5 @@ def run() -> None:
 
     reload = os.getenv("DEBUG", "").lower() == "true"
     uvicorn.run(
-        "jenkins_job_insight.main:app", host="0.0.0.0", port=8000, reload=reload
+        "jenkins_job_insight.main:app", host="0.0.0.0", port=APP_PORT, reload=reload
     )

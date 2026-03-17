@@ -418,7 +418,7 @@ The service maintains a history of all analyzed test failures and exposes it thr
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/history/test/{test_name}` | Pass/fail history for a specific test, including failure rate, classifications breakdown, recent runs, and related comments |
+| `GET` | `/history/test/{test_name}` | Estimated pass/fail history for a specific test (pass count is derived by subtracting recorded failures from total analyzed builds), including failure rate, classifications breakdown, recent runs, and related comments |
 | `GET` | `/history/search?signature={sig}` | Find all tests that failed with the same error signature, with occurrence counts and last classification |
 | `GET` | `/history/stats/{job_name}` | Aggregate statistics for a specific job: overall health, most common failures, failure trend direction |
 | `GET` | `/history/trends` | Daily or weekly failure rate data points over time |

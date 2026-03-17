@@ -2177,21 +2177,25 @@ def generate_dashboard_html(
 
 /* Dashboard cards */
 .dashboard-card {{
-    display: flex;
-    align-items: center;
-    gap: 16px;
+    position: relative;
     padding: 16px 20px;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     margin-bottom: 8px;
-    text-decoration: none;
     color: inherit;
     transition: background 0.15s, border-color 0.15s;
 }}
 .dashboard-card:hover {{
     background: var(--bg-hover);
     border-color: var(--accent-blue);
+}}
+.dashboard-card .card-link {{
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    text-decoration: none;
+    color: inherit;
 }}
 .card-main {{
     flex: 1;
@@ -2370,7 +2374,7 @@ def generate_dashboard_html(
 
 /* Responsive (page-specific) */
 @media (max-width: 768px) {{
-    .dashboard-card {{ flex-direction: column; align-items: flex-start; gap: 10px; }}
+    .dashboard-card .card-link {{ flex-direction: column; align-items: flex-start; gap: 10px; }}
     .card-meta {{ width: 100%; justify-content: space-between; }}
     .card-job-name {{ max-width: 100%; }}
     .controls-bar {{ flex-direction: column; }}
@@ -2702,16 +2706,21 @@ def _render_dashboard_card(
         else:
             result_class = " result-passed"
 
+    # Use a <div> container with an <a> link inside (not wrapping the button)
+    # to avoid nesting interactive elements, which breaks keyboard/screen-reader accessibility.
     parts.append(
-        f'<a class="dashboard-card{result_class}" href="{e(report_href)}" data-job-id="{e(job_id)}" target="_blank" rel="noopener">'
+        f'<div class="dashboard-card{result_class}" data-job-id="{e(job_id)}">'
     )
-    parts.append('  <div class="card-main">')
+    parts.append(
+        f'  <a class="card-link" href="{e(report_href)}" target="_blank" rel="noopener">'
+    )
+    parts.append('    <div class="card-main">')
 
     # Result icon for completed jobs with known failure count
     if status == "completed" and failure_count is not None:
         if failure_count > 0:
             parts.append(
-                '    <span class="card-result-icon has-failures">'
+                '      <span class="card-result-icon has-failures">'
                 '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
                 ' stroke="currentColor" stroke-width="3">'
                 '<line x1="18" y1="6" x2="6" y2="18"/>'
@@ -2720,35 +2729,37 @@ def _render_dashboard_card(
             )
         else:
             parts.append(
-                '    <span class="card-result-icon passed">'
+                '      <span class="card-result-icon passed">'
                 '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
                 ' stroke="currentColor" stroke-width="3">'
                 '<polyline points="20 6 9 17 4 12"/>'
                 "</svg></span>"
             )
 
-    parts.append(f'    <span class="card-job-name">{e(job_name)}</span>')
+    parts.append(f'      <span class="card-job-name">{e(job_name)}</span>')
 
     if build_number:
         parts.append(
-            f'    <span class="card-build-chip">#{e(str(build_number))}</span>'
+            f'      <span class="card-build-chip">#{e(str(build_number))}</span>'
         )
 
-    parts.append(f'    <span class="status-chip {e(status_class)}">{e(status)}</span>')
+    parts.append(
+        f'      <span class="status-chip {e(status_class)}">{e(status)}</span>'
+    )
 
     if failure_count is not None and failure_count > 0:
         parts.append(
-            f'    <span class="failure-count-badge">'
+            f'      <span class="failure-count-badge">'
             f"{failure_count} failure{'s' if failure_count != 1 else ''}"
             f"</span>"
         )
     elif status == "completed" and failure_count is not None:
-        parts.append('    <span class="passed-badge">passed</span>')
+        parts.append('      <span class="passed-badge">passed</span>')
 
     child_job_count = job.get("child_job_count")
     if child_job_count is not None and child_job_count > 0:
         parts.append(
-            f'    <span class="child-jobs-badge">'
+            f'      <span class="child-jobs-badge">'
             f"{child_job_count} child job{'s' if child_job_count != 1 else ''}"
             f"</span>"
         )
@@ -2759,19 +2770,19 @@ def _render_dashboard_card(
     if failure_count is not None and failure_count > 0:
         if reviewed_count >= failure_count:
             parts.append(
-                '    <span class="status-chip" '
+                '      <span class="status-chip" '
                 'style="background: rgba(63,185,80,0.15); color: var(--accent-green)">'
                 "\u2713 Fully Reviewed</span>"
             )
         elif reviewed_count > 0:
             parts.append(
-                '    <span class="status-chip" '
+                '      <span class="status-chip" '
                 'style="background: rgba(210,153,34,0.15); color: var(--accent-yellow)">'
                 f"{reviewed_count}/{failure_count} Reviewed</span>"
             )
         else:
             parts.append(
-                '    <span class="status-chip" '
+                '      <span class="status-chip" '
                 'style="background: rgba(248,81,73,0.12); color: var(--accent-red)">'
                 "Needs Review</span>"
             )
@@ -2779,28 +2790,45 @@ def _render_dashboard_card(
     # Comment count badge
     if comment_count > 0:
         parts.append(
-            f'    <span class="card-build-chip">'
+            f'      <span class="card-build-chip">'
             f"{comment_count} comment{'s' if comment_count != 1 else ''}"
             f"</span>"
         )
 
     # Per-card classification badges (populated by JS using job_id)
     parts.append(
-        f'    <span class="classification-job-badges" data-job-name="{e(job_name)}" data-job-id="{e(job_id)}" style="display:none"></span>'
+        f'      <span class="classification-job-badges" data-job-name="{e(job_name)}" data-job-id="{e(job_id)}" style="display:none"></span>'
     )
 
-    parts.append("  </div>")
-    parts.append('  <div class="card-meta">')
+    parts.append("    </div>")
+    parts.append('    <div class="card-meta">')
     parts.append(
-        f'    <span class="card-job-id" title="{e(job_id)}">{e(short_id)}</span>'
+        f'      <span class="card-job-id" title="{e(job_id)}">{e(short_id)}</span>'
     )
-    parts.append(f'    <span class="card-timestamp">{e(created_at)}</span>')
+    parts.append(f'      <span class="card-timestamp">{e(created_at)}</span>')
 
+    if jenkins_url:
+        parts.append(
+            '      <span class="card-jenkins-icon" title="Jenkins build available">'
+            '\n        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
+            ' stroke="currentColor" stroke-width="2">'
+            '\n          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'
+            '\n          <polyline points="15 3 21 3 21 9"/>'
+            '\n          <line x1="10" y1="14" x2="21" y2="3"/>'
+            "\n        </svg>"
+            "\n      </span>"
+        )
+
+    parts.append("    </div>")
+    parts.append("  </a>")
+
+    # Delete button is outside the <a> link to avoid nesting interactive elements
     parts.append(
-        f'    <button class="delete-job-btn" data-job-id="{e(job_id)}"'
-        f' onclick="event.preventDefault(); event.stopPropagation(); deleteJob(this, &#39;{e(job_id)}&#39;)"'
+        f'  <button class="delete-job-btn" data-job-id="{e(job_id)}"'
+        f' onclick="event.stopPropagation(); deleteJob(this, &#39;{e(job_id)}&#39;)"'
         ' style="background:none;border:1px solid transparent;border-radius:4px;color:var(--text-muted);'
-        'cursor:pointer;padding:4px 6px;transition:all 0.15s;display:inline-flex;align-items:center;"'
+        "cursor:pointer;padding:4px 6px;transition:all 0.15s;display:inline-flex;align-items:center;"
+        'position:absolute;bottom:8px;right:8px;"'
         ' onmouseover="this.style.color=&#39;var(--accent-red)&#39;;this.style.borderColor=&#39;var(--accent-red)&#39;;'
         'this.style.background=&#39;rgba(248,81,73,0.12)&#39;"'
         ' onmouseout="this.style.color=&#39;var(--text-muted)&#39;;this.style.borderColor=&#39;transparent&#39;;'
@@ -2811,20 +2839,7 @@ def _render_dashboard_card(
         '<path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>'
     )
 
-    if jenkins_url:
-        parts.append(
-            '    <span class="card-jenkins-icon" title="Jenkins build available">'
-            '\n      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
-            ' stroke="currentColor" stroke-width="2">'
-            '\n        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'
-            '\n        <polyline points="15 3 21 3 21 9"/>'
-            '\n        <line x1="10" y1="14" x2="21" y2="3"/>'
-            "\n      </svg>"
-            "\n    </span>"
-        )
-
-    parts.append("  </div>")
-    parts.append("</a>")
+    parts.append("</div>")
 
 
 def generate_register_html() -> str:
@@ -3198,7 +3213,7 @@ def generate_history_html(base_url: str = "") -> str:
   /* ---- Trends (only show when multi-day data exists) ---- */
   fetchJson(BASE + '/history/trends?period=daily&days=30')
     .then(function(data) {{
-      var items = data.periods || [];
+      var items = data.data || data.periods || [];
       if (items.length <= 1) {{
         // Single day or no data: keep trends hidden
         return;
@@ -3210,10 +3225,10 @@ def generate_history_html(base_url: str = "") -> str:
       for (var i = 0; i < items.length; i++) {{
         var t = items[i];
         h += '<tr>';
-        h += '<td class="mono">' + escapeHtml(t.period) + '</td>';
-        h += '<td class="mono">' + t.total_failures + '</td>';
-        h += '<td class="mono">' + t.unique_tests + '</td>';
-        h += '<td class="mono">' + t.builds + '</td>';
+        h += '<td class="mono">' + escapeHtml(t.date || t.period || '') + '</td>';
+        h += '<td class="mono">' + (t.failures != null ? t.failures : (t.total_failures != null ? t.total_failures : 0)) + '</td>';
+        h += '<td class="mono">' + (t.unique_tests != null ? t.unique_tests : '-') + '</td>';
+        h += '<td class="mono">' + (t.builds != null ? t.builds : '-') + '</td>';
         h += '</tr>';
       }}
       h += '</table></div>';

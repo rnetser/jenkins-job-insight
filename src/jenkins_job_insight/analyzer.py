@@ -133,7 +133,10 @@ def get_failure_signature(failure: TestFailure) -> str:
     Returns:
         SHA-256 hash string representing the failure signature.
     """
-    # Use error message and first 5 lines of stack trace
+    # Use error message and first 5 lines of stack trace for deduplication.
+    # Intentionally limited to 5 lines: different stack depths for the same
+    # root cause (e.g., varying call-site depth) should still collapse into
+    # one group so the AI analyzes each unique error only once.
     stack_lines = failure.stack_trace.split("\n")[:5]
     signature_text = f"{failure.error_message}|{'|'.join(stack_lines)}"
     return hashlib.sha256(signature_text.encode()).hexdigest()
@@ -649,6 +652,16 @@ def _build_prompt_sections(
     artifacts_section = _build_artifacts_section(artifacts_context)
     resources_section = _build_resources_section(repo_path)
 
+    if not _QUERY_MD_PATH.exists():
+        logger.warning(
+            f"History analysis prompt file not found at {_QUERY_MD_PATH}; "
+            "analysis will proceed without history-aware classification"
+        )
+    if not server_url:
+        logger.warning(
+            "server_url is empty; analysis will proceed without history-aware classification"
+        )
+
     query_section = ""
     if server_url and _QUERY_MD_PATH.exists():
         logger.info(
@@ -678,10 +691,6 @@ When executing curl commands from that file, use server_url={server_url} and job
 These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
 {repo_history_prompt}
 """
-    else:
-        logger.debug(
-            f"query_section is EMPTY (server_url='{server_url}', FAILURE_HISTORY_ANALYSIS.md exists={_QUERY_MD_PATH.exists()})"
-        )
 
     return custom_prompt_section, artifacts_section, resources_section, query_section
 
@@ -701,10 +710,16 @@ def _build_resources_section(repo_path: Path | None) -> str:
     if not repo_path:
         return ""
 
+    is_git_repo = (repo_path / ".git").exists()
     resources: list[str] = []
-    resources.append(
-        f"- Git repository at {repo_path} — you can run git commands (git log, git diff, etc.)"
-    )
+    if is_git_repo:
+        resources.append(
+            f"- Git repository at {repo_path} — you can run git commands (git log, git diff, etc.)"
+        )
+    else:
+        resources.append(
+            f"- Workspace at {repo_path} — inspect files directly; git commands are not available here"
+        )
 
     job_insight_prompt = repo_path / JOB_INSIGHT_PROMPT_FILENAME
     if job_insight_prompt.exists():

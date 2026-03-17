@@ -144,6 +144,25 @@ async def init_db() -> None:
                 await db.execute("DROP TABLE failure_reviews_old")
                 logger.info("Migration: failure_reviews table rebuilt successfully")
 
+        # Ensure test_classifications table exists before running migrations.
+        # On a fresh DB the table may not exist yet, so CREATE TABLE must come
+        # before any ALTER TABLE migrations.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS test_classifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                test_name TEXT NOT NULL,
+                job_name TEXT NOT NULL DEFAULT '',
+                parent_job_name TEXT NOT NULL DEFAULT '',
+                classification TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                references_info TEXT NOT NULL DEFAULT '',
+                created_by TEXT NOT NULL DEFAULT '',
+                job_id TEXT NOT NULL DEFAULT '',
+                visible INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Migration: add parent_job_name to test_classifications table
         cursor = await db.execute("PRAGMA table_info(test_classifications)")
         columns = {row[1] for row in await cursor.fetchall()}
@@ -305,6 +324,11 @@ async def delete_comment(comment_id: int, username: str) -> bool:
     """Delete a comment if it belongs to the given username.
 
     Returns True if deleted, False if not found or not owned by user.
+
+    Note: The jji_username cookie is not cryptographically signed. Users on the
+    same network could forge it to impersonate others. This is a known limitation
+    accepted for the current local/VPN deployment model. Proper authentication
+    (e.g., signed sessions) is tracked in issue #55.
     """
     logger.debug(f"delete_comment: comment_id={comment_id}, username={username}")
     async with aiosqlite.connect(DB_PATH) as db:
@@ -919,13 +943,17 @@ async def get_test_history(
             consecutive_failures = len(recent_runs)
 
         # Estimate total runs from distinct job_ids in results table
+        # Apply exclude_job_id to the denominator so rates stay consistent
         if job_name:
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM results WHERE result_json LIKE ?",
-                (f'%"job_name": "{job_name}"%',),
-            )
+            total_query = "SELECT COUNT(*) FROM results WHERE result_json LIKE ?"
+            total_params: list = [f'%"job_name": "{job_name}"%']
         else:
-            cursor = await db.execute("SELECT COUNT(*) FROM results")
+            total_query = "SELECT COUNT(*) FROM results WHERE 1=1"
+            total_params = []
+        if exclude_job_id:
+            total_query += " AND job_id != ?"
+            total_params.append(exclude_job_id)
+        cursor = await db.execute(total_query, total_params)
         total_runs = (await cursor.fetchone())[0]
         passes = max(0, total_runs - failures)
         failure_rate = failures / total_runs if total_runs > 0 else 0.0
@@ -1072,10 +1100,13 @@ async def get_job_stats(job_name: str, exclude_job_id: str = "") -> dict:
             exclude_params = [exclude_job_id]
 
         # Total builds analyzed (from results table, matching job_name in JSON)
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM results WHERE result_json LIKE ?",
-            (f'%"job_name": "{job_name}"%',),
-        )
+        # Apply exclude_job_id to the denominator so rates stay consistent
+        total_builds_query = "SELECT COUNT(*) FROM results WHERE result_json LIKE ?"
+        total_builds_params: list = [f'%"job_name": "{job_name}"%']
+        if exclude_job_id:
+            total_builds_query += " AND job_id != ?"
+            total_builds_params.append(exclude_job_id)
+        cursor = await db.execute(total_builds_query, total_builds_params)
         total_builds = (await cursor.fetchone())[0]
 
         if total_builds == 0:
@@ -1195,15 +1226,30 @@ async def get_trends(
         )
         rows = await cursor.fetchall()
 
+        # Get total analyzed builds in the time range for failure_rate calculation
+        total_builds_query = "SELECT COUNT(*) FROM results WHERE created_at >= ?"
+        total_builds_params: list = [cutoff]
+        if job_name:
+            total_builds_query += " AND result_json LIKE ?"
+            total_builds_params.append(f'%"job_name": "{job_name}"%')
+        if exclude_job_id:
+            total_builds_query += " AND job_id != ?"
+            total_builds_params.append(exclude_job_id)
+        cursor = await db.execute(total_builds_query, total_builds_params)
+        total_builds_in_range = (await cursor.fetchone())[0]
+
         data = []
         for row in rows:
+            failures_count = row["failures"]
             data.append(
                 {
                     "date": row["date"],
-                    "failures": row["failures"],
+                    "failures": failures_count,
                     "unique_tests": row["unique_tests"],
-                    "total_tests": row["failures"],
-                    "failure_rate": 0.0,
+                    "total_tests": total_builds_in_range,
+                    "failure_rate": round(failures_count / total_builds_in_range, 4)
+                    if total_builds_in_range > 0
+                    else 0.0,
                 }
             )
 

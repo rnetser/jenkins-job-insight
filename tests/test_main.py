@@ -1874,12 +1874,20 @@ class TestHistoryEndpoints:
 
     @pytest.mark.asyncio
     async def test_get_test_history(self, test_client) -> None:
-        """Test that /history/test/{test_name} returns expected structure."""
+        """Test that /history/test/{test_name} returns expected structure and values."""
         response = test_client.get("/history/test/some.test.name")
         assert response.status_code == 200
         data = response.json()
-        assert "test_name" in data
         assert data["test_name"] == "some.test.name"
+        # Verify all expected keys are present with correct default values
+        assert data["total_runs"] == 0
+        assert data["failures"] == 0
+        assert data["passes"] == 0
+        assert data["failure_rate"] == 0.0
+        assert data["consecutive_failures"] == 0
+        assert isinstance(data["recent_runs"], list)
+        assert isinstance(data["comments"], list)
+        assert isinstance(data["classifications"], dict)
 
     @pytest.mark.asyncio
     async def test_search_by_signature(self, test_client) -> None:
@@ -1887,8 +1895,8 @@ class TestHistoryEndpoints:
         response = test_client.get("/history/search?signature=abc123")
         assert response.status_code == 200
         data = response.json()
-        assert "signature" in data
         assert data["signature"] == "abc123"
+        assert isinstance(data.get("matches", []), list)
 
     @pytest.mark.asyncio
     async def test_search_by_signature_requires_param(self, test_client) -> None:
@@ -1898,19 +1906,23 @@ class TestHistoryEndpoints:
 
     @pytest.mark.asyncio
     async def test_get_job_stats(self, test_client) -> None:
-        """Test that /history/stats/{job_name} returns expected structure."""
+        """Test that /history/stats/{job_name} returns expected structure and values."""
         response = test_client.get("/history/stats/my-job")
         assert response.status_code == 200
         data = response.json()
-        assert "job_name" in data
         assert data["job_name"] == "my-job"
+        # Verify default values for a job with no history
+        assert data["total_builds_analyzed"] == 0
+        assert data["builds_with_failures"] == 0
+        assert data["overall_failure_rate"] == 0.0
+        assert isinstance(data["most_common_failures"], list)
+        assert data["recent_trend"] in ("stable", "improving", "worsening")
 
     @pytest.mark.asyncio
     async def test_get_trends(self, test_client) -> None:
-        """Test that /history/trends returns expected structure."""
+        """Test that /history/trends returns expected structure and values."""
         response = test_client.get("/history/trends")
         assert response.status_code == 200
         data = response.json()
-        assert "data" in data
-        assert "period" in data
         assert data["period"] == "daily"
+        assert isinstance(data["data"], list)

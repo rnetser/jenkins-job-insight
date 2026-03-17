@@ -4,7 +4,10 @@ You MUST follow ALL steps below for EVERY test failure you analyze. These steps 
 
 ## Step 1: Check Test History (MANDATORY for EVERY test)
 
-For EVERY failed test, check its history BEFORE making any classification:
+For EVERY failed test, check its history BEFORE making any classification.
+
+> **Note:** Test names and job names may contain special characters (brackets, spaces, slashes, `::`, etc.) that must be URL-encoded in curl commands. For example, `test_foo[param1]` becomes `test_foo%5Bparam1%5D`.
+
 ```bash
 curl -s "{server_url}/history/test/{test_name}?exclude_job_id={job_id}" | python3 -m json.tool
 ```
@@ -111,7 +114,7 @@ A classification without evidence is INVALID. Always cite:
 
 ## Rules
 
-- ALWAYS complete ALL 5 steps for EVERY test. No shortcuts.
+- ALWAYS complete Steps 1-3 and Step 5 for EVERY test. Step 4 is required once per job (not per test). No shortcuts.
 - ALWAYS check history BEFORE classifying — don't classify blind.
 - ALWAYS call POST /history/classify — this is how your classification is recorded. Include `references` with Jira keys, URLs, or other evidence identifiers.
 - If many tests fail with the same infrastructure error (e.g., product not deployed), classify ALL as INFRASTRUCTURE.
