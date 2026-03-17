@@ -435,6 +435,10 @@ The file `src/jenkins_job_insight/ai-prompts/FAILURE_HISTORY_ANALYSIS.md` is inj
 - Compare failure patterns with git log to identify regressions
 - Classify tests as FLAKY, REGRESSION, INFRASTRUCTURE, KNOWN_BUG, or INTERMITTENT based on evidence
 
+#### Custom History Analysis Prompt
+
+Projects can enhance the AI's history analysis by placing a `JOB_INSIGHT_FAILURE_HISTORY_ANALYSIS_PROMPT.md` file in the test repository root. When present, the AI reads this file alongside the built-in `FAILURE_HISTORY_ANALYSIS.md`, allowing project-specific instructions for classification patterns, known infrastructure issues, or custom rules.
+
 #### What the AI Can Detect with History
 
 | Pattern | How It Uses History |

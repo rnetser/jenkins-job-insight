@@ -49,6 +49,9 @@ FALLBACK_TAIL_LINES = 200
 _QUERY_MD_PATH = Path(__file__).parent / "ai-prompts" / "FAILURE_HISTORY_ANALYSIS.md"
 
 JOB_INSIGHT_PROMPT_FILENAME = "JOB_INSIGHT_PROMPT.md"
+JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME = (
+    "JOB_INSIGHT_FAILURE_HISTORY_ANALYSIS_PROMPT.md"
+)
 
 
 # CLI flags that were previously hardcoded in provider command builders.
@@ -651,12 +654,29 @@ def _build_prompt_sections(
         logger.info(
             f"Pointing AI to FAILURE_HISTORY_ANALYSIS.md with server_url={server_url}"
         )
+        repo_history_prompt = ""
+        if repo_path:
+            repo_history_path = repo_path / JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME
+            logger.debug(
+                f"Repo history analysis prompt exists: {repo_history_path.exists()}"
+            )
+            if repo_history_path.exists():
+                logger.info(
+                    f"Found repo-level history analysis prompt at {repo_history_path}"
+                )
+                repo_history_prompt = f"""
+Also read and follow the project-specific history analysis instructions at {repo_history_path}.
+These instructions complement (do not replace) the main instructions above.
+"""
+        else:
+            logger.debug("No repo path provided, skipping repo history prompt check")
+
         query_section = f"""
 
 MANDATORY: Before analyzing any failure, you MUST read and follow the instructions in {_QUERY_MD_PATH}.
 When executing curl commands from that file, use server_url={server_url} and job_id={job_id}.
 These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
-
+{repo_history_prompt}
 """
     else:
         logger.debug(
@@ -690,6 +710,12 @@ def _build_resources_section(repo_path: Path | None) -> str:
     if job_insight_prompt.exists():
         resources.append(
             f"- Project-specific analysis instructions at {job_insight_prompt} — read and follow them"
+        )
+
+    repo_history_prompt = repo_path / JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME
+    if repo_history_prompt.exists():
+        resources.append(
+            f"- Project-specific history analysis instructions at {repo_history_prompt} — read and follow alongside the main history analysis instructions"
         )
 
     if resources:
