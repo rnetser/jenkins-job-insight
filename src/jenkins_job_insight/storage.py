@@ -90,6 +90,46 @@ async def init_db() -> None:
         else:
             logger.debug("Migration: comments already has error_signature column")
 
+        # Migration: rebuild failure_reviews with correct 4-column PRIMARY KEY
+        # ALTER TABLE cannot change PKs in SQLite, so we need a full rebuild
+        cursor = await db.execute("PRAGMA table_info(failure_reviews)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "child_build_number" in columns:
+            # Check if PK includes child_build_number by inspecting table SQL
+            cursor = await db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='failure_reviews'"
+            )
+            create_sql = (await cursor.fetchone())[0]
+            if (
+                "child_build_number" not in create_sql.split("PRIMARY KEY")[1]
+                if "PRIMARY KEY" in create_sql
+                else ""
+            ):
+                logger.info(
+                    "Migration: rebuilding failure_reviews table with 4-column PRIMARY KEY"
+                )
+                await db.execute(
+                    "ALTER TABLE failure_reviews RENAME TO failure_reviews_old"
+                )
+                await db.execute("""
+                    CREATE TABLE failure_reviews (
+                        job_id TEXT NOT NULL,
+                        test_name TEXT NOT NULL,
+                        child_job_name TEXT NOT NULL DEFAULT '',
+                        child_build_number INTEGER NOT NULL DEFAULT 0,
+                        reviewed BOOLEAN DEFAULT 0,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (job_id, test_name, child_job_name, child_build_number)
+                    )
+                """)
+                await db.execute("""
+                    INSERT INTO failure_reviews (job_id, test_name, child_job_name, child_build_number, reviewed, updated_at)
+                    SELECT job_id, test_name, child_job_name, child_build_number, reviewed, updated_at
+                    FROM failure_reviews_old
+                """)
+                await db.execute("DROP TABLE failure_reviews_old")
+                logger.info("Migration: failure_reviews table rebuilt successfully")
+
         await db.commit()
 
 

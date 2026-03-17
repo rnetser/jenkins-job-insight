@@ -959,7 +959,7 @@ async def enrich_comments(
     enrichments: dict[str, list[dict]] = {}
 
     if tasks:
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await run_parallel_with_limit(tasks)
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.debug("Enrichment task %d failed: %s", i, result)
