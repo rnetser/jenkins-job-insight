@@ -2624,17 +2624,6 @@ def generate_dashboard_html(
             'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)'
         };
 
-        // Global header summary badges
-        var headerContent = document.querySelector('.header-content');
-        if (headerContent) {
-            for (var cls in counts) {
-                var badge = document.createElement('span');
-                badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;white-space:nowrap;' + (colors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)');
-                badge.textContent = counts[cls] + ' ' + cls.replace('_', ' ');
-                headerContent.appendChild(badge);
-            }
-        }
-
         // Per-card classification badges (matched by job_id)
         document.querySelectorAll('.classification-job-badges').forEach(function(span) {
             var cardJobId = span.dataset.jobId;
