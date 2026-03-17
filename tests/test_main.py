@@ -1867,3 +1867,68 @@ class TestChildScopeValidation:
             },
         )
         assert response.status_code == 422
+
+
+class TestHistoryEndpoints:
+    """Tests for the /history/* endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_get_test_history(self, test_client) -> None:
+        """Test that /history/test/{test_name} returns expected structure."""
+        response = test_client.get("/history/test/some.test.name")
+        assert response.status_code == 200
+        data = response.json()
+        assert "test_name" in data
+        assert data["test_name"] == "some.test.name"
+
+    @pytest.mark.asyncio
+    async def test_search_by_signature(self, test_client) -> None:
+        """Test that /history/search returns expected structure."""
+        response = test_client.get("/history/search?signature=abc123")
+        assert response.status_code == 200
+        data = response.json()
+        assert "signature" in data
+        assert data["signature"] == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_search_by_signature_requires_param(self, test_client) -> None:
+        """Test that /history/search requires signature parameter."""
+        response = test_client.get("/history/search")
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_get_job_stats(self, test_client) -> None:
+        """Test that /history/stats/{job_name} returns expected structure."""
+        response = test_client.get("/history/stats/my-job")
+        assert response.status_code == 200
+        data = response.json()
+        assert "job_name" in data
+        assert data["job_name"] == "my-job"
+
+    @pytest.mark.asyncio
+    async def test_get_flaky_tests(self, test_client) -> None:
+        """Test that /history/flaky returns expected structure."""
+        response = test_client.get("/history/flaky")
+        assert response.status_code == 200
+        data = response.json()
+        assert "flaky_tests" in data
+        assert isinstance(data["flaky_tests"], list)
+
+    @pytest.mark.asyncio
+    async def test_get_regressions(self, test_client) -> None:
+        """Test that /history/regressions returns expected structure."""
+        response = test_client.get("/history/regressions")
+        assert response.status_code == 200
+        data = response.json()
+        assert "regressions" in data
+        assert isinstance(data["regressions"], list)
+
+    @pytest.mark.asyncio
+    async def test_get_trends(self, test_client) -> None:
+        """Test that /history/trends returns expected structure."""
+        response = test_client.get("/history/trends")
+        assert response.status_code == 200
+        data = response.json()
+        assert "data" in data
+        assert "period" in data
+        assert data["period"] == "daily"

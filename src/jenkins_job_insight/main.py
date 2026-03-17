@@ -1092,6 +1092,69 @@ async def dashboard(
     return HTMLResponse(html_content)
 
 
+@app.get("/history/test/{test_name:path}")
+async def get_test_history_endpoint(
+    test_name: str,
+    limit: int = Query(default=20, le=100),
+    job_name: str = Query(default=""),
+) -> dict:
+    """Get pass/fail history for a specific test."""
+    return await storage.get_test_history(test_name, limit=limit, job_name=job_name)
+
+
+@app.get("/history/search")
+async def search_by_signature_endpoint(
+    signature: str = Query(...),
+) -> dict:
+    """Find all tests that failed with the same error signature."""
+    return await storage.search_by_signature(signature)
+
+
+@app.get("/history/stats/{job_name:path}")
+async def get_job_stats_endpoint(job_name: str) -> dict:
+    """Get aggregate statistics for a specific job."""
+    return await storage.get_job_stats(job_name)
+
+
+@app.get("/history/flaky")
+async def get_flaky_tests_endpoint(
+    min_runs: int = Query(default=5, ge=1),
+    min_rate: float = Query(default=0.2, ge=0.0, le=1.0),
+    max_rate: float = Query(default=0.8, ge=0.0, le=1.0),
+    job_name: str = Query(default=""),
+) -> dict:
+    """Get known flaky tests."""
+    return {
+        "flaky_tests": await storage.get_flaky_tests(
+            min_runs=min_runs, min_rate=min_rate, max_rate=max_rate, job_name=job_name
+        )
+    }
+
+
+@app.get("/history/regressions")
+async def get_regressions_endpoint(
+    days: int = Query(default=7, ge=1),
+    min_previous_passes: int = Query(default=3, ge=1),
+    job_name: str = Query(default=""),
+) -> dict:
+    """Get recent test regressions."""
+    return {
+        "regressions": await storage.get_regressions(
+            days=days, min_previous_passes=min_previous_passes, job_name=job_name
+        )
+    }
+
+
+@app.get("/history/trends")
+async def get_trends_endpoint(
+    period: str = Query(default="daily"),
+    days: int = Query(default=30, ge=1),
+    job_name: str = Query(default=""),
+) -> dict:
+    """Get failure rate trends over time."""
+    return await storage.get_trends(period=period, days=days, job_name=job_name)
+
+
 @app.get("/health")
 async def health_check() -> dict:
     """Health check endpoint."""
