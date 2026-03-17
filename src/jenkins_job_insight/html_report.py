@@ -1126,7 +1126,12 @@ async function loadClassifications() {{
                 'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);'
             }};
             badge.style.cssText = (colors[cls.classification] || 'background:var(--bg-tertiary);color:var(--text-muted);') + 'margin-left:6px;';
-            badge.textContent = cls.classification;
+            var badgeLabel = cls.classification.replace('_', ' ');
+            if (cls.classification === 'KNOWN_BUG') {{
+                var jiraMatch = (cls.reason || '').match(/([A-Z][A-Z0-9]+-\d+)/);
+                if (jiraMatch) badgeLabel = 'KNOWN BUG: ' + jiraMatch[1];
+            }}
+            badge.textContent = badgeLabel;
             badge.title = cls.reason || '';
             toggle.appendChild(badge);
         }});
@@ -1137,11 +1142,16 @@ async function loadClassifications() {{
             if (!card) return;
             var toggles = card.querySelectorAll('.reviewed-toggle');
             var cardClassifications = {{}};
+            var cardJiraKeys = {{}};
             toggles.forEach(function(t) {{
                 var tn = t.dataset.testName;
                 if (tn && byTest[tn]) {{
                     var cls = byTest[tn][0].classification;
                     cardClassifications[cls] = (cardClassifications[cls] || 0) + 1;
+                    if (cls === 'KNOWN_BUG') {{
+                        var jm = (byTest[tn][0].reason || '').match(/([A-Z][A-Z0-9]+-\d+)/);
+                        if (jm && !cardJiraKeys[jm[1]]) cardJiraKeys[jm[1]] = true;
+                    }}
                 }}
             }});
             for (var cls in cardClassifications) {{
@@ -1156,7 +1166,14 @@ async function loadClassifications() {{
                 }};
                 badge.style.cssText = (clsColors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted);') + 'margin-left:6px;';
                 var count = cardClassifications[cls];
-                badge.textContent = count > 1 ? count + ' ' + cls.replace('_', ' ') : cls.replace('_', ' ');
+                var label = count > 1 ? count + ' ' + cls.replace('_', ' ') : cls.replace('_', ' ');
+                if (cls === 'KNOWN_BUG') {{
+                    var keys = Object.keys(cardJiraKeys);
+                    if (keys.length > 0) {{
+                        label = count > 1 ? count + ' KNOWN BUG: ' + keys.join(', ') : 'KNOWN BUG: ' + keys[0];
+                    }}
+                }}
+                badge.textContent = label;
                 summary.appendChild(badge);
             }}
         }});
@@ -1167,11 +1184,16 @@ async function loadClassifications() {{
             if (!childCard) return;
             var toggles = childCard.querySelectorAll('.reviewed-toggle');
             var childClassifications = {{}};
+            var childJiraKeys = {{}};
             toggles.forEach(function(t) {{
                 var tn = t.dataset.testName;
                 if (tn && byTest[tn]) {{
                     var cls = byTest[tn][0].classification;
                     childClassifications[cls] = (childClassifications[cls] || 0) + 1;
+                    if (cls === 'KNOWN_BUG') {{
+                        var jm = (byTest[tn][0].reason || '').match(/([A-Z][A-Z0-9]+-\d+)/);
+                        if (jm && !childJiraKeys[jm[1]]) childJiraKeys[jm[1]] = true;
+                    }}
                 }}
             }});
             for (var cls in childClassifications) {{
@@ -1184,7 +1206,14 @@ async function loadClassifications() {{
                     'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)'
                 }}[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)');
                 var count = childClassifications[cls];
-                badge.textContent = count > 1 ? count + ' ' + cls.replace('_', ' ') : cls.replace('_', ' ');
+                var label = count > 1 ? count + ' ' + cls.replace('_', ' ') : cls.replace('_', ' ');
+                if (cls === 'KNOWN_BUG') {{
+                    var keys = Object.keys(childJiraKeys);
+                    if (keys.length > 0) {{
+                        label = count > 1 ? count + ' KNOWN BUG: ' + keys.join(', ') : 'KNOWN BUG: ' + keys[0];
+                    }}
+                }}
+                badge.textContent = label;
                 summary.appendChild(badge);
             }}
         }});
@@ -1607,21 +1636,24 @@ def _render_group_card(
     # Comments section (populated by JavaScript)
     # Build test name selector for multi-test groups
     if len(failures) > 1:
-        select_html = f'{indent}        <select class="comment-test-select">'
+        select_html = (
+            f'{indent}        <select class="comment-test-select" style="width:100%;">'
+        )
         for f in failures:
             select_html += f'<option value="{e(f.test_name)}">{e(f.test_name)}</option>'
-        select_html += "</select>"
+        select_html += "</select>\n"
     else:
-        select_html = f'<input type="hidden" class="comment-test-select" value="{e(failures[0].test_name)}">'
+        select_html = f'{indent}        <input type="hidden" class="comment-test-select" value="{e(failures[0].test_name)}">\n'
 
     all_test_names = e(json.dumps([f.test_name for f in failures]))
     parts.append(f"""{indent}    <div class="comments-section" data-test-names="{all_test_names}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}">
 {indent}      <div class="comments-header">Comments (<span class="comment-count">0</span>)</div>
 {indent}      <div class="comment-list"></div>
-{indent}      <div class="comment-input-row">
-{indent}        {select_html}
-{indent}        <textarea class="comment-input" placeholder="Add a comment (bug link, PR, notes...)" rows="1"></textarea>
-{indent}        <button class="comment-add-btn" onclick="addComment(this)">Add</button>
+{indent}      <div class="comment-input-row" style="flex-direction:column;gap:8px;">
+{select_html}{indent}        <div style="display:flex;gap:8px;">
+{indent}          <textarea class="comment-input" placeholder="Add a comment (bug link, PR, notes...)" rows="1" style="flex:1;"></textarea>
+{indent}          <button class="comment-add-btn" onclick="addComment(this)">Add</button>
+{indent}        </div>
 {indent}      </div>
 {indent}    </div>
 """)
@@ -2505,12 +2537,20 @@ def generate_dashboard_html(
     fetch(BASE + '/history/classifications').then(function(r) { return r.json(); }).then(function(data) {
         var counts = {};
         var byParentJob = {};
+        var jiraKeysByJob = {};
         (data.classifications || []).forEach(function(c) {
             counts[c.classification] = (counts[c.classification] || 0) + 1;
             var pjn = c.parent_job_name || c.job_name || '';
             if (pjn) {
                 if (!byParentJob[pjn]) byParentJob[pjn] = {};
                 byParentJob[pjn][c.classification] = (byParentJob[pjn][c.classification] || 0) + 1;
+                if (c.classification === 'KNOWN_BUG') {
+                    var jm = (c.reason || '').match(/([A-Z][A-Z0-9]+-\d+)/);
+                    if (jm) {
+                        if (!jiraKeysByJob[pjn]) jiraKeysByJob[pjn] = {};
+                        jiraKeysByJob[pjn][jm[1]] = true;
+                    }
+                }
             }
         });
 
@@ -2541,7 +2581,14 @@ def generate_dashboard_html(
             for (var cls in byParentJob[jobName]) {
                 var count = byParentJob[jobName][cls];
                 var color = colors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)';
-                html += '<span style="display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;' + color + ';white-space:nowrap;margin-right:4px;">' + count + ' ' + cls.replace('_', ' ') + '</span>';
+                var label = count + ' ' + cls.replace('_', ' ');
+                if (cls === 'KNOWN_BUG' && jiraKeysByJob[jobName]) {
+                    var keys = Object.keys(jiraKeysByJob[jobName]);
+                    if (keys.length > 0) {
+                        label = count + ' KNOWN BUG: ' + keys.join(', ');
+                    }
+                }
+                html += '<span style="display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;' + color + ';white-space:nowrap;margin-right:4px;">' + label + '</span>';
             }
             span.style.display = '';
             span.innerHTML = html;
