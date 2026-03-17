@@ -999,6 +999,95 @@ async def get_job_stats(job_name: str) -> dict:
     }
 
 
+async def get_flaky_tests(
+    min_runs: int = 5,
+    min_rate: float = 0.2,
+    max_rate: float = 0.8,
+    job_name: str = "",
+) -> list[dict]:
+    """Find tests with intermittent pass/fail behavior.
+
+    A test is considered flaky if its failure rate is between min_rate and
+    max_rate across at least min_runs builds.
+
+    Args:
+        min_runs: Minimum number of builds a test must appear in.
+        min_rate: Minimum failure rate to be considered flaky.
+        max_rate: Maximum failure rate to be considered flaky.
+        job_name: Optional filter by job name.
+
+    Returns:
+        List of dicts with test_name, failure_rate, total_runs, failures,
+        passes, last_status, and job_names.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Get total builds count for estimating pass rate
+        if job_name:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM results WHERE result_json LIKE ?",
+                (f'%"job_name": "{job_name}"%',),
+            )
+        else:
+            cursor = await db.execute("SELECT COUNT(*) FROM results")
+        total_builds = (await cursor.fetchone())[0]
+
+        if total_builds < min_runs:
+            return []
+
+        # Get failure counts per test
+        job_filter = ""
+        params: list = []
+        if job_name:
+            job_filter = " WHERE job_name = ?"
+            params.append(job_name)
+
+        cursor = await db.execute(
+            f"SELECT test_name, COUNT(*) as failures, "
+            f"GROUP_CONCAT(DISTINCT job_name) as job_names "
+            f"FROM failure_history{job_filter} "
+            f"GROUP BY test_name",
+            params,
+        )
+        rows = await cursor.fetchall()
+
+        flaky_tests = []
+        for row in rows:
+            failures = row["failures"]
+            failure_rate = failures / total_builds if total_builds > 0 else 0.0
+            passes = total_builds - failures
+
+            if total_builds >= min_runs and min_rate <= failure_rate <= max_rate:
+                # Get last status (most recent failure entry)
+                cursor = await db.execute(
+                    f"SELECT classification FROM failure_history "
+                    f"WHERE test_name = ?{' AND job_name = ?' if job_name else ''} "
+                    f"ORDER BY analyzed_at DESC LIMIT 1",
+                    [row["test_name"]] + ([job_name] if job_name else []),
+                )
+                last_row = await cursor.fetchone()
+                last_status = last_row[0] if last_row else ""
+
+                flaky_tests.append(
+                    {
+                        "test_name": row["test_name"],
+                        "failure_rate": round(failure_rate, 4),
+                        "total_runs": total_builds,
+                        "failures": failures,
+                        "passes": passes,
+                        "last_status": last_status,
+                        "job_names": row["job_names"].split(",")
+                        if row["job_names"]
+                        else [],
+                    }
+                )
+
+        # Sort by failure rate descending
+        flaky_tests.sort(key=lambda x: x["failure_rate"], reverse=True)
+        return flaky_tests
+
+
 async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
     """List recent analysis results with summary data for dashboard display.
 

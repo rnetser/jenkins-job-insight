@@ -573,3 +573,95 @@ class TestGetJobStats:
         with patch.object(storage, "DB_PATH", setup_test_db):
             result = await storage.get_job_stats("nonexistent-job")
             assert result["total_builds_analyzed"] == 0
+
+
+class TestGetFlakyTests:
+    async def test_detects_flaky_test(self, setup_test_db):
+        import aiosqlite
+
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            async with aiosqlite.connect(setup_test_db) as db:
+                # Create 10 builds for the job
+                for i in range(10):
+                    await db.execute(
+                        "INSERT INTO results (job_id, jenkins_url, status, result_json) VALUES (?, ?, ?, ?)",
+                        (
+                            f"flaky-{i}",
+                            "https://j.example.com/job/test/1/",
+                            "completed",
+                            json.dumps(
+                                {
+                                    "job_name": "ocp-e2e",
+                                    "build_number": i + 1,
+                                    "failures": [],
+                                    "child_job_analyses": [],
+                                }
+                            ),
+                        ),
+                    )
+
+                # test_lookup fails in 5 of 10 builds (50% failure rate = flaky)
+                for i in range(5):
+                    await db.execute(
+                        """INSERT INTO failure_history
+                           (job_id, job_name, build_number, test_name, error_signature, classification)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            f"flaky-{i}",
+                            "ocp-e2e",
+                            i + 1,
+                            "tests.TestDNS.test_lookup",
+                            "sig-flaky",
+                            "PRODUCT BUG",
+                        ),
+                    )
+                await db.commit()
+
+            result = await storage.get_flaky_tests()
+            assert len(result) >= 1
+            flaky_test = result[0]
+            assert flaky_test["test_name"] == "tests.TestDNS.test_lookup"
+            assert 0.2 <= flaky_test["failure_rate"] <= 0.8
+
+    async def test_excludes_persistent_failures(self, setup_test_db):
+        import aiosqlite
+
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            async with aiosqlite.connect(setup_test_db) as db:
+                for i in range(10):
+                    await db.execute(
+                        "INSERT INTO results (job_id, jenkins_url, status, result_json) VALUES (?, ?, ?, ?)",
+                        (
+                            f"persist-{i}",
+                            "https://j.example.com/job/test/1/",
+                            "completed",
+                            json.dumps(
+                                {
+                                    "job_name": "ocp-e2e",
+                                    "build_number": i + 1,
+                                    "failures": [],
+                                    "child_job_analyses": [],
+                                }
+                            ),
+                        ),
+                    )
+                # Fails in 9 of 10 builds (90% = persistent, not flaky)
+                for i in range(9):
+                    await db.execute(
+                        """INSERT INTO failure_history
+                           (job_id, job_name, build_number, test_name, error_signature, classification)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            f"persist-{i}",
+                            "ocp-e2e",
+                            i + 1,
+                            "tests.TestPersist.test_always_fail",
+                            "sig-persist",
+                            "PRODUCT BUG",
+                        ),
+                    )
+                await db.commit()
+
+            result = await storage.get_flaky_tests(max_rate=0.8)
+            test_names = [t["test_name"] for t in result]
+            assert "tests.TestPersist.test_always_fail" not in test_names
