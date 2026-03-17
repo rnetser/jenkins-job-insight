@@ -761,7 +761,7 @@ async function loadCommentsAndReviews() {{
                 const sectionTests = JSON.parse(section.dataset.testNames || '[]');
                 const sectionChild = section.dataset.childJob || '';
                 const sectionChildBuild = parseInt(section.dataset.childBuild || '0');
-                if (sectionTests.includes(testNames) && sectionChild === childJob && sectionChildBuild === childBuildNumber) {{
+                if (sectionTests.includes(testNames) && sectionChild === childJob && (sectionChildBuild === childBuildNumber || childBuildNumber === 0)) {{
                     appendCommentToList(section, c);
                 }}
             }});
@@ -878,7 +878,7 @@ function appendCommentToList(section, comment) {{
     var currentUser = '';
     try {{ currentUser = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
     if (comment.username && comment.username === currentUser && comment.id) {{
-        deleteBtn = ' <button onclick="deleteComment(this, ' + comment.id + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor=\'var(--accent-red)\'" onmouseout="this.style.borderColor=\'transparent\'">Delete</button>';
+        deleteBtn = ' <button onclick="deleteComment(this, ' + comment.id + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor=&#39;var(--accent-red)&#39;" onmouseout="this.style.borderColor=&#39;transparent&#39;">Delete</button>';
     }}
     // Safe: escapeHtml sanitizes all user content, autoLink only adds <a> tags for URL patterns
     item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + deleteBtn + '</div><div class="comment-text">' + userLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
