@@ -878,7 +878,7 @@ function appendCommentToList(section, comment) {{
     var currentUser = '';
     try {{ currentUser = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
     if (comment.username && comment.username === currentUser && comment.id) {{
-        deleteBtn = ' <button onclick="deleteComment(this, ' + comment.id + ')" style="background:none;border:none;color:var(--accent-red);cursor:pointer;font-size:11px;opacity:0.6;">&#10005;</button>';
+        deleteBtn = ' <button onclick="deleteComment(this, ' + comment.id + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor=\'var(--accent-red)\'" onmouseout="this.style.borderColor=\'transparent\'">Delete</button>';
     }}
     // Safe: escapeHtml sanitizes all user content, autoLink only adds <a> tags for URL patterns
     item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + deleteBtn + '</div><div class="comment-text">' + userLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
