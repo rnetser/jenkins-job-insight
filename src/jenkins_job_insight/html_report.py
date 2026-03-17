@@ -999,7 +999,7 @@ async function loadCommentsAndReviews() {{
             var overallBadge = document.getElementById('overall-comment-count');
             if (overallBadge) {{
                 overallBadge.style.display = '';
-                overallBadge.textContent = totalComments + ' comment' + (totalComments !== 1 ? 's' : '');
+                overallBadge.textContent = '\ud83d\udcac ' + totalComments;
                 overallBadge.style.background = 'var(--bg-tertiary)';
                 overallBadge.style.color = 'var(--text-muted)';
                 overallBadge.style.border = '1px solid var(--border)';
@@ -1019,8 +1019,9 @@ async function loadCommentsAndReviews() {{
             var childJob = badge.dataset.childJob || '';
             if (childCounts[childJob]) {{
                 badge.style.display = '';
-                badge.textContent = childCounts[childJob] + ' comment' + (childCounts[childJob] !== 1 ? 's' : '');
+                badge.textContent = '\ud83d\udcac ' + childCounts[childJob];
                 badge.style.cssText = 'display:inline;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;';
+                badge.parentNode.appendChild(badge);
             }}
         }});
 
@@ -1037,8 +1038,9 @@ async function loadCommentsAndReviews() {{
             }});
             if (count > 0) {{
                 badge.style.display = '';
-                badge.textContent = count + ' comment' + (count !== 1 ? 's' : '');
+                badge.textContent = '\ud83d\udcac ' + count;
                 badge.style.cssText = 'display:inline;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;';
+                badge.parentNode.appendChild(badge);
             }}
         }});
     }} catch (err) {{
@@ -2787,18 +2789,16 @@ def _render_dashboard_card(
                 "Needs Review</span>"
             )
 
-    # Comment count badge
-    if comment_count > 0:
-        parts.append(
-            f'      <span class="card-build-chip">'
-            f"{comment_count} comment{'s' if comment_count != 1 else ''}"
-            f"</span>"
-        )
-
     # Per-card classification badges (populated by JS using job_id)
     parts.append(
         f'      <span class="classification-job-badges" data-job-name="{e(job_name)}" data-job-id="{e(job_id)}" style="display:none"></span>'
     )
+
+    # Comment count badge (icon + number, positioned at end after all other badges)
+    if comment_count > 0:
+        parts.append(
+            f'      <span class="card-build-chip">\U0001f4ac {comment_count}</span>'
+        )
 
     parts.append("    </div>")
     parts.append('    <div class="card-meta">')
