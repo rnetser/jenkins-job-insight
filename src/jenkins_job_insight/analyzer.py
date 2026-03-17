@@ -47,7 +47,7 @@ logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 FALLBACK_TAIL_LINES = 200
 
 # Path to QUERY.md — the AI reads it at runtime instead of injecting content into the prompt
-_QUERY_MD_PATH = Path(__file__).parent / "QUERY.md"
+_QUERY_MD_PATH = Path(__file__).parent / "ai-prompts" / "QUERY.md"
 
 JOB_INSIGHT_PROMPT_FILENAME = "JOB_INSIGHT_PROMPT.md"
 
