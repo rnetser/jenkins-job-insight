@@ -866,9 +866,10 @@ function appendCommentToList(section, comment) {{
     item.className = 'comment-item';
     if (comment.id) item.dataset.commentId = comment.id;
     const text = autoLink(escapeHtml(comment.comment));
+    var userLabel = comment.username ? '<span style="font-family:var(--font-mono);font-size:11px;color:var(--accent-purple);margin-right:6px;">' + escapeHtml(comment.username) + '</span>' : '';
     var testLabel = comment.test_name ? '<span style="font-family:var(--font-mono);font-size:11px;color:var(--accent-blue);margin-right:6px;">' + escapeHtml(comment.test_name) + '</span>' : '';
     // Safe: escapeHtml sanitizes all user content, autoLink only adds <a> tags for URL patterns
-    item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + '</div><div class="comment-text">' + testLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
+    item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + '</div><div class="comment-text">' + userLabel + testLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
     list.appendChild(item);
 }}
 
@@ -951,7 +952,10 @@ async function addComment(btn) {{
         if (resp.ok) {{
             const result = await resp.json();
             const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-            appendCommentToList(section, {{id: result.id, comment: comment, created_at: now, test_name: testName}});
+            var currentUser = '';
+            var uc = document.cookie.split('; ').find(function(c) {{ return c.startsWith('jji_username='); }});
+            if (uc) currentUser = decodeURIComponent(uc.split('=')[1]);
+            appendCommentToList(section, {{id: result.id, comment: comment, created_at: now, test_name: testName, username: currentUser}});
             const count = section.querySelectorAll('.comment-item').length;
             section.querySelector('.comment-count').textContent = count;
             input.value = '';
@@ -1011,6 +1015,21 @@ document.addEventListener('DOMContentLoaded', async function() {{
             toggleReviewed(this.closest('.reviewed-toggle'));
         }});
     }});
+    // Show current user in header
+    var userCookie = document.cookie.split('; ').find(function(c) {{ return c.startsWith('jji_username='); }});
+    if (userCookie) {{
+        var uname = decodeURIComponent(userCookie.split('=')[1]);
+        var headerContent = document.querySelector('.header-content');
+        if (headerContent) {{
+            var chips = headerContent.querySelector('.env-chips');
+            if (chips) {{
+                var userChip = document.createElement('span');
+                userChip.className = 'env-chip';
+                userChip.textContent = 'User: ' + uname;
+                chips.appendChild(userChip);
+            }}
+        }}
+    }}
     await loadCommentsAndReviews();
     await loadEnrichments();
 }});
@@ -2234,6 +2253,26 @@ def generate_dashboard_html(
 </script>
 """)
 
+    # --- USERNAME DISPLAY (always, regardless of job count) ---
+    parts.append("""
+<script>
+(function() {
+    var userCookie = document.cookie.split('; ').find(function(c) { return c.startsWith('jji_username='); });
+    if (userCookie) {
+        var uname = decodeURIComponent(userCookie.split('=')[1]);
+        var headerContent = document.querySelector('.header-content');
+        if (headerContent) {
+            var userChip = document.createElement('span');
+            userChip.className = 'env-chip';
+            userChip.style.marginLeft = 'auto';
+            userChip.textContent = 'User: ' + uname;
+            headerContent.appendChild(userChip);
+        }
+    }
+})();
+</script>
+""")
+
     parts.append("</div>\n</body>\n</html>")
     return "\n".join(parts)
 
@@ -2379,3 +2418,84 @@ def _render_dashboard_card(
 
     parts.append("  </div>")
     parts.append("</a>")
+
+
+def generate_register_html() -> str:
+    """Generate the user registration page HTML.
+
+    Returns:
+        A complete HTML document as a string with the registration form.
+    """
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jenkins Job Insight - Register</title>
+<link rel="icon" href="{FAVICON_DATA_URI}">
+<style>
+{_common_css()}
+.register-container {{
+    max-width: 400px;
+    margin: 100px auto;
+    padding: 40px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    text-align: center;
+}}
+.register-container h2 {{
+    font-size: 20px;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}}
+.register-container p {{
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 24px;
+}}
+.register-input {{
+    width: 100%;
+    padding: 12px 16px;
+    font-size: 16px;
+    font-family: var(--font-sans);
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    outline: none;
+    margin-bottom: 16px;
+    transition: border-color 0.15s;
+}}
+.register-input::placeholder {{ color: var(--text-muted); }}
+.register-input:focus {{ border-color: var(--accent-blue); }}
+.register-btn {{
+    width: 100%;
+    padding: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--accent-blue);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}}
+.register-btn:hover {{
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+}}
+</style>
+</head>
+<body>
+<div class="register-container">
+    <h2>Welcome to Jenkins Job Insight</h2>
+    <p>Enter your name to get started</p>
+    <form method="POST" action="/register">
+        <input class="register-input" type="text" name="username" placeholder="Your name" required autofocus>
+        <button class="register-btn" type="submit">Continue</button>
+    </form>
+</div>
+</body>
+</html>"""

@@ -376,6 +376,7 @@ class CommentResponse(BaseModel):
     child_job_name: str = ""
     child_build_number: int = 0
     comment: str
+    username: str = ""
     created_at: str
 
 

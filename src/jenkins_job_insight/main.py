@@ -8,7 +8,8 @@ from contextlib import asynccontextmanager
 from xml.etree.ElementTree import ParseError
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import SecretStr
 from simple_logger.logger import get_logger
 
@@ -41,6 +42,7 @@ from jenkins_job_insight.html_report import (
     format_result_as_html,
     format_status_page,
     generate_dashboard_html,
+    generate_register_html,
 )
 from jenkins_job_insight.output import send_callback
 from jenkins_job_insight.repository import RepositoryManager
@@ -159,6 +161,53 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+class UsernameMiddleware(BaseHTTPMiddleware):
+    """Middleware that checks for jji_username cookie and redirects to /register if missing."""
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path in ("/register", "/health", "/favicon.ico") or path.startswith(
+            "/register"
+        ):
+            return await call_next(request)
+
+        username = request.cookies.get("jji_username", "")
+        if not username:
+            # Only redirect browser requests, not API calls
+            accept = request.headers.get("accept", "")
+            if "text/html" in accept:
+                return RedirectResponse(url="/register", status_code=303)
+
+        request.state.username = username
+        return await call_next(request)
+
+
+app.add_middleware(UsernameMiddleware)
+
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_page() -> str:
+    """Show registration page for new users."""
+    return generate_register_html()
+
+
+@app.post("/register")
+async def register(request: Request) -> RedirectResponse:
+    """Set username cookie and redirect to dashboard."""
+    form = await request.form()
+    username = str(form.get("username", "")).strip()
+    if not username:
+        return RedirectResponse(url="/register", status_code=303)
+    response = RedirectResponse(url="/dashboard", status_code=303)
+    response.set_cookie(
+        key="jji_username",
+        value=username,
+        max_age=365 * 24 * 60 * 60,  # 1 year
+        samesite="lax",
+    )
+    return response
 
 
 def _resolve_ai_config_values(
@@ -822,7 +871,7 @@ async def get_comments(job_id: str) -> dict:
 
 
 @app.post("/results/{job_id}/comments", status_code=201)
-async def add_comment(job_id: str, body: AddCommentRequest) -> dict:
+async def add_comment(job_id: str, body: AddCommentRequest, request: Request) -> dict:
     """Add a comment to a test failure."""
     await _validate_test_name_in_result(
         job_id, body.test_name, body.child_job_name, body.child_build_number
@@ -845,6 +894,7 @@ async def add_comment(job_id: str, body: AddCommentRequest) -> dict:
                     error_signature = f.get("error_signature", "")
                     break
 
+    username = request.cookies.get("jji_username", "")
     try:
         comment_id = await storage.add_comment(
             job_id=job_id,
@@ -853,6 +903,7 @@ async def add_comment(job_id: str, body: AddCommentRequest) -> dict:
             child_job_name=body.child_job_name,
             child_build_number=body.child_build_number,
             error_signature=error_signature,
+            username=username,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -861,11 +912,12 @@ async def add_comment(job_id: str, body: AddCommentRequest) -> dict:
 
 
 @app.put("/results/{job_id}/reviewed")
-async def set_reviewed(job_id: str, body: SetReviewedRequest) -> dict:
+async def set_reviewed(job_id: str, body: SetReviewedRequest, request: Request) -> dict:
     """Toggle the reviewed state for a test failure."""
     await _validate_test_name_in_result(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
+    username = request.cookies.get("jji_username", "")
     try:
         await storage.set_reviewed(
             job_id=job_id,
@@ -873,6 +925,7 @@ async def set_reviewed(job_id: str, body: SetReviewedRequest) -> dict:
             reviewed=body.reviewed,
             child_job_name=body.child_job_name,
             child_build_number=body.child_build_number,
+            username=username,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

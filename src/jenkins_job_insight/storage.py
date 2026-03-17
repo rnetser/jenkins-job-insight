@@ -39,6 +39,7 @@ async def init_db() -> None:
                 child_build_number INTEGER NOT NULL DEFAULT 0,
                 comment TEXT NOT NULL,
                 error_signature TEXT NOT NULL DEFAULT '',
+                username TEXT NOT NULL DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -58,6 +59,7 @@ async def init_db() -> None:
                 child_job_name TEXT NOT NULL DEFAULT '',
                 child_build_number INTEGER NOT NULL DEFAULT 0,
                 reviewed BOOLEAN DEFAULT 0,
+                username TEXT NOT NULL DEFAULT '',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (job_id, test_name, child_job_name, child_build_number)
             )
@@ -78,6 +80,16 @@ async def init_db() -> None:
                 logger.debug(
                     f"Migration: {table} already has child_build_number column"
                 )
+
+        # Migration: add username to comments and failure_reviews
+        for table in ("comments", "failure_reviews"):
+            cursor = await db.execute(f"PRAGMA table_info({table})")
+            columns = {row[1] for row in await cursor.fetchall()}
+            if "username" not in columns:
+                await db.execute(
+                    f"ALTER TABLE {table} ADD COLUMN username TEXT NOT NULL DEFAULT ''"
+                )
+                logger.info(f"Migration: added username column to {table}")
 
         # Migration: add error_signature to comments table
         cursor = await db.execute("PRAGMA table_info(comments)")
@@ -118,13 +130,14 @@ async def init_db() -> None:
                         child_job_name TEXT NOT NULL DEFAULT '',
                         child_build_number INTEGER NOT NULL DEFAULT 0,
                         reviewed BOOLEAN DEFAULT 0,
+                        username TEXT NOT NULL DEFAULT '',
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         PRIMARY KEY (job_id, test_name, child_job_name, child_build_number)
                     )
                 """)
                 await db.execute("""
-                    INSERT INTO failure_reviews (job_id, test_name, child_job_name, child_build_number, reviewed, updated_at)
-                    SELECT job_id, test_name, child_job_name, child_build_number, reviewed, updated_at
+                    INSERT INTO failure_reviews (job_id, test_name, child_job_name, child_build_number, reviewed, username, updated_at)
+                    SELECT job_id, test_name, child_job_name, child_build_number, reviewed, COALESCE(username, ''), updated_at
                     FROM failure_reviews_old
                 """)
                 await db.execute("DROP TABLE failure_reviews_old")
@@ -154,12 +167,13 @@ async def add_comment(
     child_job_name: str = "",
     child_build_number: int = 0,
     error_signature: str = "",
+    username: str = "",
 ) -> int:
     """Add a comment to a test failure."""
     _validate_child_identifier_pairing(child_job_name, child_build_number)
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO comments (job_id, test_name, child_job_name, child_build_number, comment, error_signature) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO comments (job_id, test_name, child_job_name, child_build_number, comment, error_signature, username) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 job_id,
                 test_name,
@@ -167,6 +181,7 @@ async def add_comment(
                 child_build_number,
                 comment,
                 error_signature,
+                username,
             ),
         )
         await db.commit()
@@ -178,7 +193,7 @@ async def get_comments_for_job(job_id: str) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT id, job_id, test_name, child_job_name, child_build_number, comment, error_signature, created_at "
+            "SELECT id, job_id, test_name, child_job_name, child_build_number, comment, error_signature, username, created_at "
             "FROM comments WHERE job_id = ? ORDER BY created_at ASC",
             (job_id,),
         )
@@ -192,14 +207,15 @@ async def set_reviewed(
     reviewed: bool,
     child_job_name: str = "",
     child_build_number: int = 0,
+    username: str = "",
 ) -> None:
     """Set or update the reviewed state for a test failure."""
     _validate_child_identifier_pairing(child_job_name, child_build_number)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT OR REPLACE INTO failure_reviews (job_id, test_name, child_job_name, child_build_number, reviewed, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-            (job_id, test_name, child_job_name, child_build_number, reviewed),
+            "INSERT OR REPLACE INTO failure_reviews (job_id, test_name, child_job_name, child_build_number, reviewed, username, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            (job_id, test_name, child_job_name, child_build_number, reviewed, username),
         )
         await db.commit()
 
@@ -209,7 +225,7 @@ async def get_reviews_for_job(job_id: str) -> dict[str, dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT test_name, child_job_name, child_build_number, reviewed, updated_at "
+            "SELECT test_name, child_job_name, child_build_number, reviewed, username, updated_at "
             "FROM failure_reviews WHERE job_id = ?",
             (job_id,),
         )
@@ -222,6 +238,7 @@ async def get_reviews_for_job(job_id: str) -> dict[str, dict]:
                 key = row["test_name"]
             result[key] = {
                 "reviewed": bool(row["reviewed"]),
+                "username": row["username"],
                 "updated_at": row["updated_at"],
             }
         return result
@@ -294,7 +311,7 @@ async def get_historical_comments(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            f"SELECT id, job_id, test_name, child_job_name, child_build_number, comment, error_signature, created_at "
+            f"SELECT id, job_id, test_name, child_job_name, child_build_number, comment, error_signature, username, created_at "
             f"FROM comments WHERE {where} ORDER BY created_at DESC",
             params,
         )
