@@ -1331,7 +1331,12 @@ async def get_test_classifications(
     parent_job_name: str = "",
     job_id: str = "",
 ) -> list[dict]:
-    """Get test classifications, optionally filtered."""
+    """Get test classifications, only from completed analyses.
+
+    Uses a LEFT JOIN with the results table so that:
+    - Classifications linked to a job_id are only returned when that job has status 'completed'.
+    - Legacy classifications without a job_id (empty string) are always returned.
+    """
     logger.debug(
         f"get_test_classifications: test_name={test_name!r}, classification={classification!r}, "
         f"job_name={job_name!r}, parent_job_name={parent_job_name!r}, job_id={job_id!r}"
@@ -1340,19 +1345,19 @@ async def get_test_classifications(
     params = []
 
     if test_name:
-        conditions.append("test_name = ?")
+        conditions.append("tc.test_name = ?")
         params.append(test_name)
     if classification:
-        conditions.append("classification = ?")
+        conditions.append("tc.classification = ?")
         params.append(classification)
     if job_name:
-        conditions.append("job_name = ?")
+        conditions.append("tc.job_name = ?")
         params.append(job_name)
     if parent_job_name:
-        conditions.append("parent_job_name = ?")
+        conditions.append("tc.parent_job_name = ?")
         params.append(parent_job_name)
     if job_id:
-        conditions.append("job_id = ?")
+        conditions.append("tc.job_id = ?")
         params.append(job_id)
 
     where = " AND ".join(conditions) if conditions else "1=1"
@@ -1360,8 +1365,12 @@ async def get_test_classifications(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            f"SELECT id, test_name, job_name, parent_job_name, classification, reason, references_info, created_by, job_id, created_at "
-            f"FROM test_classifications WHERE {where} ORDER BY created_at DESC",
+            f"SELECT tc.id, tc.test_name, tc.job_name, tc.parent_job_name, tc.classification, "
+            f"tc.reason, tc.references_info, tc.created_by, tc.job_id, tc.created_at "
+            f"FROM test_classifications tc "
+            f"LEFT JOIN results r ON tc.job_id = r.job_id "
+            f"WHERE (r.status = 'completed' OR r.job_id IS NULL OR tc.job_id = '') AND {where} "
+            f"ORDER BY tc.created_at DESC",
             params,
         )
         rows = await cursor.fetchall()
