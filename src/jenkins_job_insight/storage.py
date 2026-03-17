@@ -224,6 +224,20 @@ async def add_comment(
         return cursor.lastrowid
 
 
+async def delete_comment(comment_id: int, username: str) -> bool:
+    """Delete a comment if it belongs to the given username.
+
+    Returns True if deleted, False if not found or not owned by user.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "DELETE FROM comments WHERE id = ? AND username = ?",
+            (comment_id, username),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
 async def get_comments_for_job(job_id: str) -> list[dict]:
     """Get all comments for a specific job."""
     async with aiosqlite.connect(DB_PATH) as db:

@@ -966,6 +966,25 @@ async def add_comment(job_id: str, body: AddCommentRequest, request: Request) ->
     return {"id": comment_id}
 
 
+@app.delete("/results/{job_id}/comments/{comment_id}")
+async def delete_comment_endpoint(
+    job_id: str, comment_id: int, request: Request
+) -> dict:
+    """Delete a comment (only by the user who created it)."""
+    username = request.cookies.get("jji_username", "")
+    if not username:
+        raise HTTPException(status_code=401, detail="Username required")
+
+    deleted = await storage.delete_comment(comment_id, username)
+    if not deleted:
+        raise HTTPException(
+            status_code=404, detail="Comment not found or not owned by you"
+        )
+
+    await _invalidate_cached_html(job_id)
+    return {"status": "deleted"}
+
+
 @app.put("/results/{job_id}/reviewed")
 async def set_reviewed(job_id: str, body: SetReviewedRequest, request: Request) -> dict:
     """Toggle the reviewed state for a test failure."""

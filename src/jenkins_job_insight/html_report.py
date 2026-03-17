@@ -743,6 +743,7 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     parts.append(f"""
 <script>
 const JOB_ID = "{e(result.job_id)}";
+const JOB_NAME = "{e(result.job_name or "")}";
 // Derive base path for API calls (works behind reverse proxies with path prefixes)
 const BASE_PATH = window.location.pathname.replace(/\\/results\\/.*$/, '');
 
@@ -873,9 +874,36 @@ function appendCommentToList(section, comment) {{
     if (comment.id) item.dataset.commentId = comment.id;
     const text = autoLink(escapeHtml(comment.comment));
     var userLabel = comment.username ? '<span style="font-family:var(--font-mono);font-size:11px;color:var(--accent-purple);margin-right:6px;">' + escapeHtml(comment.username) + '</span>' : '';
+    var deleteBtn = '';
+    var currentUser = '';
+    try {{ currentUser = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
+    if (comment.username && comment.username === currentUser && comment.id) {{
+        deleteBtn = ' <button onclick="deleteComment(this, ' + comment.id + ')" style="background:none;border:none;color:var(--accent-red);cursor:pointer;font-size:11px;opacity:0.6;">&#10005;</button>';
+    }}
     // Safe: escapeHtml sanitizes all user content, autoLink only adds <a> tags for URL patterns
-    item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + '</div><div class="comment-text">' + userLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
+    item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + deleteBtn + '</div><div class="comment-text">' + userLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
     list.appendChild(item);
+}}
+
+async function deleteComment(btn, commentId) {{
+    if (!confirm('Delete this comment?')) return;
+    try {{
+        const resp = await fetch(BASE_PATH + '/results/' + JOB_ID + '/comments/' + commentId, {{
+            method: 'DELETE',
+        }});
+        if (resp.ok) {{
+            const item = btn.closest('.comment-item');
+            const section = item.closest('.comments-section');
+            item.remove();
+            const count = section.querySelectorAll('.comment-item').length;
+            section.querySelector('.comment-count').textContent = count;
+        }} else {{
+            const data = await resp.json();
+            alert(data.detail || 'Failed to delete');
+        }}
+    }} catch (err) {{
+        console.warn('Failed to delete comment:', err);
+    }}
 }}
 
 function escapeHtml(str) {{
@@ -1053,8 +1081,8 @@ document.addEventListener('DOMContentLoaded', async function() {{
 async function loadHistoryBadges() {{
     try {{
         const [flakyResp, regResp] = await Promise.all([
-            fetch(BASE_PATH + '/history/flaky'),
-            fetch(BASE_PATH + '/history/regressions')
+            fetch(BASE_PATH + '/history/flaky?job_name=' + encodeURIComponent(JOB_NAME)),
+            fetch(BASE_PATH + '/history/regressions?job_name=' + encodeURIComponent(JOB_NAME))
         ]);
 
         const flakyTests = new Set();
@@ -2859,7 +2887,8 @@ def generate_history_html(base_url: str = "") -> str:
 
 <script>
 (function() {{
-  var BASE = '{api}';
+  // Derive API base path from current URL (works behind reverse proxies with path prefixes)
+  var BASE = window.location.pathname.replace(/\/history$/, '');
 
   function escapeHtml(s) {{
     var el = document.createElement('div');
