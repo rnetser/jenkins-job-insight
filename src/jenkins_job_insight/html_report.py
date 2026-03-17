@@ -2394,24 +2394,52 @@ def generate_dashboard_html(
   }}
   fetchJson(base + '/history/flaky').then(function(data) {{
     if (!data) return;
-    var count = (data.flaky_tests || []).length;
+    var flakyTests = data.flaky_tests || [];
+    var count = flakyTests.length;
     if (count > 0) {{
       var el = document.getElementById('flaky-badge');
       if (el) {{
         el.textContent = count + ' flaky test' + (count !== 1 ? 's' : '');
         el.style.display = '';
       }}
+      var flakyByJob = {{}};
+      flakyTests.forEach(function(t) {{
+        (t.job_names || []).forEach(function(jn) {{
+          flakyByJob[jn] = (flakyByJob[jn] || 0) + 1;
+        }});
+      }});
+      document.querySelectorAll('.flaky-job-badge').forEach(function(badge) {{
+        var jobName = badge.dataset.jobName;
+        if (flakyByJob[jobName]) {{
+          badge.textContent = flakyByJob[jobName] + ' flaky';
+          badge.style.cssText = 'display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;background:rgba(210,153,34,0.15);color:var(--accent-yellow);white-space:nowrap;';
+        }}
+      }});
     }}
   }});
   fetchJson(base + '/history/regressions').then(function(data) {{
     if (!data) return;
-    var count = (data.regressions || []).length;
+    var regressions = data.regressions || [];
+    var count = regressions.length;
     if (count > 0) {{
       var el = document.getElementById('regression-badge');
       if (el) {{
         el.textContent = count + ' regression' + (count !== 1 ? 's' : '');
         el.style.display = '';
       }}
+      var regByJob = {{}};
+      regressions.forEach(function(t) {{
+        var jobParts = (t.first_failure_job || '').split(' #');
+        var jn = jobParts[0];
+        if (jn) regByJob[jn] = (regByJob[jn] || 0) + 1;
+      }});
+      document.querySelectorAll('.regression-job-badge').forEach(function(badge) {{
+        var jobName = badge.dataset.jobName;
+        if (regByJob[jobName]) {{
+          badge.textContent = regByJob[jobName] + ' regression' + (regByJob[jobName] > 1 ? 's' : '');
+          badge.style.cssText = 'display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;background:rgba(248,81,73,0.12);color:var(--accent-red);white-space:nowrap;';
+        }}
+      }});
     }}
   }});
 }})();
@@ -2541,6 +2569,16 @@ def _render_dashboard_card(
             f"{comment_count} comment{'s' if comment_count != 1 else ''}"
             f"</span>"
         )
+
+    # Per-job flaky & regression badge placeholders (populated by JS)
+    parts.append(
+        f'    <span class="flaky-job-badge" data-job-name="{e(job_name)}"'
+        f' style="display:none"></span>'
+    )
+    parts.append(
+        f'    <span class="regression-job-badge" data-job-name="{e(job_name)}"'
+        f' style="display:none"></span>'
+    )
 
     parts.append("  </div>")
     parts.append('  <div class="card-meta">')
