@@ -731,3 +731,42 @@ class TestGetRegressions:
             result = await storage.get_regressions(days=7)
             test_names = [r["test_name"] for r in result]
             assert "tests.TestOld.test_ancient" not in test_names
+
+
+class TestGetTrends:
+    async def test_get_daily_trends(self, setup_test_db):
+        import aiosqlite
+        from datetime import datetime, timedelta
+
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            now = datetime.now()
+            async with aiosqlite.connect(setup_test_db) as db:
+                for i in range(3):
+                    date = (now - timedelta(days=i)).strftime("%Y-%m-%d 10:00:00")
+                    await db.execute(
+                        """INSERT INTO failure_history
+                           (job_id, job_name, build_number, test_name, error_signature, classification, analyzed_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            f"trend-{i}",
+                            "ocp-e2e",
+                            i + 1,
+                            f"tests.Test{i}.test_one",
+                            "sig-trend",
+                            "PRODUCT BUG",
+                            date,
+                        ),
+                    )
+                await db.commit()
+
+            result = await storage.get_trends(period="daily", days=7)
+            assert result["period"] == "daily"
+            assert len(result["data"]) >= 1
+            first = result["data"][0]
+            assert "date" in first
+            assert "failures" in first
+
+    async def test_get_trends_empty(self, setup_test_db):
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            result = await storage.get_trends()
+            assert result["data"] == []

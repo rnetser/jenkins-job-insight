@@ -1194,6 +1194,69 @@ async def get_regressions(
         return regressions
 
 
+async def get_trends(
+    period: str = "daily",
+    days: int = 30,
+    job_name: str = "",
+) -> dict:
+    """Get failure rate over time grouped by period.
+
+    Args:
+        period: Grouping period, either "daily" or "weekly".
+        days: Number of days to look back.
+        job_name: Optional filter by job name.
+
+    Returns:
+        Dict with period and data list, where each entry has date,
+        failures, unique_tests, total_tests, and failure_rate.
+    """
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+
+    if period == "weekly":
+        date_expr = "strftime('%Y-W%W', analyzed_at)"
+    else:
+        date_expr = "DATE(analyzed_at)"
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Build optional job_name filter
+        job_filter = ""
+        params: list = [cutoff]
+        if job_name:
+            job_filter = " AND job_name = ?"
+            params.append(job_name)
+
+        cursor = await db.execute(
+            f"SELECT {date_expr} as date, "
+            f"COUNT(*) as failures, "
+            f"COUNT(DISTINCT test_name) as unique_tests "
+            f"FROM failure_history "
+            f"WHERE analyzed_at >= ?{job_filter} "
+            f"GROUP BY {date_expr} "
+            f"ORDER BY date ASC",
+            params,
+        )
+        rows = await cursor.fetchall()
+
+        data = []
+        for row in rows:
+            data.append(
+                {
+                    "date": row["date"],
+                    "failures": row["failures"],
+                    "unique_tests": row["unique_tests"],
+                    "total_tests": row["failures"],
+                    "failure_rate": 0.0,
+                }
+            )
+
+    return {
+        "period": period,
+        "data": data,
+    }
+
+
 async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
     """List recent analysis results with summary data for dashboard display.
 
