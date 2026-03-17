@@ -643,6 +643,8 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     <h1>{e(job_name)}</h1>
     <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
     <span id="overall-review-status" class="status-chip" style="display:none"></span>
+    <span id="flaky-count-badge" class="status-chip" style="display:none"></span>
+    <span id="regression-count-badge" class="status-chip" style="display:none"></span>
     <div class="env-chips">
       <span class="env-chip">Build: #{e(build_number)}</span>
       <span class="env-chip">Status: {e(result.status)}</span>
@@ -1045,7 +1047,71 @@ document.addEventListener('DOMContentLoaded', async function() {{
     }});
     await loadCommentsAndReviews();
     await loadEnrichments();
+    await loadHistoryBadges();
 }});
+
+async function loadHistoryBadges() {{
+    try {{
+        const [flakyResp, regResp] = await Promise.all([
+            fetch(BASE_PATH + '/history/flaky'),
+            fetch(BASE_PATH + '/history/regressions')
+        ]);
+
+        const flakyTests = new Set();
+        const regressionTests = new Set();
+
+        if (flakyResp.ok) {{
+            const flakyData = await flakyResp.json();
+            (flakyData.flaky_tests || []).forEach(t => flakyTests.add(t.test_name));
+        }}
+        if (regResp.ok) {{
+            const regData = await regResp.json();
+            (regData.regressions || []).forEach(t => regressionTests.add(t.test_name));
+        }}
+
+        // Add badges to reviewed-toggle labels (which contain test names)
+        document.querySelectorAll('.reviewed-toggle').forEach(toggle => {{
+            const testName = toggle.dataset.testName;
+            if (!testName) return;
+
+            if (flakyTests.has(testName)) {{
+                const badge = document.createElement('span');
+                badge.className = 'classification-tag';
+                badge.style.cssText = 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);margin-left:6px;';
+                badge.textContent = 'FLAKY';
+                toggle.appendChild(badge);
+            }}
+            if (regressionTests.has(testName)) {{
+                const badge = document.createElement('span');
+                badge.className = 'classification-tag';
+                badge.style.cssText = 'background:rgba(248,81,73,0.12);color:var(--accent-red);margin-left:6px;';
+                badge.textContent = 'REGRESSION';
+                toggle.appendChild(badge);
+            }}
+        }});
+
+        if (flakyTests.size > 0) {{
+            const badge = document.getElementById('flaky-count-badge');
+            if (badge) {{
+                badge.style.display = '';
+                badge.textContent = flakyTests.size + ' Flaky';
+                badge.style.background = 'rgba(210,153,34,0.15)';
+                badge.style.color = 'var(--accent-yellow)';
+            }}
+        }}
+        if (regressionTests.size > 0) {{
+            const badge = document.getElementById('regression-count-badge');
+            if (badge) {{
+                badge.style.display = '';
+                badge.textContent = regressionTests.size + ' Regression';
+                badge.style.background = 'rgba(248,81,73,0.12)';
+                badge.style.color = 'var(--accent-red)';
+            }}
+        }}
+    }} catch (err) {{
+        console.warn('Failed to load history badges:', err);
+    }}
+}}
 </script>
 """)
 

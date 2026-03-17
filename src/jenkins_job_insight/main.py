@@ -189,6 +189,12 @@ class UsernameMiddleware(BaseHTTPMiddleware):
 app.add_middleware(UsernameMiddleware)
 
 
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """Redirect root to dashboard."""
+    return RedirectResponse(url="/dashboard")
+
+
 @app.get("/register", response_class=HTMLResponse)
 async def register_page() -> str:
     """Show registration page for new users."""
