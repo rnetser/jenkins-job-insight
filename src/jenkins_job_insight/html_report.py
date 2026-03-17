@@ -2652,7 +2652,7 @@ async function confirmDeleteJob(btn, jobId) {
 function cancelDeleteJob(btn) {
     var span = btn.closest('.delete-confirm');
     var jobId = span.parentNode.querySelector('[data-job-id]').dataset.jobId;
-    span.outerHTML = '<button class="delete-job-btn" data-job-id="' + jobId + '" onclick="event.preventDefault();event.stopPropagation();deleteJob(this,&#39;' + jobId + '&#39;)" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;opacity:0.5;" title="Delete this analysis">\u2715</button>';
+    span.outerHTML = '<button class="delete-job-btn" data-job-id="' + jobId + '" onclick="event.preventDefault();event.stopPropagation();deleteJob(this,&#39;' + jobId + '&#39;)" style="background:none;border:1px solid transparent;border-radius:4px;color:var(--text-muted);cursor:pointer;padding:4px 6px;transition:all 0.15s;display:inline-flex;align-items:center;" onmouseover="this.style.color=&#39;var(--accent-red)&#39;;this.style.borderColor=&#39;var(--accent-red)&#39;;this.style.background=&#39;rgba(248,81,73,0.12)&#39;" onmouseout="this.style.color=&#39;var(--text-muted)&#39;;this.style.borderColor=&#39;transparent&#39;;this.style.background=&#39;none&#39;" title="Delete this analysis"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>';
 }
 </script>
 """)
@@ -2796,11 +2796,16 @@ def _render_dashboard_card(
     parts.append(
         f'    <button class="delete-job-btn" data-job-id="{e(job_id)}"'
         f' onclick="event.preventDefault(); event.stopPropagation(); deleteJob(this, &#39;{e(job_id)}&#39;)"'
-        ' style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;opacity:0.5;'
-        'transition:opacity 0.15s,color 0.15s;"'
-        ' onmouseover="this.style.opacity=&#39;1&#39;;this.style.color=&#39;var(--accent-red)&#39;"'
-        ' onmouseout="this.style.opacity=&#39;0.5&#39;;this.style.color=&#39;var(--text-muted)&#39;"'
-        ' title="Delete this analysis">\u2715</button>'
+        ' style="background:none;border:1px solid transparent;border-radius:4px;color:var(--text-muted);'
+        'cursor:pointer;padding:4px 6px;transition:all 0.15s;display:inline-flex;align-items:center;"'
+        ' onmouseover="this.style.color=&#39;var(--accent-red)&#39;;this.style.borderColor=&#39;var(--accent-red)&#39;;'
+        'this.style.background=&#39;rgba(248,81,73,0.12)&#39;"'
+        ' onmouseout="this.style.color=&#39;var(--text-muted)&#39;;this.style.borderColor=&#39;transparent&#39;;'
+        'this.style.background=&#39;none&#39;"'
+        ' title="Delete this analysis">'
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+        '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>'
+        '<path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>'
     )
 
     if jenkins_url:
