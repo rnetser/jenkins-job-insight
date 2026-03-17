@@ -46,6 +46,12 @@ logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 FALLBACK_TAIL_LINES = 200
 
+# Load QUERY.md content for AI history API instructions
+_QUERY_MD_PATH = Path(__file__).parent / "QUERY.md"
+_QUERY_MD_CONTENT = ""
+if _QUERY_MD_PATH.exists():
+    _QUERY_MD_CONTENT = _QUERY_MD_PATH.read_text()
+
 JOB_INSIGHT_PROMPT_FILENAME = "JOB_INSIGHT_PROMPT.md"
 
 
@@ -700,6 +706,7 @@ async def analyze_failure_group(
     custom_prompt: str = "",
     artifacts_context: str = "",
     historical_context: str = "",
+    server_url: str = "",
 ) -> list[FailureAnalysis]:
     """Analyze a group of failures with the same error signature.
 
@@ -716,6 +723,7 @@ async def analyze_failure_group(
         custom_prompt: Additional instructions from request or repo-level file.
         artifacts_context: Jenkins artifacts context for AI analysis (optional).
         historical_context: Previous human feedback for similar failures.
+        server_url: Base URL of this server for AI history API access.
 
     Returns:
         List of FailureAnalysis objects, one per failure in the group.
@@ -742,6 +750,12 @@ async def analyze_failure_group(
         if git_log:
             git_log_section = f"\n\n{git_log}\n"
 
+    query_section = ""
+    if server_url and _QUERY_MD_CONTENT:
+        query_section = (
+            "\n\n" + _QUERY_MD_CONTENT.replace("{server_url}", server_url) + "\n"
+        )
+
     prompt = f"""Analyze this test failure from a Jenkins CI job.
 
 AFFECTED TESTS ({len(failures)} tests with same error):
@@ -758,7 +772,7 @@ CONSOLE CONTEXT:
 You have access to the test repository. Explore the code to understand the failure.
 
 Note: Multiple tests failed with the same error. Provide ONE analysis that applies to all of them.
-{custom_prompt_section}{historical_section}{git_log_section}
+{custom_prompt_section}{historical_section}{git_log_section}{query_section}
 {_JSON_RESPONSE_SCHEMA}
 """
 
@@ -811,6 +825,7 @@ async def analyze_child_job(
     custom_prompt: str = "",
     artifacts_context: str = "",
     historical_context: str = "",
+    server_url: str = "",
 ) -> ChildJobAnalysis:
     """Analyze a single child job, recursively analyzing its failed children.
 
@@ -830,6 +845,7 @@ async def analyze_child_job(
         custom_prompt: Additional instructions from request or repo-level file.
         artifacts_context: Jenkins artifacts context for AI analysis (optional).
         historical_context: Previous human feedback for similar failures.
+        server_url: Base URL of this server for AI history API access.
 
     Returns:
         ChildJobAnalysis with analysis results or nested child analyses.
@@ -897,6 +913,7 @@ async def analyze_child_job(
                 custom_prompt,
                 artifacts_context="",
                 historical_context=historical_context,
+                server_url=server_url,
             )
             for child_name, child_num in failed_children
         ]
@@ -1020,6 +1037,7 @@ async def analyze_child_job(
                     artifacts_context=artifacts_context,
                     historical_context=group_historical_context
                     or effective_historical_context,
+                    server_url=server_url,
                 )
             )
         group_results = await run_parallel_with_limit(tasks)
@@ -1085,6 +1103,12 @@ async def analyze_child_job(
     elif effective_historical_context:
         historical_section = f"\n\nHISTORICAL CONTEXT FROM PREVIOUS ANALYSES:\n{effective_historical_context}\n"
 
+    query_section = ""
+    if server_url and _QUERY_MD_CONTENT:
+        query_section = (
+            "\n\n" + _QUERY_MD_CONTENT.replace("{server_url}", server_url) + "\n"
+        )
+
     prompt = f"""Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
@@ -1094,7 +1118,7 @@ CONSOLE OUTPUT (errors/failures/warnings extracted):
 {artifacts_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-{custom_prompt_section}{historical_section}
+{custom_prompt_section}{historical_section}{query_section}
 {_JSON_RESPONSE_SCHEMA}
 """
     success, analysis_output = await call_ai_cli(
@@ -1132,6 +1156,7 @@ async def analyze_job(
     ai_provider: str,
     ai_model: str,
     job_id: str | None = None,
+    server_url: str = "",
 ) -> AnalysisResult:
     """Analyze a Jenkins job failure."""
     if job_id is None:
@@ -1295,6 +1320,7 @@ async def analyze_job(
                         ai_cli_timeout=settings.ai_cli_timeout,
                         custom_prompt=custom_prompt,
                         artifacts_context="",
+                        server_url=server_url,
                     )
                     for child_name, child_num in failed_child_jobs
                 ]
@@ -1425,6 +1451,7 @@ async def analyze_job(
                             custom_prompt=custom_prompt,
                             artifacts_context=artifacts_context,
                             historical_context=group_historical_context,
+                            server_url=server_url,
                         )
                     )
                 group_results = await run_parallel_with_limit(failure_tasks)
@@ -1471,6 +1498,14 @@ async def analyze_job(
                         + "\n"
                     )
 
+                query_section = ""
+                if server_url and _QUERY_MD_CONTENT:
+                    query_section = (
+                        "\n\n"
+                        + _QUERY_MD_CONTENT.replace("{server_url}", server_url)
+                        + "\n"
+                    )
+
                 prompt = f"""Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
@@ -1481,7 +1516,7 @@ CONSOLE OUTPUT (errors/failures/warnings extracted):
 {artifacts_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-{custom_prompt_section}{historical_section}
+{custom_prompt_section}{historical_section}{query_section}
 {_JSON_RESPONSE_SCHEMA}
 """
                 success, analysis_output = await call_ai_cli(

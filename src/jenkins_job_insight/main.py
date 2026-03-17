@@ -389,12 +389,16 @@ async def process_analysis_with_id(
 
         ai_provider, ai_model = _resolve_ai_config(body)
 
+        # Build server URL for AI history API access
+        server_url = base_url or f"http://localhost:{os.environ.get('PORT', '8000')}"
+
         result = await analyze_job(
             body,
             settings,
             ai_provider=ai_provider,
             ai_model=ai_model,
             job_id=job_id,
+            server_url=server_url,
         )
 
         # Enrich PRODUCT BUG failures with Jira matches
@@ -462,11 +466,15 @@ async def analyze(
         merged = _merge_settings(body, settings)
         ai_provider, ai_model = _resolve_ai_config(body)
 
+        # Build server URL for AI history API access
+        server_url = base_url or f"http://localhost:{os.environ.get('PORT', '8000')}"
+
         result = await analyze_job(
             body,
             merged,
             ai_provider=ai_provider,
             ai_model=ai_model,
+            server_url=server_url,
         )
 
         # Enrich PRODUCT BUG failures with Jira matches
@@ -613,6 +621,9 @@ async def analyze_failures(
 
         custom_prompt = _resolve_custom_prompt(body.raw_prompt, repo_path)
 
+        # Build server URL for AI history API access
+        server_url = base_url or f"http://localhost:{os.environ.get('PORT', '8000')}"
+
         # Analyze each unique failure group in parallel
         coroutines = [
             analyze_failure_group(
@@ -623,6 +634,7 @@ async def analyze_failures(
                 ai_model=ai_model,
                 ai_cli_timeout=merged.ai_cli_timeout,
                 custom_prompt=custom_prompt,
+                server_url=server_url,
             )
             for group_failures in groups.values()
         ]
