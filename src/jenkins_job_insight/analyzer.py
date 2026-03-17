@@ -775,7 +775,8 @@ async def analyze_failure_group(
             f"query_section is EMPTY (server_url='{server_url}', _QUERY_MD_CONTENT={len(_QUERY_MD_CONTENT)} bytes)"
         )
 
-    prompt = f"""Analyze this test failure from a Jenkins CI job.
+    prompt = f"""{query_section}
+Analyze this test failure from a Jenkins CI job.
 
 AFFECTED TESTS ({len(failures)} tests with same error):
 {chr(10).join(f"- {name}" for name in test_names)}
@@ -791,7 +792,7 @@ CONSOLE CONTEXT:
 You have access to the test repository. Explore the code to understand the failure.
 
 Note: Multiple tests failed with the same error. Provide ONE analysis that applies to all of them.
-{custom_prompt_section}{historical_section}{git_log_section}{query_section}
+{custom_prompt_section}{historical_section}{git_log_section}
 {_JSON_RESPONSE_SCHEMA}
 """
 
@@ -1144,7 +1145,8 @@ async def analyze_child_job(
             f"query_section is EMPTY (server_url='{server_url}', _QUERY_MD_CONTENT={len(_QUERY_MD_CONTENT)} bytes)"
         )
 
-    prompt = f"""Analyze this failed Jenkins job:
+    prompt = f"""{query_section}
+Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
 
@@ -1153,7 +1155,7 @@ CONSOLE OUTPUT (errors/failures/warnings extracted):
 {artifacts_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-{custom_prompt_section}{historical_section}{query_section}
+{custom_prompt_section}{historical_section}
 {_JSON_RESPONSE_SCHEMA}
 """
     logger.debug(f"AI prompt length: {len(prompt)} chars")
@@ -1557,7 +1559,8 @@ async def analyze_job(
                         f"query_section is EMPTY (server_url='{server_url}', _QUERY_MD_CONTENT={len(_QUERY_MD_CONTENT)} bytes)"
                     )
 
-                prompt = f"""Analyze this failed Jenkins job:
+                prompt = f"""{query_section}
+Analyze this failed Jenkins job:
 
 Job: {job_name} #{build_number}
 
@@ -1567,7 +1570,7 @@ CONSOLE OUTPUT (errors/failures/warnings extracted):
 {artifacts_section}
 
 You have access to the repository if one was cloned. Explore to understand the failure.
-{custom_prompt_section}{historical_section}{query_section}
+{custom_prompt_section}{historical_section}
 {_JSON_RESPONSE_SCHEMA}
 """
                 logger.debug(f"AI prompt length: {len(prompt)} chars")

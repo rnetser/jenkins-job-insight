@@ -403,9 +403,10 @@ async def process_analysis_with_id(
             f"process_analysis_with_id: ai_provider={ai_provider}, ai_model={ai_model}"
         )
 
-        # Build server URL for AI history API access
-        server_url = base_url or f"http://localhost:{os.environ.get('PORT', '8000')}"
-        logger.debug(f"Built server_url={server_url} for analyze_job")
+        # AI runs inside the container, use internal port
+        internal_port = os.environ.get("PORT", "8000")
+        server_url = f"http://localhost:{internal_port}"
+        logger.debug(f"Built internal server_url={server_url} for AI tool access")
 
         result = await analyze_job(
             body,
@@ -488,9 +489,10 @@ async def analyze(
         merged = _merge_settings(body, settings)
         ai_provider, ai_model = _resolve_ai_config(body)
 
-        # Build server URL for AI history API access
-        server_url = base_url or f"http://localhost:{os.environ.get('PORT', '8000')}"
-        logger.debug(f"Built server_url={server_url} for analyze_job")
+        # AI runs inside the container, use internal port
+        internal_port = os.environ.get("PORT", "8000")
+        server_url = f"http://localhost:{internal_port}"
+        logger.debug(f"Built internal server_url={server_url} for AI tool access")
 
         result = await analyze_job(
             body,
@@ -647,9 +649,10 @@ async def analyze_failures(
 
         custom_prompt = _resolve_custom_prompt(body.raw_prompt, repo_path)
 
-        # Build server URL for AI history API access
-        server_url = base_url or f"http://localhost:{os.environ.get('PORT', '8000')}"
-        logger.debug(f"Built server_url={server_url} for analyze_job")
+        # AI runs inside the container, use internal port
+        internal_port = os.environ.get("PORT", "8000")
+        server_url = f"http://localhost:{internal_port}"
+        logger.debug(f"Built internal server_url={server_url} for AI tool access")
 
         # Analyze each unique failure group in parallel
         coroutines = [
