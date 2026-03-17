@@ -409,6 +409,43 @@ Each analyzed test failure supports user comments and a "Reviewed" checkbox for 
 
 Jira enrichment reuses existing Jira configuration (`JIRA_URL`, `JIRA_PAT`, and optionally `JIRA_EMAIL` for Cloud auth).
 
+### Failure History & AI Tools
+
+The service maintains a history of all analyzed test failures and exposes it through API endpoints. During analysis, the AI receives a skill file (`QUERY.md`) that teaches it how to query these endpoints, enabling data-driven classification.
+
+#### History API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/history/test/{test_name}` | Pass/fail history for a specific test, including failure rate, classifications breakdown, flakiness indicator, recent runs, and related comments |
+| `GET` | `/history/search?signature={sig}` | Find all tests that failed with the same error signature, with occurrence counts and last classification |
+| `GET` | `/history/stats/{job_name}` | Aggregate statistics for a specific job: overall health, most common failures, failure trend direction |
+| `GET` | `/history/flaky` | Tests with intermittent pass/fail behavior (failure rate between 20-80%) |
+| `GET` | `/history/regressions` | Tests that recently started failing after previously passing |
+| `GET` | `/history/trends` | Daily or weekly failure rate data points over time |
+
+#### QUERY.md -- AI Skill File
+
+The file `src/jenkins_job_insight/QUERY.md` is injected into the AI prompt during analysis. It teaches the AI how to use `curl` to query the history endpoints before classifying each failure. This allows the AI to:
+
+- Check whether a test is already known to be flaky
+- Reference existing comments and bug tickets instead of suggesting duplicates
+- Correlate error signatures across multiple tests
+- Identify regressions by comparing with recent pass history
+
+#### What the AI Can Detect with History
+
+| Pattern | How It Uses History |
+|---------|-------------------|
+| **Flaky tests** | Queries `/history/flaky` and `/history/test/{name}` to identify intermittent failures (20-80% failure rate) |
+| **Regressions** | Queries `/history/regressions` and cross-references with git log to find the causing commit |
+| **Ongoing failures** | Checks consecutive failure count in `/history/test/{name}` to flag persistent issues |
+| **Duplicate bugs** | Searches `/history/search?signature=...` to find other tests hitting the same error, then references existing comments and Jira tickets |
+
+#### History Page
+
+The `/history` endpoint serves an interactive HTML page accessible from the dashboard header. It provides a UI for exploring flaky tests, regressions, and failure trends without using the API directly.
+
 ### SSL Verification
 
 For Jenkins servers with self-signed SSL certificates, disable certificate verification:
@@ -552,6 +589,7 @@ This context helps the AI distinguish between test infrastructure issues (CODE I
 | `/results/{job_id}.html` | GET    | Retrieve stored result as an HTML report (supports `?refresh=1`) |
 | `/dashboard`             | GET    | HTML dashboard listing all analysis reports       |
 | `/results`               | GET    | List recent analysis jobs (default: 50, max: 100) |
+| `/history`               | GET    | Interactive failure history page (HTML)            |
 | `/health`                | GET    | Health check endpoint                             |
 | `/favicon.ico`           | GET    | Application favicon (SVG)                         |
 | `/analyze-failures`      | POST   | Analyze raw test failures directly (no Jenkins)   |
