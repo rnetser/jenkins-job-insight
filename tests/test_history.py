@@ -665,3 +665,69 @@ class TestGetFlakyTests:
             result = await storage.get_flaky_tests(max_rate=0.8)
             test_names = [t["test_name"] for t in result]
             assert "tests.TestPersist.test_always_fail" not in test_names
+
+
+class TestGetRegressions:
+    async def test_detects_regression(self, setup_test_db):
+        import aiosqlite
+        from datetime import datetime, timedelta
+
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            now = datetime.now()
+            async with aiosqlite.connect(setup_test_db) as db:
+                # A test that recently started failing
+                for i in range(3):
+                    analyzed_at = (now - timedelta(days=i)).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )
+                    await db.execute(
+                        """INSERT INTO failure_history
+                           (job_id, job_name, build_number, test_name, error_signature, classification, analyzed_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            f"reg-{i}",
+                            "ocp-e2e",
+                            100 + i,
+                            "tests.TestNew.test_regression",
+                            "sig-reg",
+                            "CODE ISSUE",
+                            analyzed_at,
+                        ),
+                    )
+                await db.commit()
+
+            result = await storage.get_regressions(days=7, min_previous_passes=0)
+            assert len(result) >= 1
+            reg = result[0]
+            assert reg["test_name"] == "tests.TestNew.test_regression"
+            assert reg["consecutive_failures"] >= 1
+
+    async def test_excludes_old_failures(self, setup_test_db):
+        import aiosqlite
+        from datetime import datetime, timedelta
+
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            async with aiosqlite.connect(setup_test_db) as db:
+                # Failure from 30 days ago
+                old_date = (datetime.now() - timedelta(days=30)).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                await db.execute(
+                    """INSERT INTO failure_history
+                       (job_id, job_name, build_number, test_name, error_signature, classification, analyzed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        "old-1",
+                        "ocp-e2e",
+                        1,
+                        "tests.TestOld.test_ancient",
+                        "sig-old",
+                        "PRODUCT BUG",
+                        old_date,
+                    ),
+                )
+                await db.commit()
+
+            result = await storage.get_regressions(days=7)
+            test_names = [r["test_name"] for r in result]
+            assert "tests.TestOld.test_ancient" not in test_names

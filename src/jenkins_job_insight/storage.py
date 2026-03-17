@@ -1088,6 +1088,112 @@ async def get_flaky_tests(
         return flaky_tests
 
 
+async def get_regressions(
+    days: int = 7,
+    min_previous_passes: int = 3,
+    job_name: str = "",
+) -> list[dict]:
+    """Find tests that recently started failing.
+
+    A regression is a test whose first recorded failure occurred within
+    the lookback period.
+
+    Args:
+        days: Number of days to look back for new failures.
+        min_previous_passes: Minimum previous passing builds required
+            (set to 0 to include all new failures).
+        job_name: Optional filter by job name.
+
+    Returns:
+        List of dicts with test_name, first_failure, first_failure_job,
+        consecutive_failures, previous_passes, classification, and
+        error_signature.
+    """
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Build optional job_name filter
+        job_filter = ""
+        params: list = [cutoff]
+        if job_name:
+            job_filter = " AND job_name = ?"
+            params.append(job_name)
+
+        # Find tests whose first failure is within the lookback window
+        cursor = await db.execute(
+            f"SELECT test_name, MIN(analyzed_at) as first_failure, "
+            f"COUNT(*) as consecutive_failures "
+            f"FROM failure_history "
+            f"WHERE analyzed_at >= ?{job_filter} "
+            f"GROUP BY test_name "
+            f"HAVING MIN(analyzed_at) >= ?",
+            params + [cutoff],
+        )
+        candidates = await cursor.fetchall()
+
+        regressions = []
+        for candidate in candidates:
+            test_name = candidate["test_name"]
+
+            # Check that the test has no failures before the cutoff window
+            check_params: list = [test_name, cutoff]
+            if job_name:
+                check_params.append(job_name)
+            cursor = await db.execute(
+                f"SELECT COUNT(*) FROM failure_history "
+                f"WHERE test_name = ? AND analyzed_at < ?{' AND job_name = ?' if job_name else ''}",
+                check_params,
+            )
+            old_failures = (await cursor.fetchone())[0]
+            if old_failures > 0:
+                # Not a new regression, it failed before the window too
+                continue
+
+            # Estimate previous passes (total builds minus failures)
+            if job_name:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM results WHERE result_json LIKE ?",
+                    (f'%"job_name": "{job_name}"%',),
+                )
+            else:
+                cursor = await db.execute("SELECT COUNT(*) FROM results")
+            total_builds = (await cursor.fetchone())[0]
+            previous_passes = max(0, total_builds - candidate["consecutive_failures"])
+
+            if previous_passes < min_previous_passes:
+                continue
+
+            # Get classification and error_signature from first failure
+            first_failure_params: list = [test_name]
+            if job_name:
+                first_failure_params.append(job_name)
+            cursor = await db.execute(
+                f"SELECT classification, error_signature, job_name as first_failure_job "
+                f"FROM failure_history WHERE test_name = ?{' AND job_name = ?' if job_name else ''} "
+                f"ORDER BY analyzed_at ASC LIMIT 1",
+                first_failure_params,
+            )
+            detail = await cursor.fetchone()
+
+            regressions.append(
+                {
+                    "test_name": test_name,
+                    "first_failure": candidate["first_failure"],
+                    "first_failure_job": detail["first_failure_job"] if detail else "",
+                    "consecutive_failures": candidate["consecutive_failures"],
+                    "previous_passes": previous_passes,
+                    "classification": detail["classification"] if detail else "",
+                    "error_signature": detail["error_signature"] if detail else "",
+                }
+            )
+
+        # Sort by consecutive_failures descending
+        regressions.sort(key=lambda x: x["consecutive_failures"], reverse=True)
+        return regressions
+
+
 async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
     """List recent analysis results with summary data for dashboard display.
 
