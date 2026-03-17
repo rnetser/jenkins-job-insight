@@ -1221,7 +1221,7 @@ async function loadClassifications() {{
                 if (jiraMatch) badgeLabel = 'KNOWN BUG: ' + jiraMatch[1];
             }}
             badge.textContent = badgeLabel;
-            badge.title = cls.reason || '';
+            badge.title = (cls.reason || '') + (cls.references_info ? '\nRef: ' + cls.references_info : '');
             toggle.appendChild(badge);
         }});
 
@@ -1232,13 +1232,19 @@ async function loadClassifications() {{
             var toggles = card.querySelectorAll('.reviewed-toggle');
             var cardClassifications = {{}};
             var cardJiraKeys = {{}};
+            var cardReasons = {{}};
             toggles.forEach(function(t) {{
                 var tn = t.dataset.testName;
                 if (tn && byTest[tn]) {{
                     var cls = byTest[tn][0].classification;
                     cardClassifications[cls] = (cardClassifications[cls] || 0) + 1;
+                    if (!cardReasons[cls]) cardReasons[cls] = [];
+                    var r = byTest[tn][0].reason || '';
+                    var ri = byTest[tn][0].references_info || '';
+                    var tip = r + (ri ? '\nRef: ' + ri : '');
+                    if (tip && cardReasons[cls].indexOf(tip) === -1) cardReasons[cls].push(tip);
                     if (cls === 'KNOWN_BUG') {{
-                        var jm = (byTest[tn][0].reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
+                        var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
                         if (jm && !cardJiraKeys[jm[1]]) cardJiraKeys[jm[1]] = true;
                     }}
                 }}
@@ -1263,6 +1269,7 @@ async function loadClassifications() {{
                     }}
                 }}
                 badge.textContent = label;
+                badge.title = (cardReasons[cls] || []).join('; ');
                 summary.appendChild(badge);
             }}
         }});
@@ -1274,13 +1281,19 @@ async function loadClassifications() {{
             var toggles = childCard.querySelectorAll('.reviewed-toggle');
             var childClassifications = {{}};
             var childJiraKeys = {{}};
+            var childReasons = {{}};
             toggles.forEach(function(t) {{
                 var tn = t.dataset.testName;
                 if (tn && byTest[tn]) {{
                     var cls = byTest[tn][0].classification;
                     childClassifications[cls] = (childClassifications[cls] || 0) + 1;
+                    if (!childReasons[cls]) childReasons[cls] = [];
+                    var r = byTest[tn][0].reason || '';
+                    var ri = byTest[tn][0].references_info || '';
+                    var tip = r + (ri ? '\nRef: ' + ri : '');
+                    if (tip && childReasons[cls].indexOf(tip) === -1) childReasons[cls].push(tip);
                     if (cls === 'KNOWN_BUG') {{
-                        var jm = (byTest[tn][0].reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
+                        var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
                         if (jm && !childJiraKeys[jm[1]]) childJiraKeys[jm[1]] = true;
                     }}
                 }}
@@ -1303,6 +1316,7 @@ async function loadClassifications() {{
                     }}
                 }}
                 badge.textContent = label;
+                badge.title = (childReasons[cls] || []).join('; ');
                 summary.appendChild(badge);
             }}
         }});
