@@ -977,6 +977,9 @@ async function loadCommentsAndReviews() {{
                 overallBadge.style.background = 'var(--bg-tertiary)';
                 overallBadge.style.color = 'var(--text-muted)';
                 overallBadge.style.border = '1px solid var(--border)';
+                overallBadge.style.fontSize = '13px';
+                overallBadge.style.padding = '4px 12px';
+                overallBadge.style.fontFamily = 'var(--font-mono)';
             }}
         }}
 
@@ -1026,6 +1029,9 @@ function updateReviewBadges() {{
     const overallBadge = document.getElementById('overall-review-status');
     if (overallBadge && totalTests > 0) {{
         overallBadge.style.display = '';
+        overallBadge.style.fontSize = '13px';
+        overallBadge.style.padding = '4px 12px';
+        overallBadge.style.fontFamily = 'var(--font-mono)';
         if (reviewedTests >= totalTests) {{
             overallBadge.textContent = '\u2713 Fully Reviewed';
             overallBadge.style.background = 'rgba(63,185,80,0.15)';
@@ -1432,7 +1438,7 @@ async function loadClassifications() {{
             }};
             for (var cls in headerClassifications) {{
                 var chip = document.createElement('span');
-                chip.style.cssText = 'display:inline-flex;align-items:center;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;white-space:nowrap;' + (hColors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)');
+                chip.style.cssText = 'display:inline-flex;align-items:center;font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;font-family:var(--font-mono);white-space:nowrap;' + (hColors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)');
                 chip.textContent = headerClassifications[cls] + ' ' + cls.replace('_', ' ');
                 headerChips.appendChild(chip);
             }}
