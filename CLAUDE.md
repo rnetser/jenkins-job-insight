@@ -55,6 +55,22 @@ This project uses AI CLI tools (Claude CLI, Gemini CLI, Cursor Agent CLI) instea
 | `enrich_with_jira_matches()` | Post-processing: attaches Jira matches to PRODUCT BUG failures |
 | `_filter_matches_with_ai()` | AI-powered relevance filtering of Jira candidates |
 
+### AI Tool Access (IMPORTANT)
+
+Never pre-feed data to the AI in the prompt. Instead, give the AI tools (API endpoints, scripts, commands) and let it decide what data it needs and extract it itself.
+
+**DO:**
+- Expose API endpoints the AI can curl
+- Provide a skill file (e.g., QUERY.md) documenting available tools
+- Let the AI query, explore, and interpret data on its own
+
+**DON'T:**
+- Pre-query the database and stuff results into the prompt
+- Summarize or filter data before the AI sees it
+- Make decisions about what data the AI needs — let the AI decide
+
+This principle applies to all AI integrations: failure history, test analysis, and any future AI-powered features.
+
 ### Failure Deduplication
 
 When multiple tests fail with the same error:
