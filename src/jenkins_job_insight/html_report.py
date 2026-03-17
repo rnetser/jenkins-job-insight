@@ -111,6 +111,105 @@ body {
 }"""
 
 
+def _modal_css() -> str:
+    """Return CSS for the confirmation modal dialog.
+
+    Used by both the analysis report and dashboard pages.
+
+    Returns:
+        A CSS string (without ``<style>`` tags) ready to embed directly.
+    """
+    return """\
+/* Modal popup */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal-dialog {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+}
+.modal-dialog h3 {
+    font-size: 16px;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+.modal-dialog p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+}
+.modal-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+.modal-btn {
+    padding: 8px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    transition: background 0.15s, border-color 0.15s;
+}
+.modal-btn-cancel {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+.modal-btn-cancel:hover {
+    background: var(--bg-hover);
+}
+.modal-btn-danger {
+    background: rgba(248,81,73,0.12);
+    color: var(--accent-red);
+    border-color: var(--accent-red);
+}
+.modal-btn-danger:hover {
+    background: rgba(248,81,73,0.25);
+}"""
+
+
+def _modal_js() -> str:
+    """Return JavaScript for the ``showConfirmModal`` function.
+
+    Used by both the analysis report and dashboard pages.
+
+    Returns:
+        A JavaScript string (without ``<script>`` tags) ready to embed directly.
+    """
+    return """\
+function showConfirmModal(title, message, onConfirm) {
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = '<div class="modal-dialog">' +
+        '<h3>' + title + '</h3>' +
+        '<p>' + message + '</p>' +
+        '<div class="modal-actions">' +
+        '<button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>' +
+        '<button class="modal-btn modal-btn-danger" id="modal-confirm">Delete</button>' +
+        '</div></div>';
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#modal-cancel').onclick = function() { overlay.remove(); };
+    overlay.querySelector('#modal-confirm').onclick = function() { overlay.remove(); onConfirm(); };
+    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+}"""
+
+
 def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str:
     """Generate a self-contained HTML report for an analysis result.
 
@@ -623,67 +722,7 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     font-family: var(--font-mono);
 }}
 
-/* Modal popup */
-.modal-overlay {{
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-}}
-.modal-dialog {{
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 24px;
-    max-width: 400px;
-    width: 90%;
-    text-align: center;
-}}
-.modal-dialog h3 {{
-    font-size: 16px;
-    color: var(--text-primary);
-    margin-bottom: 8px;
-}}
-.modal-dialog p {{
-    font-size: 13px;
-    color: var(--text-secondary);
-    margin-bottom: 20px;
-}}
-.modal-actions {{
-    display: flex;
-    gap: 12px;
-    justify-content: center;
-}}
-.modal-btn {{
-    padding: 8px 20px;
-    font-size: 13px;
-    font-weight: 600;
-    border-radius: 6px;
-    cursor: pointer;
-    border: 1px solid var(--border);
-    transition: background 0.15s, border-color 0.15s;
-}}
-.modal-btn-cancel {{
-    background: var(--bg-tertiary);
-    color: var(--text-secondary);
-}}
-.modal-btn-cancel:hover {{
-    background: var(--bg-hover);
-}}
-.modal-btn-danger {{
-    background: rgba(248,81,73,0.12);
-    color: var(--accent-red);
-    border-color: var(--accent-red);
-}}
-.modal-btn-danger:hover {{
-    background: rgba(248,81,73,0.25);
-}}
+{_modal_css()}
 
 /* Responsive (page-specific) */
 @media (max-width: 768px) {{
@@ -991,22 +1030,7 @@ function appendCommentToList(section, comment) {{
     list.appendChild(item);
 }}
 
-function showConfirmModal(title, message, onConfirm) {{
-    var overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = '<div class="modal-dialog">' +
-        '<h3>' + title + '</h3>' +
-        '<p>' + message + '</p>' +
-        '<div class="modal-actions">' +
-        '<button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>' +
-        '<button class="modal-btn modal-btn-danger" id="modal-confirm">Delete</button>' +
-        '</div></div>';
-    document.body.appendChild(overlay);
-
-    overlay.querySelector('#modal-cancel').onclick = function() {{ overlay.remove(); }};
-    overlay.querySelector('#modal-confirm').onclick = function() {{ overlay.remove(); onConfirm(); }};
-    overlay.onclick = function(e) {{ if (e.target === overlay) overlay.remove(); }};
-}}
+{_modal_js()}
 
 async function deleteComment(btn, commentId) {{
     showConfirmModal('Delete Comment', 'Are you sure you want to delete this comment?', async function() {{
@@ -2393,67 +2417,7 @@ def generate_dashboard_html(
     margin-top: 8px;
 }}
 
-/* Modal popup */
-.modal-overlay {{
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-}}
-.modal-dialog {{
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 24px;
-    max-width: 400px;
-    width: 90%;
-    text-align: center;
-}}
-.modal-dialog h3 {{
-    font-size: 16px;
-    color: var(--text-primary);
-    margin-bottom: 8px;
-}}
-.modal-dialog p {{
-    font-size: 13px;
-    color: var(--text-secondary);
-    margin-bottom: 20px;
-}}
-.modal-actions {{
-    display: flex;
-    gap: 12px;
-    justify-content: center;
-}}
-.modal-btn {{
-    padding: 8px 20px;
-    font-size: 13px;
-    font-weight: 600;
-    border-radius: 6px;
-    cursor: pointer;
-    border: 1px solid var(--border);
-    transition: background 0.15s, border-color 0.15s;
-}}
-.modal-btn-cancel {{
-    background: var(--bg-tertiary);
-    color: var(--text-secondary);
-}}
-.modal-btn-cancel:hover {{
-    background: var(--bg-hover);
-}}
-.modal-btn-danger {{
-    background: rgba(248,81,73,0.12);
-    color: var(--accent-red);
-    border-color: var(--accent-red);
-}}
-.modal-btn-danger:hover {{
-    background: rgba(248,81,73,0.25);
-}}
+{_modal_css()}
 
 /* Responsive (page-specific) */
 @media (max-width: 768px) {{
@@ -2745,25 +2709,9 @@ def generate_dashboard_html(
 """)
 
     # --- DELETE JOB JS ---
+    parts.append("\n<script>")
+    parts.append(_modal_js())
     parts.append("""
-<script>
-function showConfirmModal(title, message, onConfirm) {
-    var overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = '<div class="modal-dialog">' +
-        '<h3>' + title + '</h3>' +
-        '<p>' + message + '</p>' +
-        '<div class="modal-actions">' +
-        '<button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>' +
-        '<button class="modal-btn modal-btn-danger" id="modal-confirm">Delete</button>' +
-        '</div></div>';
-    document.body.appendChild(overlay);
-
-    overlay.querySelector('#modal-cancel').onclick = function() { overlay.remove(); };
-    overlay.querySelector('#modal-confirm').onclick = function() { overlay.remove(); onConfirm(); };
-    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
-}
-
 function deleteJob(btn, jobId) {
     showConfirmModal('Delete Analysis', 'Are you sure you want to delete this analysis? All comments, reviews, and history data will be permanently removed.', async function() {
         var BASE = window.location.pathname.replace(/\\/dashboard.*$/, '');
