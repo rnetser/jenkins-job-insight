@@ -44,12 +44,15 @@ def _sanitize_jql_keyword(keyword: str) -> str:
 class JiraClient:
     """HTTP client for Jira REST API.
 
-    Auto-detects Cloud (email + API token, REST API v3) vs
+    Auto-detects Cloud (email + API token/PAT, REST API v3) vs
     Server/DC (PAT only, REST API v2) based on provided credentials.
 
-    Cloud detection: both ``jira_email`` and ``jira_api_token`` are set.
+    Cloud detection: ``jira_email`` is set. Uses Basic auth with
+    ``email:token`` where the token is ``jira_api_token`` (preferred)
+    or ``jira_pat`` as fallback.
 
-    Server/DC detection: only ``jira_pat`` is set (no email or no api_token).
+    Server/DC detection: no ``jira_email``. Uses Bearer auth with
+    ``jira_pat``.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -57,25 +60,27 @@ class JiraClient:
         self._project_key = settings.jira_project_key
         self._max_results = settings.jira_max_results
 
+        # Resolve token: prefer jira_api_token (backward compat), fall back to jira_pat
+        token_value = ""
+        if settings.jira_api_token:
+            token_value = settings.jira_api_token.get_secret_value()
+        elif settings.jira_pat:
+            token_value = settings.jira_pat.get_secret_value()
+
         # Detect Cloud vs Server/DC
         self._auth: tuple[str, str] | None
-        if settings.jira_email and settings.jira_api_token:
-            # Cloud: email + API token -> Basic auth, API v3
-            self._auth = (
-                settings.jira_email,
-                settings.jira_api_token.get_secret_value(),
-            )
+        if settings.jira_email and token_value:
+            # Cloud: email present = Cloud instance, Basic auth with email:pat
+            self._auth = (settings.jira_email, token_value)
             self._search_path = "/rest/api/3/search/jql"
             self._api_path = "/rest/api/3"
             self._headers: dict[str, str] = {}
-        elif settings.jira_pat:
-            # Server/DC: PAT only -> Bearer auth, API v2
+        elif token_value:
+            # Server/DC: no email, Bearer PAT
             self._auth = None
             self._search_path = "/rest/api/2/search"
             self._api_path = "/rest/api/2"
-            self._headers = {
-                "Authorization": f"Bearer {settings.jira_pat.get_secret_value()}"
-            }
+            self._headers = {"Authorization": f"Bearer {token_value}"}
         else:
             # No valid auth configured
             self._auth = None

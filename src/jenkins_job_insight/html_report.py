@@ -157,6 +157,17 @@ def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str
     border-radius: 12px;
     font-family: var(--font-mono);
 }}
+.status-chip {{
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 12px;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}}
 .env-chips {{ display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }}
 .env-chip {{
     font-size: 12px;
@@ -627,6 +638,7 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
   <div class="header-content">
     <h1>{e(job_name)}</h1>
     <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
+    <span id="overall-review-status" class="status-chip" style="display:none"></span>
     <div class="env-chips">
       <span class="env-chip">Build: #{e(build_number)}</span>
       <span class="env-chip">Status: {e(result.status)}</span>
@@ -767,9 +779,85 @@ async function loadCommentsAndReviews() {{
                 }});
             }}
         }}
+        updateReviewBadges();
     }} catch (err) {{
         console.warn('Failed to load comments:', err);
     }}
+}}
+
+function updateReviewBadges() {{
+    // Overall job review status
+    const allToggles = document.querySelectorAll('.reviewed-toggle');
+    const totalTests = allToggles.length;
+    const reviewedTests = document.querySelectorAll('.reviewed-toggle.checked').length;
+
+    const overallBadge = document.getElementById('overall-review-status');
+    if (overallBadge && totalTests > 0) {{
+        overallBadge.style.display = '';
+        if (reviewedTests >= totalTests) {{
+            overallBadge.textContent = '\u2713 Fully Reviewed';
+            overallBadge.style.background = 'rgba(63,185,80,0.15)';
+            overallBadge.style.color = 'var(--accent-green)';
+        }} else if (reviewedTests > 0) {{
+            overallBadge.textContent = reviewedTests + '/' + totalTests + ' Reviewed';
+            overallBadge.style.background = 'rgba(210,153,34,0.15)';
+            overallBadge.style.color = 'var(--accent-yellow)';
+        }} else {{
+            overallBadge.textContent = 'Needs Review';
+            overallBadge.style.background = 'rgba(248,81,73,0.12)';
+            overallBadge.style.color = 'var(--accent-red)';
+        }}
+    }}
+
+    // Per child job review status
+    document.querySelectorAll('.child-review-status').forEach(badge => {{
+        const job = badge.closest('.child-job');
+        if (!job) return;
+        const toggles = job.querySelectorAll('.reviewed-toggle');
+        const total = toggles.length;
+        const checked = job.querySelectorAll('.reviewed-toggle.checked').length;
+        if (total === 0) return;
+
+        badge.style.display = '';
+        if (checked >= total) {{
+            badge.textContent = '\u2713 Reviewed';
+            badge.style.background = 'rgba(63,185,80,0.15)';
+            badge.style.color = 'var(--accent-green)';
+        }} else if (checked > 0) {{
+            badge.textContent = checked + '/' + total;
+            badge.style.background = 'rgba(210,153,34,0.15)';
+            badge.style.color = 'var(--accent-yellow)';
+        }} else {{
+            badge.textContent = 'Needs Review';
+            badge.style.background = 'rgba(248,81,73,0.12)';
+            badge.style.color = 'var(--accent-red)';
+        }}
+    }});
+
+    // Per bug card review status
+    document.querySelectorAll('.group-review-status').forEach(badge => {{
+        const card = badge.closest('.bug-card');
+        if (!card) return;
+        const toggles = card.querySelectorAll('.reviewed-toggle');
+        const total = toggles.length;
+        const checked = card.querySelectorAll('.reviewed-toggle.checked').length;
+        if (total === 0) return;
+
+        badge.style.display = '';
+        if (checked >= total) {{
+            badge.textContent = '\u2713 Reviewed';
+            badge.style.background = 'rgba(63,185,80,0.15)';
+            badge.style.color = 'var(--accent-green)';
+        }} else if (checked > 0) {{
+            badge.textContent = checked + '/' + total;
+            badge.style.background = 'rgba(210,153,34,0.15)';
+            badge.style.color = 'var(--accent-yellow)';
+        }} else {{
+            badge.textContent = 'Needs Review';
+            badge.style.background = 'rgba(248,81,73,0.12)';
+            badge.style.color = 'var(--accent-red)';
+        }}
+    }});
 }}
 
 function appendCommentToList(section, comment) {{
@@ -831,6 +919,7 @@ async function toggleReviewed(label) {{
         }});
         if (resp.ok) {{
             label.classList.toggle('checked', reviewed);
+            updateReviewBadges();
         }} else {{
             checkbox.checked = !reviewed;
             console.warn('Failed to toggle reviewed: server returned', resp.status);
@@ -1211,6 +1300,7 @@ def _render_group_card(
 {indent}    <span class="bug-count">{e(test_label)}</span>
 {indent}    <span class="classification-tag {e(cls_class)}">{e(cls)}</span>
 {indent}    <span class="severity-tag-inline {e(severity)}">{e(severity.upper())}</span>
+{indent}    <span class="group-review-status status-chip" style="display:none"></span>
 {indent}  </summary>
 {indent}  <div class="bug-body">
 """)
@@ -1377,6 +1467,7 @@ def _render_child_jobs(
     <span style="color:var(--accent-purple)">{e(child.job_name)}</span>
     <span style="color:var(--text-muted)">#{child.build_number}</span>
     <span class="failure-badge" style="font-size:11px;padding:2px 8px">{badge_text}</span>
+    <span class="child-review-status status-chip" data-child-job="{e(child.job_name)}" style="display:none"></span>
   </summary>
   <div class="child-job-body">
     <div class="child-job-meta">

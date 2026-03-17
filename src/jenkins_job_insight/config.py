@@ -70,17 +70,15 @@ class Settings(BaseSettings):
             if self.enable_jira is True:
                 logger.warning("enable_jira is True but JIRA_URL is not configured")
             return False
-        # Cloud auth: email + API token
-        has_cloud_auth = bool(self.jira_email and self.jira_api_token)
-        # Server/DC auth: PAT
-        has_server_auth = bool(self.jira_pat)
-        if not (has_cloud_auth or has_server_auth):
+        # Token: prefer jira_api_token (backward compat), fall back to jira_pat
+        has_token = bool(self.jira_api_token or self.jira_pat)
+        if not has_token:
             if self.enable_jira is True:
                 logger.warning(
                     "enable_jira is True but no Jira credentials are configured"
                 )
             return False
-        return has_cloud_auth or has_server_auth
+        return True
 
 
 @lru_cache

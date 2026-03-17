@@ -895,25 +895,27 @@ async def enrich_comments(
     comments = await storage.get_comments_for_job(job_id)
 
     # Detect Cloud vs Server/DC auth once, matching JiraClient logic:
-    # - Cloud: email + api_token -> httpx Basic auth tuple
-    # - Server/DC: pat only (no email) -> Bearer header
+    # - Cloud: jira_email is set -> Basic auth with email:token
+    # - Server/DC: no email -> Bearer PAT
+    # Token resolution: prefer jira_api_token (backward compat), fall back to jira_pat
     auth: tuple[str, str] | None = None
     auth_headers: dict[str, str] = {}
     jira_url: str | None = settings.jira_url if settings.jira_enabled else None
     jira_active = bool(jira_url)
 
     if jira_active and jira_url:
-        if settings.jira_email and settings.jira_api_token:
-            # Cloud: Basic auth with email:api_token
-            auth = (
-                settings.jira_email,
-                settings.jira_api_token.get_secret_value(),
-            )
+        jira_token = ""
+        if settings.jira_api_token:
+            jira_token = settings.jira_api_token.get_secret_value()
         elif settings.jira_pat:
-            # Server/DC: Bearer PAT (no email check)
-            auth_headers["Authorization"] = (
-                f"Bearer {settings.jira_pat.get_secret_value()}"
-            )
+            jira_token = settings.jira_pat.get_secret_value()
+
+        if settings.jira_email and jira_token:
+            # Cloud: Basic auth
+            auth = (settings.jira_email, jira_token)
+        elif jira_token:
+            # Server/DC: Bearer
+            auth_headers["Authorization"] = f"Bearer {jira_token}"
 
     github_token = (
         settings.github_token.get_secret_value() if settings.github_token else None
