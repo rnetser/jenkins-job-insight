@@ -1100,6 +1100,41 @@ async function loadEnrichments() {{
     }}
 }}
 
+async function loadClassifications() {{
+    try {{
+        var resp = await fetch(BASE_PATH + '/history/classifications');
+        if (!resp.ok) return;
+        var data = await resp.json();
+        var byTest = {{}};
+        (data.classifications || []).forEach(function(c) {{
+            if (!byTest[c.test_name]) byTest[c.test_name] = [];
+            byTest[c.test_name].push(c);
+        }});
+
+        document.querySelectorAll('.reviewed-toggle').forEach(function(toggle) {{
+            var testName = toggle.dataset.testName;
+            if (!testName || !byTest[testName]) return;
+            // Show the most recent classification for this test
+            var cls = byTest[testName][0];
+            var badge = document.createElement('span');
+            badge.className = 'classification-tag';
+            var colors = {{
+                'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);',
+                'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red);',
+                'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange);',
+                'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple);',
+                'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);'
+            }};
+            badge.style.cssText = (colors[cls.classification] || 'background:var(--bg-tertiary);color:var(--text-muted);') + 'margin-left:6px;';
+            badge.textContent = cls.classification;
+            badge.title = cls.reason || '';
+            toggle.appendChild(badge);
+        }});
+    }} catch (err) {{
+        console.warn('Failed to load classifications:', err);
+    }}
+}}
+
 document.addEventListener('DOMContentLoaded', async function() {{
     document.querySelectorAll('.reviewed-toggle input[type="checkbox"]').forEach(cb => {{
         cb.addEventListener('change', function(event) {{
@@ -1134,6 +1169,7 @@ document.addEventListener('DOMContentLoaded', async function() {{
     }});
     await loadCommentsAndReviews();
     await loadEnrichments();
+    await loadClassifications();
 }});
 </script>
 """)
@@ -2380,6 +2416,42 @@ def generate_dashboard_html(
 </script>
 """)
 
+    # --- CLASSIFICATION BADGES (always, regardless of job count) ---
+    parts.append("""
+<script>
+(function() {
+    var BASE = window.location.pathname.replace(/\\/dashboard.*$/, '');
+    fetch(BASE + '/history/classifications').then(function(r) { return r.json(); }).then(function(data) {
+        var byJob = {};
+        (data.classifications || []).forEach(function(c) {
+            var jn = c.job_name || '';
+            if (!byJob[jn]) byJob[jn] = {};
+            byJob[jn][c.classification] = (byJob[jn][c.classification] || 0) + 1;
+        });
+        document.querySelectorAll('.classification-job-badges').forEach(function(span) {
+            var jobName = span.dataset.jobName;
+            if (!byJob[jobName]) return;
+            var html = '';
+            var colors = {
+                'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)',
+                'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red)',
+                'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange)',
+                'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple)',
+                'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)'
+            };
+            for (var cls in byJob[jobName]) {
+                var count = byJob[jobName][cls];
+                var color = colors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)';
+                html += '<span style="display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;' + color + ';white-space:nowrap;margin-right:4px;">' + count + ' ' + cls.replace('_', ' ') + '</span>';
+            }
+            span.style.display = '';
+            span.innerHTML = html;
+        });
+    }).catch(function() {});
+})();
+</script>
+""")
+
     parts.append("</div>\n</body>\n</html>")
     return "\n".join(parts)
 
@@ -2503,6 +2575,10 @@ def _render_dashboard_card(
             f"{comment_count} comment{'s' if comment_count != 1 else ''}"
             f"</span>"
         )
+
+    parts.append(
+        f'    <span class="classification-job-badges" data-job-name="{e(job_name)}" style="display:none"></span>'
+    )
 
     parts.append("  </div>")
     parts.append('  <div class="card-meta">')
@@ -2830,6 +2906,11 @@ def generate_history_html(base_url: str = "") -> str:
         <option value="">All Classifications</option>
         <option value="PRODUCT BUG">PRODUCT BUG</option>
         <option value="CODE ISSUE">CODE ISSUE</option>
+        <option value="KNOWN_BUG">KNOWN_BUG</option>
+        <option value="REGRESSION">REGRESSION</option>
+        <option value="FLAKY">FLAKY</option>
+        <option value="INFRASTRUCTURE">INFRASTRUCTURE</option>
+        <option value="INTERMITTENT">INTERMITTENT</option>
     </select>
     <select class="per-page-select" id="per-page-select">
         <option value="25">25 per page</option>
