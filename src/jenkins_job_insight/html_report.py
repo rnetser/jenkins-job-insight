@@ -2093,6 +2093,8 @@ def generate_dashboard_html(
   <div class="header-content">
     <h1>Jenkins Job Insight</h1>
     <span id="jobs-badge" class="jobs-badge">{total_jobs} job{"s" if total_jobs != 1 else ""}{e(limit_note)}</span>
+    <a id="flaky-badge" href="{e(base_url)}/history" style="display:none;font-size:12px;font-weight:700;padding:4px 10px;border-radius:12px;background:rgba(210,153,34,0.15);color:var(--accent-yellow);text-decoration:none;font-family:var(--font-mono);"></a>
+    <a id="regression-badge" href="{e(base_url)}/history" style="display:none;font-size:12px;font-weight:700;padding:4px 10px;border-radius:12px;background:rgba(248,81,73,0.15);color:var(--accent-red);text-decoration:none;font-family:var(--font-mono);"></a>
     <a href="{e(base_url)}/history" style="color:var(--accent-blue);text-decoration:none;font-size:14px;">History</a>
   </div>
 </div>
@@ -2285,6 +2287,40 @@ def generate_dashboard_html(
         }
     }
 })();
+</script>
+""")
+
+    # --- HISTORY BADGES (always, regardless of job count) ---
+    parts.append(f"""
+<script>
+(function() {{
+  var base = '{html.escape(base_url)}';
+  function fetchJson(url) {{
+    return fetch(url).then(function(r) {{ return r.ok ? r.json() : null; }}).catch(function() {{ return null; }});
+  }}
+  fetchJson(base + '/history/flaky').then(function(data) {{
+    if (!data) return;
+    var count = (data.flaky_tests || []).length;
+    if (count > 0) {{
+      var el = document.getElementById('flaky-badge');
+      if (el) {{
+        el.textContent = count + ' flaky test' + (count !== 1 ? 's' : '');
+        el.style.display = '';
+      }}
+    }}
+  }});
+  fetchJson(base + '/history/regressions').then(function(data) {{
+    if (!data) return;
+    var count = (data.regressions || []).length;
+    if (count > 0) {{
+      var el = document.getElementById('regression-badge');
+      if (el) {{
+        el.textContent = count + ' regression' + (count !== 1 ? 's' : '');
+        el.style.display = '';
+      }}
+    }}
+  }});
+}})();
 </script>
 """)
 
