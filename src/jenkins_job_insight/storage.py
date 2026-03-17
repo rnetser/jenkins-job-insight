@@ -159,6 +159,21 @@ async def init_db() -> None:
                 "Migration: test_classifications already has parent_job_name column"
             )
 
+        # Migration: add references_info to test_classifications table
+        cursor = await db.execute("PRAGMA table_info(test_classifications)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "references_info" not in columns:
+            await db.execute(
+                "ALTER TABLE test_classifications ADD COLUMN references_info TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info(
+                "Migration: added references_info column to test_classifications"
+            )
+        else:
+            logger.debug(
+                "Migration: test_classifications already has references_info column"
+            )
+
         # failure_history: denormalized table for fast history queries
         await db.execute("""
             CREATE TABLE IF NOT EXISTS failure_history (
@@ -199,6 +214,7 @@ async def init_db() -> None:
                 parent_job_name TEXT NOT NULL DEFAULT '',
                 classification TEXT NOT NULL,
                 reason TEXT NOT NULL DEFAULT '',
+                references_info TEXT NOT NULL DEFAULT '',
                 created_by TEXT NOT NULL DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -1266,6 +1282,7 @@ async def set_test_classification(
     job_name: str = "",
     parent_job_name: str = "",
     created_by: str = "",
+    references: str = "",
 ) -> int:
     """Set a classification for a test (e.g., FLAKY, REGRESSION).
 
@@ -1277,9 +1294,17 @@ async def set_test_classification(
     )
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO test_classifications (test_name, job_name, parent_job_name, classification, reason, created_by) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (test_name, job_name, parent_job_name, classification, reason, created_by),
+            "INSERT INTO test_classifications (test_name, job_name, parent_job_name, classification, reason, references_info, created_by) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                test_name,
+                job_name,
+                parent_job_name,
+                classification,
+                reason,
+                references,
+                created_by,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -1317,7 +1342,7 @@ async def get_test_classifications(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            f"SELECT id, test_name, job_name, parent_job_name, classification, reason, created_by, created_at "
+            f"SELECT id, test_name, job_name, parent_job_name, classification, reason, references_info, created_by, created_at "
             f"FROM test_classifications WHERE {where} ORDER BY created_at DESC",
             params,
         )

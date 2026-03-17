@@ -1128,7 +1128,7 @@ async function loadClassifications() {{
             badge.style.cssText = (colors[cls.classification] || 'background:var(--bg-tertiary);color:var(--text-muted);') + 'margin-left:6px;';
             var badgeLabel = cls.classification.replace('_', ' ');
             if (cls.classification === 'KNOWN_BUG') {{
-                var jiraMatch = (cls.reason || '').match(/([A-Z][A-Z0-9]+-\d+)/);
+                var jiraMatch = (cls.reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
                 if (jiraMatch) badgeLabel = 'KNOWN BUG: ' + jiraMatch[1];
             }}
             badge.textContent = badgeLabel;
@@ -1149,7 +1149,7 @@ async function loadClassifications() {{
                     var cls = byTest[tn][0].classification;
                     cardClassifications[cls] = (cardClassifications[cls] || 0) + 1;
                     if (cls === 'KNOWN_BUG') {{
-                        var jm = (byTest[tn][0].reason || '').match(/([A-Z][A-Z0-9]+-\d+)/);
+                        var jm = (byTest[tn][0].reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
                         if (jm && !cardJiraKeys[jm[1]]) cardJiraKeys[jm[1]] = true;
                     }}
                 }}
@@ -1191,7 +1191,7 @@ async function loadClassifications() {{
                     var cls = byTest[tn][0].classification;
                     childClassifications[cls] = (childClassifications[cls] || 0) + 1;
                     if (cls === 'KNOWN_BUG') {{
-                        var jm = (byTest[tn][0].reason || '').match(/([A-Z][A-Z0-9]+-\d+)/);
+                        var jm = (byTest[tn][0].reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
                         if (jm && !childJiraKeys[jm[1]]) childJiraKeys[jm[1]] = true;
                     }}
                 }}
@@ -2545,7 +2545,7 @@ def generate_dashboard_html(
                 if (!byParentJob[pjn]) byParentJob[pjn] = {};
                 byParentJob[pjn][c.classification] = (byParentJob[pjn][c.classification] || 0) + 1;
                 if (c.classification === 'KNOWN_BUG') {
-                    var jm = (c.reason || '').match(/([A-Z][A-Z0-9]+-\d+)/);
+                    var jm = (c.reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
                     if (jm) {
                         if (!jiraKeysByJob[pjn]) jiraKeysByJob[pjn] = {};
                         jiraKeysByJob[pjn][jm[1]] = true;

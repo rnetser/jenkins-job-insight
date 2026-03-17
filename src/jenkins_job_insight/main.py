@@ -1272,6 +1272,7 @@ async def classify_test(request: Request, body: dict) -> dict:
     classification = body.get("classification", "")
     reason = body.get("reason", "")
     job_name = body.get("job_name", "")
+    references = body.get("references", "")
 
     if not test_name or not classification:
         raise HTTPException(
@@ -1303,6 +1304,7 @@ async def classify_test(request: Request, body: dict) -> dict:
         job_name=job_name,
         parent_job_name=parent_job_name,
         created_by=created_by,
+        references=references,
     )
     return {"id": classification_id}
 

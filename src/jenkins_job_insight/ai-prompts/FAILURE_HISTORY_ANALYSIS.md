@@ -50,9 +50,10 @@ curl -s -X POST "{server_url}/history/classify" \
   -H "Content-Type: application/json" \
   -d '{
     "test_name": "{test_name}",
-    "classification": "REGRESSION",
-    "reason": "Explain why you chose this classification",
-    "job_name": "{job_name}"
+    "classification": "KNOWN_BUG",
+    "reason": "Explain why with specific evidence from history data",
+    "job_name": "{job_name}",
+    "references": "MTV-2385, https://github.com/org/repo/pull/123"
   }'
 ```
 
@@ -76,11 +77,29 @@ curl -s -X POST "{server_url}/history/classify" \
 4. Always include a clear `reason` explaining your classification.
 5. Always reference historical data in your reason (e.g., "This test failed in 8 of the last 10 runs" or "First failure, was passing in all prior builds").
 
+### Evidence Requirements (MANDATORY)
+
+Every classification MUST include evidence in the `reason` field:
+
+| Classification | Required Evidence |
+|---|---|
+| KNOWN_BUG | Jira ticket key (e.g., MTV-2385), bug URL, or reference from historical comments |
+| REGRESSION | The date/build when the test started failing, what was passing before, correlation with git commits if available |
+| FLAKY | Failure rate statistics, specific builds where it passed vs failed |
+| INFRASTRUCTURE | The infrastructure error (e.g., "cluster not deployed", "node not ready"), evidence that multiple unrelated tests failed with the same root cause |
+| INTERMITTENT | The trigger pattern, frequency, and conditions under which it occurs vs doesn't |
+
+A classification without evidence is INVALID. Always cite:
+- Specific data from /history/test/ (failure rates, consecutive failures, dates)
+- Jira tickets or bug URLs from historical comments
+- Error signatures shared across tests (from /history/search)
+- Previous classifications and their reasons
+
 ## Rules
 
 - ALWAYS complete ALL 5 steps for EVERY test. No shortcuts.
 - ALWAYS check history BEFORE classifying — don't classify blind.
-- ALWAYS call POST /history/classify — this is how your classification is recorded.
+- ALWAYS call POST /history/classify — this is how your classification is recorded. Include `references` with Jira keys, URLs, or other evidence identifiers.
 - If many tests fail with the same infrastructure error (e.g., product not deployed), classify ALL as INFRASTRUCTURE.
 - Reference existing comments, bugs, and history in your analysis.
 - Your reason field should cite specific data from the history (failure rates, consecutive failures, first seen dates).
