@@ -557,6 +557,7 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 }}
 .comment-text {{
     color: var(--text-secondary);
+    white-space: pre-wrap;
 }}
 .comment-text a {{
     color: var(--accent-blue);
@@ -591,6 +592,9 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     font-family: var(--font-sans);
     outline: none;
     transition: border-color 0.15s;
+    resize: vertical;
+    min-height: 36px;
+    max-height: 200px;
 }}
 .comment-input::placeholder {{ color: var(--text-muted); }}
 .comment-input:focus {{ border-color: var(--accent-blue); }}
@@ -1030,6 +1034,16 @@ document.addEventListener('DOMContentLoaded', async function() {{
             }}
         }}
     }}
+    // Enter to send, Shift+Enter for new line
+    document.querySelectorAll('.comment-input').forEach(textarea => {{
+        textarea.addEventListener('keydown', function(e) {{
+            if (e.key === 'Enter' && !e.shiftKey) {{
+                e.preventDefault();
+                const btn = this.closest('.comment-input-row').querySelector('.comment-add-btn');
+                if (btn) btn.click();
+            }}
+        }});
+    }});
     await loadCommentsAndReviews();
     await loadEnrichments();
 }});
@@ -1399,7 +1413,7 @@ def _render_group_card(
 {indent}      <div class="comment-list"></div>
 {indent}      <div class="comment-input-row">
 {indent}        {select_html}
-{indent}        <input class="comment-input" type="text" placeholder="Add a comment (bug link, PR, notes...)">
+{indent}        <textarea class="comment-input" placeholder="Add a comment (bug link, PR, notes...)" rows="1"></textarea>
 {indent}        <button class="comment-add-btn" onclick="addComment(this)">Add</button>
 {indent}      </div>
 {indent}    </div>
