@@ -412,7 +412,7 @@ Jira enrichment reuses existing Jira configuration (`JIRA_URL`, `JIRA_PAT`, and 
 
 ### Failure History & AI Tools
 
-The service maintains a history of all analyzed test failures and exposes it through API endpoints. During analysis, the AI receives a skill file (`QUERY.md`) that teaches it how to query these endpoints, enabling data-driven classification.
+The service maintains a history of all analyzed test failures and exposes it through API endpoints. During analysis, the AI receives a skill file (`FAILURE_HISTORY_ANALYSIS.md`) that teaches it how to query these endpoints, enabling data-driven classification.
 
 #### History API Endpoints
 
@@ -425,9 +425,9 @@ The service maintains a history of all analyzed test failures and exposes it thr
 | `POST` | `/history/classify` | Classify a test as FLAKY, REGRESSION, INFRASTRUCTURE, KNOWN_BUG, or INTERMITTENT (used by AI and humans) |
 | `GET` | `/history/classifications` | Query existing test classifications, filterable by test_name, classification, and job_name |
 
-#### QUERY.md -- AI Skill File
+#### FAILURE_HISTORY_ANALYSIS.md -- AI Skill File
 
-The file `src/jenkins_job_insight/QUERY.md` is injected into the AI prompt during analysis. It provides step-by-step instructions that the AI follows for each failure: check test history, search for similar errors, check existing classifications, review job statistics, and finally classify the test via `POST /history/classify`. This allows the AI to:
+The file `src/jenkins_job_insight/ai-prompts/FAILURE_HISTORY_ANALYSIS.md` is injected into the AI prompt during analysis. It provides step-by-step instructions that the AI follows for each failure: check test history, search for similar errors, check existing classifications, review job statistics, and finally classify the test via `POST /history/classify`. This allows the AI to:
 
 - Use raw history data to judge whether a test is flaky, a regression, or a persistent issue
 - Reference existing comments and bug tickets instead of suggesting duplicates

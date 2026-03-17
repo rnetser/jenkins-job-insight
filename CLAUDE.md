@@ -61,7 +61,7 @@ Never pre-feed data to the AI in the prompt. Instead, give the AI tools (API end
 
 **DO:**
 - Expose API endpoints the AI can curl
-- Provide a skill file (e.g., QUERY.md) documenting available tools
+- Provide a skill file (e.g., FAILURE_HISTORY_ANALYSIS.md) documenting available tools
 - Let the AI query, explore, and interpret data on its own
 
 **DON'T:**

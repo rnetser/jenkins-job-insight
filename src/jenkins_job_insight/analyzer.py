@@ -46,8 +46,8 @@ logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 FALLBACK_TAIL_LINES = 200
 
-# Path to QUERY.md — the AI reads it at runtime instead of injecting content into the prompt
-_QUERY_MD_PATH = Path(__file__).parent / "ai-prompts" / "QUERY.md"
+# Path to FAILURE_HISTORY_ANALYSIS.md — the AI reads it at runtime instead of injecting content into the prompt
+_QUERY_MD_PATH = Path(__file__).parent / "ai-prompts" / "FAILURE_HISTORY_ANALYSIS.md"
 
 JOB_INSIGHT_PROMPT_FILENAME = "JOB_INSIGHT_PROMPT.md"
 
@@ -755,7 +755,9 @@ async def analyze_failure_group(
 
     query_section = ""
     if server_url and _QUERY_MD_PATH.exists():
-        logger.info(f"Pointing AI to QUERY.md with server_url={server_url}")
+        logger.info(
+            f"Pointing AI to FAILURE_HISTORY_ANALYSIS.md with server_url={server_url}"
+        )
         query_section = f"""
 
 MANDATORY: Before analyzing any failure, you MUST read and follow the instructions in {_QUERY_MD_PATH}.
@@ -765,7 +767,7 @@ These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
 """
     else:
         logger.debug(
-            f"query_section is EMPTY (server_url='{server_url}', QUERY.md exists={_QUERY_MD_PATH.exists()})"
+            f"query_section is EMPTY (server_url='{server_url}', FAILURE_HISTORY_ANALYSIS.md exists={_QUERY_MD_PATH.exists()})"
         )
 
     prompt = f"""{query_section}
@@ -1123,7 +1125,9 @@ async def analyze_child_job(
 
     query_section = ""
     if server_url and _QUERY_MD_PATH.exists():
-        logger.info(f"Pointing AI to QUERY.md with server_url={server_url}")
+        logger.info(
+            f"Pointing AI to FAILURE_HISTORY_ANALYSIS.md with server_url={server_url}"
+        )
         query_section = f"""
 
 MANDATORY: Before analyzing any failure, you MUST read and follow the instructions in {_QUERY_MD_PATH}.
@@ -1133,7 +1137,7 @@ These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
 """
     else:
         logger.debug(
-            f"query_section is EMPTY (server_url='{server_url}', QUERY.md exists={_QUERY_MD_PATH.exists()})"
+            f"query_section is EMPTY (server_url='{server_url}', FAILURE_HISTORY_ANALYSIS.md exists={_QUERY_MD_PATH.exists()})"
         )
 
     prompt = f"""{query_section}
@@ -1531,7 +1535,9 @@ async def analyze_job(
 
                 query_section = ""
                 if server_url and _QUERY_MD_PATH.exists():
-                    logger.info(f"Pointing AI to QUERY.md with server_url={server_url}")
+                    logger.info(
+                        f"Pointing AI to FAILURE_HISTORY_ANALYSIS.md with server_url={server_url}"
+                    )
                     query_section = f"""
 
 MANDATORY: Before analyzing any failure, you MUST read and follow the instructions in {_QUERY_MD_PATH}.
@@ -1541,7 +1547,7 @@ These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
 """
                 else:
                     logger.debug(
-                        f"query_section is EMPTY (server_url='{server_url}', QUERY.md exists={_QUERY_MD_PATH.exists()})"
+                        f"query_section is EMPTY (server_url='{server_url}', FAILURE_HISTORY_ANALYSIS.md exists={_QUERY_MD_PATH.exists()})"
                     )
 
                 prompt = f"""{query_section}
