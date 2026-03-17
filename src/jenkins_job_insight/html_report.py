@@ -2888,7 +2888,7 @@ def generate_history_html(base_url: str = "") -> str:
 <script>
 (function() {{
   // Derive API base path from current URL (works behind reverse proxies with path prefixes)
-  var BASE = window.location.pathname.replace(/\/history$/, '');
+  var BASE = window.location.pathname.replace(/\\/history$/, '');
 
   function escapeHtml(s) {{
     var el = document.createElement('div');
@@ -2988,7 +2988,7 @@ def generate_history_html(base_url: str = "") -> str:
       for (var i = 0; i < items.length; i++) {{
         var r = items[i];
         h += '<tr>';
-        h += '<td><span class="test-link" onclick="document.getElementById(\'test-search\').value=this.textContent;document.getElementById(\'search-btn\').click();">' + escapeHtml(r.test_name) + '</span></td>';
+        h += '<td><span class="test-link" onclick="document.getElementById(\\'test-search\\').value=this.textContent;document.getElementById(\\'search-btn\\').click();">' + escapeHtml(r.test_name) + '</span></td>';
         h += '<td>' + escapeHtml(r.job_name || '') + '</td>';
         h += '<td class="mono"><span class="badge-red">' + r.consecutive_failures + '</span></td>';
         h += '<td class="mono">' + escapeHtml(r.first_failure_date || '') + '</td>';
@@ -3018,7 +3018,7 @@ def generate_history_html(base_url: str = "") -> str:
         var f = items[i];
         var pct = (f.failure_rate * 100).toFixed(1);
         h += '<tr>';
-        h += '<td><span class="test-link" onclick="document.getElementById(\'test-search\').value=this.textContent;document.getElementById(\'search-btn\').click();">' + escapeHtml(f.test_name) + '</span></td>';
+        h += '<td><span class="test-link" onclick="document.getElementById(\\'test-search\\').value=this.textContent;document.getElementById(\\'search-btn\\').click();">' + escapeHtml(f.test_name) + '</span></td>';
         h += '<td class="mono"><span class="badge-yellow">' + pct + '%</span></td>';
         h += '<td class="mono">' + f.failures + '</td>';
         h += '<td class="mono">' + f.total_runs + '</td>';
