@@ -144,6 +144,21 @@ async def init_db() -> None:
                 await db.execute("DROP TABLE failure_reviews_old")
                 logger.info("Migration: failure_reviews table rebuilt successfully")
 
+        # Migration: add parent_job_name to test_classifications table
+        cursor = await db.execute("PRAGMA table_info(test_classifications)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "parent_job_name" not in columns:
+            await db.execute(
+                "ALTER TABLE test_classifications ADD COLUMN parent_job_name TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info(
+                "Migration: added parent_job_name column to test_classifications"
+            )
+        else:
+            logger.debug(
+                "Migration: test_classifications already has parent_job_name column"
+            )
+
         # failure_history: denormalized table for fast history queries
         await db.execute("""
             CREATE TABLE IF NOT EXISTS failure_history (
@@ -181,6 +196,7 @@ async def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 test_name TEXT NOT NULL,
                 job_name TEXT NOT NULL DEFAULT '',
+                parent_job_name TEXT NOT NULL DEFAULT '',
                 classification TEXT NOT NULL,
                 reason TEXT NOT NULL DEFAULT '',
                 created_by TEXT NOT NULL DEFAULT '',
@@ -1232,11 +1248,23 @@ async def save_html_report(job_id: str, html_content: str) -> Path:
     return report_path
 
 
+async def get_parent_job_name_for_test(test_name: str) -> str:
+    """Look up the parent pipeline job name for a test from failure_history."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT job_name FROM failure_history WHERE test_name = ? ORDER BY analyzed_at DESC LIMIT 1",
+            (test_name,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else ""
+
+
 async def set_test_classification(
     test_name: str,
     classification: str,
     reason: str = "",
     job_name: str = "",
+    parent_job_name: str = "",
     created_by: str = "",
 ) -> int:
     """Set a classification for a test (e.g., FLAKY, REGRESSION).
@@ -1244,13 +1272,14 @@ async def set_test_classification(
     Can be set by the AI during analysis or by humans.
     """
     logger.debug(
-        f"set_test_classification: test_name={test_name}, classification={classification}, created_by={created_by}"
+        f"set_test_classification: test_name={test_name}, classification={classification}, "
+        f"parent_job_name={parent_job_name}, created_by={created_by}"
     )
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO test_classifications (test_name, job_name, classification, reason, created_by) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (test_name, job_name, classification, reason, created_by),
+            "INSERT INTO test_classifications (test_name, job_name, parent_job_name, classification, reason, created_by) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (test_name, job_name, parent_job_name, classification, reason, created_by),
         )
         await db.commit()
         return cursor.lastrowid
@@ -1260,10 +1289,12 @@ async def get_test_classifications(
     test_name: str = "",
     classification: str = "",
     job_name: str = "",
+    parent_job_name: str = "",
 ) -> list[dict]:
     """Get test classifications, optionally filtered."""
     logger.debug(
-        f"get_test_classifications: test_name={test_name!r}, classification={classification!r}, job_name={job_name!r}"
+        f"get_test_classifications: test_name={test_name!r}, classification={classification!r}, "
+        f"job_name={job_name!r}, parent_job_name={parent_job_name!r}"
     )
     conditions = []
     params = []
@@ -1277,13 +1308,16 @@ async def get_test_classifications(
     if job_name:
         conditions.append("job_name = ?")
         params.append(job_name)
+    if parent_job_name:
+        conditions.append("parent_job_name = ?")
+        params.append(parent_job_name)
 
     where = " AND ".join(conditions) if conditions else "1=1"
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            f"SELECT id, test_name, job_name, classification, reason, created_by, created_at "
+            f"SELECT id, test_name, job_name, parent_job_name, classification, reason, created_by, created_at "
             f"FROM test_classifications WHERE {where} ORDER BY created_at DESC",
             params,
         )

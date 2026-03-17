@@ -1293,11 +1293,15 @@ async def classify_test(request: Request, body: dict) -> dict:
 
     created_by = request.cookies.get("jji_username", "ai")
 
+    # Look up parent job name from failure_history
+    parent_job_name = await storage.get_parent_job_name_for_test(test_name)
+
     classification_id = await storage.set_test_classification(
         test_name=test_name,
         classification=classification.upper(),
         reason=reason,
         job_name=job_name,
+        parent_job_name=parent_job_name,
         created_by=created_by,
     )
     return {"id": classification_id}
@@ -1308,15 +1312,18 @@ async def get_classifications(
     test_name: str = Query(default=""),
     classification: str = Query(default=""),
     job_name: str = Query(default=""),
+    parent_job_name: str = Query(default=""),
 ) -> dict:
     """Get test classifications."""
     logger.debug(
-        f"GET /history/classifications: test_name={test_name!r}, classification={classification!r}, job_name={job_name!r}"
+        f"GET /history/classifications: test_name={test_name!r}, classification={classification!r}, "
+        f"job_name={job_name!r}, parent_job_name={parent_job_name!r}"
     )
     classifications = await storage.get_test_classifications(
         test_name=test_name,
         classification=classification,
         job_name=job_name,
+        parent_job_name=parent_job_name,
     )
     return {"classifications": classifications}
 

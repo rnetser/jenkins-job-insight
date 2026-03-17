@@ -2416,15 +2416,21 @@ def generate_dashboard_html(
 </script>
 """)
 
-    # --- CLASSIFICATION BADGES (global header summary) ---
+    # --- CLASSIFICATION BADGES (global header summary + per-card) ---
     parts.append("""
 <script>
 (function() {
     var BASE = window.location.pathname.replace(/\\/dashboard.*$/, '');
     fetch(BASE + '/history/classifications').then(function(r) { return r.json(); }).then(function(data) {
         var counts = {};
+        var byParentJob = {};
         (data.classifications || []).forEach(function(c) {
             counts[c.classification] = (counts[c.classification] || 0) + 1;
+            var pjn = c.parent_job_name || c.job_name || '';
+            if (pjn) {
+                if (!byParentJob[pjn]) byParentJob[pjn] = {};
+                byParentJob[pjn][c.classification] = (byParentJob[pjn][c.classification] || 0) + 1;
+            }
         });
 
         var colors = {
@@ -2435,6 +2441,7 @@ def generate_dashboard_html(
             'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)'
         };
 
+        // Global header summary badges
         var headerContent = document.querySelector('.header-content');
         if (headerContent) {
             for (var cls in counts) {
@@ -2444,6 +2451,20 @@ def generate_dashboard_html(
                 headerContent.appendChild(badge);
             }
         }
+
+        // Per-card classification badges
+        document.querySelectorAll('.classification-job-badges').forEach(function(span) {
+            var jobName = span.dataset.jobName;
+            if (!byParentJob[jobName]) return;
+            var html = '';
+            for (var cls in byParentJob[jobName]) {
+                var count = byParentJob[jobName][cls];
+                var color = colors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)';
+                html += '<span style="display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;' + color + ';white-space:nowrap;margin-right:4px;">' + count + ' ' + cls.replace('_', ' ') + '</span>';
+            }
+            span.style.display = '';
+            span.innerHTML = html;
+        });
     }).catch(function() {});
 })();
 </script>
@@ -2572,6 +2593,11 @@ def _render_dashboard_card(
             f"{comment_count} comment{'s' if comment_count != 1 else ''}"
             f"</span>"
         )
+
+    # Per-card classification badges (populated by JS using parent_job_name)
+    parts.append(
+        f'    <span class="classification-job-badges" data-job-name="{e(job_name)}" style="display:none"></span>'
+    )
 
     parts.append("  </div>")
     parts.append('  <div class="card-meta">')
