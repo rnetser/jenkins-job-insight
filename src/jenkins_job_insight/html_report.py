@@ -1455,20 +1455,14 @@ document.addEventListener('DOMContentLoaded', async function() {{
             toggleReviewed(this.closest('.reviewed-toggle'));
         }});
     }});
-    // Show current user in header
-    var userCookie = document.cookie.split('; ').find(function(c) {{ return c.startsWith('jji_username='); }});
-    if (userCookie) {{
-        var uname = decodeURIComponent(userCookie.split('=')[1]);
-        var headerContent = document.querySelector('.header-content');
-        if (headerContent) {{
-            var chips = headerContent.querySelector('.env-chips');
-            if (chips) {{
-                var userChip = document.createElement('span');
-                userChip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
-                userChip.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escapeHtml(uname);
-                chips.appendChild(userChip);
-            }}
-        }}
+    // Show current user badge at fixed top-right
+    var username = '';
+    try {{ username = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
+    if (username) {{
+        var userBadge = document.createElement('div');
+        userBadge.style.cssText = 'position:fixed;top:12px;right:24px;z-index:200;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
+        userBadge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escapeHtml(username);
+        document.body.appendChild(userBadge);
     }}
     // Enter to send, Shift+Enter for new line
     document.querySelectorAll('.comment-input').forEach(textarea => {{
@@ -2583,18 +2577,15 @@ def generate_dashboard_html(
     parts.append("""
 <script>
 (function() {
-    var userCookie = document.cookie.split('; ').find(function(c) { return c.startsWith('jji_username='); });
-    if (userCookie) {
-        var uname = decodeURIComponent(userCookie.split('=')[1]);
-        var headerContent = document.querySelector('.header-content');
-        if (headerContent) {
-            var userChip = document.createElement('span');
-            userChip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;margin-left:auto;';
-            var escapedName = document.createElement('span');
-            escapedName.textContent = uname;
-            userChip.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escapedName.innerHTML;
-            headerContent.appendChild(userChip);
-        }
+    var username = '';
+    try { username = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); } catch(e) {}
+    if (username) {
+        var userBadge = document.createElement('div');
+        userBadge.style.cssText = 'position:fixed;top:12px;right:24px;z-index:200;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
+        var escapedName = document.createElement('span');
+        escapedName.textContent = username;
+        userBadge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escapedName.innerHTML;
+        document.body.appendChild(userBadge);
     }
 })();
 </script>
@@ -3283,6 +3274,18 @@ def generate_history_html(base_url: str = "") -> str:
 
   /* ---- Initial load ---- */
   loadFailures();
+}})();
+</script>
+<script>
+(function() {{
+    var username = '';
+    try {{ username = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
+    if (username) {{
+        var userBadge = document.createElement('div');
+        userBadge.style.cssText = 'position:fixed;top:12px;right:24px;z-index:200;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
+        userBadge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escapeHtml(username);
+        document.body.appendChild(userBadge);
+    }}
 }})();
 </script>
 </body>
