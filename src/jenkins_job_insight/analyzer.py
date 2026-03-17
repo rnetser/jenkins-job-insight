@@ -46,13 +46,8 @@ logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 FALLBACK_TAIL_LINES = 200
 
-# Load QUERY.md content for AI history API instructions
+# Path to QUERY.md — the AI reads it at runtime instead of injecting content into the prompt
 _QUERY_MD_PATH = Path(__file__).parent / "QUERY.md"
-_QUERY_MD_CONTENT = ""
-if _QUERY_MD_PATH.exists():
-    _QUERY_MD_CONTENT = _QUERY_MD_PATH.read_text()
-
-logger.debug(f"QUERY.MD loaded: {len(_QUERY_MD_CONTENT)} bytes")
 
 JOB_INSIGHT_PROMPT_FILENAME = "JOB_INSIGHT_PROMPT.md"
 
@@ -759,20 +754,18 @@ async def analyze_failure_group(
             git_log_section = f"\n\n{git_log}\n"
 
     query_section = ""
-    if server_url and _QUERY_MD_CONTENT:
-        logger.info(f"Injecting QUERY.md into prompt with server_url={server_url}")
-        query_content = _QUERY_MD_CONTENT.replace("{server_url}", server_url)
-        if job_id:
-            query_content = query_content.replace("{job_id}", job_id)
-        query_section = "\n\n" + query_content + "\n"
+    if server_url and _QUERY_MD_PATH.exists():
+        logger.info(f"Pointing AI to QUERY.md with server_url={server_url}")
+        query_section = f"""
 
-    if query_section:
-        logger.debug(
-            f"query_section built: {len(query_section)} chars with server_url={server_url}"
-        )
+MANDATORY: Before analyzing any failure, you MUST read and follow the instructions in {_QUERY_MD_PATH}.
+When executing curl commands from that file, use server_url={server_url} and job_id={job_id}.
+These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
+
+"""
     else:
         logger.debug(
-            f"query_section is EMPTY (server_url='{server_url}', _QUERY_MD_CONTENT={len(_QUERY_MD_CONTENT)} bytes)"
+            f"query_section is EMPTY (server_url='{server_url}', QUERY.md exists={_QUERY_MD_PATH.exists()})"
         )
 
     prompt = f"""{query_section}
@@ -1129,20 +1122,18 @@ async def analyze_child_job(
         historical_section = f"\n\nHISTORICAL CONTEXT FROM PREVIOUS ANALYSES:\n{effective_historical_context}\n"
 
     query_section = ""
-    if server_url and _QUERY_MD_CONTENT:
-        logger.info(f"Injecting QUERY.md into prompt with server_url={server_url}")
-        query_content = _QUERY_MD_CONTENT.replace("{server_url}", server_url)
-        if job_id:
-            query_content = query_content.replace("{job_id}", job_id)
-        query_section = "\n\n" + query_content + "\n"
+    if server_url and _QUERY_MD_PATH.exists():
+        logger.info(f"Pointing AI to QUERY.md with server_url={server_url}")
+        query_section = f"""
 
-    if query_section:
-        logger.debug(
-            f"query_section built: {len(query_section)} chars with server_url={server_url}"
-        )
+MANDATORY: Before analyzing any failure, you MUST read and follow the instructions in {_QUERY_MD_PATH}.
+When executing curl commands from that file, use server_url={server_url} and job_id={job_id}.
+These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
+
+"""
     else:
         logger.debug(
-            f"query_section is EMPTY (server_url='{server_url}', _QUERY_MD_CONTENT={len(_QUERY_MD_CONTENT)} bytes)"
+            f"query_section is EMPTY (server_url='{server_url}', QUERY.md exists={_QUERY_MD_PATH.exists()})"
         )
 
     prompt = f"""{query_section}
@@ -1539,24 +1530,18 @@ async def analyze_job(
                     )
 
                 query_section = ""
-                if server_url and _QUERY_MD_CONTENT:
-                    logger.info(
-                        f"Injecting QUERY.md into prompt with server_url={server_url}"
-                    )
-                    query_content = _QUERY_MD_CONTENT.replace(
-                        "{server_url}", server_url
-                    )
-                    if job_id:
-                        query_content = query_content.replace("{job_id}", job_id)
-                    query_section = "\n\n" + query_content + "\n"
+                if server_url and _QUERY_MD_PATH.exists():
+                    logger.info(f"Pointing AI to QUERY.md with server_url={server_url}")
+                    query_section = f"""
 
-                if query_section:
-                    logger.debug(
-                        f"query_section built: {len(query_section)} chars with server_url={server_url}"
-                    )
+MANDATORY: Before analyzing any failure, you MUST read and follow the instructions in {_QUERY_MD_PATH}.
+When executing curl commands from that file, use server_url={server_url} and job_id={job_id}.
+These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
+
+"""
                 else:
                     logger.debug(
-                        f"query_section is EMPTY (server_url='{server_url}', _QUERY_MD_CONTENT={len(_QUERY_MD_CONTENT)} bytes)"
+                        f"query_section is EMPTY (server_url='{server_url}', QUERY.md exists={_QUERY_MD_PATH.exists()})"
                     )
 
                 prompt = f"""{query_section}
