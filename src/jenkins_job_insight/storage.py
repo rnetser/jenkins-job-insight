@@ -177,6 +177,9 @@ async def init_db() -> None:
 
         await db.commit()
 
+    # Backfill failure_history from existing results (runs once when table is empty)
+    await backfill_failure_history()
+
 
 def _validate_child_identifier_pairing(
     child_job_name: str, child_build_number: int
@@ -652,6 +655,44 @@ async def populate_failure_history(job_id: str, result_data: dict) -> None:
         logger.info(
             f"Populated failure_history with {len(rows)} rows for job_id={job_id}"
         )
+
+
+async def backfill_failure_history() -> None:
+    """Backfill failure_history from existing completed results.
+
+    Runs once at startup when the failure_history table is empty but
+    the results table has completed rows. Uses the same extraction
+    logic as populate_failure_history().
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Check if failure_history already has data
+        cursor = await db.execute("SELECT COUNT(*) FROM failure_history")
+        count = (await cursor.fetchone())[0]
+        if count > 0:
+            logger.info("failure_history already has data, skipping backfill")
+            return
+
+        # Get all completed results with result_json
+        cursor = await db.execute(
+            "SELECT job_id, result_json FROM results WHERE status = 'completed' AND result_json IS NOT NULL"
+        )
+        rows = await cursor.fetchall()
+
+    if not rows:
+        logger.info("No completed results to backfill into failure_history")
+        return
+
+    logger.info(f"Backfilling failure_history from {len(rows)} completed results")
+    backfilled = 0
+    for job_id, result_json_str in rows:
+        try:
+            result_data = json.loads(result_json_str)
+            await populate_failure_history(job_id, result_data)
+            backfilled += 1
+        except (json.JSONDecodeError, TypeError, AttributeError) as exc:
+            logger.debug(f"Skipping backfill for job_id={job_id}: {exc}")
+
+    logger.info(f"Backfill complete: processed {backfilled}/{len(rows)} results")
 
 
 async def list_results_for_dashboard(limit: int = 500) -> list[dict]:

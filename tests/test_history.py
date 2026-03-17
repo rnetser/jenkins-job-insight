@@ -1,5 +1,6 @@
 """Tests for failure history storage and query functions."""
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -239,5 +240,138 @@ class TestPopulateFailureHistory:
                     "SELECT COUNT(*) FROM failure_history WHERE job_id = ?",
                     ("job-empty",),
                 )
+                count = (await cursor.fetchone())[0]
+                assert count == 0
+
+
+class TestBackfillFailureHistory:
+    async def test_backfill_populates_from_existing_results(self, setup_test_db):
+        """Backfill should populate from existing completed results when table is empty."""
+        import aiosqlite
+
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            # Insert a completed result directly into the results table
+            result_data = {
+                "job_name": "ocp-4.16-e2e",
+                "build_number": 100,
+                "failures": [
+                    {
+                        "test_name": "tests.TestA.test_one",
+                        "error": "some error",
+                        "error_signature": "sig-backfill",
+                        "analysis": {
+                            "classification": "PRODUCT BUG",
+                            "details": "...",
+                        },
+                    },
+                ],
+                "child_job_analyses": [],
+            }
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    "INSERT INTO results (job_id, jenkins_url, status, result_json) VALUES (?, ?, ?, ?)",
+                    (
+                        "backfill-1",
+                        "https://jenkins.example.com/job/test/100/",
+                        "completed",
+                        json.dumps(result_data),
+                    ),
+                )
+                await db.commit()
+
+            # Run backfill
+            await storage.backfill_failure_history()
+
+            async with aiosqlite.connect(setup_test_db) as db:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM failure_history WHERE job_id = ?",
+                    ("backfill-1",),
+                )
+                count = (await cursor.fetchone())[0]
+                assert count == 1
+
+    async def test_backfill_skips_when_table_not_empty(self, setup_test_db):
+        """Backfill should not run when failure_history already has data."""
+        import aiosqlite
+
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            # Insert existing failure_history row
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    "INSERT INTO failure_history (job_id, job_name, build_number, test_name) VALUES (?, ?, ?, ?)",
+                    ("existing-1", "some-job", 1, "test_existing"),
+                )
+                await db.commit()
+
+            # Insert a completed result
+            result_data = {
+                "job_name": "ocp-4.16-e2e",
+                "build_number": 200,
+                "failures": [
+                    {
+                        "test_name": "tests.TestB.test_two",
+                        "error": "err",
+                        "error_signature": "sig-skip",
+                        "analysis": {
+                            "classification": "CODE ISSUE",
+                            "details": "...",
+                        },
+                    },
+                ],
+                "child_job_analyses": [],
+            }
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    "INSERT INTO results (job_id, jenkins_url, status, result_json) VALUES (?, ?, ?, ?)",
+                    (
+                        "backfill-2",
+                        "https://jenkins.example.com/job/test/200/",
+                        "completed",
+                        json.dumps(result_data),
+                    ),
+                )
+                await db.commit()
+
+            await storage.backfill_failure_history()
+
+            # Should NOT have backfilled since table was not empty
+            async with aiosqlite.connect(setup_test_db) as db:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM failure_history WHERE job_id = ?",
+                    ("backfill-2",),
+                )
+                count = (await cursor.fetchone())[0]
+                assert count == 0
+
+    async def test_backfill_skips_non_completed_results(self, setup_test_db):
+        """Backfill should only process completed results."""
+        import aiosqlite
+
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    "INSERT INTO results (job_id, jenkins_url, status, result_json) VALUES (?, ?, ?, ?)",
+                    (
+                        "pending-1",
+                        "https://jenkins.example.com/job/test/1/",
+                        "pending",
+                        None,
+                    ),
+                )
+                await db.execute(
+                    "INSERT INTO results (job_id, jenkins_url, status, result_json) VALUES (?, ?, ?, ?)",
+                    (
+                        "failed-1",
+                        "https://jenkins.example.com/job/test/2/",
+                        "failed",
+                        json.dumps({"error": "boom"}),
+                    ),
+                )
+                await db.commit()
+
+            await storage.backfill_failure_history()
+
+            async with aiosqlite.connect(setup_test_db) as db:
+                cursor = await db.execute("SELECT COUNT(*) FROM failure_history")
                 count = (await cursor.fetchone())[0]
                 assert count == 0
