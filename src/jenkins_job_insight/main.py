@@ -53,6 +53,7 @@ from jenkins_job_insight.storage import (
     init_db,
     list_results,
     list_results_for_dashboard,
+    populate_failure_history,
     save_html_report,
     save_result,
     update_status,
@@ -417,6 +418,17 @@ async def process_analysis_with_id(
             f"(job_id: {job_id})"
         )
 
+        # Populate failure history for completed analyses
+        if result.status == "completed":
+            try:
+                await populate_failure_history(job_id, result_data)
+            except Exception:
+                logger.warning(
+                    "Failed to populate failure_history for job_id=%s",
+                    job_id,
+                    exc_info=True,
+                )
+
         await deliver_results(result, body, settings)
 
     except Exception as e:
@@ -476,6 +488,18 @@ async def analyze(
             f"Sync analysis completed for {body.job_name} #{body.build_number} "
             f"(job_id: {result.job_id})"
         )
+
+        # Populate failure history
+        try:
+            await populate_failure_history(
+                result.job_id, result.model_dump(mode="json")
+            )
+        except Exception:
+            logger.warning(
+                "Failed to populate failure_history for job_id=%s",
+                result.job_id,
+                exc_info=True,
+            )
 
         await deliver_results(result, body, merged)
 
@@ -645,6 +669,17 @@ async def analyze_failures(
         result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
 
         await update_status(job_id, "completed", result_data)
+
+        # Populate failure history
+        try:
+            await populate_failure_history(job_id, result_data)
+        except Exception:
+            logger.warning(
+                "Failed to populate failure_history for job_id=%s",
+                job_id,
+                exc_info=True,
+            )
+
         return JSONResponse(content=result_data)
 
     except Exception as e:
