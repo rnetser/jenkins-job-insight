@@ -2093,6 +2093,7 @@ def generate_dashboard_html(
   <div class="header-content">
     <h1>Jenkins Job Insight</h1>
     <span id="jobs-badge" class="jobs-badge">{total_jobs} job{"s" if total_jobs != 1 else ""}{e(limit_note)}</span>
+    <a href="{e(base_url)}/history" style="color:var(--accent-blue);text-decoration:none;font-size:14px;">History</a>
   </div>
 </div>
 """)
@@ -2511,5 +2512,424 @@ def generate_register_html() -> str:
         <button class="register-btn" type="submit">Continue</button>
     </form>
 </div>
+</body>
+</html>"""
+
+
+def generate_history_html(base_url: str = "") -> str:
+    """Generate a self-contained HTML page for failure history exploration.
+
+    The page uses inline JavaScript to fetch data from the history API
+    endpoints and renders regressions, flaky tests, trends, and a test
+    search feature.  All dynamic content is escaped via ``escapeHtml()``
+    before DOM insertion.
+
+    Args:
+        base_url: External base URL for constructing API request URLs.
+
+    Returns:
+        A complete HTML document as a string.
+    """
+    e = html.escape
+    api = e(base_url)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jenkins Job Insight - Failure History</title>
+<link rel="icon" href="{FAVICON_DATA_URI}">
+<style>
+{_common_css()}
+.env-chips {{ display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }}
+.env-chip {{
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    text-decoration: none;
+}}
+.env-chip:hover {{ border-color: var(--accent-blue); color: var(--accent-blue); }}
+.section-title {{
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin: 32px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}}
+.search-bar {{
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+}}
+.search-input {{
+    flex: 1;
+    min-width: 200px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color 0.15s;
+}}
+.search-input::placeholder {{ color: var(--text-muted); }}
+.search-input:focus {{ border-color: var(--accent-blue); }}
+.search-btn {{
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--accent-blue);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}}
+.search-btn:hover {{
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+}}
+.table-container {{
+    overflow-x: auto;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 24px;
+}}
+.table-container table {{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}}
+.table-container th {{
+    text-align: left;
+    padding: 10px 14px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}}
+.table-container td {{
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-primary);
+    vertical-align: top;
+}}
+.table-container tr:last-child td {{ border-bottom: none; }}
+.table-container tr:hover td {{ background: var(--bg-hover); }}
+.mono {{ font-family: var(--font-mono); font-size: 12px; }}
+.badge-red {{
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(248, 81, 73, 0.12);
+    color: var(--accent-red);
+}}
+.badge-yellow {{
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(210, 153, 34, 0.15);
+    color: var(--accent-yellow);
+}}
+.badge-green {{
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(63, 185, 80, 0.12);
+    color: var(--accent-green);
+}}
+.badge-blue {{
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(88, 166, 255, 0.12);
+    color: var(--accent-blue);
+}}
+.empty-msg {{
+    text-align: center;
+    padding: 32px 20px;
+    color: var(--text-muted);
+    font-size: 14px;
+}}
+.test-link {{
+    color: var(--accent-blue);
+    text-decoration: none;
+    cursor: pointer;
+}}
+.test-link:hover {{ text-decoration: underline; }}
+#search-results {{
+    display: none;
+    margin-bottom: 24px;
+}}
+#search-results .result-card {{
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+}}
+#search-results .result-header {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}}
+#search-results .result-title {{
+    font-weight: 600;
+    font-size: 15px;
+    font-family: var(--font-mono);
+    word-break: break-all;
+}}
+
+/* Responsive */
+@media (max-width: 768px) {{
+    .search-bar {{ flex-direction: column; }}
+    .search-input {{ min-width: 100%; }}
+}}
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="sticky-header">
+  <div class="header-content">
+    <h1>Failure History</h1>
+    <div class="env-chips">
+      <a class="env-chip" href="{api}/dashboard">Dashboard</a>
+    </div>
+  </div>
+</div>
+
+<!-- Search -->
+<div class="search-bar">
+  <input type="text" id="test-search" class="search-input" placeholder="Search by test name (e.g. tests.network.TestDNS.test_lookup)">
+  <button id="search-btn" class="search-btn">Search</button>
+</div>
+<div id="search-results"></div>
+
+<!-- Regressions -->
+<h2 class="section-title">Recent Regressions</h2>
+<div id="regressions-section">
+  <div class="empty-msg">Loading regressions...</div>
+</div>
+
+<!-- Flaky Tests -->
+<h2 class="section-title">Flaky Tests</h2>
+<div id="flaky-section">
+  <div class="empty-msg">Loading flaky tests...</div>
+</div>
+
+<!-- Trends -->
+<h2 class="section-title">Failure Trends (Last 30 Days)</h2>
+<div id="trends-section">
+  <div class="empty-msg">Loading trends...</div>
+</div>
+
+<div class="report-footer">
+  <span>Jenkins Job Insight - Failure History</span>
+</div>
+
+</div>
+
+<script>
+(function() {{
+  var BASE = '{api}';
+
+  function escapeHtml(s) {{
+    var el = document.createElement('div');
+    el.textContent = s;
+    return el.innerHTML;
+  }}
+
+  function fetchJson(url) {{
+    return fetch(url).then(function(r) {{
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }});
+  }}
+
+  /* ---- Search ---- */
+  var searchInput = document.getElementById('test-search');
+  var searchBtn = document.getElementById('search-btn');
+  var searchResults = document.getElementById('search-results');
+
+  function doSearch() {{
+    var q = searchInput.value.trim();
+    if (!q) return;
+    searchResults.style.display = 'block';
+    searchResults.innerHTML = '<div class="empty-msg">Searching...</div>';
+
+    fetchJson(BASE + '/history/test/' + encodeURIComponent(q))
+      .then(function(data) {{
+        if (data.failures === 0 && data.recent_runs.length === 0) {{
+          searchResults.innerHTML = '<div class="empty-msg">No history found for this test.</div>';
+          return;
+        }}
+        var h = '<div class="result-card">';
+        h += '<div class="result-header">';
+        h += '<span class="result-title">' + escapeHtml(data.test_name) + '</span>';
+        h += '<span class="badge-red">' + data.failures + ' failures</span>';
+        h += '<span class="badge-green">' + data.passes + ' passes</span>';
+        var pct = (data.failure_rate * 100).toFixed(1);
+        h += '<span class="badge-yellow">' + pct + '% failure rate</span>';
+        if (data.is_flaky) h += '<span class="badge-yellow">FLAKY</span>';
+        if (data.last_classification) {{
+          h += '<span class="badge-blue">' + escapeHtml(data.last_classification) + '</span>';
+        }}
+        h += '</div>';
+
+        if (data.recent_runs.length > 0) {{
+          h += '<div class="table-container"><table>';
+          h += '<tr><th>Job</th><th>Build</th><th>Classification</th><th>Error</th><th>Date</th></tr>';
+          for (var i = 0; i < data.recent_runs.length; i++) {{
+            var run = data.recent_runs[i];
+            h += '<tr>';
+            h += '<td>' + escapeHtml(run.job_name || '') + '</td>';
+            h += '<td class="mono">#' + escapeHtml(String(run.build_number || '')) + '</td>';
+            h += '<td><span class="badge-blue">' + escapeHtml(run.classification || '') + '</span></td>';
+            h += '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(run.error_message || '') + '">' + escapeHtml((run.error_message || '').substring(0, 120)) + '</td>';
+            h += '<td class="mono">' + escapeHtml(run.analyzed_at || '') + '</td>';
+            h += '</tr>';
+          }}
+          h += '</table></div>';
+        }}
+
+        if (data.comments && data.comments.length > 0) {{
+          h += '<h3 style="font-size:13px;color:var(--text-secondary);margin:12px 0 8px;">Comments</h3>';
+          for (var c = 0; c < data.comments.length; c++) {{
+            var cm = data.comments[c];
+            h += '<div style="padding:8px 12px;margin-bottom:4px;background:var(--bg-tertiary);border-radius:4px;font-size:12px;">';
+            h += '<strong>' + escapeHtml(cm.username || 'anonymous') + '</strong>';
+            h += ' <span style="color:var(--text-muted)">' + escapeHtml(cm.created_at || '') + '</span><br>';
+            h += escapeHtml(cm.comment || '');
+            h += '</div>';
+          }}
+        }}
+
+        h += '</div>';
+        searchResults.innerHTML = h;
+      }})
+      .catch(function(err) {{
+        searchResults.innerHTML = '<div class="empty-msg">Error: ' + escapeHtml(err.message) + '</div>';
+      }});
+  }}
+
+  searchBtn.addEventListener('click', doSearch);
+  searchInput.addEventListener('keydown', function(ev) {{
+    if (ev.key === 'Enter') doSearch();
+  }});
+
+  /* ---- Regressions ---- */
+  fetchJson(BASE + '/history/regressions')
+    .then(function(data) {{
+      var section = document.getElementById('regressions-section');
+      var items = data.regressions || [];
+      if (items.length === 0) {{
+        section.innerHTML = '<div class="empty-msg">No recent regressions detected.</div>';
+        return;
+      }}
+      var h = '<div class="table-container"><table>';
+      h += '<tr><th>Test Name</th><th>Job</th><th>Consecutive Failures</th><th>First Failed</th><th>Classification</th></tr>';
+      for (var i = 0; i < items.length; i++) {{
+        var r = items[i];
+        h += '<tr>';
+        h += '<td><span class="test-link" onclick="document.getElementById(\'test-search\').value=this.textContent;document.getElementById(\'search-btn\').click();">' + escapeHtml(r.test_name) + '</span></td>';
+        h += '<td>' + escapeHtml(r.job_name || '') + '</td>';
+        h += '<td class="mono"><span class="badge-red">' + r.consecutive_failures + '</span></td>';
+        h += '<td class="mono">' + escapeHtml(r.first_failure_date || '') + '</td>';
+        h += '<td><span class="badge-blue">' + escapeHtml(r.classification || '') + '</span></td>';
+        h += '</tr>';
+      }}
+      h += '</table></div>';
+      section.innerHTML = h;
+    }})
+    .catch(function(err) {{
+      document.getElementById('regressions-section').innerHTML =
+        '<div class="empty-msg">Failed to load regressions: ' + escapeHtml(err.message) + '</div>';
+    }});
+
+  /* ---- Flaky Tests ---- */
+  fetchJson(BASE + '/history/flaky')
+    .then(function(data) {{
+      var section = document.getElementById('flaky-section');
+      var items = data.flaky_tests || [];
+      if (items.length === 0) {{
+        section.innerHTML = '<div class="empty-msg">No flaky tests detected.</div>';
+        return;
+      }}
+      var h = '<div class="table-container"><table>';
+      h += '<tr><th>Test Name</th><th>Failure Rate</th><th>Failures</th><th>Total Runs</th><th>Jobs</th></tr>';
+      for (var i = 0; i < items.length; i++) {{
+        var f = items[i];
+        var pct = (f.failure_rate * 100).toFixed(1);
+        h += '<tr>';
+        h += '<td><span class="test-link" onclick="document.getElementById(\'test-search\').value=this.textContent;document.getElementById(\'search-btn\').click();">' + escapeHtml(f.test_name) + '</span></td>';
+        h += '<td class="mono"><span class="badge-yellow">' + pct + '%</span></td>';
+        h += '<td class="mono">' + f.failures + '</td>';
+        h += '<td class="mono">' + f.total_runs + '</td>';
+        h += '<td>' + escapeHtml((f.job_names || []).join(', ')) + '</td>';
+        h += '</tr>';
+      }}
+      h += '</table></div>';
+      section.innerHTML = h;
+    }})
+    .catch(function(err) {{
+      document.getElementById('flaky-section').innerHTML =
+        '<div class="empty-msg">Failed to load flaky tests: ' + escapeHtml(err.message) + '</div>';
+    }});
+
+  /* ---- Trends ---- */
+  fetchJson(BASE + '/history/trends?period=daily&days=30')
+    .then(function(data) {{
+      var section = document.getElementById('trends-section');
+      var items = data.periods || [];
+      if (items.length === 0) {{
+        section.innerHTML = '<div class="empty-msg">No trend data available yet.</div>';
+        return;
+      }}
+      var h = '<div class="table-container"><table>';
+      h += '<tr><th>Period</th><th>Total Failures</th><th>Unique Tests</th><th>Builds Analyzed</th></tr>';
+      for (var i = 0; i < items.length; i++) {{
+        var t = items[i];
+        h += '<tr>';
+        h += '<td class="mono">' + escapeHtml(t.period) + '</td>';
+        h += '<td class="mono">' + t.total_failures + '</td>';
+        h += '<td class="mono">' + t.unique_tests + '</td>';
+        h += '<td class="mono">' + t.builds + '</td>';
+        h += '</tr>';
+      }}
+      h += '</table></div>';
+      section.innerHTML = h;
+    }})
+    .catch(function(err) {{
+      document.getElementById('trends-section').innerHTML =
+        '<div class="empty-msg">Failed to load trends: ' + escapeHtml(err.message) + '</div>';
+    }});
+}})();
+</script>
 </body>
 </html>"""

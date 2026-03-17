@@ -42,6 +42,7 @@ from jenkins_job_insight.html_report import (
     format_result_as_html,
     format_status_page,
     generate_dashboard_html,
+    generate_history_html,
     generate_register_html,
 )
 from jenkins_job_insight.output import send_callback
@@ -1101,6 +1102,14 @@ async def dashboard(
     base_url = _extract_base_url(request)
     jobs = await list_results_for_dashboard(limit)
     html_content = generate_dashboard_html(jobs, base_url, limit=limit)
+    return HTMLResponse(html_content)
+
+
+@app.get("/history", response_class=HTMLResponse)
+async def history_page(request: Request) -> HTMLResponse:
+    """Serve the failure history page."""
+    base_url = _extract_base_url(request)
+    html_content = generate_history_html(base_url)
     return HTMLResponse(html_content)
 
 
