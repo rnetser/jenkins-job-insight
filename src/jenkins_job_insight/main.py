@@ -455,6 +455,9 @@ async def process_analysis_with_id(
                     exc_info=True,
                 )
 
+        # Reveal classifications created during analysis
+        await storage.make_classifications_visible(job_id)
+
         await deliver_results(result, body, settings)
 
     except Exception as e:
@@ -533,6 +536,9 @@ async def analyze(
                 result.job_id,
                 exc_info=True,
             )
+
+        # Reveal classifications created during analysis
+        await storage.make_classifications_visible(result.job_id)
 
         await deliver_results(result, body, merged)
 
@@ -728,6 +734,9 @@ async def analyze_failures(
                 job_id,
                 exc_info=True,
             )
+
+        # Reveal classifications created during analysis
+        await storage.make_classifications_visible(job_id)
 
         return JSONResponse(content=result_data)
 
@@ -1325,6 +1334,7 @@ async def classify_test(request: Request, body: dict) -> dict:
         created_by=created_by,
         references=references,
         job_id=classify_job_id,
+        visible=0,
     )
     return {"id": classification_id}
 

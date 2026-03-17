@@ -185,6 +185,17 @@ async def init_db() -> None:
         else:
             logger.debug("Migration: test_classifications already has job_id column")
 
+        # Migration: add visible column to test_classifications table
+        cursor = await db.execute("PRAGMA table_info(test_classifications)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "visible" not in columns:
+            await db.execute(
+                "ALTER TABLE test_classifications ADD COLUMN visible INTEGER NOT NULL DEFAULT 1"
+            )
+            logger.info("Migration: added visible column to test_classifications")
+        else:
+            logger.debug("Migration: test_classifications already has visible column")
+
         # failure_history: denormalized table for fast history queries
         await db.execute("""
             CREATE TABLE IF NOT EXISTS failure_history (
@@ -228,6 +239,7 @@ async def init_db() -> None:
                 references_info TEXT NOT NULL DEFAULT '',
                 created_by TEXT NOT NULL DEFAULT '',
                 job_id TEXT NOT NULL DEFAULT '',
+                visible INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -1296,19 +1308,24 @@ async def set_test_classification(
     created_by: str = "",
     references: str = "",
     job_id: str = "",
+    visible: int = 1,
 ) -> int:
     """Set a classification for a test (e.g., FLAKY, REGRESSION).
 
     Can be set by the AI during analysis or by humans.
+
+    Args:
+        visible: Whether the classification is immediately visible.
+            Set to 0 during AI analysis; revealed after analysis completes.
     """
     logger.debug(
         f"set_test_classification: test_name={test_name}, classification={classification}, "
-        f"parent_job_name={parent_job_name}, job_id={job_id}, created_by={created_by}"
+        f"parent_job_name={parent_job_name}, job_id={job_id}, created_by={created_by}, visible={visible}"
     )
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO test_classifications (test_name, job_name, parent_job_name, classification, reason, references_info, created_by, job_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO test_classifications (test_name, job_name, parent_job_name, classification, reason, references_info, created_by, job_id, visible) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 test_name,
                 job_name,
@@ -1318,6 +1335,7 @@ async def set_test_classification(
                 references,
                 created_by,
                 job_id,
+                visible,
             ),
         )
         await db.commit()
@@ -1331,18 +1349,18 @@ async def get_test_classifications(
     parent_job_name: str = "",
     job_id: str = "",
 ) -> list[dict]:
-    """Get test classifications, only from completed analyses.
+    """Get visible test classifications.
 
-    Uses a LEFT JOIN with the results table so that:
-    - Classifications linked to a job_id are only returned when that job has status 'completed'.
-    - Legacy classifications without a job_id (empty string) are always returned.
+    Only returns classifications with visible=1. During AI analysis,
+    classifications are created with visible=0 and revealed after
+    analysis completes via make_classifications_visible().
     """
     logger.debug(
         f"get_test_classifications: test_name={test_name!r}, classification={classification!r}, "
         f"job_name={job_name!r}, parent_job_name={parent_job_name!r}, job_id={job_id!r}"
     )
-    conditions = []
-    params = []
+    conditions = ["tc.visible = 1"]
+    params: list[str] = []
 
     if test_name:
         conditions.append("tc.test_name = ?")
@@ -1360,7 +1378,7 @@ async def get_test_classifications(
         conditions.append("tc.job_id = ?")
         params.append(job_id)
 
-    where = " AND ".join(conditions) if conditions else "1=1"
+    where = " AND ".join(conditions)
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -1368,8 +1386,7 @@ async def get_test_classifications(
             f"SELECT tc.id, tc.test_name, tc.job_name, tc.parent_job_name, tc.classification, "
             f"tc.reason, tc.references_info, tc.created_by, tc.job_id, tc.created_at "
             f"FROM test_classifications tc "
-            f"LEFT JOIN results r ON tc.job_id = r.job_id "
-            f"WHERE (r.status = 'completed' OR r.job_id IS NULL OR tc.job_id = '') AND {where} "
+            f"WHERE {where} "
             f"ORDER BY tc.created_at DESC",
             params,
         )
@@ -1377,6 +1394,17 @@ async def get_test_classifications(
         result = [dict(row) for row in rows]
         logger.debug(f"get_test_classifications: count={len(result)}")
         return result
+
+
+async def make_classifications_visible(job_id: str) -> None:
+    """Make all classifications for a job visible after analysis completes."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE test_classifications SET visible = 1 WHERE job_id = ? AND visible = 0",
+            (job_id,),
+        )
+        await db.commit()
+    logger.debug(f"make_classifications_visible: job_id={job_id}")
 
 
 async def get_all_failures(
