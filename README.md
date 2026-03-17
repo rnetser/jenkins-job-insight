@@ -70,9 +70,9 @@ Configure the service using environment variables. The service is tied to a sing
 | **Jira (Optional)** | | | |
 | `ENABLE_JIRA` | No | *(auto-detect)* | Explicitly enable/disable Jira integration (overrides auto-detection) |
 | `JIRA_URL` | No | - | Jira instance URL (enables Jira integration) |
-| `JIRA_EMAIL` | No | - | Email for Jira Cloud authentication |
-| `JIRA_API_TOKEN` | No | - | API token for Jira Cloud |
-| `JIRA_PAT` | No | - | Personal Access Token for Jira Server/DC |
+| `JIRA_EMAIL` | No | - | Email for Jira Cloud authentication (if set, Cloud auth is used; if not set, Server/DC auth is used) |
+| `JIRA_API_TOKEN` | No | - | API token for Jira Cloud (kept for backward compatibility; prefer `JIRA_PAT`) |
+| `JIRA_PAT` | No | - | Personal Access Token (works for both Cloud and Server/DC) |
 | `JIRA_PROJECT_KEY` | No | - | Scope Jira searches to a specific project |
 | `JIRA_SSL_VERIFY` | No | `true` | SSL certificate verification for Jira |
 | `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
@@ -240,9 +240,9 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | **Jira**             |                      |          |                        |                                                                |
 | `ENABLE_JIRA`        | `enable_jira`        | No       | Both                   | Enable/disable Jira bug search (default: auto-detect)          |
 | `JIRA_URL`           | `jira_url`           | No       | Both                   | Jira instance URL                                              |
-| `JIRA_EMAIL`         | `jira_email`         | No       | Both                   | Email for Jira Cloud authentication                            |
-| `JIRA_API_TOKEN`     | `jira_api_token`     | No       | Both                   | API token for Jira Cloud                                       |
-| `JIRA_PAT`           | `jira_pat`           | No       | Both                   | Personal Access Token for Jira Server/DC                       |
+| `JIRA_EMAIL`         | `jira_email`         | No       | Both                   | Email for Jira Cloud (determines auth mode: set = Cloud, unset = Server/DC) |
+| `JIRA_API_TOKEN`     | `jira_api_token`     | No       | Both                   | Backward-compatible alias for `JIRA_PAT`                       |
+| `JIRA_PAT`           | `jira_pat`           | No       | Both                   | Personal Access Token (works for both Cloud and Server/DC)     |
 | `JIRA_PROJECT_KEY`   | `jira_project_key`   | No       | Both                   | Scope Jira searches to a specific project                      |
 | `JIRA_SSL_VERIFY`    | `jira_ssl_verify`    | No       | Both                   | SSL certificate verification for Jira (default: true)          |
 | `JIRA_MAX_RESULTS`   | `jira_max_results`   | No       | Both                   | Maximum Jira results per search (default: 5)                   |
@@ -281,9 +281,9 @@ Jira integration works with all analysis endpoints: `/analyze`, `/analyze?sync=t
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `JIRA_URL` | Yes* | - | Jira instance URL (Cloud or Server/DC) |
-| `JIRA_EMAIL` | Cloud | - | Email for Jira Cloud authentication |
-| `JIRA_API_TOKEN` | Cloud | - | API token for Jira Cloud |
-| `JIRA_PAT` | Server | - | Personal Access Token for Jira Server/DC |
+| `JIRA_PAT` | Yes* | - | Personal Access Token (works for both Cloud and Server/DC) |
+| `JIRA_EMAIL` | No | - | Email for Jira Cloud — determines auth mode: if set, Cloud auth (Basic with email:PAT); if not set, Server/DC auth (Bearer PAT) |
+| `JIRA_API_TOKEN` | No | - | Kept for backward compatibility (prefer `JIRA_PAT`) |
 | `JIRA_PROJECT_KEY` | No | - | Scope searches to a specific project |
 | `JIRA_SSL_VERIFY` | No | `true` | SSL certificate verification |
 | `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
@@ -295,7 +295,7 @@ Jira integration works with all analysis endpoints: `/analyze`, `/analyze?sync=t
 ```bash
 JIRA_URL=https://your-org.atlassian.net
 JIRA_EMAIL=your-email@example.com
-JIRA_API_TOKEN=your-jira-api-token
+JIRA_PAT=your-personal-access-token
 ```
 
 **Jira Server/DC:**
@@ -304,6 +304,8 @@ JIRA_API_TOKEN=your-jira-api-token
 JIRA_URL=https://jira.your-company.com
 JIRA_PAT=your-personal-access-token
 ```
+
+`JIRA_EMAIL` is the switch that determines which authentication mode is used. When `JIRA_EMAIL` is set, the service uses Basic authentication (email:PAT) for Jira Cloud. When `JIRA_EMAIL` is omitted, the service uses Bearer token authentication (PAT) for Jira Server/DC.
 
 #### Error Handling
 
@@ -372,7 +374,8 @@ Each analyzed test failure supports user comments and a "Reviewed" checkbox for 
 
 - **Comments**: Add free-text comments to any failed test (bug links, PR links, notes). Comments are threaded with timestamps and persist across page loads.
 - **Reviewed Checkbox**: Mark individual failures as reviewed so team members know which failures have been triaged.
-- **Dashboard Status**: The dashboard shows review progress per job — "Fully Reviewed", "X/Y Reviewed", or "Needs Review" — plus comment counts.
+- **Review Status Badges**: Review progress badges ("Fully Reviewed", "X/Y Reviewed", "Needs Review") and comment counts appear on the dashboard cards, the report page header, child job cards, and individual bug cards.
+- **Dashboard Status**: The dashboard shows review progress per job with the same badges.
 - **Comment Enrichment**: GitHub PR URLs and Jira ticket keys in comments are automatically detected and display live status badges (Merged, Open, Closed, etc.).
 - **AI Context**: Historical comments from previous analyses of similar failures are fed to the AI, helping it reference existing bugs and PRs instead of suggesting duplicates.
 - **Git Log Regression Check**: For CODE ISSUE classifications, the AI checks the test repo's recent git log for commits that may have caused a regression.
@@ -404,7 +407,7 @@ Each analyzed test failure supports user comments and a "Reviewed" checkbox for 
 |----------|----------|---------|-------------|
 | `GITHUB_TOKEN` | No | - | GitHub API token for fetching PR status from private repositories. Public repositories work without a token. This value can also be set per-request via the `github_token` field in the payload. |
 
-Jira enrichment reuses existing Jira configuration (`JIRA_URL`, `JIRA_EMAIL` + `JIRA_API_TOKEN` (Cloud), `JIRA_PAT` (Server/DC)).
+Jira enrichment reuses existing Jira configuration (`JIRA_URL`, `JIRA_PAT`, and optionally `JIRA_EMAIL` for Cloud auth).
 
 ### SSL Verification
 
