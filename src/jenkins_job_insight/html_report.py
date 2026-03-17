@@ -952,6 +952,13 @@ const JOB_ID = "{e(result.job_id)}";
 // Derive base path for API calls (works behind reverse proxies with path prefixes)
 const BASE_PATH = window.location.pathname.replace(/\\/results\\/.*$/, '');
 
+function renderCommentBadge(badge, count) {{
+    if (count <= 0) return;
+    badge.style.display = '';
+    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:13px;padding:4px 12px;border-radius:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;';
+    badge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> ' + count;
+}}
+
 async function loadCommentsAndReviews() {{
     try {{
         const resp = await fetch(`${{BASE_PATH}}/results/${{JOB_ID}}/comments`);
@@ -995,18 +1002,9 @@ async function loadCommentsAndReviews() {{
 
         // Overall comment count
         var totalComments = data.comments.length;
-        if (totalComments > 0) {{
-            var overallBadge = document.getElementById('overall-comment-count');
-            if (overallBadge) {{
-                overallBadge.style.display = '';
-                overallBadge.textContent = '\ud83d\udcac ' + totalComments;
-                overallBadge.style.background = 'var(--bg-tertiary)';
-                overallBadge.style.color = 'var(--text-muted)';
-                overallBadge.style.border = '1px solid var(--border)';
-                overallBadge.style.fontSize = '13px';
-                overallBadge.style.padding = '4px 12px';
-                overallBadge.style.fontFamily = 'var(--font-mono)';
-            }}
+        var overallBadge = document.getElementById('overall-comment-count');
+        if (overallBadge) {{
+            renderCommentBadge(overallBadge, totalComments);
         }}
 
         // Per child job comment counts
@@ -1018,10 +1016,7 @@ async function loadCommentsAndReviews() {{
         document.querySelectorAll('.child-comment-count').forEach(function(badge) {{
             var childJob = badge.dataset.childJob || '';
             if (childCounts[childJob]) {{
-                badge.style.display = '';
-                badge.textContent = '\ud83d\udcac ' + childCounts[childJob];
-                badge.style.cssText = 'display:inline;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;';
-                badge.parentNode.appendChild(badge);
+                renderCommentBadge(badge, childCounts[childJob]);
             }}
         }});
 
@@ -1037,10 +1032,7 @@ async function loadCommentsAndReviews() {{
                 }}
             }});
             if (count > 0) {{
-                badge.style.display = '';
-                badge.textContent = '\ud83d\udcac ' + count;
-                badge.style.cssText = 'display:inline;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;';
-                badge.parentNode.appendChild(badge);
+                renderCommentBadge(badge, count);
             }}
         }});
     }} catch (err) {{
@@ -2797,7 +2789,7 @@ def _render_dashboard_card(
     # Comment count badge (icon + number, positioned at end after all other badges)
     if comment_count > 0:
         parts.append(
-            f'      <span class="card-build-chip">\U0001f4ac {comment_count}</span>'
+            f'      <span class="card-build-chip"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> {comment_count}</span>'
         )
 
     parts.append("    </div>")
