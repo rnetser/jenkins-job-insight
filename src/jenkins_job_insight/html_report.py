@@ -850,7 +850,6 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     <h1>{e(job_name)}</h1>
     <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
     <span id="overall-review-status" class="status-chip" style="display:none"></span>
-    <span id="overall-comment-count" class="status-chip" style="display:none"></span>
     <div class="env-chips">
       <span class="env-chip">Build: #{e(build_number)}</span>
       <span class="env-chip">Status: {e(result.status)}</span>
@@ -858,6 +857,7 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
       {f'<span class="env-chip">Analyzed: {e(completed_at)}</span>' if completed_at else ""}
       {f'<span class="env-chip"><a href="{e(jenkins_url_str)}" target="_blank" rel="noopener">Jenkins</a></span>' if jenkins_url_str else ""}
       <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
+      <span id="overall-comment-count" class="status-chip" style="display:none"></span>
     </div>
   </div>
 </div>
@@ -958,7 +958,7 @@ function renderCommentBadge(badge, count) {{
         return;
     }}
     badge.style.display = '';
-    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:13px;padding:4px 12px;border-radius:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;';
+    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:13px;padding:4px 12px;border-radius:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;margin-left:auto;';
     badge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> ' + count;
 }}
 
