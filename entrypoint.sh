@@ -15,8 +15,8 @@ fi
 # shell variables) gets the correct bind port at runtime.
 export PORT="${PORT:-8000}"
 
-# If the caller already passed --port, don't append a duplicate.
-if [[ " $* " == *" --port "* ]]; then
+# If the caller already passed --port (space-separated or =value), don't append a duplicate.
+if [[ " $* " == *" --port "* ]] || [[ " $* " == *" --port="* ]]; then
     exec "$@"
 fi
 

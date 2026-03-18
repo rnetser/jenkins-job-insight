@@ -485,6 +485,7 @@ async def process_analysis_with_id(
 
         # Reveal classifications created during analysis
         await storage.make_classifications_visible(job_id)
+        await _invalidate_cached_html(job_id)
 
         await deliver_results(result, body, settings)
 
@@ -564,6 +565,7 @@ async def analyze(
 
         # Reveal classifications created during analysis
         await storage.make_classifications_visible(result.job_id)
+        await _invalidate_cached_html(result.job_id)
 
         await deliver_results(result, body, merged)
 
@@ -759,6 +761,7 @@ async def analyze_failures(
 
         # Reveal classifications created during analysis
         await storage.make_classifications_visible(job_id)
+        await _invalidate_cached_html(job_id)
 
         return JSONResponse(content=result_data)
 
@@ -1378,6 +1381,8 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
         child_build_number=body.child_build_number,
         visible=visible,
     )
+    if classify_job_id:
+        await _invalidate_cached_html(classify_job_id)
     return {"id": classification_id}
 
 

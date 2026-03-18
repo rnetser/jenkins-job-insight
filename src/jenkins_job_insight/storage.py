@@ -935,9 +935,12 @@ async def get_test_history(
             job_filter += " AND job_id != ?"
             params.append(exclude_job_id)
 
-        # Failure count
+        # Failure count — count distinct builds (job_ids) where this test
+        # failed, not raw rows. A test can fail multiple times in different
+        # child jobs within the same build, and counting rows would inflate
+        # the failure count relative to total_runs (which counts builds).
         cursor = await db.execute(
-            f"SELECT COUNT(*) FROM failure_history WHERE test_name = ?{job_filter}",
+            f"SELECT COUNT(DISTINCT job_id) FROM failure_history WHERE test_name = ?{job_filter}",
             params,
         )
         failures = (await cursor.fetchone())[0]
@@ -995,22 +998,13 @@ async def get_test_history(
         )
         recent_runs = [dict(row) for row in await cursor.fetchall()]
 
-        # Consecutive failures (count from most recent backwards).
-        # NOTE: failure_history only records failures, not passes. Without pass
-        # data we cannot detect an intervening successful build that would break
-        # the streak. The count here therefore represents the number of recent
-        # consecutive failure records — the true streak may be shorter if the
-        # test passed between recorded failures.  Adding pass tracking is
-        # deferred to a future enhancement.
-        consecutive_failures = 0
-        for run in recent_runs:
-            if run.get("classification"):
-                consecutive_failures += 1
-            else:
-                break
-        # If all runs are failures, count them all
-        if consecutive_failures == 0 and recent_runs:
-            consecutive_failures = len(recent_runs)
+        # Consecutive failures — every row in recent_runs is a failure
+        # (failure_history only records failures), so count them directly.
+        # NOTE: Without pass tracking we cannot detect an intervening
+        # successful build that would break the streak. The count here
+        # represents the number of recent consecutive failure records.
+        # Adding pass tracking is deferred to a future enhancement.
+        consecutive_failures = len(recent_runs)
 
         # Count only completed results for the denominator so that
         # pending/running/failed analyses don't inflate total_runs.
@@ -1223,11 +1217,13 @@ async def get_job_stats(job_name: str, exclude_job_id: str = "") -> dict:
         )
 
         # Most common failures
+        # GROUP BY test_name, classification to avoid non-deterministic
+        # classification values when a test has been reclassified over time.
         cursor = await db.execute(
             f"SELECT test_name, COUNT(*) as count, classification "
             f"FROM failure_history WHERE job_name = ?{exclude_filter} "
-            f"GROUP BY test_name ORDER BY count DESC LIMIT 10",
-            [job_name] + exclude_params,
+            f"GROUP BY test_name, classification ORDER BY count DESC LIMIT 10",
+            [job_name, *exclude_params],
         )
         most_common = [dict(row) for row in await cursor.fetchall()]
 
@@ -1535,13 +1531,15 @@ async def set_test_classification(
         # Mirror classification into failure_history so that filters on
         # failure_history.classification (used by get_all_failures, get_test_history)
         # reflect manual/AI reclassifications from test_classifications.
-        # Scope by the full primary key (job_id, test_name, child_job_name,
-        # child_build_number) so repeated child builds are distinguished.
-        await db.execute(
-            "UPDATE failure_history SET classification = ? "
-            "WHERE test_name = ? AND child_job_name = ? AND child_build_number = ? AND job_id = ?",
-            [classification, test_name, job_name, child_build_number, job_id],
-        )
+        # Only mirror when visible=1 to prevent hidden AI classifications from
+        # leaking into failure_history before analysis completes.
+        # When visible=0, make_classifications_visible() handles the mirror.
+        if visible:
+            await db.execute(
+                "UPDATE failure_history SET classification = ? "
+                "WHERE test_name = ? AND child_job_name = ? AND child_build_number = ? AND job_id = ?",
+                [classification, test_name, job_name, child_build_number, job_id],
+            )
 
         await db.commit()
         return cursor.lastrowid
@@ -1602,14 +1600,45 @@ async def get_test_classifications(
 
 
 async def make_classifications_visible(job_id: str) -> None:
-    """Make all classifications for a job visible after analysis completes."""
+    """Make all classifications for a job visible after analysis completes.
+
+    Also mirrors classifications into failure_history. The mirror is deferred
+    from set_test_classification (which creates rows with visible=0 during
+    analysis) to here so that failure_history doesn't leak hidden AI labels.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Fetch hidden classifications before flipping so we can mirror them
+        cursor = await db.execute(
+            "SELECT test_name, job_name, child_build_number, classification "
+            "FROM test_classifications WHERE job_id = ? AND visible = 0",
+            (job_id,),
+        )
+        rows = await cursor.fetchall()
+
         await db.execute(
             "UPDATE test_classifications SET visible = 1 WHERE job_id = ? AND visible = 0",
             (job_id,),
         )
+
+        # Mirror each newly-visible classification into failure_history
+        for row in rows:
+            await db.execute(
+                "UPDATE failure_history SET classification = ? "
+                "WHERE test_name = ? AND child_job_name = ? AND child_build_number = ? AND job_id = ?",
+                [
+                    row["classification"],
+                    row["test_name"],
+                    row["job_name"],
+                    row["child_build_number"],
+                    job_id,
+                ],
+            )
+
         await db.commit()
-    logger.debug(f"make_classifications_visible: job_id={job_id}")
+    logger.debug(
+        f"make_classifications_visible: job_id={job_id}, mirrored={len(rows)} classifications"
+    )
 
 
 async def get_all_failures(
