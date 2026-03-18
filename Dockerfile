@@ -92,9 +92,12 @@ ENV HOME="/home/appuser"
 
 EXPOSE 8000
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
+
 # Use uv run for uvicorn
 # --no-sync prevents uv from attempting to modify the venv at runtime.
 # This is required for OpenShift where containers run as an arbitrary UID
 # and may not have write access to the .venv directory.
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["sh", "-c", "uv run --no-sync uvicorn jenkins_job_insight.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["uv", "run", "--no-sync", "uvicorn", "jenkins_job_insight.main:app", "--host", "0.0.0.0"]

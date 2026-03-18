@@ -862,6 +862,11 @@ async def backfill_failure_history() -> None:
     for job_id, result_json_str, created_at in rows:
         try:
             result_data = json.loads(result_json_str)
+            # Skip completed results with zero failures — they have nothing to
+            # insert into failure_history, so without this guard the LEFT JOIN
+            # would find them "missing" on every startup and reprocess them.
+            if count_all_failures(result_data) == 0:
+                continue
             # Use the original created_at timestamp to preserve historical chronology
             await populate_failure_history(
                 job_id, result_data, analyzed_at=created_at or ""
@@ -1254,7 +1259,9 @@ async def get_trends(
         failures, unique_tests, total_tests, and failure_rate.
     """
     logger.debug(f"get_trends: period={period}, days={days}, job_name={job_name}")
-    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=days)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
 
     # failure_history has analyzed_at; results has created_at — use separate expressions
     if period == "weekly":
@@ -1484,18 +1491,13 @@ async def set_test_classification(
         # Mirror classification into failure_history so that filters on
         # failure_history.classification (used by get_all_failures, get_test_history)
         # reflect manual/AI reclassifications from test_classifications.
-        update_conditions = ["test_name = ?"]
-        update_params: list[str] = [test_name]
-        if job_name:
-            update_conditions.append("child_job_name = ?")
-            update_params.append(job_name)
-        # job_id is always required — always scope the mirror update
-        update_conditions.append("job_id = ?")
-        update_params.append(job_id)
-        update_where = " AND ".join(update_conditions)
+        # Always scope the mirror update by test_name, child_job_name, and job_id.
+        # Use empty string for child_job_name when it represents the top-level job,
+        # matching how populate_failure_history() stores child_job_name.
         await db.execute(
-            f"UPDATE failure_history SET classification = ? WHERE {update_where}",
-            [classification] + update_params,
+            "UPDATE failure_history SET classification = ? "
+            "WHERE test_name = ? AND child_job_name = ? AND job_id = ?",
+            [classification, test_name, job_name, job_id],
         )
 
         await db.commit()

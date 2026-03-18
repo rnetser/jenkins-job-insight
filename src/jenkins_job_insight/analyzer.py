@@ -650,7 +650,7 @@ def _build_prompt_sections(
     )
 
     artifacts_section = _build_artifacts_section(artifacts_context)
-    history_enabled = bool(server_url and _QUERY_MD_PATH.exists())
+    history_enabled = bool(server_url and job_id and _QUERY_MD_PATH.exists())
     resources_section = _build_resources_section(
         repo_path, history_enabled=history_enabled
     )
@@ -663,6 +663,10 @@ def _build_prompt_sections(
     if not server_url:
         logger.warning(
             "server_url is empty; analysis will proceed without history-aware classification"
+        )
+    if server_url and not job_id:
+        logger.warning(
+            "job_id is empty; disabling history-aware classification to avoid unscoped history queries"
         )
 
     query_section = ""

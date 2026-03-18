@@ -72,10 +72,28 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "").lower()
 AI_MODEL = os.getenv("AI_MODEL", "")
 
 
+def _read_app_port() -> int:
+    """Parse and validate the PORT environment variable.
+
+    Returns:
+        The validated integer port number.
+
+    Raises:
+        SystemExit: If PORT is not a valid integer.
+    """
+    raw_port = os.environ.get("PORT", "8000")
+    try:
+        return int(raw_port)
+    except ValueError:
+        raise SystemExit(
+            f"Invalid PORT environment variable: {raw_port!r}. Must be an integer."
+        )
+
+
 # APP_PORT is the single source of truth for the server port.
 # Used by both uvicorn bind (run()) and internal AI self-calls (_build_internal_server_url()).
 # If overriding, set the PORT env var — the Dockerfile's --port should match.
-APP_PORT = int(os.environ.get("PORT", "8000"))
+APP_PORT = _read_app_port()
 
 
 def _build_internal_server_url() -> str:
@@ -1320,7 +1338,7 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
     logger.debug(
         f"POST /history/classify: test_name={body.test_name!r}, classification={body.classification!r}"
     )
-    test_name = body.test_name
+    test_name = body.test_name.strip()
     classification = body.classification
     reason = body.reason
     job_name = body.job_name

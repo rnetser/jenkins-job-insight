@@ -340,6 +340,29 @@ def _user_badge_js() -> str:
 """
 
 
+def _classification_colors_js() -> str:
+    """Return JavaScript for the ``getClassificationStyle`` function.
+
+    Centralizes the classification-to-color mapping so all pages use a
+    single source of truth.  Call sites should invoke
+    ``getClassificationStyle(cls)`` to get the CSS style string.
+
+    Returns:
+        A JavaScript string (without ``<script>`` tags) ready to embed directly.
+    """
+    return """\
+function getClassificationStyle(cls) {
+    var styles = {
+        'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);',
+        'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red);',
+        'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange);',
+        'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple);',
+        'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);'
+    };
+    return styles[cls] || 'background:var(--bg-tertiary);color:var(--text-muted);';
+}"""
+
+
 def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str:
     """Generate a self-contained HTML report for an analysis result.
 
@@ -1131,6 +1154,8 @@ function appendCommentToList(section, comment) {{
 
 {_modal_js()}
 
+{_classification_colors_js()}
+
 async function deleteComment(btn, commentId) {{
     showConfirmModal('Delete Comment', 'Are you sure you want to delete this comment?', async function() {{
         try {{
@@ -1312,17 +1337,10 @@ async function loadClassifications() {{
             var key = childJob + '::' + testName;
             var entries = byKey[key];
             if (!entries) return;
-            var colors = {{
-                'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);',
-                'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red);',
-                'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange);',
-                'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple);',
-                'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);'
-            }};
             entries.forEach(function(cls) {{
                 var badge = document.createElement('span');
                 badge.className = 'classification-tag';
-                badge.style.cssText = (colors[cls.classification] || 'background:var(--bg-tertiary);color:var(--text-muted);') + 'margin-left:6px;';
+                badge.style.cssText = getClassificationStyle(cls.classification) + 'margin-left:6px;';
                 var badgeLabel = cls.classification.replace('_', ' ');
                 if (cls.classification === 'KNOWN_BUG') {{
                     var jiraMatch = (cls.reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
@@ -1365,14 +1383,7 @@ async function loadClassifications() {{
             for (var cls in cardClassifications) {{
                 var badge = document.createElement('span');
                 badge.className = 'classification-tag';
-                var clsColors = {{
-                    'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);',
-                    'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red);',
-                    'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange);',
-                    'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple);',
-                    'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);'
-                }};
-                badge.style.cssText = (clsColors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted);') + 'margin-left:6px;';
+                badge.style.cssText = getClassificationStyle(cls) + 'margin-left:6px;';
                 var count = cardClassifications[cls];
                 var label = count > 1 ? count + ' ' + cls.replace('_', ' ') : cls.replace('_', ' ');
                 if (cls === 'KNOWN_BUG') {{
@@ -1417,13 +1428,7 @@ async function loadClassifications() {{
             }});
             for (var cls in childClassifications) {{
                 var badge = document.createElement('span');
-                badge.style.cssText = 'display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;white-space:nowrap;margin-left:6px;' + ({{
-                    'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)',
-                    'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red)',
-                    'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange)',
-                    'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple)',
-                    'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)'
-                }}[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)');
+                badge.style.cssText = 'display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;white-space:nowrap;margin-left:6px;' + getClassificationStyle(cls);
                 var count = childClassifications[cls];
                 var label = count > 1 ? count + ' ' + cls.replace('_', ' ') : cls.replace('_', ' ');
                 if (cls === 'KNOWN_BUG') {{
@@ -1448,16 +1453,9 @@ async function loadClassifications() {{
         var headerLine1 = document.getElementById('header-line1');
         if (headerLine1) {{
             var regenBtn = headerLine1.querySelector('.regenerate-btn');
-            var hColors = {{
-                'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)',
-                'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red)',
-                'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange)',
-                'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple)',
-                'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)'
-            }};
             for (var cls in headerClassifications) {{
                 var chip = document.createElement('span');
-                chip.style.cssText = 'display:inline-flex;align-items:center;font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;font-family:var(--font-mono);white-space:nowrap;' + (hColors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)');
+                chip.style.cssText = 'display:inline-flex;align-items:center;font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;font-family:var(--font-mono);white-space:nowrap;' + getClassificationStyle(cls);
                 chip.textContent = headerClassifications[cls] + ' ' + cls.replace('_', ' ');
                 if (regenBtn) {{
                     headerLine1.insertBefore(chip, regenBtn);
@@ -2618,6 +2616,7 @@ def generate_dashboard_html(
 """)
 
     # --- CLASSIFICATION BADGES (global header summary + per-card by job_id) ---
+    parts.append(f"\n<script>\n{_classification_colors_js()}\n</script>")
     parts.append("""
 <script>
 (function() {
@@ -2642,14 +2641,6 @@ def generate_dashboard_html(
             }
         });
 
-        var colors = {
-            'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)',
-            'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red)',
-            'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange)',
-            'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple)',
-            'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)'
-        };
-
         // Per-card classification badges (matched by job_id)
         document.querySelectorAll('.classification-job-badges').forEach(function(span) {
             var cardJobId = span.dataset.jobId;
@@ -2657,7 +2648,7 @@ def generate_dashboard_html(
             var html = '';
             for (var cls in byJobId[cardJobId]) {
                 var count = byJobId[cardJobId][cls];
-                var color = colors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)';
+                var color = getClassificationStyle(cls);
                 var label = count + ' ' + cls.replace('_', ' ');
                 if (cls === 'KNOWN_BUG' && jiraKeysByJobId[cardJobId]) {
                     var keys = Object.keys(jiraKeysByJobId[cardJobId]);
@@ -2665,7 +2656,7 @@ def generate_dashboard_html(
                         label = count + ' KNOWN BUG: ' + keys.join(', ');
                     }
                 }
-                html += '<span style="display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;' + color + ';white-space:nowrap;margin-right:4px;">' + label + '</span>';
+                html += '<span style="display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;' + color + 'white-space:nowrap;margin-right:4px;">' + label + '</span>';
             }
             span.style.display = '';
             span.innerHTML = html;
@@ -2696,9 +2687,13 @@ function deleteJob(btn, jobId) {
                     // rebuild its cached card lists and re-render.
                     window.dispatchEvent(new CustomEvent('dashboard-card-deleted'));
                 }, 300);
+            } else {
+                var errData = await resp.json().catch(function() { return {}; });
+                showConfirmModal('Delete Failed', errData.detail || 'Failed to delete analysis. HTTP ' + resp.status, function() {});
             }
         } catch (err) {
             console.warn('Failed to delete job:', err);
+            showConfirmModal('Delete Failed', 'Failed to delete analysis. Please try again.', function() {});
         }
     });
 }

@@ -11,4 +11,10 @@ if [ -d /cursor-credentials ]; then
     cp -a /cursor-credentials/. "${XDG_CONFIG_HOME:-/home/appuser/.config}/cursor/"
 fi
 
-exec "$@"
+# Resolve PORT with a default so the exec-form CMD (which cannot expand
+# shell variables) gets the correct bind port at runtime.
+export PORT="${PORT:-8000}"
+
+# exec replaces the shell with the CMD process, making uvicorn PID 1
+# for proper signal handling and graceful shutdown.
+exec "$@" --port "$PORT"
