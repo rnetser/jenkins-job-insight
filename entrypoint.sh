@@ -15,6 +15,15 @@ fi
 # shell variables) gets the correct bind port at runtime.
 export PORT="${PORT:-8000}"
 
-# exec replaces the shell with the CMD process, making uvicorn PID 1
-# for proper signal handling and graceful shutdown.
-exec "$@" --port "$PORT"
+# If the caller already passed --port, don't append a duplicate.
+if [[ " $* " == *" --port "* ]]; then
+    exec "$@"
+fi
+
+# Only inject --port for the default uvicorn command; pass other
+# commands (e.g. "docker run … bash") through unchanged.
+if [[ "$1" == "uv" && "$2" == "run" && "$4" == "uvicorn" ]]; then
+    exec "$@" --port "$PORT"
+fi
+
+exec "$@"

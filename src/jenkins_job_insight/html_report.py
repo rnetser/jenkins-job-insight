@@ -302,13 +302,15 @@ function showConfirmModal(title, message, onConfirm) {
     var overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = '<div class="modal-dialog">' +
-        '<h3>' + title + '</h3>' +
-        '<p>' + message + '</p>' +
+        '<h3 id="modal-title"></h3>' +
+        '<p id="modal-message"></p>' +
         '<div class="modal-actions">' +
         '<button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>' +
         '<button class="modal-btn modal-btn-danger" id="modal-confirm">Delete</button>' +
         '</div></div>';
     document.body.appendChild(overlay);
+    overlay.querySelector('#modal-title').textContent = title;
+    overlay.querySelector('#modal-message').textContent = message;
 
     overlay.querySelector('#modal-cancel').onclick = function() { overlay.remove(); };
     overlay.querySelector('#modal-confirm').onclick = function() { overlay.remove(); onConfirm(); };
@@ -3041,19 +3043,19 @@ def generate_history_html(base_url: str = "") -> str:
     white-space: nowrap;
 }}
 .classification-tag.product-bug {{
-    background: rgba(248, 81, 73, 0.12);
-    color: var(--accent-red);
+    background: var(--accent-orange-bg);
+    color: var(--accent-orange);
 }}
 .classification-tag.code-issue {{
-    background: rgba(210, 153, 34, 0.15);
-    color: var(--accent-yellow);
+    background: var(--accent-blue-bg);
+    color: var(--accent-blue);
 }}
 .classification-tag.known-bug {{
     background: rgba(188, 140, 255, 0.12);
     color: var(--accent-purple);
 }}
 .classification-tag.regression {{
-    background: rgba(248, 81, 73, 0.12);
+    background: var(--accent-red-bg);
     color: var(--accent-red);
 }}
 .classification-tag.flaky {{
@@ -3061,16 +3063,16 @@ def generate_history_html(base_url: str = "") -> str:
     color: var(--accent-yellow);
 }}
 .classification-tag.infrastructure {{
-    background: rgba(63, 185, 80, 0.15);
-    color: var(--accent-green);
+    background: var(--accent-orange-bg);
+    color: var(--accent-orange);
 }}
 .classification-tag.intermittent {{
     background: rgba(210, 153, 34, 0.15);
     color: var(--accent-yellow);
 }}
 .classification-tag.unknown {{
-    background: rgba(88, 166, 255, 0.12);
-    color: var(--accent-blue);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
 }}
 
 /* Test name column */

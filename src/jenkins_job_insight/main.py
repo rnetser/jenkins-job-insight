@@ -1375,6 +1375,7 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
         created_by=created_by,
         references=references,
         job_id=classify_job_id,
+        child_build_number=body.child_build_number,
         visible=visible,
     )
     return {"id": classification_id}

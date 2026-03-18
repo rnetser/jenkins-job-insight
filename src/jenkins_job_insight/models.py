@@ -413,6 +413,7 @@ class ClassifyTestRequest(BaseModel):
     job_name: str = ""
     references: str = ""
     job_id: str
+    child_build_number: int = 0
 
     @field_validator("job_id")
     @classmethod

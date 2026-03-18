@@ -797,9 +797,10 @@ async def analyze_failure_group(
         )
     )
 
+    has_git_repo = bool(repo_path and (repo_path / ".git").exists())
     repo_sentence = (
         "You have access to the test repository. Explore the code to understand the failure."
-        if repo_path
+        if has_git_repo
         else "No test repository is available. Base your analysis on the console output and artifacts context provided."
     )
 

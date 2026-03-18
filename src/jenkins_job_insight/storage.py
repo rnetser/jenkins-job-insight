@@ -256,7 +256,13 @@ async def init_db() -> None:
 
         await db.commit()
 
-    # Backfill failure_history from existing results (runs once when table is empty)
+    # Backfill failure_history from existing results (runs once when table is empty).
+    # This runs synchronously in the lifespan hook, which means the server does not
+    # accept requests until it finishes.  This is acceptable because:
+    #  1. The backfill only runs once — when failure_history is empty but results exist.
+    #  2. Subsequent startups skip it instantly (the table is no longer empty).
+    #  3. The expected data volume (hundreds to low-thousands of results) completes
+    #     in under a second on typical hardware.
     await backfill_failure_history()
 
 
@@ -1000,8 +1006,13 @@ async def get_test_history(
             )
             total_params: list = [job_name]
         else:
-            total_query = "SELECT COUNT(*) FROM results WHERE status = 'completed'"
-            total_params = []
+            # Without job_name, counting ALL results would mix unrelated jobs.
+            # Instead, count distinct job_ids where this specific test appears
+            # in failure_history, giving a meaningful denominator for this test.
+            total_query = (
+                "SELECT COUNT(DISTINCT job_id) FROM failure_history WHERE test_name = ?"
+            )
+            total_params = [test_name]
         if exclude_job_id:
             total_query += " AND job_id != ?"
             total_params.append(exclude_job_id)
@@ -1286,7 +1297,7 @@ async def get_trends(
 
         cursor = await db.execute(
             f"SELECT {fh_date_expr} as date, "
-            f"COUNT(*) as failures, "
+            f"COUNT(DISTINCT job_id) as failures, "
             f"COUNT(DISTINCT test_name) as unique_tests "
             f"FROM failure_history "
             f"WHERE analyzed_at >= ?{job_filter} "
@@ -1323,15 +1334,30 @@ async def get_trends(
         for brow in await cursor.fetchall():
             builds_per_bucket[brow[0]] = brow[1]
 
-        data = []
+        # Build a lookup from the failure rows so zero-failure buckets
+        # (present in builds_per_bucket but absent from failure_history)
+        # are emitted with failures=0 and failure_rate=0.0.
+        failure_map: dict[str, dict] = {}
         for row in rows:
-            failures_count = row["failures"]
-            bucket_total = builds_per_bucket.get(row["date"], 0)
+            failure_map[row["date"]] = {
+                "failures": row["failures"],
+                "unique_tests": row["unique_tests"],
+            }
+
+        # Iterate over all build buckets to include clean-build dates.
+        all_dates = sorted(
+            set(list(failure_map.keys()) + list(builds_per_bucket.keys()))
+        )
+        data = []
+        for date in all_dates:
+            bucket_total = builds_per_bucket.get(date, 0)
+            finfo = failure_map.get(date, {"failures": 0, "unique_tests": 0})
+            failures_count = finfo["failures"]
             data.append(
                 {
-                    "date": row["date"],
+                    "date": date,
                     "failures": failures_count,
-                    "unique_tests": row["unique_tests"],
+                    "unique_tests": finfo["unique_tests"],
                     "total_tests": bucket_total,
                     "failure_rate": round(failures_count / bucket_total, 4)
                     if bucket_total > 0
@@ -1454,6 +1480,7 @@ async def set_test_classification(
     parent_job_name: str = "",
     created_by: str = "",
     references: str = "",
+    child_build_number: int = 0,
     visible: int = 1,
 ) -> int:
     """Set a classification for a test (e.g., FLAKY, REGRESSION).
@@ -1491,13 +1518,12 @@ async def set_test_classification(
         # Mirror classification into failure_history so that filters on
         # failure_history.classification (used by get_all_failures, get_test_history)
         # reflect manual/AI reclassifications from test_classifications.
-        # Always scope the mirror update by test_name, child_job_name, and job_id.
-        # Use empty string for child_job_name when it represents the top-level job,
-        # matching how populate_failure_history() stores child_job_name.
+        # Scope by the full primary key (job_id, test_name, child_job_name,
+        # child_build_number) so repeated child builds are distinguished.
         await db.execute(
             "UPDATE failure_history SET classification = ? "
-            "WHERE test_name = ? AND child_job_name = ? AND job_id = ?",
-            [classification, test_name, job_name, job_id],
+            "WHERE test_name = ? AND child_job_name = ? AND child_build_number = ? AND job_id = ?",
+            [classification, test_name, job_name, child_build_number, job_id],
         )
 
         await db.commit()
