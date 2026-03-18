@@ -87,7 +87,7 @@ body {
     padding: 16px 24px;
     margin: 0 -24px 32px;
 }
-.header-content { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.header-content { max-width: 1200px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 8px; }
 .header-content h1 { font-size: 20px; font-weight: 700; flex-shrink: 0; }
 
 /* Footer */
@@ -831,9 +831,6 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 {_modal_css()}
 
 /* Responsive (page-specific) */
-@media (max-width: 768px) {{
-    .env-chips {{ margin-left: 0; }}
-}}
 @media (max-width: 480px) {{
     .failure-summary {{ font-size: 12px; gap: 8px; }}
 }}
@@ -844,20 +841,26 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 """)
 
     # --- STICKY HEADER ---
+    job_name_html = (
+        f'<a href="{e(jenkins_url_str)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">{e(job_name)}</a>'
+        if jenkins_url_str
+        else e(job_name)
+    )
     parts.append(f"""
 <div class="sticky-header">
   <div class="header-content">
-    <h1>{e(job_name)}</h1>
-    <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
-    <span id="overall-review-status" class="status-chip" style="display:none"></span>
-    <div class="env-chips">
+    <div id="header-line1" style="display:flex;align-items:center;gap:16px;width:100%;flex-wrap:wrap;">
+      <h1>{job_name_html}</h1>
+      <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
+      <span id="overall-review-status" class="status-chip" style="display:none"></span>
+      <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data" style="margin-left:auto;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap;">
       <span class="env-chip">Build: #{e(build_number)}</span>
       <span class="env-chip">Status: {e(result.status)}</span>
       <span class="env-chip">AI: {e(provider_info)}</span>
       {f'<span class="env-chip">Analyzed: {e(completed_at)}</span>' if completed_at else ""}
-      {f'<span class="env-chip"><a href="{e(jenkins_url_str)}" target="_blank" rel="noopener">Jenkins</a></span>' if jenkins_url_str else ""}
-      <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
-      <span id="overall-comment-count" class="status-chip" style="display:none"></span>
+      <span id="overall-comment-count" style="display:none;margin-left:auto;"></span>
     </div>
   </div>
 </div>
@@ -1473,8 +1476,9 @@ async function loadClassifications() {{
                 headerClassifications[entry.classification] = (headerClassifications[entry.classification] || 0) + 1;
             }});
         }}
-        var headerChips = document.querySelector('.env-chips');
-        if (headerChips) {{
+        var headerLine1 = document.getElementById('header-line1');
+        if (headerLine1) {{
+            var regenBtn = headerLine1.querySelector('.regenerate-btn');
             var hColors = {{
                 'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow)',
                 'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red)',
@@ -1486,7 +1490,11 @@ async function loadClassifications() {{
                 var chip = document.createElement('span');
                 chip.style.cssText = 'display:inline-flex;align-items:center;font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;font-family:var(--font-mono);white-space:nowrap;' + (hColors[cls] || 'background:var(--bg-tertiary);color:var(--text-muted)');
                 chip.textContent = headerClassifications[cls] + ' ' + cls.replace('_', ' ');
-                headerChips.appendChild(chip);
+                if (regenBtn) {{
+                    headerLine1.insertBefore(chip, regenBtn);
+                }} else {{
+                    headerLine1.appendChild(chip);
+                }}
             }}
         }}
     }} catch (err) {{
