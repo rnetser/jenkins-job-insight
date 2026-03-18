@@ -28,6 +28,7 @@ from jenkins_job_insight.models import (
     AnalyzeRequest,
     BaseAnalysisRequest,
     ChildJobAnalysis,
+    ClassifyTestRequest,
     FailureAnalysis,
     FailureAnalysisResult,
     SetReviewedRequest,
@@ -1299,15 +1300,17 @@ async def get_trends_endpoint(
 
 
 @app.post("/history/classify", status_code=201)
-async def classify_test(request: Request, body: dict) -> dict:
+async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
     """Classify a test as FLAKY, REGRESSION, etc. Used by AI and humans."""
-    logger.debug(f"POST /history/classify: body_keys={list(body.keys())}")
-    test_name = body.get("test_name", "")
-    classification = body.get("classification", "")
-    reason = body.get("reason", "")
-    job_name = body.get("job_name", "")
-    references = body.get("references", "")
-    classify_job_id = body.get("job_id", "")
+    logger.debug(
+        f"POST /history/classify: test_name={body.test_name!r}, classification={body.classification!r}"
+    )
+    test_name = body.test_name
+    classification = body.classification
+    reason = body.reason
+    job_name = body.job_name
+    references = body.references
+    classify_job_id = body.job_id
 
     if not test_name or not classification:
         raise HTTPException(

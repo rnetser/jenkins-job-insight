@@ -777,6 +777,7 @@ async def analyze_failure_group(
 
     # Use the first failure as representative
     representative = failures[0]
+    error_signature = get_failure_signature(representative)
     test_names = [f.test_name for f in failures]
 
     custom_prompt_section, artifacts_section, resources_section, query_section = (
@@ -787,6 +788,8 @@ async def analyze_failure_group(
 
     prompt = f"""{query_section}
 Analyze this test failure from a Jenkins CI job.
+
+ERROR SIGNATURE: {error_signature}
 
 AFFECTED TESTS ({len(failures)} tests with same error):
 {chr(10).join(f"- {name}" for name in test_names)}

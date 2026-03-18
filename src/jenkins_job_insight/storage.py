@@ -325,10 +325,14 @@ async def delete_comment(comment_id: int, username: str) -> bool:
 
     Returns True if deleted, False if not found or not owned by user.
 
-    Note: The jji_username cookie is not cryptographically signed. Users on the
-    same network could forge it to impersonate others. This is a known limitation
-    accepted for the current local/VPN deployment model. Proper authentication
-    (e.g., signed sessions) is tracked in issue #55.
+    SECURITY WARNING: The ``username`` parameter comes from an unsigned
+    ``jji_username`` cookie.  Any client can trivially forge the cookie value
+    to delete another user's comments.  This is **NOT** a real authorization
+    check — it only provides convenience-level identity matching.
+
+    TODO(#55): Replace with proper authentication (e.g., HMAC-signed session
+    cookies or OAuth) so that comment ownership is cryptographically verified.
+    Until then, this endpoint must NOT be exposed to untrusted networks.
     """
     logger.debug(f"delete_comment: comment_id={comment_id}, username={username}")
     async with aiosqlite.connect(DB_PATH) as db:
@@ -661,8 +665,14 @@ def _failure_to_history_row(
     build_number: int,
     child_job_name: str = "",
     child_build_number: int = 0,
+    analyzed_at: str = "",
 ) -> tuple:
-    """Convert a single failure dict to a failure_history row tuple."""
+    """Convert a single failure dict to a failure_history row tuple.
+
+    Args:
+        analyzed_at: Timestamp for when the job was originally analyzed.
+            If empty, the DB column default (CURRENT_TIMESTAMP) is used.
+    """
     analysis = failure.get("analysis", {})
     classification = (
         "" if isinstance(analysis, str) else analysis.get("classification", "")
@@ -677,6 +687,7 @@ def _failure_to_history_row(
         classification,
         child_job_name,
         child_build_number,
+        analyzed_at,
     )
 
 
@@ -685,6 +696,7 @@ def _extract_failures_for_history(
     job_id: str,
     job_name: str,
     build_number: int,
+    analyzed_at: str = "",
 ) -> list[tuple]:
     """Extract all failures from result_data into flat tuples for insertion.
 
@@ -697,21 +709,29 @@ def _extract_failures_for_history(
         job_id: The job identifier.
         job_name: Top-level job name.
         build_number: Top-level build number.
+        analyzed_at: Original analysis timestamp from results.created_at.
+            Used during backfill to preserve historical chronology.
 
     Returns:
         List of tuples ready for INSERT:
         (job_id, job_name, build_number, test_name, error_message,
-         error_signature, classification, child_job_name, child_build_number)
+         error_signature, classification, child_job_name, child_build_number, analyzed_at)
     """
     rows: list[tuple] = []
 
     # Top-level failures (no child context)
     for f in result_data.get("failures", []):
-        rows.append(_failure_to_history_row(f, job_id, job_name, build_number))
+        rows.append(
+            _failure_to_history_row(
+                f, job_id, job_name, build_number, analyzed_at=analyzed_at
+            )
+        )
 
     # Child job analyses (recursive)
     for child in result_data.get("child_job_analyses", []):
-        _extract_child_failures_for_history(child, job_id, job_name, build_number, rows)
+        _extract_child_failures_for_history(
+            child, job_id, job_name, build_number, rows, analyzed_at=analyzed_at
+        )
 
     return rows
 
@@ -722,6 +742,7 @@ def _extract_child_failures_for_history(
     job_name: str,
     build_number: int,
     rows: list[tuple],
+    analyzed_at: str = "",
 ) -> None:
     """Recursively extract failures from a child job analysis dict.
 
@@ -731,6 +752,7 @@ def _extract_child_failures_for_history(
         job_name: Top-level job name.
         build_number: Top-level build number.
         rows: Accumulator list for insertion tuples.
+        analyzed_at: Original analysis timestamp for historical chronology.
     """
     child_job = child.get("job_name", "")
     child_build = child.get("build_number", 0)
@@ -738,17 +760,25 @@ def _extract_child_failures_for_history(
     for f in child.get("failures", []):
         rows.append(
             _failure_to_history_row(
-                f, job_id, job_name, build_number, child_job, child_build
+                f,
+                job_id,
+                job_name,
+                build_number,
+                child_job,
+                child_build,
+                analyzed_at=analyzed_at,
             )
         )
 
     for nested in child.get("failed_children", []):
         _extract_child_failures_for_history(
-            nested, job_id, job_name, build_number, rows
+            nested, job_id, job_name, build_number, rows, analyzed_at=analyzed_at
         )
 
 
-async def populate_failure_history(job_id: str, result_data: dict) -> None:
+async def populate_failure_history(
+    job_id: str, result_data: dict, analyzed_at: str = ""
+) -> None:
     """Populate failure_history from a completed analysis result.
 
     Extracts all failures (top-level and nested children) and inserts
@@ -758,12 +788,17 @@ async def populate_failure_history(job_id: str, result_data: dict) -> None:
     Args:
         job_id: Unique identifier for the analysis job.
         result_data: Parsed result dictionary from result_json.
+        analyzed_at: Original analysis timestamp (results.created_at).
+            Used during backfill to preserve historical chronology.
+            If empty, the DB default (CURRENT_TIMESTAMP) is used.
     """
     logger.debug(f"populate_failure_history: job_id={job_id}")
     job_name = result_data.get("job_name", "")
     build_number = result_data.get("build_number", 0)
 
-    rows = _extract_failures_for_history(result_data, job_id, job_name, build_number)
+    rows = _extract_failures_for_history(
+        result_data, job_id, job_name, build_number, analyzed_at=analyzed_at
+    )
     if not rows:
         logger.debug(
             f"populate_failure_history: job_id={job_id}, no failures to insert"
@@ -783,15 +818,28 @@ async def populate_failure_history(job_id: str, result_data: dict) -> None:
             )
             return
 
-        await db.executemany(
-            """
-            INSERT INTO failure_history
-                (job_id, job_name, build_number, test_name, error_message,
-                 error_signature, classification, child_job_name, child_build_number)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
+        # Use analyzed_at when provided (backfill), otherwise let the DB default apply
+        if analyzed_at:
+            await db.executemany(
+                """
+                INSERT INTO failure_history
+                    (job_id, job_name, build_number, test_name, error_message,
+                     error_signature, classification, child_job_name, child_build_number, analyzed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+        else:
+            await db.executemany(
+                """
+                INSERT INTO failure_history
+                    (job_id, job_name, build_number, test_name, error_message,
+                     error_signature, classification, child_job_name, child_build_number)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                # Strip the analyzed_at field (last element) when not backfilling
+                [row[:-1] for row in rows],
+            )
         await db.commit()
         logger.info(
             f"Populated failure_history with {len(rows)} rows for job_id={job_id}"
@@ -813,9 +861,9 @@ async def backfill_failure_history() -> None:
             logger.info("failure_history already has data, skipping backfill")
             return
 
-        # Get all completed results with result_json
+        # Get all completed results with result_json and created_at
         cursor = await db.execute(
-            "SELECT job_id, result_json FROM results WHERE status = 'completed' AND result_json IS NOT NULL"
+            "SELECT job_id, result_json, created_at FROM results WHERE status = 'completed' AND result_json IS NOT NULL"
         )
         rows = await cursor.fetchall()
 
@@ -825,10 +873,13 @@ async def backfill_failure_history() -> None:
 
     logger.info(f"Backfilling failure_history from {len(rows)} completed results")
     backfilled = 0
-    for job_id, result_json_str in rows:
+    for job_id, result_json_str, created_at in rows:
         try:
             result_data = json.loads(result_json_str)
-            await populate_failure_history(job_id, result_data)
+            # Use the original created_at timestamp to preserve historical chronology
+            await populate_failure_history(
+                job_id, result_data, analyzed_at=created_at or ""
+            )
             backfilled += 1
         except (json.JSONDecodeError, TypeError, AttributeError) as exc:
             logger.debug(f"Skipping backfill for job_id={job_id}: {exc}")
@@ -931,7 +982,13 @@ async def get_test_history(
         )
         recent_runs = [dict(row) for row in await cursor.fetchall()]
 
-        # Consecutive failures (count from most recent backwards)
+        # Consecutive failures (count from most recent backwards).
+        # NOTE: failure_history only records failures, not passes. Without pass
+        # data we cannot detect an intervening successful build that would break
+        # the streak. The count here therefore represents the number of recent
+        # consecutive failure records — the true streak may be shorter if the
+        # test passed between recorded failures.  Adding pass tracking is
+        # deferred to a future enhancement.
         consecutive_failures = 0
         for run in recent_runs:
             if run.get("classification"):
@@ -942,16 +999,21 @@ async def get_test_history(
         if consecutive_failures == 0 and recent_runs:
             consecutive_failures = len(recent_runs)
 
-        # Estimate total runs from distinct job_ids in results table
-        # Apply exclude_job_id to the denominator so rates stay consistent
+        # Estimate total runs from distinct job_ids in the results table.
+        # Use failure_history for job_name filtering (structural column) instead of
+        # LIKE-matching against raw JSON, which is fragile with special characters.
         if job_name:
-            total_query = "SELECT COUNT(*) FROM results WHERE result_json LIKE ?"
-            total_params: list = [f'%"job_name": "{job_name}"%']
+            total_query = (
+                "SELECT COUNT(DISTINCT r.job_id) FROM results r "
+                "INNER JOIN failure_history fh ON r.job_id = fh.job_id "
+                "WHERE fh.job_name = ?"
+            )
+            total_params: list = [job_name]
         else:
             total_query = "SELECT COUNT(*) FROM results WHERE 1=1"
             total_params = []
         if exclude_job_id:
-            total_query += " AND job_id != ?"
+            total_query += " AND r.job_id != ?" if job_name else " AND job_id != ?"
             total_params.append(exclude_job_id)
         cursor = await db.execute(total_query, total_params)
         total_runs = (await cursor.fetchone())[0]
@@ -972,6 +1034,9 @@ async def get_test_history(
             comment_params.extend(signatures)
 
         comment_where = " OR ".join(comment_conditions)
+        if exclude_job_id:
+            comment_where = f"({comment_where}) AND job_id != ?"
+            comment_params.append(exclude_job_id)
         cursor = await db.execute(
             f"SELECT comment, username, created_at FROM comments WHERE {comment_where} ORDER BY created_at DESC",
             comment_params,
@@ -1057,11 +1122,16 @@ async def search_by_signature(signature: str, exclude_job_id: str = "") -> dict:
         last_classification = (await cursor.fetchone())[0] or ""
 
         # Comments related to this signature
-        cursor = await db.execute(
+        comments_query = (
             "SELECT comment, username, created_at FROM comments "
-            "WHERE error_signature = ? ORDER BY created_at DESC",
-            (signature,),
+            "WHERE error_signature = ?"
         )
+        comments_params: list[str] = [signature]
+        if exclude_job_id:
+            comments_query += " AND job_id != ?"
+            comments_params.append(exclude_job_id)
+        comments_query += " ORDER BY created_at DESC"
+        cursor = await db.execute(comments_query, comments_params)
         comments = [dict(row) for row in await cursor.fetchall()]
 
     logger.debug(
@@ -1099,12 +1169,16 @@ async def get_job_stats(job_name: str, exclude_job_id: str = "") -> dict:
             exclude_filter = " AND job_id != ?"
             exclude_params = [exclude_job_id]
 
-        # Total builds analyzed (from results table, matching job_name in JSON)
-        # Apply exclude_job_id to the denominator so rates stay consistent
-        total_builds_query = "SELECT COUNT(*) FROM results WHERE result_json LIKE ?"
-        total_builds_params: list = [f'%"job_name": "{job_name}"%']
+        # Total builds analyzed — use failure_history for structural job_name
+        # lookup instead of LIKE-matching against raw JSON in results.
+        total_builds_query = (
+            "SELECT COUNT(DISTINCT r.job_id) FROM results r "
+            "INNER JOIN failure_history fh ON r.job_id = fh.job_id "
+            "WHERE fh.job_name = ?"
+        )
+        total_builds_params: list = [job_name]
         if exclude_job_id:
-            total_builds_query += " AND job_id != ?"
+            total_builds_query += " AND r.job_id != ?"
             total_builds_params.append(exclude_job_id)
         cursor = await db.execute(total_builds_query, total_builds_params)
         total_builds = (await cursor.fetchone())[0]
@@ -1226,29 +1300,45 @@ async def get_trends(
         )
         rows = await cursor.fetchall()
 
-        # Get total analyzed builds in the time range for failure_rate calculation
-        total_builds_query = "SELECT COUNT(*) FROM results WHERE created_at >= ?"
-        total_builds_params: list = [cutoff]
+        # Get per-bucket build counts using the same date grouping expression.
+        # This ensures each bucket's failure_rate uses that bucket's own
+        # denominator rather than the entire window's count.
         if job_name:
-            total_builds_query += " AND result_json LIKE ?"
-            total_builds_params.append(f'%"job_name": "{job_name}"%')
+            bucket_query = (
+                f"SELECT {date_expr} as date, COUNT(DISTINCT r.job_id) as total "
+                f"FROM results r "
+                f"INNER JOIN failure_history fh ON r.job_id = fh.job_id "
+                f"WHERE r.created_at >= ? AND fh.job_name = ?"
+            )
+            bucket_params: list = [cutoff, job_name]
+        else:
+            bucket_query = (
+                f"SELECT {date_expr} as date, COUNT(DISTINCT r.job_id) as total "
+                f"FROM results r "
+                f"WHERE r.created_at >= ?"
+            )
+            bucket_params = [cutoff]
         if exclude_job_id:
-            total_builds_query += " AND job_id != ?"
-            total_builds_params.append(exclude_job_id)
-        cursor = await db.execute(total_builds_query, total_builds_params)
-        total_builds_in_range = (await cursor.fetchone())[0]
+            bucket_query += " AND r.job_id != ?"
+            bucket_params.append(exclude_job_id)
+        bucket_query += f" GROUP BY {date_expr}"
+        cursor = await db.execute(bucket_query, bucket_params)
+        builds_per_bucket: dict[str, int] = {}
+        for brow in await cursor.fetchall():
+            builds_per_bucket[brow[0]] = brow[1]
 
         data = []
         for row in rows:
             failures_count = row["failures"]
+            bucket_total = builds_per_bucket.get(row["date"], 0)
             data.append(
                 {
                     "date": row["date"],
                     "failures": failures_count,
                     "unique_tests": row["unique_tests"],
-                    "total_tests": total_builds_in_range,
-                    "failure_rate": round(failures_count / total_builds_in_range, 4)
-                    if total_builds_in_range > 0
+                    "total_tests": bucket_total,
+                    "failure_rate": round(failures_count / bucket_total, 4)
+                    if bucket_total > 0
                     else 0.0,
                 }
             )
@@ -1380,6 +1470,24 @@ async def set_test_classification(
                 visible,
             ),
         )
+
+        # Mirror classification into failure_history so that filters on
+        # failure_history.classification (used by get_all_failures, get_test_history)
+        # reflect manual/AI reclassifications from test_classifications.
+        update_conditions = ["test_name = ?"]
+        update_params: list[str] = [test_name]
+        if job_name:
+            update_conditions.append("child_job_name = ?")
+            update_params.append(job_name)
+        if job_id:
+            update_conditions.append("job_id = ?")
+            update_params.append(job_id)
+        update_where = " AND ".join(update_conditions)
+        await db.execute(
+            f"UPDATE failure_history SET classification = ? WHERE {update_where}",
+            [classification] + update_params,
+        )
+
         await db.commit()
         return cursor.lastrowid
 

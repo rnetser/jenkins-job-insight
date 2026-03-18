@@ -953,10 +953,51 @@ const JOB_ID = "{e(result.job_id)}";
 const BASE_PATH = window.location.pathname.replace(/\\/results\\/.*$/, '');
 
 function renderCommentBadge(badge, count) {{
-    if (count <= 0) return;
+    if (count <= 0) {{
+        badge.style.display = 'none';
+        return;
+    }}
     badge.style.display = '';
     badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:13px;padding:4px 12px;border-radius:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;';
     badge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> ' + count;
+}}
+
+function updateCommentBadges() {{
+    // Recalculate overall comment count
+    var totalComments = document.querySelectorAll('.comment-item').length;
+    var overallBadge = document.getElementById('overall-comment-count');
+    if (overallBadge) {{
+        renderCommentBadge(overallBadge, totalComments);
+    }}
+
+    // Per child job comment counts
+    document.querySelectorAll('.child-job-summary').forEach(function(summary) {{
+        var childJobEl = summary.closest('.child-job');
+        if (!childJobEl) return;
+        var count = childJobEl.querySelectorAll('.comment-item').length;
+        // Find or create badge
+        var badge = summary.querySelector('.child-comment-badge');
+        if (!badge) {{
+            badge = document.createElement('span');
+            badge.className = 'child-comment-badge';
+            summary.appendChild(badge);
+        }}
+        renderCommentBadge(badge, count);
+    }});
+
+    // Per bug card comment counts
+    document.querySelectorAll('.bug-summary, .failure-summary').forEach(function(summary) {{
+        var card = summary.closest('.bug-card, .failure-card');
+        if (!card) return;
+        var count = card.querySelectorAll('.comment-item').length;
+        var badge = summary.querySelector('.card-comment-badge');
+        if (!badge) {{
+            badge = document.createElement('span');
+            badge.className = 'card-comment-badge';
+            summary.appendChild(badge);
+        }}
+        renderCommentBadge(badge, count);
+    }});
 }}
 
 async function loadCommentsAndReviews() {{
@@ -1130,6 +1171,7 @@ async function deleteComment(btn, commentId) {{
                 item.remove();
                 var count = section.querySelectorAll('.comment-item').length;
                 section.querySelector('.comment-count').textContent = count;
+                updateCommentBadges();
             }} else {{
                 var data = await resp.json();
                 alert(data.detail || 'Failed to delete');
@@ -1226,6 +1268,7 @@ async function addComment(btn) {{
             const count = section.querySelectorAll('.comment-item').length;
             section.querySelector('.comment-count').textContent = count;
             input.value = '';
+            updateCommentBadges();
             await loadEnrichments();
         }}
     }} catch (err) {{
@@ -1282,7 +1325,10 @@ async function loadClassifications() {{
         var data = await resp.json();
         var byKey = {{}};
         (data.classifications || []).forEach(function(c) {{
-            var key = (c.job_name || '') + '::' + c.test_name;
+            // Normalize: empty job_name (root-job) uses '' as the key prefix,
+            // matching the toggle's data-child-job which is '' for root failures.
+            var scopeKey = c.job_name || '';
+            var key = scopeKey + '::' + c.test_name;
             if (!byKey[key]) byKey[key] = [];
             byKey[key].push(c);
         }});
@@ -2563,6 +2609,14 @@ def generate_dashboard_html(
     }}
   }});
 
+  // After a card is deleted, rebuild the cached card arrays and re-render
+  // so pagination counts, search state, and badge totals stay accurate.
+  window.addEventListener('dashboard-card-deleted', function() {{
+    allCards = Array.from(document.querySelectorAll('#job-cards .dashboard-card'));
+    totalAll = allCards.length;
+    applyFilter();
+  }});
+
   // Initial render
   render();
 }})();
@@ -2647,12 +2701,12 @@ function deleteJob(btn, jobId) {
                 var card = btn.closest('.dashboard-card');
                 card.style.transition = 'opacity 0.3s';
                 card.style.opacity = '0';
-                setTimeout(function() { card.remove(); }, 300);
-                var badge = document.querySelector('.jobs-badge');
-                if (badge) {
-                    var count = document.querySelectorAll('.dashboard-card').length;
-                    badge.textContent = count + ' jobs';
-                }
+                setTimeout(function() {
+                    card.remove();
+                    // Dispatch a custom event so the pagination controller can
+                    // rebuild its cached card lists and re-render.
+                    window.dispatchEvent(new CustomEvent('dashboard-card-deleted'));
+                }, 300);
             }
         } catch (err) {
             console.warn('Failed to delete job:', err);
