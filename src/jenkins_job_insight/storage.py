@@ -158,6 +158,7 @@ async def init_db() -> None:
                 references_info TEXT NOT NULL DEFAULT '',
                 created_by TEXT NOT NULL DEFAULT '',
                 job_id TEXT NOT NULL DEFAULT '',
+                child_build_number INTEGER NOT NULL DEFAULT 0,
                 visible INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -214,6 +215,21 @@ async def init_db() -> None:
             logger.info("Migration: added visible column to test_classifications")
         else:
             logger.debug("Migration: test_classifications already has visible column")
+
+        # Migration: add child_build_number to test_classifications table
+        cursor = await db.execute("PRAGMA table_info(test_classifications)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "child_build_number" not in columns:
+            await db.execute(
+                "ALTER TABLE test_classifications ADD COLUMN child_build_number INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info(
+                "Migration: added child_build_number column to test_classifications"
+            )
+        else:
+            logger.debug(
+                "Migration: test_classifications already has child_build_number column"
+            )
 
         # failure_history: denormalized table for fast history queries
         await db.execute("""
@@ -1500,8 +1516,8 @@ async def set_test_classification(
     )
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO test_classifications (test_name, job_name, parent_job_name, classification, reason, references_info, created_by, job_id, visible) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO test_classifications (test_name, job_name, parent_job_name, classification, reason, references_info, created_by, job_id, child_build_number, visible) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 test_name,
                 job_name,
@@ -1511,6 +1527,7 @@ async def set_test_classification(
                 references,
                 created_by,
                 job_id,
+                child_build_number,
                 visible,
             ),
         )
@@ -1572,7 +1589,7 @@ async def get_test_classifications(
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             f"SELECT tc.id, tc.test_name, tc.job_name, tc.parent_job_name, tc.classification, "
-            f"tc.reason, tc.references_info, tc.created_by, tc.job_id, tc.created_at "
+            f"tc.reason, tc.references_info, tc.created_by, tc.job_id, tc.child_build_number, tc.created_at "
             f"FROM test_classifications tc "
             f"WHERE {where} "
             f"ORDER BY tc.created_at DESC",
