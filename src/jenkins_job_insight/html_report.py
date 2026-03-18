@@ -2221,7 +2221,9 @@ def generate_dashboard_html(
 
 /* Dashboard cards */
 .dashboard-card {{
-    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
     padding: 16px 20px;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
@@ -2234,7 +2236,9 @@ def generate_dashboard_html(
     background: var(--bg-hover);
     border-color: var(--accent-blue);
 }}
-.dashboard-card .card-link {{
+.card-link {{
+    flex: 1;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 16px;
@@ -2336,8 +2340,9 @@ def generate_dashboard_html(
 .card-meta {{
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
     flex-shrink: 0;
+    white-space: nowrap;
 }}
 .card-timestamp {{
     font-size: 12px;
@@ -2418,7 +2423,7 @@ def generate_dashboard_html(
 
 /* Responsive (page-specific) */
 @media (max-width: 768px) {{
-    .dashboard-card .card-link {{ flex-direction: column; align-items: flex-start; gap: 10px; }}
+    .card-link {{ flex-direction: column; align-items: flex-start; gap: 10px; }}
     .card-meta {{ width: 100%; justify-content: space-between; }}
     .card-job-name {{ max-width: 100%; }}
     .controls-bar {{ flex-direction: column; }}
@@ -2760,19 +2765,20 @@ def _render_dashboard_card(
 
     # Use a <div> container with an <a> link inside (not wrapping the button)
     # to avoid nesting interactive elements, which breaks keyboard/screen-reader accessibility.
+    # The outer <div> is the flex container; <a class="card-link"> takes flex:1 for the
+    # clickable area, and <div class="card-meta"> sits outside the link with the delete button.
     parts.append(
         f'<div class="dashboard-card{result_class}" data-job-id="{e(job_id)}">'
     )
     parts.append(
         f'  <a class="card-link" href="{e(report_href)}" target="_blank" rel="noopener">'
     )
-    parts.append('    <div class="card-main">')
 
     # Result icon for completed jobs with known failure count
     if status == "completed" and failure_count is not None:
         if failure_count > 0:
             parts.append(
-                '      <span class="card-result-icon has-failures">'
+                '    <span class="card-result-icon has-failures">'
                 '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
                 ' stroke="currentColor" stroke-width="3">'
                 '<line x1="18" y1="6" x2="6" y2="18"/>'
@@ -2781,13 +2787,14 @@ def _render_dashboard_card(
             )
         else:
             parts.append(
-                '      <span class="card-result-icon passed">'
+                '    <span class="card-result-icon passed">'
                 '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
                 ' stroke="currentColor" stroke-width="3">'
                 '<polyline points="20 6 9 17 4 12"/>'
                 "</svg></span>"
             )
 
+    parts.append('    <div class="card-main">')
     parts.append(f'      <span class="card-job-name">{e(job_name)}</span>')
 
     if build_number:
@@ -2851,34 +2858,22 @@ def _render_dashboard_card(
         )
 
     parts.append("    </div>")
-    parts.append('    <div class="card-meta">')
-    parts.append(
-        f'      <span class="card-job-id" title="{e(job_id)}">{e(short_id)}</span>'
-    )
-    parts.append(f'      <span class="card-timestamp">{e(created_at)}</span>')
-
-    if jenkins_url:
-        parts.append(
-            '      <span class="card-jenkins-icon" title="Jenkins build available">'
-            '\n        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
-            ' stroke="currentColor" stroke-width="2">'
-            '\n          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'
-            '\n          <polyline points="15 3 21 3 21 9"/>'
-            '\n          <line x1="10" y1="14" x2="21" y2="3"/>'
-            "\n        </svg>"
-            "\n      </span>"
-        )
-
-    parts.append("    </div>")
     parts.append("  </a>")
 
-    # Delete button is outside the <a> link to avoid nesting interactive elements
+    # card-meta sits outside the <a> link so interactive elements (delete button) are
+    # not nested inside a link.  It stays on the right side of the card via flex layout.
+    parts.append('  <div class="card-meta">')
     parts.append(
-        f'  <button class="delete-job-btn" data-job-id="{e(job_id)}"'
+        f'    <span class="card-job-id" title="{e(job_id)}">{e(short_id)}</span>'
+    )
+    parts.append(f'    <span class="card-timestamp">{e(created_at)}</span>')
+
+    # Delete button inline in card-meta (no absolute positioning)
+    parts.append(
+        f'    <button class="delete-job-btn" data-job-id="{e(job_id)}"'
         f' onclick="event.stopPropagation(); deleteJob(this, &#39;{e(job_id)}&#39;)"'
         ' style="background:none;border:1px solid transparent;border-radius:4px;color:var(--text-muted);'
-        "cursor:pointer;padding:4px 6px;transition:all 0.15s;display:inline-flex;align-items:center;"
-        'position:absolute;bottom:8px;right:8px;"'
+        'cursor:pointer;padding:4px 6px;transition:all 0.15s;display:inline-flex;align-items:center;"'
         ' onmouseover="this.style.color=&#39;var(--accent-red)&#39;;this.style.borderColor=&#39;var(--accent-red)&#39;;'
         'this.style.background=&#39;rgba(248,81,73,0.12)&#39;"'
         ' onmouseout="this.style.color=&#39;var(--text-muted)&#39;;this.style.borderColor=&#39;transparent&#39;;'
@@ -2889,6 +2884,19 @@ def _render_dashboard_card(
         '<path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>'
     )
 
+    if jenkins_url:
+        parts.append(
+            '    <span class="card-jenkins-icon" title="Jenkins build available">'
+            '\n      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"'
+            ' stroke="currentColor" stroke-width="2">'
+            '\n        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'
+            '\n        <polyline points="15 3 21 3 21 9"/>'
+            '\n        <line x1="10" y1="14" x2="21" y2="3"/>'
+            "\n      </svg>"
+            "\n    </span>"
+        )
+
+    parts.append("  </div>")
     parts.append("</div>")
 
 
