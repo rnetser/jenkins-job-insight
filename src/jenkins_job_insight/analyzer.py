@@ -786,6 +786,12 @@ async def analyze_failure_group(
         )
     )
 
+    repo_sentence = (
+        "You have access to the test repository. Explore the code to understand the failure."
+        if repo_path
+        else "No test repository is available. Base your analysis on the console output and artifacts context provided."
+    )
+
     prompt = f"""{query_section}
 Analyze this test failure from a Jenkins CI job.
 
@@ -802,7 +808,7 @@ CONSOLE CONTEXT:
 {console_context}
 {artifacts_section}
 
-You have access to the test repository. Explore the code to understand the failure.
+{repo_sentence}
 
 Note: Multiple tests failed with the same error. Provide ONE analysis that applies to all of them.
 {custom_prompt_section}{resources_section}

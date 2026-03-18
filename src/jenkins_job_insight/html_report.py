@@ -973,16 +973,24 @@ function updateCommentBadges() {{
         renderCommentBadge(overallBadge, totalComments);
     }}
 
-    // Per child job comment counts
+    // Remove all dynamically created comment badges before recreating
+    document.querySelectorAll('.dynamic-comment-badge').forEach(function(el) {{ el.remove(); }});
+
+    // Per child job comment counts — scope to direct children only
     document.querySelectorAll('.child-job-summary').forEach(function(summary) {{
         var childJobEl = summary.closest('.child-job');
         if (!childJobEl) return;
-        var count = childJobEl.querySelectorAll('.comment-item').length;
+        var childJobName = childJobEl.getAttribute('data-child-job') || '';
+        var childBuild = childJobEl.getAttribute('data-child-build') || '';
+        // Only count comment items that belong directly to this child job, not grandchildren
+        var count = Array.from(childJobEl.querySelectorAll('.comment-item')).filter(function(item) {{
+            return item.closest('.child-job') === childJobEl;
+        }}).length;
         // Find or create badge
         var badge = summary.querySelector('.child-comment-badge');
         if (!badge) {{
             badge = document.createElement('span');
-            badge.className = 'child-comment-badge';
+            badge.className = 'child-comment-badge dynamic-comment-badge';
             summary.appendChild(badge);
         }}
         renderCommentBadge(badge, count);
@@ -996,7 +1004,7 @@ function updateCommentBadges() {{
         var badge = summary.querySelector('.card-comment-badge');
         if (!badge) {{
             badge = document.createElement('span');
-            badge.className = 'card-comment-badge';
+            badge.className = 'card-comment-badge dynamic-comment-badge';
             summary.appendChild(badge);
         }}
         renderCommentBadge(badge, count);
@@ -1062,6 +1070,7 @@ async function loadCommentsAndReviews() {{
             var childJob = reviewBadge ? reviewBadge.dataset.childJob : '';
             if (childCounts[childJob]) {{
                 var badge = document.createElement('span');
+                badge.className = 'dynamic-comment-badge';
                 renderCommentBadge(badge, childCounts[childJob]);
                 summary.appendChild(badge);
             }}
@@ -1081,6 +1090,7 @@ async function loadCommentsAndReviews() {{
             }});
             if (count > 0) {{
                 var badge = document.createElement('span');
+                badge.className = 'dynamic-comment-badge';
                 renderCommentBadge(badge, count);
                 summary.appendChild(badge);
             }}

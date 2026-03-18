@@ -406,8 +406,10 @@ class ClassifyTestRequest(BaseModel):
     """Request body for classifying a test (e.g., FLAKY, REGRESSION)."""
 
     test_name: str
-    classification: str
+    classification: Literal[
+        "FLAKY", "REGRESSION", "INFRASTRUCTURE", "KNOWN_BUG", "INTERMITTENT"
+    ]
     reason: str = ""
     job_name: str = ""
     references: str = ""
-    job_id: str = ""
+    job_id: str

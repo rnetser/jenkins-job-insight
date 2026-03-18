@@ -1312,25 +1312,10 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
     references = body.references
     classify_job_id = body.job_id
 
-    if not test_name or not classification:
-        raise HTTPException(
-            status_code=400, detail="test_name and classification are required"
-        )
+    if not test_name:
+        raise HTTPException(status_code=400, detail="test_name is required")
 
-    valid_classifications = {
-        "FLAKY",
-        "REGRESSION",
-        "INFRASTRUCTURE",
-        "KNOWN_BUG",
-        "INTERMITTENT",
-    }
-    if classification.upper() not in valid_classifications:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid classification. Valid: {', '.join(sorted(valid_classifications))}",
-        )
-
-    if classification.upper() == "KNOWN_BUG" and not str(references).strip():
+    if classification == "KNOWN_BUG" and not str(references).strip():
         raise HTTPException(
             status_code=400,
             detail="KNOWN_BUG requires non-empty references (e.g., Jira tickets or historical bug URLs).",
@@ -1338,19 +1323,24 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
 
     created_by = request.cookies.get("jji_username", "ai")
 
+    # Human classifications are visible immediately.
+    # AI classifications become visible after analysis completes
+    # and calls make_classifications_visible().
+    visible = 0 if created_by == "ai" else 1
+
     # Look up parent job name from failure_history
     parent_job_name = await storage.get_parent_job_name_for_test(test_name)
 
     classification_id = await storage.set_test_classification(
         test_name=test_name,
-        classification=classification.upper(),
+        classification=classification,
         reason=reason,
         job_name=job_name,
         parent_job_name=parent_job_name,
         created_by=created_by,
         references=references,
         job_id=classify_job_id,
-        visible=0,
+        visible=visible,
     )
     return {"id": classification_id}
 

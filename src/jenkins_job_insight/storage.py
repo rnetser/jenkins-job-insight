@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiosqlite
@@ -247,21 +247,6 @@ async def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_fh_job_test ON failure_history (job_name, test_name)"
         )
 
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS test_classifications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                test_name TEXT NOT NULL,
-                job_name TEXT NOT NULL DEFAULT '',
-                parent_job_name TEXT NOT NULL DEFAULT '',
-                classification TEXT NOT NULL,
-                reason TEXT NOT NULL DEFAULT '',
-                references_info TEXT NOT NULL DEFAULT '',
-                created_by TEXT NOT NULL DEFAULT '',
-                job_id TEXT NOT NULL DEFAULT '',
-                visible INTEGER NOT NULL DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_tc_test_name ON test_classifications (test_name)"
         )
@@ -1214,7 +1199,7 @@ async def get_job_stats(job_name: str, exclude_job_id: str = "") -> dict:
         most_common = [dict(row) for row in await cursor.fetchall()]
 
         # Recent trend: compare last 7 days vs previous 7 days
-        now = datetime.now()
+        now = datetime.now(tz=timezone.utc)
         seven_days_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
         fourteen_days_ago = (now - timedelta(days=14)).strftime("%Y-%m-%d %H:%M:%S")
 
