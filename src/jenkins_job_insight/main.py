@@ -72,6 +72,9 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "").lower()
 AI_MODEL = os.getenv("AI_MODEL", "")
 
 
+# APP_PORT is the single source of truth for the server port.
+# Used by both uvicorn bind (run()) and internal AI self-calls (_build_internal_server_url()).
+# If overriding, set the PORT env var — the Dockerfile's --port should match.
 APP_PORT = int(os.environ.get("PORT", "8000"))
 
 
@@ -1181,8 +1184,10 @@ async def list_job_results(limit: int = Query(50, le=100)) -> list[dict]:
 async def delete_job_endpoint(job_id: str, request: Request) -> dict:
     """Delete an analyzed job and all related data.
 
-    No authorization required — all users are trusted in this project.
-    See issue #55 for future auth implementation.
+    This project operates on a trusted network with no authentication.
+    All users can perform all actions. The username cookie check below
+    is a UI convenience (prevents accidental deletions from scripts),
+    not a security boundary. See issue #55 for future auth plans.
     """
     # Basic sanity check — not security. All users are trusted.
     # This just ensures a human with a registered name is making the request.
@@ -1338,8 +1343,10 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
     # and calls make_classifications_visible().
     visible = 0 if created_by == "ai" else 1
 
-    # Look up parent job name from failure_history
-    parent_job_name = await storage.get_parent_job_name_for_test(test_name)
+    # Look up parent job name from failure_history, scoped to this job
+    parent_job_name = await storage.get_parent_job_name_for_test(
+        test_name, job_id=classify_job_id
+    )
 
     classification_id = await storage.set_test_classification(
         test_name=test_name,

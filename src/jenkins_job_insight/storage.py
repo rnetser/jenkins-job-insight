@@ -985,21 +985,20 @@ async def get_test_history(
         if consecutive_failures == 0 and recent_runs:
             consecutive_failures = len(recent_runs)
 
-        # Estimate total runs from distinct job_ids in the results table.
-        # Use failure_history for job_name filtering (structural column) instead of
-        # LIKE-matching against raw JSON, which is fragile with special characters.
+        # Count only completed results for the denominator so that
+        # pending/running/failed analyses don't inflate total_runs.
         if job_name:
             total_query = (
-                "SELECT COUNT(DISTINCT r.job_id) FROM results r "
-                "INNER JOIN failure_history fh ON r.job_id = fh.job_id "
-                "WHERE fh.job_name = ?"
+                "SELECT COUNT(DISTINCT job_id) FROM results "
+                "WHERE status = 'completed' "
+                "AND json_extract(result_json, '$.job_name') = ?"
             )
             total_params: list = [job_name]
         else:
-            total_query = "SELECT COUNT(*) FROM results WHERE 1=1"
+            total_query = "SELECT COUNT(*) FROM results WHERE status = 'completed'"
             total_params = []
         if exclude_job_id:
-            total_query += " AND r.job_id != ?" if job_name else " AND job_id != ?"
+            total_query += " AND job_id != ?"
             total_params.append(exclude_job_id)
         cursor = await db.execute(total_query, total_params)
         total_runs = (await cursor.fetchone())[0]
@@ -1290,32 +1289,28 @@ async def get_trends(
         )
         rows = await cursor.fetchall()
 
-        # Get per-bucket build counts using the same date grouping expression.
-        # This ensures each bucket's failure_rate uses that bucket's own
-        # denominator rather than the entire window's count.
+        # Get per-bucket build counts from completed results only.
+        # Count directly from results (no JOIN through failure_history)
+        # so that clean builds are included in the denominator.
         if job_name:
-            # JOIN query — use fh_date_expr since the date comes from failure_history
-            bucket_query = (
-                f"SELECT {fh_date_expr} as date, COUNT(DISTINCT r.job_id) as total "
-                f"FROM results r "
-                f"INNER JOIN failure_history fh ON r.job_id = fh.job_id "
-                f"WHERE r.created_at >= ? AND fh.job_name = ?"
-            )
-            bucket_params: list = [cutoff, job_name]
-            bucket_group_expr = fh_date_expr
-        else:
-            # results-only query — use results_date_expr (created_at, not analyzed_at)
             bucket_query = (
                 f"SELECT {results_date_expr} as date, COUNT(DISTINCT r.job_id) as total "
                 f"FROM results r "
-                f"WHERE r.created_at >= ?"
+                f"WHERE r.status = 'completed' AND r.created_at >= ? "
+                f"AND json_extract(r.result_json, '$.job_name') = ?"
+            )
+            bucket_params: list = [cutoff, job_name]
+        else:
+            bucket_query = (
+                f"SELECT {results_date_expr} as date, COUNT(DISTINCT r.job_id) as total "
+                f"FROM results r "
+                f"WHERE r.status = 'completed' AND r.created_at >= ?"
             )
             bucket_params = [cutoff]
-            bucket_group_expr = results_date_expr
         if exclude_job_id:
             bucket_query += " AND r.job_id != ?"
             bucket_params.append(exclude_job_id)
-        bucket_query += f" GROUP BY {bucket_group_expr}"
+        bucket_query += f" GROUP BY {results_date_expr}"
         cursor = await db.execute(bucket_query, bucket_params)
         builds_per_bucket: dict[str, int] = {}
         for brow in await cursor.fetchall():
@@ -1414,13 +1409,30 @@ async def save_html_report(job_id: str, html_content: str) -> Path:
     return report_path
 
 
-async def get_parent_job_name_for_test(test_name: str) -> str:
-    """Look up the parent pipeline job name for a test from failure_history."""
+async def get_parent_job_name_for_test(test_name: str, job_id: str = "") -> str:
+    """Look up the parent pipeline job name for a test from failure_history.
+
+    Args:
+        test_name: The test name to look up.
+        job_id: When provided, scopes the lookup to a specific analysis job
+                to avoid cross-job leakage.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT job_name FROM failure_history WHERE test_name = ? ORDER BY analyzed_at DESC LIMIT 1",
-            (test_name,),
-        )
+        if job_id:
+            query = (
+                "SELECT job_name FROM failure_history "
+                "WHERE test_name = ? AND job_id = ? "
+                "ORDER BY analyzed_at DESC LIMIT 1"
+            )
+            params: tuple = (test_name, job_id)
+        else:
+            query = (
+                "SELECT job_name FROM failure_history "
+                "WHERE test_name = ? "
+                "ORDER BY analyzed_at DESC LIMIT 1"
+            )
+            params = (test_name,)
+        cursor = await db.execute(query, params)
         row = await cursor.fetchone()
         return row[0] if row else ""
 

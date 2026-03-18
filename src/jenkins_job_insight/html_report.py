@@ -3212,9 +3212,9 @@ def generate_history_html(base_url: str = "") -> str:
     if (currentSearch) url += '&search=' + encodeURIComponent(currentSearch);
     if (currentClassification) url += '&classification=' + encodeURIComponent(currentClassification);
 
-    fetch(url).then(function(r) {{ return r.json(); }}).then(function(data) {{
-      totalItems = data.total;
-      renderTable(data.failures);
+    fetchJson(url).then(function(data) {{
+      totalItems = Number(data.total || 0);
+      renderTable(Array.isArray(data.failures) ? data.failures : []);
       renderPagination();
     }}).catch(function(err) {{
       document.getElementById('failures-tbody').innerHTML =
@@ -3303,7 +3303,7 @@ def generate_history_html(base_url: str = "") -> str:
         h += '<td class="mono">' + escapeHtml(t.date || t.period || '') + '</td>';
         h += '<td class="mono">' + (t.failures != null ? t.failures : (t.total_failures != null ? t.total_failures : 0)) + '</td>';
         h += '<td class="mono">' + (t.unique_tests != null ? t.unique_tests : '-') + '</td>';
-        h += '<td class="mono">' + (t.builds != null ? t.builds : '-') + '</td>';
+        h += '<td class="mono">' + (t.total_tests != null ? t.total_tests : '-') + '</td>';
         h += '</tr>';
       }}
       h += '</table></div>';
