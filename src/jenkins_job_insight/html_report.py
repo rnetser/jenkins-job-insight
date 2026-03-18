@@ -2224,6 +2224,7 @@ def generate_dashboard_html(
     display: flex;
     align-items: flex-start;
     gap: 16px;
+    flex-wrap: wrap;
     padding: 16px 20px;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
@@ -2687,6 +2688,8 @@ def generate_dashboard_html(
             }
             span.style.display = '';
             span.innerHTML = html;
+            var sec = span.closest('.card-secondary');
+            if (sec) sec.style.display = 'flex';
         });
     }).catch(function() {});
 })();
@@ -2846,17 +2849,6 @@ def _render_dashboard_card(
                 "Needs Review</span>"
             )
 
-    # Per-card classification badges (populated by JS using job_id)
-    parts.append(
-        f'      <span class="classification-job-badges" data-job-name="{e(job_name)}" data-job-id="{e(job_id)}" style="display:none"></span>'
-    )
-
-    # Comment count badge (icon + number, positioned at end after all other badges)
-    if comment_count > 0:
-        parts.append(
-            f'      <span class="card-build-chip"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> {comment_count}</span>'
-        )
-
     parts.append("    </div>")
     parts.append("  </a>")
 
@@ -2897,6 +2889,23 @@ def _render_dashboard_card(
         )
 
     parts.append("  </div>")
+
+    # Secondary row: classification badges (left) + comment badge (right-aligned)
+    # Placed as direct child of .dashboard-card so it spans full card width.
+    comment_badge = ""
+    if comment_count > 0:
+        comment_badge = (
+            f'<span class="card-build-chip"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+            f'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> {comment_count}</span>'
+        )
+    parts.append(
+        f'  <div class="card-secondary" style="display:flex;width:100%;align-items:center;gap:6px;padding-top:4px;">'
+        f'<span class="classification-job-badges" data-job-name="{e(job_name)}" data-job-id="{e(job_id)}" style="display:none"></span>'
+        f'<span style="flex:1"></span>'
+        f"{comment_badge}"
+        f"</div>"
+    )
+
     parts.append("</div>")
 
 
