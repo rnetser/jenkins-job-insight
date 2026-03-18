@@ -413,3 +413,15 @@ class ClassifyTestRequest(BaseModel):
     job_name: str = ""
     references: str = ""
     job_id: str
+
+    @field_validator("job_id")
+    @classmethod
+    def job_id_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("job_id must not be empty")
+        return v
+
+    @field_validator("classification", mode="before")
+    @classmethod
+    def normalize_classification(cls, v: str) -> str:
+        return v.upper() if isinstance(v, str) else v

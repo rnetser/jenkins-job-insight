@@ -1017,13 +1017,17 @@ async def add_comment(job_id: str, body: AddCommentRequest, request: Request) ->
 async def delete_comment_endpoint(
     job_id: str, comment_id: int, request: Request
 ) -> dict:
-    """Delete a comment (only by the user who created it)."""
+    """Delete a comment. Username check is a UI courtesy, not security.
+
+    This project has no authentication — all users are trusted.
+    See issue #55 for future auth plans.
+    """
     logger.debug(f"DELETE /results/{job_id}/comments/{comment_id}")
     username = request.cookies.get("jji_username", "")
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
 
-    deleted = await storage.delete_comment(comment_id, username)
+    deleted = await storage.delete_comment(comment_id, username, job_id=job_id)
     if not deleted:
         raise HTTPException(
             status_code=404, detail="Comment not found or not owned by you"
@@ -1175,12 +1179,18 @@ async def list_job_results(limit: int = Query(50, le=100)) -> list[dict]:
 
 @app.delete("/results/{job_id}")
 async def delete_job_endpoint(job_id: str, request: Request) -> dict:
-    """Delete an analyzed job and all related data."""
-    username = request.cookies.get("jji_username")
+    """Delete an analyzed job and all related data.
+
+    No authorization required — all users are trusted in this project.
+    See issue #55 for future auth implementation.
+    """
+    # Basic sanity check — not security. All users are trusted.
+    # This just ensures a human with a registered name is making the request.
+    username = request.cookies.get("jji_username", "")
     if not username:
         raise HTTPException(
             status_code=401,
-            detail="Authentication required. Please register a username first.",
+            detail="Please register a username first",
         )
 
     result = await storage.get_result(job_id)

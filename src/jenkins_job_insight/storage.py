@@ -305,26 +305,28 @@ async def add_comment(
         return cursor.lastrowid
 
 
-async def delete_comment(comment_id: int, username: str) -> bool:
-    """Delete a comment if it belongs to the given username.
+async def delete_comment(comment_id: int, username: str, job_id: str = "") -> bool:
+    """Delete a comment. Username check is a UI courtesy, not security.
 
-    Returns True if deleted, False if not found or not owned by user.
+    This project has no authentication — all users are trusted.
+    See issue #55 for future auth plans.
 
-    SECURITY WARNING: The ``username`` parameter comes from an unsigned
-    ``jji_username`` cookie.  Any client can trivially forge the cookie value
-    to delete another user's comments.  This is **NOT** a real authorization
-    check — it only provides convenience-level identity matching.
-
-    TODO(#55): Replace with proper authentication (e.g., HMAC-signed session
-    cookies or OAuth) so that comment ownership is cryptographically verified.
-    Until then, this endpoint must NOT be exposed to untrusted networks.
+    Returns True if deleted, False if not found.
     """
-    logger.debug(f"delete_comment: comment_id={comment_id}, username={username}")
+    logger.debug(
+        f"delete_comment: comment_id={comment_id}, username={username}, job_id={job_id}"
+    )
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "DELETE FROM comments WHERE id = ? AND username = ?",
-            (comment_id, username),
-        )
+        # Build query with optional scoping filters
+        query = "DELETE FROM comments WHERE id = ?"
+        params: list = [comment_id]
+        if username:
+            query += " AND username = ?"
+            params.append(username)
+        if job_id:
+            query += " AND job_id = ?"
+            params.append(job_id)
+        cursor = await db.execute(query, params)
         await db.commit()
         deleted = cursor.rowcount > 0
         logger.debug(f"delete_comment: comment_id={comment_id}, deleted={deleted}")
@@ -839,24 +841,23 @@ async def backfill_failure_history() -> None:
     logic as populate_failure_history().
     """
     async with aiosqlite.connect(DB_PATH) as db:
-        # Check if failure_history already has data
-        cursor = await db.execute("SELECT COUNT(*) FROM failure_history")
-        count = (await cursor.fetchone())[0]
-        if count > 0:
-            logger.info("failure_history already has data, skipping backfill")
-            return
-
-        # Get all completed results with result_json and created_at
+        # Find completed results that are NOT yet in failure_history.
+        # This makes the backfill resumable: if it crashes mid-way,
+        # remaining jobs are picked up on next startup.
         cursor = await db.execute(
-            "SELECT job_id, result_json, created_at FROM results WHERE status = 'completed' AND result_json IS NOT NULL"
+            "SELECT r.job_id, r.result_json, r.created_at FROM results r "
+            "LEFT JOIN failure_history fh ON r.job_id = fh.job_id "
+            "WHERE r.status = 'completed' AND r.result_json IS NOT NULL AND fh.job_id IS NULL"
         )
         rows = await cursor.fetchall()
 
     if not rows:
-        logger.info("No completed results to backfill into failure_history")
+        logger.info(
+            "All completed results already in failure_history, nothing to backfill"
+        )
         return
 
-    logger.info(f"Backfilling failure_history from {len(rows)} completed results")
+    logger.info(f"Backfilling failure_history from {len(rows)} missing results")
     backfilled = 0
     for job_id, result_json_str, created_at in rows:
         try:
@@ -1154,16 +1155,17 @@ async def get_job_stats(job_name: str, exclude_job_id: str = "") -> dict:
             exclude_filter = " AND job_id != ?"
             exclude_params = [exclude_job_id]
 
-        # Total builds analyzed — use failure_history for structural job_name
-        # lookup instead of LIKE-matching against raw JSON in results.
+        # Total completed builds — count from results table (not failure_history)
+        # so that builds with zero failures are included in the denominator.
+        # Uses json_extract to match job_name stored in result_json.
         total_builds_query = (
-            "SELECT COUNT(DISTINCT r.job_id) FROM results r "
-            "INNER JOIN failure_history fh ON r.job_id = fh.job_id "
-            "WHERE fh.job_name = ?"
+            "SELECT COUNT(DISTINCT job_id) FROM results "
+            "WHERE status = 'completed' AND "
+            "json_extract(result_json, '$.job_name') = ?"
         )
         total_builds_params: list = [job_name]
         if exclude_job_id:
-            total_builds_query += " AND r.job_id != ?"
+            total_builds_query += " AND job_id != ?"
             total_builds_params.append(exclude_job_id)
         cursor = await db.execute(total_builds_query, total_builds_params)
         total_builds = (await cursor.fetchone())[0]
@@ -1255,10 +1257,13 @@ async def get_trends(
     logger.debug(f"get_trends: period={period}, days={days}, job_name={job_name}")
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
+    # failure_history has analyzed_at; results has created_at — use separate expressions
     if period == "weekly":
-        date_expr = "strftime('%Y-W%W', analyzed_at)"
+        fh_date_expr = "strftime('%Y-W%W', analyzed_at)"
+        results_date_expr = "strftime('%Y-W%W', created_at)"
     else:
-        date_expr = "DATE(analyzed_at)"
+        fh_date_expr = "DATE(analyzed_at)"
+        results_date_expr = "DATE(created_at)"
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -1274,12 +1279,12 @@ async def get_trends(
             params.append(exclude_job_id)
 
         cursor = await db.execute(
-            f"SELECT {date_expr} as date, "
+            f"SELECT {fh_date_expr} as date, "
             f"COUNT(*) as failures, "
             f"COUNT(DISTINCT test_name) as unique_tests "
             f"FROM failure_history "
             f"WHERE analyzed_at >= ?{job_filter} "
-            f"GROUP BY {date_expr} "
+            f"GROUP BY {fh_date_expr} "
             f"ORDER BY date ASC",
             params,
         )
@@ -1289,24 +1294,28 @@ async def get_trends(
         # This ensures each bucket's failure_rate uses that bucket's own
         # denominator rather than the entire window's count.
         if job_name:
+            # JOIN query — use fh_date_expr since the date comes from failure_history
             bucket_query = (
-                f"SELECT {date_expr} as date, COUNT(DISTINCT r.job_id) as total "
+                f"SELECT {fh_date_expr} as date, COUNT(DISTINCT r.job_id) as total "
                 f"FROM results r "
                 f"INNER JOIN failure_history fh ON r.job_id = fh.job_id "
                 f"WHERE r.created_at >= ? AND fh.job_name = ?"
             )
             bucket_params: list = [cutoff, job_name]
+            bucket_group_expr = fh_date_expr
         else:
+            # results-only query — use results_date_expr (created_at, not analyzed_at)
             bucket_query = (
-                f"SELECT {date_expr} as date, COUNT(DISTINCT r.job_id) as total "
+                f"SELECT {results_date_expr} as date, COUNT(DISTINCT r.job_id) as total "
                 f"FROM results r "
                 f"WHERE r.created_at >= ?"
             )
             bucket_params = [cutoff]
+            bucket_group_expr = results_date_expr
         if exclude_job_id:
             bucket_query += " AND r.job_id != ?"
             bucket_params.append(exclude_job_id)
-        bucket_query += f" GROUP BY {date_expr}"
+        bucket_query += f" GROUP BY {bucket_group_expr}"
         cursor = await db.execute(bucket_query, bucket_params)
         builds_per_bucket: dict[str, int] = {}
         for brow in await cursor.fetchall():
@@ -1419,12 +1428,13 @@ async def get_parent_job_name_for_test(test_name: str) -> str:
 async def set_test_classification(
     test_name: str,
     classification: str,
+    *,
+    job_id: str,
     reason: str = "",
     job_name: str = "",
     parent_job_name: str = "",
     created_by: str = "",
     references: str = "",
-    job_id: str = "",
     visible: int = 1,
 ) -> int:
     """Set a classification for a test (e.g., FLAKY, REGRESSION).
@@ -1432,9 +1442,12 @@ async def set_test_classification(
     Can be set by the AI during analysis or by humans.
 
     Args:
+        job_id: Required — scopes the classification to a specific analysis job.
         visible: Whether the classification is immediately visible.
             Set to 0 during AI analysis; revealed after analysis completes.
     """
+    if not job_id or not job_id.strip():
+        raise ValueError("job_id is required for test classification")
     logger.debug(
         f"set_test_classification: test_name={test_name}, classification={classification}, "
         f"parent_job_name={parent_job_name}, job_id={job_id}, created_by={created_by}, visible={visible}"
@@ -1464,9 +1477,9 @@ async def set_test_classification(
         if job_name:
             update_conditions.append("child_job_name = ?")
             update_params.append(job_name)
-        if job_id:
-            update_conditions.append("job_id = ?")
-            update_params.append(job_id)
+        # job_id is always required — always scope the mirror update
+        update_conditions.append("job_id = ?")
+        update_params.append(job_id)
         update_where = " AND ".join(update_conditions)
         await db.execute(
             f"UPDATE failure_history SET classification = ? WHERE {update_where}",

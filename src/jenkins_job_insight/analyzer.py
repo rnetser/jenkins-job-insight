@@ -650,7 +650,10 @@ def _build_prompt_sections(
     )
 
     artifacts_section = _build_artifacts_section(artifacts_context)
-    resources_section = _build_resources_section(repo_path)
+    history_enabled = bool(server_url and _QUERY_MD_PATH.exists())
+    resources_section = _build_resources_section(
+        repo_path, history_enabled=history_enabled
+    )
 
     if not _QUERY_MD_PATH.exists():
         logger.warning(
@@ -663,7 +666,7 @@ def _build_prompt_sections(
         )
 
     query_section = ""
-    if server_url and _QUERY_MD_PATH.exists():
+    if history_enabled:
         logger.info(
             f"Pointing AI to FAILURE_HISTORY_ANALYSIS.md with server_url={server_url}"
         )
@@ -695,7 +698,9 @@ These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
     return custom_prompt_section, artifacts_section, resources_section, query_section
 
 
-def _build_resources_section(repo_path: Path | None) -> str:
+def _build_resources_section(
+    repo_path: Path | None, *, history_enabled: bool = False
+) -> str:
     """Build a section telling the AI about available resources.
 
     Instead of pre-fetching data (git log, custom prompt files), this tells the
@@ -703,6 +708,8 @@ def _build_resources_section(repo_path: Path | None) -> str:
 
     Args:
         repo_path: Path to cloned test repository, or None.
+        history_enabled: Whether failure history analysis is active.
+            When False, the history prompt file is not advertised.
 
     Returns:
         Formatted resources section for the AI prompt, or empty string.
@@ -728,7 +735,7 @@ def _build_resources_section(repo_path: Path | None) -> str:
         )
 
     repo_history_prompt = repo_path / JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME
-    if repo_history_prompt.exists():
+    if history_enabled and repo_history_prompt.exists():
         resources.append(
             f"- Project-specific history analysis instructions at {repo_history_prompt} — read and follow alongside the main history analysis instructions"
         )

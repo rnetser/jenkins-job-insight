@@ -1051,50 +1051,9 @@ async function loadCommentsAndReviews() {{
             }}
         }}
         updateReviewBadges();
-
-        // Overall comment count
-        var totalComments = data.comments.length;
-        var overallBadge = document.getElementById('overall-comment-count');
-        if (overallBadge) {{
-            renderCommentBadge(overallBadge, totalComments);
-        }}
-
-        // Per child job comment counts (dynamically appended after classifications)
-        var childCounts = {{}};
-        data.comments.forEach(function(c) {{
-            var key = c.child_job_name || '';
-            childCounts[key] = (childCounts[key] || 0) + 1;
-        }});
-        document.querySelectorAll('.child-job-summary').forEach(function(summary) {{
-            var reviewBadge = summary.querySelector('.child-review-status');
-            var childJob = reviewBadge ? reviewBadge.dataset.childJob : '';
-            if (childCounts[childJob]) {{
-                var badge = document.createElement('span');
-                badge.className = 'dynamic-comment-badge';
-                renderCommentBadge(badge, childCounts[childJob]);
-                summary.appendChild(badge);
-            }}
-        }});
-
-        // Per bug card comment counts (dynamically appended after classifications)
-        document.querySelectorAll('.bug-summary, .failure-summary').forEach(function(summary) {{
-            var testNames = [];
-            try {{ testNames = JSON.parse(summary.dataset.testNames || '[]'); }} catch(e) {{}}
-            var childJob = summary.dataset.childJob || '';
-            var count = 0;
-            data.comments.forEach(function(c) {{
-                var cChild = c.child_job_name || '';
-                if (testNames.includes(c.test_name) && cChild === childJob) {{
-                    count++;
-                }}
-            }});
-            if (count > 0) {{
-                var badge = document.createElement('span');
-                badge.className = 'dynamic-comment-badge';
-                renderCommentBadge(badge, count);
-                summary.appendChild(badge);
-            }}
-        }});
+        // Reuse updateCommentBadges() which correctly scopes by
+        // child_job_name AND child_build_number via DOM .comment-item counts.
+        updateCommentBadges();
     }} catch (err) {{
         console.warn('Failed to load comments:', err);
     }}
@@ -2064,6 +2023,7 @@ def format_status_page(job_id: str, status: str, result: dict) -> str:
     --text-muted: #6e7681;
     --accent-blue: #58a6ff;
     --accent-yellow: #d29922;
+    --accent-purple: #bc8cff;
     --font-mono: 'SF Mono', 'Cascadia Code', Consolas, monospace;
     --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     --radius: 8px;
@@ -2186,6 +2146,9 @@ body {{
     </div>
     <div class="refresh-note">Auto-refreshing every 10 seconds</div>
 </div>
+<script>
+{_user_badge_js()}
+</script>
 </body>
 </html>"""
 
@@ -3090,6 +3053,26 @@ def generate_history_html(base_url: str = "") -> str:
     background: rgba(210, 153, 34, 0.15);
     color: var(--accent-yellow);
 }}
+.classification-tag.known-bug {{
+    background: rgba(188, 140, 255, 0.12);
+    color: var(--accent-purple);
+}}
+.classification-tag.regression {{
+    background: rgba(248, 81, 73, 0.12);
+    color: var(--accent-red);
+}}
+.classification-tag.flaky {{
+    background: rgba(210, 153, 34, 0.15);
+    color: var(--accent-yellow);
+}}
+.classification-tag.infrastructure {{
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--accent-green);
+}}
+.classification-tag.intermittent {{
+    background: rgba(210, 153, 34, 0.15);
+    color: var(--accent-yellow);
+}}
 .classification-tag.unknown {{
     background: rgba(88, 166, 255, 0.12);
     color: var(--accent-blue);
@@ -3211,9 +3194,16 @@ def generate_history_html(base_url: str = "") -> str:
   }}
 
   function classificationClass(c) {{
-    if (c === 'PRODUCT BUG') return 'product-bug';
-    if (c === 'CODE ISSUE') return 'code-issue';
-    return 'unknown';
+    switch(c) {{
+        case 'PRODUCT BUG': return 'product-bug';
+        case 'CODE ISSUE': return 'code-issue';
+        case 'KNOWN_BUG': return 'known-bug';
+        case 'REGRESSION': return 'regression';
+        case 'FLAKY': return 'flaky';
+        case 'INFRASTRUCTURE': return 'infrastructure';
+        case 'INTERMITTENT': return 'intermittent';
+        default: return 'unknown';
+    }}
   }}
 
   function loadFailures() {{
