@@ -54,6 +54,13 @@ def main_callback(
         envvar="JJI_SERVER_URL",
         help="Server URL (required: set JJI_SERVER_URL or use --server).",
     ),
+    port: int = typer.Option(
+        None,
+        "--port",
+        "-p",
+        envvar="JJI_PORT",
+        help="Server port (appended to --server URL if provided).",
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -73,6 +80,13 @@ def main_callback(
             err=True,
         )
         raise typer.Exit(1)
+
+    if port:
+        from urllib.parse import urlparse, urlunparse
+
+        parsed = urlparse(server)
+        server = urlunparse(parsed._replace(netloc=f"{parsed.hostname}:{port}"))
+
     _state["server_url"] = server
     _state["json"] = json_output
     _state["username"] = username
