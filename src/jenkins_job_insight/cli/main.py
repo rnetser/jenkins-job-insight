@@ -48,10 +48,11 @@ def _handle_error(err: JJIError) -> None:
 @app.callback()
 def main_callback(
     server: str = typer.Option(
-        "",
+        None,
         "--server",
+        "-s",
         envvar="JJI_SERVER_URL",
-        help="JJI server URL (default: http://localhost:8700).",
+        help="Server URL (required: set JJI_SERVER_URL or use --server).",
     ),
     json_output: bool = typer.Option(
         False,
@@ -66,7 +67,13 @@ def main_callback(
     ),
 ):
     """jji -- CLI for the jenkins-job-insight REST API."""
-    _state["server_url"] = server or "http://localhost:8700"
+    if not server:
+        typer.echo(
+            "Error: Server URL not configured. Set JJI_SERVER_URL or use --server.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    _state["server_url"] = server
     _state["json"] = json_output
     _state["username"] = username
 

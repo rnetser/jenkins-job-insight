@@ -24,7 +24,7 @@ class JJIClient:
     errors or connection failures.
 
     Args:
-        server_url: Base URL of the JJI server (e.g. "http://localhost:8700").
+        server_url: Base URL of the JJI server (required).
         timeout: Request timeout in seconds.
         username: Username sent as a cookie for authenticated actions.
     """

@@ -37,7 +37,7 @@ uv tool install jenkins-job-insight
 #### Configuration
 
 ```bash
-export JJI_SERVER_URL=http://localhost:8700  # default
+export JJI_SERVER_URL=http://your-server:8700  # required
 export JJI_USERNAME=myakove                  # for comments/reviews
 ```
 
