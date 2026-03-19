@@ -1286,6 +1286,57 @@ function appendCommentToList(section, comment) {{
 
 {_modal_js()}
 
+function showIssueCreatedModal(type, data) {{
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+
+    var dialog = document.createElement('div');
+    dialog.className = 'modal-dialog';
+
+    var iconDiv = document.createElement('div');
+    iconDiv.style.marginBottom = '12px';
+    iconDiv.innerHTML = '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 12l2.5 2.5L16 9"/></svg>';
+    dialog.appendChild(iconDiv);
+
+    var h3 = document.createElement('h3');
+    h3.textContent = type === 'github' ? 'GitHub Issue Created' : 'Jira Bug Created';
+    dialog.appendChild(h3);
+
+    var issueUrl = data.url || '';
+    var displayName = '';
+    if (type === 'github' && issueUrl) {{
+        var match = issueUrl.match(/github\\.com\\/([^/]+)\\/([^/]+)\\/issues\\/(\\d+)/);
+        if (match) displayName = match[1] + '/' + match[2] + '#' + match[3];
+        else displayName = '#' + (data.number || '');
+    }} else if (type === 'jira') {{
+        displayName = data.key || issueUrl;
+    }}
+
+    var p = document.createElement('p');
+    p.style.marginBottom = '20px';
+    var link = document.createElement('a');
+    link.href = issueUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = displayName;
+    link.style.cssText = 'color:var(--accent-blue);text-decoration:none;font-size:16px;font-weight:600;font-family:var(--font-mono);';
+    p.appendChild(link);
+    dialog.appendChild(p);
+
+    var actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    var okBtn = document.createElement('button');
+    okBtn.className = 'modal-btn modal-btn-cancel';
+    okBtn.textContent = 'OK';
+    okBtn.onclick = function() {{ overlay.remove(); }};
+    actions.appendChild(okBtn);
+    dialog.appendChild(actions);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    overlay.onclick = function(e) {{ if (e.target === overlay) overlay.remove(); }};
+}}
+
 {_classification_colors_js()}
 
 async function deleteComment(btn, commentId) {{
@@ -1785,8 +1836,7 @@ async function submitIssue(type, title, body, testName, childJob, childBuild, in
         }}
         var data = await resp.json();
         overlay.remove();
-        var label = data.key || ('#' + (data.number || 'Issue'));
-        showConfirmModal('Issue Created', label + ' created: ' + (data.url || ''), function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
+        showIssueCreatedModal(type, data);
         // Reload comments to show the auto-added link
         await loadCommentsAndReviews();
         updateCommentBadges();
