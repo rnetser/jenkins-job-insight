@@ -902,7 +902,6 @@ async def backfill_failure_history() -> None:
 
 async def _get_failure_stats(
     db: aiosqlite.Connection,
-    test_name: str,
     job_filter: str,
     params: list,
 ) -> tuple[int, str | None, str | None, str]:
@@ -910,7 +909,6 @@ async def _get_failure_stats(
 
     Args:
         db: Open aiosqlite connection with row_factory set.
-        test_name: Full test name to look up.
         job_filter: SQL fragment for optional job_name/exclude_job_id filtering.
         params: Bind parameters matching the job_filter placeholders
                 (first element is always test_name).
@@ -949,7 +947,6 @@ async def _get_failure_stats(
 
 async def _get_classification_breakdown(
     db: aiosqlite.Connection,
-    test_name: str,
     job_filter: str,
     params: list,
 ) -> dict[str, int]:
@@ -957,7 +954,6 @@ async def _get_classification_breakdown(
 
     Args:
         db: Open aiosqlite connection with row_factory set.
-        test_name: Full test name to look up.
         job_filter: SQL fragment for optional job_name/exclude_job_id filtering.
         params: Bind parameters matching the job_filter placeholders
                 (first element is always test_name).
@@ -1041,7 +1037,7 @@ async def get_test_history(
             params.append(exclude_job_id)
 
         failures, first_seen, last_seen, last_classification = await _get_failure_stats(
-            db, test_name, job_filter, params
+            db, job_filter, params
         )
 
         if failures == 0:
@@ -1061,9 +1057,7 @@ async def get_test_history(
                 "note": "No failure records found for this test.",
             }
 
-        classifications = await _get_classification_breakdown(
-            db, test_name, job_filter, params
-        )
+        classifications = await _get_classification_breakdown(db, job_filter, params)
 
         # Recent runs (failures only, since we only track failures)
         cursor = await db.execute(
@@ -1093,20 +1087,23 @@ async def get_test_history(
             )
             total_params: list = [job_name]
         else:
-            # Without job_name, counting ALL results would mix unrelated jobs.
-            # Instead, count distinct job_ids where this specific test appears
-            # in failure_history, giving a meaningful denominator for this test.
-            total_query = (
-                "SELECT COUNT(DISTINCT job_id) FROM failure_history WHERE test_name = ?"
-            )
-            total_params = [test_name]
-        if exclude_job_id:
-            total_query += " AND job_id != ?"
-            total_params.append(exclude_job_id)
-        cursor = await db.execute(total_query, total_params)
-        total_runs = (await cursor.fetchone())[0]
-        passes = max(0, total_runs - failures)
-        failure_rate = failures / total_runs if total_runs > 0 else 0.0
+            # Without job_name filtering, pass count cannot be accurately derived.
+            # failure_history only records failures, not total test executions,
+            # so total_runs == failures and passes would always be 0 (100% failure).
+            total_query = None
+            total_params = []
+        if total_query is not None:
+            if exclude_job_id:
+                total_query += " AND job_id != ?"
+                total_params.append(exclude_job_id)
+            cursor = await db.execute(total_query, total_params)
+            total_runs = (await cursor.fetchone())[0]
+            passes = max(0, total_runs - failures)
+            failure_rate = round(failures / total_runs, 4) if total_runs > 0 else 0.0
+        else:
+            total_runs = failures
+            passes = None
+            failure_rate = None
 
         # Collect error signatures for comment lookup
         signatures = {
@@ -1120,12 +1117,17 @@ async def get_test_history(
     logger.debug(
         f"get_test_history: test_name={test_name}, failures={failures}, passes={passes}, recent_runs={len(recent_runs)}"
     )
+    note = (
+        "Pass count is estimated from total analyzed builds minus recorded failures."
+        if passes is not None
+        else "Pass/fail stats unavailable without job_name — failure_history only records failures."
+    )
     return {
         "test_name": test_name,
         "total_runs": total_runs,
         "failures": failures,
         "passes": passes,
-        "failure_rate": round(failure_rate, 4),
+        "failure_rate": failure_rate,
         "first_seen": first_seen,
         "last_seen": last_seen,
         "last_classification": last_classification,
@@ -1133,7 +1135,7 @@ async def get_test_history(
         "recent_runs": recent_runs,
         "comments": comments,
         "consecutive_failures": consecutive_failures,
-        "note": "Pass count is estimated from total analyzed builds minus recorded failures.",
+        "note": note,
     }
 
 
@@ -1349,7 +1351,11 @@ async def get_trends(
         "%Y-%m-%d %H:%M:%S"
     )
 
-    # failure_history has analyzed_at; results has created_at — use separate expressions
+    # Failures are bucketed by failure_history.analyzed_at; build totals are
+    # bucketed by results.created_at.  These two clocks can differ slightly
+    # (analysis completes after the result row is created), so a build near a
+    # bucket boundary may land in adjacent buckets for the two series.  The
+    # mismatch is small relative to daily/weekly bucket widths and is acceptable.
     if period == "weekly":
         fh_date_expr = "strftime('%Y-W%W', analyzed_at)"
         results_date_expr = "strftime('%Y-W%W', created_at)"
@@ -1669,13 +1675,26 @@ async def make_classifications_visible(job_id: str) -> None:
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        # Fetch hidden classifications before flipping so we can mirror them
+        # Fetch hidden classifications before flipping so we can mirror them.
+        # ORDER BY created_at DESC ensures latest-wins when deduplicating
+        # by (test_name, job_name, child_build_number) below.
         cursor = await db.execute(
             "SELECT test_name, job_name, child_build_number, classification "
-            "FROM test_classifications WHERE job_id = ? AND visible = 0",
+            "FROM test_classifications WHERE job_id = ? AND visible = 0 "
+            "ORDER BY created_at DESC",
             (job_id,),
         )
-        rows = await cursor.fetchall()
+        all_rows = await cursor.fetchall()
+
+        # Deduplicate: keep only the latest classification per key
+        # (latest-wins, since we ordered by created_at DESC).
+        seen: set[tuple[str, str, int]] = set()
+        rows = []
+        for row in all_rows:
+            key = (row["test_name"], row["job_name"], row["child_build_number"])
+            if key not in seen:
+                seen.add(key)
+                rows.append(row)
 
         await db.execute(
             "UPDATE test_classifications SET visible = 1 WHERE job_id = ? AND visible = 0",
@@ -1779,10 +1798,16 @@ async def delete_job(job_id: str) -> bool:
         job_existed = cursor.rowcount > 0
         await db.commit()
 
-        # Delete cached HTML report
-        report_path = REPORTS_DIR / f"{job_id}.html"
-        if report_path.exists():
-            report_path.unlink()
+        # Delete cached HTML report (best-effort — a race with another
+        # remover or a transient OS error should not turn a successful
+        # DB delete into a 500).
+        try:
+            report_path = REPORTS_DIR / f"{job_id}.html"
+            report_path.unlink(missing_ok=True)
+        except OSError:
+            logger.debug(
+                f"delete_job: failed to remove cached report for job_id={job_id}"
+            )
 
         return job_existed
 
