@@ -24,6 +24,58 @@ For each failure, the service provides detailed explanations and either fix sugg
 - **pytest JUnit XML integration**: Enrich JUnit XML reports with AI analysis via a pytest plugin
 - **Raw XML analysis**: Accept raw JUnit XML via API, extract failures, analyze, and return enriched XML
 
+### CLI Tool (`jji`)
+
+A command-line interface for the jenkins-job-insight API.
+
+#### Installation
+
+```bash
+uv tool install jenkins-job-insight
+```
+
+#### Configuration
+
+```bash
+export JJI_SERVER_URL=http://localhost:8700  # default
+export JJI_USERNAME=myakove                  # for comments/reviews
+```
+
+Or pass per-command: `jji --server http://host:port --user myname <command>`
+
+#### Quick Start
+
+```bash
+# Check server health
+jji health
+
+# List recent analyses
+jji results list
+
+# Trigger a new analysis
+jji analyze mtv-2.11-ocp-4.20-test-release-non-gate 27 --provider claude --jira
+
+# Check status
+jji status <job_id>
+
+# View test history
+jji history test "tests.TestFoo.test_bar"
+
+# List all failures
+jji history failures --search "DNS" --classification "PRODUCT BUG"
+
+# Add a comment
+jji comments add <job_id> --test "tests.TestFoo.test_bar" -m "Opened bug: MTV-123"
+
+# Classify a test
+jji classify "tests.TestFoo.test_bar" --type REGRESSION --reason "Started failing in build 27" --job-id <id>
+
+# JSON output for scripts/AI
+jji results list --json
+```
+
+Run `jji --help` for all commands.
+
 ## Quick Start
 
 > **Note:** The `data` directory must exist on the host before starting the container. Docker creates mounted directories as root, but the container runs as a non-root user for security.

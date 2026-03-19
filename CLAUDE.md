@@ -84,6 +84,10 @@ Never pre-feed data to the AI in the prompt. Instead, give the AI tools (API end
 
 This principle applies to all AI integrations: failure history, test analysis, and any future AI-powered features.
 
+### CLI Access
+
+A `jji` CLI tool is available for querying the jenkins-job-insight API. Run `jji --help` for available commands.
+
 ### Failure Deduplication
 
 When multiple tests fail with the same error:
