@@ -23,6 +23,35 @@ For each failure, the service provides detailed explanations and either fix sugg
 - **Direct failure analysis**: Analyze raw test failures without Jenkins via `POST /analyze-failures`
 - **pytest JUnit XML integration**: Enrich JUnit XML reports with AI analysis via a pytest plugin
 - **Raw XML analysis**: Accept raw JUnit XML via API, extract failures, analyze, and return enriched XML
+- **One-click bug creation**: Create GitHub issues or Jira bugs directly from failure cards with AI-generated content, editable preview, and duplicate detection
+
+### One-Click Bug Creation
+
+Failure cards in the HTML report include bug creation buttons based on classification:
+
+- **CODE ISSUE** failures show an "Open GitHub Issue" button (requires `GITHUB_TOKEN` and `TESTS_REPO_URL`)
+- **PRODUCT BUG** failures show an "Open Jira Bug" button (requires Jira configuration)
+
+The workflow is: click button, review AI-generated preview in an editable modal, then submit. Similar existing issues are shown before creation to prevent duplicates. A classification override button allows changing a failure from CODE ISSUE to PRODUCT BUG (or vice versa), which persists for future AI analysis.
+
+**CLI equivalents:**
+
+```bash
+# Preview a GitHub issue
+jji preview-issue JOB_ID --test test_name --type github
+
+# Preview a Jira bug
+jji preview-issue JOB_ID --test test_name --type jira
+
+# Create a GitHub issue
+jji create-issue JOB_ID --test test_name --type github --title "Bug title" --body "Details..."
+
+# Create a Jira bug
+jji create-issue JOB_ID --test test_name --type jira --title "Bug title" --body "Details..."
+
+# Override classification
+jji override-classification JOB_ID --test test_name --classification "PRODUCT BUG"
+```
 
 ### CLI Tool (`jji`)
 
@@ -654,6 +683,11 @@ This context helps the AI distinguish between test infrastructure issues (CODE I
 | `/results/{job_id}/reviewed` | PUT | Toggle reviewed state for a test failure          |
 | `/results/{job_id}/review-status` | GET | Get review summary for dashboard             |
 | `/results/{job_id}/enrich-comments` | POST | Fetch live PR/Jira statuses for comments   |
+| `/results/{job_id}/preview-github-issue` | POST | Preview a GitHub issue from failure analysis |
+| `/results/{job_id}/preview-jira-bug` | POST | Preview a Jira bug from failure analysis      |
+| `/results/{job_id}/create-github-issue` | POST | Create a GitHub issue (returns 201)          |
+| `/results/{job_id}/create-jira-bug` | POST | Create a Jira bug (returns 201)                |
+| `/results/{job_id}/override-classification` | PUT | Override failure classification            |
 | `/dashboard`             | GET    | HTML dashboard listing all analysis reports       |
 | `/history`               | GET    | Interactive failure history page (HTML)            |
 | `/history/test/{test_name}` | GET | Pass/fail history for a specific test              |

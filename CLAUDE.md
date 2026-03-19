@@ -88,6 +88,13 @@ This principle applies to all AI integrations: failure history, test analysis, a
 
 A `jji` CLI tool is available for querying the jenkins-job-insight API. Run `jji --help` for available commands.
 
+### CLI Parity
+
+Every new API endpoint MUST also be supported via the `jji` CLI tool. When adding a new endpoint:
+1. Add the client method to `cli/client.py`
+2. Add the CLI command to `cli/main.py`
+3. Add tests for both in `tests/test_cli_client.py` and `tests/test_cli_main.py`
+
 ### Failure Deduplication
 
 When multiple tests fail with the same error:
