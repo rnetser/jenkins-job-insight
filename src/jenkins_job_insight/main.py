@@ -1302,7 +1302,9 @@ async def preview_github_issue(
         report_url = f"{base_url}/results/{job_id}.html"
     else:
         report_url = f"results/{job_id}.html"
-        jenkins_url = jenkins_url or ""
+        job_name = result_data.get("job_name", "")
+        build_number = result_data.get("build_number", 0)
+        jenkins_url = f"{job_name} #{build_number}" if job_name else ""
 
     content = await generate_github_issue_content(
         failure=failure,
@@ -1376,7 +1378,9 @@ async def preview_jira_bug(
         report_url = f"{base_url}/results/{job_id}.html"
     else:
         report_url = f"results/{job_id}.html"
-        jenkins_url = jenkins_url or ""
+        job_name = result_data.get("job_name", "")
+        build_number = result_data.get("build_number", 0)
+        jenkins_url = f"{job_name} #{build_number}" if job_name else ""
 
     content = await generate_jira_bug_content(
         failure=failure,

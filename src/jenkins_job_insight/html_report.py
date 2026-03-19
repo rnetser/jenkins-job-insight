@@ -485,23 +485,28 @@ def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str
     text-overflow: ellipsis;
     white-space: nowrap;
 }}
-.classification-tag {{
-    font-size: 11px;
+.classification-tag,
+.classification-select {{
     font-weight: 600;
-    padding: 2px 8px;
     border-radius: 4px;
     text-transform: uppercase;
 }}
-.classification-tag.product-bug {{
-    background: var(--accent-orange-bg);
+.classification-tag {{
+    font-size: 11px;
+    padding: 2px 8px;
+}}
+.classification-tag.product-bug,
+.classification-select.product-bug {{
+    background-color: var(--accent-orange-bg);
     color: var(--accent-orange);
 }}
-.classification-tag.code-issue {{
-    background: var(--accent-blue-bg);
+.classification-tag.code-issue,
+.classification-select.code-issue {{
+    background-color: var(--accent-blue-bg);
     color: var(--accent-blue);
 }}
 .classification-tag.unknown {{
-    background: var(--bg-tertiary);
+    background-color: var(--bg-tertiary);
     color: var(--text-muted);
 }}
 .bug-id {{
@@ -895,10 +900,7 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     appearance: none;
     -webkit-appearance: none;
     padding: 3px 24px 3px 10px;
-    border-radius: 4px;
     font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
     border: 1px solid var(--border);
     cursor: pointer;
     outline: none;
@@ -915,14 +917,6 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     background: var(--bg-secondary);
     color: var(--text-primary);
     padding: 4px 8px;
-}}
-.classification-select.code-issue {{
-    background-color: var(--accent-blue-bg);
-    color: var(--accent-blue);
-}}
-.classification-select.product-bug {{
-    background-color: var(--accent-orange-bg);
-    color: var(--accent-orange);
 }}
 /* Preview modal extensions */
 .preview-modal .modal-dialog {{
