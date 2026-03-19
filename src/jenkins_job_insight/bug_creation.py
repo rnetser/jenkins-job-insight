@@ -256,6 +256,7 @@ Generate a JSON object with exactly two keys:
   - Summary of the problem
   - Error details (error message and relevant stack trace)
   - AI analysis findings
+  - Artifacts evidence (if available)
   - Suggested fix (if available)
   - Links to Jenkins build and analysis report
 
@@ -328,6 +329,7 @@ Generate a JSON object with exactly two keys:
   - h2. Summary
   - h2. Error (with {{{{code}}}} blocks)
   - h2. Analysis
+  - h2. Artifacts Evidence (if available)
   - h2. Evidence (if available)
   - h2. Links (Jenkins build and analysis report)
 
