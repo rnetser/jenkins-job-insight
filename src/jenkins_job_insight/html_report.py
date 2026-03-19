@@ -1002,8 +1002,6 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
   <div class="header-content">
     <div id="header-line1" style="display:flex;align-items:center;gap:16px;width:100%;flex-wrap:nowrap;">
       <h1>{job_name_html}</h1>
-      <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
-      <span id="overall-review-status" class="status-chip" style="display:none"></span>
       <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data" style="margin-left:auto;flex-shrink:0;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
     </div>
     <div style="display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap;">
@@ -1012,6 +1010,10 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
       <span class="env-chip">AI: {e(provider_info)}</span>
       {f'<span class="env-chip">Analyzed: {e(completed_at)}</span>' if completed_at else ""}
       <span id="overall-comment-count" style="display:none;margin-left:auto;"></span>
+    </div>
+    <div id="header-line3" style="display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap;">
+      <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
+      <span id="overall-review-status" class="status-chip" style="display:none"></span>
     </div>
   </div>
 </div>
@@ -1655,25 +1657,20 @@ async function loadClassifications() {{
             }}
         }});
 
-        // Add classification summary to report header
+        // Add classification summary to report header (line 3 — badges row)
         var headerClassifications = {{}};
         for (var key in byKey) {{
             byKey[key].forEach(function(entry) {{
                 headerClassifications[entry.classification] = (headerClassifications[entry.classification] || 0) + 1;
             }});
         }}
-        var headerLine1 = document.getElementById('header-line1');
-        if (headerLine1) {{
-            var regenBtn = headerLine1.querySelector('.regenerate-btn');
+        var headerLine3 = document.getElementById('header-line3');
+        if (headerLine3) {{
             for (var cls in headerClassifications) {{
                 var chip = document.createElement('span');
                 chip.style.cssText = 'display:inline-flex;align-items:center;font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;font-family:var(--font-mono);white-space:nowrap;' + getClassificationStyle(cls);
                 chip.textContent = headerClassifications[cls] + ' ' + cls.replace('_', ' ');
-                if (regenBtn) {{
-                    headerLine1.insertBefore(chip, regenBtn);
-                }} else {{
-                    headerLine1.appendChild(chip);
-                }}
+                headerLine3.appendChild(chip);
             }}
         }}
     }} catch (err) {{
