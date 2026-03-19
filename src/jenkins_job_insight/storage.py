@@ -1970,3 +1970,37 @@ async def override_classification(
         f"Classification overridden: job_id={job_id}, test_name={test_name}, "
         f"classification={classification}, by={username or 'unknown'}"
     )
+
+
+async def get_effective_classification(
+    job_id: str,
+    test_name: str,
+    child_job_name: str = "",
+    child_build_number: int = 0,
+) -> str:
+    """Return the current classification for a failure from failure_history.
+
+    After an override, the ``failure_history`` row holds the effective
+    classification while the stored ``result_json`` still has the original
+    AI classification.  Preview endpoints call this to pick the right
+    content generator (e.g. Jira bug vs GitHub issue).
+
+    Returns:
+        The classification string (e.g. "CODE ISSUE", "PRODUCT BUG"),
+        or "" if no row exists.
+    """
+    query = (
+        "SELECT classification FROM failure_history WHERE job_id = ? AND test_name = ?"
+    )
+    params: list = [job_id, test_name]
+    if child_job_name:
+        query += " AND child_job_name = ? AND child_build_number = ?"
+        params.extend([child_job_name, child_build_number])
+    else:
+        query += " AND child_job_name = '' AND child_build_number = 0"
+    query += " LIMIT 1"
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(query, params)
+        row = await cursor.fetchone()
+        return row[0] if row and row[0] else ""

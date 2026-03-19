@@ -374,7 +374,6 @@ class JJIClient:
         body: str,
         child_job_name: str = "",
         child_build_number: int = 0,
-        include_links: bool = False,
     ) -> dict:
         """Create a GitHub issue. POST /results/{job_id}/create-github-issue"""
         payload = self._with_child_scope(
@@ -382,7 +381,6 @@ class JJIClient:
                 "test_name": test_name,
                 "title": title,
                 "body": body,
-                "include_links": include_links,
             },
             child_job_name,
             child_build_number,
@@ -402,7 +400,6 @@ class JJIClient:
         body: str,
         child_job_name: str = "",
         child_build_number: int = 0,
-        include_links: bool = False,
     ) -> dict:
         """Create a Jira bug. POST /results/{job_id}/create-jira-bug"""
         payload = self._with_child_scope(
@@ -410,7 +407,6 @@ class JJIClient:
                 "test_name": test_name,
                 "title": title,
                 "body": body,
-                "include_links": include_links,
             },
             child_job_name,
             child_build_number,

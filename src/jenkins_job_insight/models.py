@@ -420,7 +420,6 @@ class CreateIssueRequest(_ChildJobFieldsValidator):
     test_name: str
     title: str
     body: str
-    include_links: bool = False
 
     @field_validator("title")
     @classmethod

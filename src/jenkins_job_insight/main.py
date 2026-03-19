@@ -61,6 +61,7 @@ from jenkins_job_insight.output import send_callback
 from jenkins_job_insight.repository import RepositoryManager
 from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
+    get_effective_classification,
     get_html_report,
     get_result,
     init_db,
@@ -1292,6 +1293,20 @@ async def preview_github_issue(
         )
     failure = FailureAnalysis.model_validate(failure_dict)
 
+    # Check if classification was overridden (failure_history holds the
+    # effective classification; result_json may be stale after an override).
+    effective_cls = await get_effective_classification(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+    if effective_cls and effective_cls != failure.analysis.classification:
+        failure = failure.model_copy(
+            update={
+                "analysis": failure.analysis.model_copy(
+                    update={"classification": effective_cls}
+                )
+            }
+        )
+
     # AI config is best-effort for preview — fallback content is generated if not configured
     ai_provider = AI_PROVIDER
     ai_model = AI_MODEL
@@ -1367,6 +1382,20 @@ async def preview_jira_bug(
             detail=f"Test '{body.test_name}' not found in job {job_id}",
         )
     failure = FailureAnalysis.model_validate(failure_dict)
+
+    # Check if classification was overridden (failure_history holds the
+    # effective classification; result_json may be stale after an override).
+    effective_cls = await get_effective_classification(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+    if effective_cls and effective_cls != failure.analysis.classification:
+        failure = failure.model_copy(
+            update={
+                "analysis": failure.analysis.model_copy(
+                    update={"classification": effective_cls}
+                )
+            }
+        )
 
     # AI config is best-effort for preview — fallback content is generated if not configured
     ai_provider = AI_PROVIDER

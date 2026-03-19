@@ -713,10 +713,10 @@ class TestBugCreationButtons:
         html_output = format_result_as_html(sample_analysis_result)
         assert "submitIssue" in html_output
 
-    def test_override_classification_btn_present(
+    def test_classification_select_present(
         self, sample_analysis_result: AnalysisResult
     ) -> None:
-        """Report includes override-classification-btn buttons.
+        """Report includes classification-select dropdown for overriding classification.
 
         NOTE: This is a UI structure test verifying the HTML contains the
         correct elements. Integration testing of the actual PUT API call
@@ -724,7 +724,7 @@ class TestBugCreationButtons:
         test_main.py (TestOverrideClassification, TestOverrideClassificationFlow).
         """
         html_output = format_result_as_html(sample_analysis_result)
-        assert "override-classification-btn" in html_output
+        assert "classification-select" in html_output
 
 
 class TestShowConfirmModal:
@@ -750,12 +750,12 @@ class TestShowConfirmModal:
     def test_override_js_handles_errors(
         self, sample_analysis_result: AnalysisResult
     ) -> None:
-        """Finding 6: overrideClassification should handle non-OK responses."""
+        """overrideClassification should handle non-OK responses."""
         html_output = format_result_as_html(sample_analysis_result)
         # Should have error handling for non-OK response
         assert "showConfirmModal" in html_output
         # The override function should handle failure case, not just success
-        assert "Override Failed" in html_output or "Override failed" in html_output
+        assert "Failed to override" in html_output
 
 
 class TestGroupCardDesignComment:

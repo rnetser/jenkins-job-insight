@@ -704,9 +704,6 @@ def create_issue(
     body: str = typer.Option(..., "--body", help="Issue body."),
     child_job_name: str = typer.Option("", "--child-job"),
     child_build_number: int = typer.Option(0, "--child-build"),
-    include_links: bool = typer.Option(
-        False, "--include-links", help="Include full URLs as clickable links."
-    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Create a GitHub issue or Jira bug from a failure analysis."""
@@ -722,7 +719,6 @@ def create_issue(
                 body=body,
                 child_job_name=child_job_name,
                 child_build_number=child_build_number,
-                include_links=include_links,
             )
         else:
             data = client.create_jira_bug(
@@ -732,7 +728,6 @@ def create_issue(
                 body=body,
                 child_job_name=child_job_name,
                 child_build_number=child_build_number,
-                include_links=include_links,
             )
     except JJIError as err:
         _handle_error(err)

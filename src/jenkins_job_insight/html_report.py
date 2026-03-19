@@ -1506,7 +1506,7 @@ async function loadClassifications() {{
             // Normalize: empty job_name (root-job) uses '' as the key prefix,
             // matching the toggle's data-child-job which is '' for root failures.
             var scopeKey = c.job_name || '';
-            var key = scopeKey + '::' + c.test_name;
+            var key = scopeKey + '#' + (c.child_build_number || 0) + '::' + c.test_name;
             if (!byKey[key]) byKey[key] = [];
             byKey[key].push(c);
         }});
@@ -1514,8 +1514,9 @@ async function loadClassifications() {{
         document.querySelectorAll('.reviewed-toggle').forEach(function(toggle) {{
             var testName = toggle.dataset.testName;
             var childJob = toggle.dataset.childJob || '';
+            var childBuild = toggle.dataset.childBuild || '0';
             if (!testName) return;
-            var key = childJob + '::' + testName;
+            var key = childJob + '#' + childBuild + '::' + testName;
             var entries = byKey[key];
             if (!entries) return;
             entries.forEach(function(cls) {{
@@ -1540,7 +1541,8 @@ async function loadClassifications() {{
         document.querySelectorAll('.reviewed-toggle').forEach(function(toggle) {{
             var testName = toggle.dataset.testName;
             var childJob = toggle.dataset.childJob || '';
-            var key = childJob + '::' + testName;
+            var childBuild = toggle.dataset.childBuild || '0';
+            var key = childJob + '#' + childBuild + '::' + testName;
             var entries = byKey[key];
             if (!entries || entries.length === 0) return;
 
@@ -1579,7 +1581,8 @@ async function loadClassifications() {{
             toggles.forEach(function(t) {{
                 var tn = t.dataset.testName;
                 var cj = t.dataset.childJob || '';
-                var key = cj + '::' + tn;
+                var cb = t.dataset.childBuild || '0';
+                var key = cj + '#' + cb + '::' + tn;
                 if (tn && byKey[key]) {{
                     byKey[key].forEach(function(entry) {{
                         var cls = entry.classification;
@@ -1625,7 +1628,8 @@ async function loadClassifications() {{
             toggles.forEach(function(t) {{
                 var tn = t.dataset.testName;
                 var cj = t.dataset.childJob || '';
-                var key = cj + '::' + tn;
+                var cb = t.dataset.childBuild || '0';
+                var key = cj + '#' + cb + '::' + tn;
                 if (tn && byKey[key]) {{
                     byKey[key].forEach(function(entry) {{
                         var cls = entry.classification;
