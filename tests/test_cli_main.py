@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
+from jenkins_job_insight.cli.client import JJIError
 from jenkins_job_insight.cli.main import app
 
 runner = CliRunner()
@@ -266,20 +267,15 @@ class TestServerFlag:
 
     def test_missing_server_url(self):
         """CLI exits with error when no server URL is configured."""
-        with patch.dict(os.environ, {}, clear=False):
-            # Ensure JJI_SERVER_URL is not set
-            env = os.environ.copy()
-            env.pop("JJI_SERVER_URL", None)
-            with patch.dict(os.environ, env, clear=True):
-                result = runner.invoke(app, ["health"])
-                assert result.exit_code == 1
-                assert "Server URL" in result.output
+        env = {k: v for k, v in os.environ.items() if k != "JJI_SERVER_URL"}
+        with patch.dict(os.environ, env, clear=True):
+            result = runner.invoke(app, ["health"])
+            assert result.exit_code == 1
+            assert "Server URL" in result.output
 
 
 class TestErrorHandling:
     def test_connection_error(self, mock_client):
-        from jenkins_job_insight.cli.client import JJIError
-
         mock_client.health.side_effect = JJIError(
             status_code=0, detail="Connection refused"
         )
@@ -288,8 +284,6 @@ class TestErrorHandling:
         assert "Connection" in result.output or "Error" in result.output
 
     def test_http_error(self, mock_client):
-        from jenkins_job_insight.cli.client import JJIError
-
         mock_client.get_result.side_effect = JJIError(
             status_code=404, detail="Job not found"
         )
@@ -299,8 +293,6 @@ class TestErrorHandling:
 
     def test_401_error_hints_about_user_flag(self, mock_client):
         """_handle_error should hint about --user when server returns 401."""
-        from jenkins_job_insight.cli.client import JJIError
-
         mock_client.delete_job.side_effect = JJIError(
             status_code=401, detail="Please register a username first"
         )
