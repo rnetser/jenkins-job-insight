@@ -10,10 +10,16 @@ from jenkins_job_insight.models import (
     AnalysisResult,
     AnalyzeRequest,
     CodeFix,
+    CreateIssueRequest,
+    CreateIssueResponse,
     FailureAnalysis,
     JiraMatch,
     JobStatus,
+    OverrideClassificationRequest,
+    PreviewIssueRequest,
+    PreviewIssueResponse,
     ProductBugReport,
+    SimilarIssue,
 )
 
 
@@ -371,3 +377,161 @@ class TestProductBugReportJiraFields:
         assert "jira_search_keywords" in data
         assert "jira_matches" in data
         assert len(data["jira_matches"]) == 1
+
+
+class TestPreviewIssueRequest:
+    """Tests for the PreviewIssueRequest model."""
+
+    def test_valid_request(self) -> None:
+        """Test creating a valid PreviewIssueRequest."""
+        req = PreviewIssueRequest(test_name="tests.TestFoo.test_bar")
+        assert req.test_name == "tests.TestFoo.test_bar"
+        assert req.child_job_name == ""
+        assert req.child_build_number == 0
+
+    def test_child_job_fields_validation(self) -> None:
+        """Test that child_job_name requires child_build_number."""
+        with pytest.raises(ValueError, match="child_build_number must be positive"):
+            PreviewIssueRequest(
+                test_name="tests.TestFoo.test_bar",
+                child_job_name="child-job",
+                child_build_number=0,
+            )
+
+
+class TestCreateIssueRequest:
+    """Tests for the CreateIssueRequest model."""
+
+    def test_valid_request(self) -> None:
+        """Test creating a valid CreateIssueRequest."""
+        req = CreateIssueRequest(
+            test_name="tests.TestFoo.test_bar",
+            title="Bug: login fails",
+            body="## Details\nLogin returns 500",
+        )
+        assert req.title == "Bug: login fails"
+        assert req.body == "## Details\nLogin returns 500"
+
+    def test_title_required(self) -> None:
+        """Test that empty title is rejected."""
+        with pytest.raises(ValueError):
+            CreateIssueRequest(
+                test_name="tests.TestFoo.test_bar",
+                title="",
+                body="some body",
+            )
+
+    def test_whitespace_only_title_rejected(self) -> None:
+        """Test that whitespace-only title is rejected."""
+        with pytest.raises(ValueError):
+            CreateIssueRequest(
+                test_name="tests.TestFoo.test_bar",
+                title="   ",
+                body="some body",
+            )
+
+
+class TestOverrideClassificationRequest:
+    """Tests for the OverrideClassificationRequest model."""
+
+    def test_valid_code_issue(self) -> None:
+        """Test CODE ISSUE classification."""
+        req = OverrideClassificationRequest(
+            test_name="tests.TestFoo.test_bar",
+            classification="CODE ISSUE",
+        )
+        assert req.classification == "CODE ISSUE"
+
+    def test_valid_product_bug(self) -> None:
+        """Test PRODUCT BUG classification."""
+        req = OverrideClassificationRequest(
+            test_name="tests.TestFoo.test_bar",
+            classification="PRODUCT BUG",
+        )
+        assert req.classification == "PRODUCT BUG"
+
+    def test_invalid_classification(self) -> None:
+        """Test that invalid classification is rejected."""
+        with pytest.raises(ValueError):
+            OverrideClassificationRequest(
+                test_name="tests.TestFoo.test_bar",
+                classification="UNKNOWN",
+            )
+
+
+class TestSimilarIssue:
+    """Tests for the SimilarIssue model."""
+
+    def test_defaults(self) -> None:
+        """Test default values."""
+        issue = SimilarIssue()
+        assert issue.number is None
+        assert issue.key == ""
+        assert issue.title == ""
+        assert issue.url == ""
+        assert issue.status == ""
+
+    def test_github_style(self) -> None:
+        """Test GitHub-style similar issue."""
+        issue = SimilarIssue(
+            number=42,
+            title="Login fails",
+            url="https://github.com/org/repo/issues/42",
+            status="open",
+        )
+        assert issue.number == 42
+        assert issue.title == "Login fails"
+
+    def test_jira_style(self) -> None:
+        """Test Jira-style similar issue."""
+        issue = SimilarIssue(
+            key="PROJ-123",
+            title="DNS timeout",
+            url="https://jira.example.com/browse/PROJ-123",
+            status="Open",
+        )
+        assert issue.key == "PROJ-123"
+
+
+class TestPreviewIssueResponse:
+    """Tests for the PreviewIssueResponse model."""
+
+    def test_creation(self) -> None:
+        """Test creating a PreviewIssueResponse."""
+        resp = PreviewIssueResponse(
+            title="Bug title",
+            body="## Details",
+            similar_issues=[SimilarIssue(number=1, title="Similar")],
+        )
+        assert resp.title == "Bug title"
+        assert len(resp.similar_issues) == 1
+
+    def test_empty_similar_issues(self) -> None:
+        """Test that similar_issues defaults to empty list."""
+        resp = PreviewIssueResponse(title="Bug", body="Details")
+        assert resp.similar_issues == []
+
+
+class TestCreateIssueResponse:
+    """Tests for the CreateIssueResponse model."""
+
+    def test_creation(self) -> None:
+        """Test creating a CreateIssueResponse."""
+        resp = CreateIssueResponse(
+            url="https://github.com/org/repo/issues/99",
+            title="Bug fix",
+            comment_id=42,
+        )
+        assert resp.url == "https://github.com/org/repo/issues/99"
+        assert resp.key == ""
+        assert resp.comment_id == 42
+
+    def test_jira_response(self) -> None:
+        """Test Jira-style CreateIssueResponse."""
+        resp = CreateIssueResponse(
+            url="https://jira.example.com/browse/PROJ-456",
+            key="PROJ-456",
+            title="DNS timeout",
+        )
+        assert resp.key == "PROJ-456"
+        assert resp.comment_id == 0
