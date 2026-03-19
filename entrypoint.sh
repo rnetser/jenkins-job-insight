@@ -15,15 +15,18 @@ fi
 # shell variables) gets the correct bind port at runtime.
 export PORT="${PORT:-8000}"
 
-# If the caller already passed --port (space-separated or =value), don't append a duplicate.
-if [[ " $* " == *" --port "* ]] || [[ " $* " == *" --port="* ]]; then
+# Check if any argument contains "uvicorn" to detect all uvicorn invocations
+has_uvicorn=false
+has_port=false
+for arg in "$@"; do
+    case "$arg" in
+        *uvicorn*) has_uvicorn=true ;;
+        --port|--port=*) has_port=true ;;
+    esac
+done
+
+if [ "$has_uvicorn" = true ] && [ "$has_port" = false ]; then
+    exec "$@" --port "$PORT"
+else
     exec "$@"
 fi
-
-# Only inject --port for the default uvicorn command; pass other
-# commands (e.g. "docker run … bash") through unchanged.
-if [[ "$1" == "uv" && "$2" == "run" && "$4" == "uvicorn" ]]; then
-    exec "$@" --port "$PORT"
-fi
-
-exec "$@"

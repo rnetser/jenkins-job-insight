@@ -79,15 +79,20 @@ def _read_app_port() -> int:
         The validated integer port number.
 
     Raises:
-        SystemExit: If PORT is not a valid integer.
+        SystemExit: If PORT is not a valid integer or is out of range.
     """
     raw_port = os.environ.get("PORT", "8000")
     try:
-        return int(raw_port)
-    except ValueError:
+        port = int(raw_port)
+    except ValueError as exc:
         raise SystemExit(
             f"Invalid PORT environment variable: {raw_port!r}. Must be an integer."
+        ) from exc
+    if not 1 <= port <= 65535:
+        raise SystemExit(
+            f"Invalid PORT environment variable: {raw_port!r}. Must be between 1 and 65535."
         )
+    return port
 
 
 # APP_PORT is the single source of truth for the server port.
@@ -1368,6 +1373,11 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
     parent_job_name = await storage.get_parent_job_name_for_test(
         test_name, job_id=classify_job_id
     )
+    if not parent_job_name and classify_job_id:
+        # Job might not be in failure_history yet (analysis in progress)
+        result = await storage.get_result(classify_job_id)
+        if result and result.get("result"):
+            parent_job_name = result["result"].get("job_name", "")
 
     classification_id = await storage.set_test_classification(
         test_name=test_name,

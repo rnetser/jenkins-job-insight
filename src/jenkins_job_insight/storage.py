@@ -994,7 +994,7 @@ async def get_test_history(
                        classification, child_job_name, child_build_number, analyzed_at
                 FROM failure_history WHERE test_name = ?{job_filter}
                 ORDER BY analyzed_at DESC LIMIT ?""",
-            params + [limit],
+            [*params, limit],
         )
         recent_runs = [dict(row) for row in await cursor.fetchall()]
 
@@ -1714,7 +1714,8 @@ async def delete_job(job_id: str) -> bool:
         await db.execute("DELETE FROM failure_reviews WHERE job_id = ?", (job_id,))
         await db.execute("DELETE FROM failure_history WHERE job_id = ?", (job_id,))
         await db.execute("DELETE FROM test_classifications WHERE job_id = ?", (job_id,))
-        await db.execute("DELETE FROM results WHERE job_id = ?", (job_id,))
+        cursor = await db.execute("DELETE FROM results WHERE job_id = ?", (job_id,))
+        job_existed = cursor.rowcount > 0
         await db.commit()
 
         # Delete cached HTML report
@@ -1722,7 +1723,7 @@ async def delete_job(job_id: str) -> bool:
         if report_path.exists():
             report_path.unlink()
 
-        return True
+        return job_existed
 
 
 async def get_html_report(job_id: str) -> str | None:
