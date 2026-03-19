@@ -1219,6 +1219,17 @@ async function toggleReviewed(label) {{
         if (resp.ok) {{
             label.classList.toggle('checked', reviewed);
             updateReviewBadges();
+            // Update select-all checkbox state
+            var card = label.closest('.bug-card') || label.closest('.failure-card') || label.closest('.child-job-body');
+            if (card) {{
+                var selectAll = card.querySelector('.select-all-toggle input[type="checkbox"]');
+                if (selectAll) {{
+                    var allToggles = card.querySelectorAll('.reviewed-toggle:not(.select-all-toggle) input[type="checkbox"]');
+                    var allChecked = Array.from(allToggles).every(function(cb) {{ return cb.checked; }});
+                    selectAll.checked = allChecked;
+                    selectAll.closest('.reviewed-toggle').classList.toggle('checked', allChecked);
+                }}
+            }}
         }} else {{
             checkbox.checked = !reviewed;
             console.warn('Failed to toggle reviewed: server returned', resp.status);
@@ -1229,23 +1240,23 @@ async function toggleReviewed(label) {{
     }}
 }}
 
-async function toggleAllReviewed(btn) {{
-    var card = btn.closest('.bug-card') || btn.closest('.failure-card') || btn.closest('.child-job-body');
+async function toggleAllReviewed(label) {{
+    var selectAllCb = label.querySelector('input[type="checkbox"]');
+    var card = label.closest('.bug-card') || label.closest('.failure-card') || label.closest('.child-job-body');
     if (!card) return;
-    var toggles = card.querySelectorAll('.reviewed-toggle input[type="checkbox"]');
-    var allChecked = Array.from(toggles).every(function(cb) {{ return cb.checked; }});
-    var newState = !allChecked;
+    var toggles = card.querySelectorAll('.reviewed-toggle:not(.select-all-toggle) input[type="checkbox"]');
+    var newState = selectAllCb.checked;
 
     var promises = [];
     toggles.forEach(function(cb) {{
         if (cb.checked !== newState) {{
             cb.checked = newState;
-            var label = cb.closest('.reviewed-toggle');
-            label.classList.toggle('checked', newState);
+            var lbl = cb.closest('.reviewed-toggle');
+            lbl.classList.toggle('checked', newState);
 
-            var testName = label.dataset.testName;
-            var childJob = label.dataset.childJob || '';
-            var childBuild = parseInt(label.dataset.childBuild || '0');
+            var testName = lbl.dataset.testName;
+            var childJob = lbl.dataset.childJob || '';
+            var childBuild = parseInt(lbl.dataset.childBuild || '0');
 
             promises.push(
                 fetch(BASE_PATH + '/results/' + JOB_ID + '/reviewed', {{
@@ -1263,9 +1274,7 @@ async function toggleAllReviewed(btn) {{
     }});
 
     await Promise.all(promises);
-
-    btn.textContent = newState ? 'Deselect All' : 'Select All';
-
+    label.classList.toggle('checked', newState);
     if (typeof updateReviewBadges === 'function') updateReviewBadges();
 }}
 
@@ -1502,7 +1511,7 @@ async function loadClassifications() {{
 }}
 
 document.addEventListener('DOMContentLoaded', async function() {{
-    document.querySelectorAll('.reviewed-toggle input[type="checkbox"]').forEach(cb => {{
+    document.querySelectorAll('.reviewed-toggle:not(.select-all-toggle) input[type="checkbox"]').forEach(cb => {{
         cb.addEventListener('change', function(event) {{
             event.stopPropagation();
             toggleReviewed(this.closest('.reviewed-toggle'));
@@ -1775,8 +1784,10 @@ def _render_group_card(
     # Affected Tests
     parts.append(f"""{indent}    <div class="bug-tests">
 {indent}      <h4>Affected Tests ({test_count})</h4>
-{indent}      <button class="select-all-reviewed" onclick="toggleAllReviewed(this)" style="font-size:11px;padding:3px 10px;border-radius:6px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;margin-bottom:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor='var(--accent-blue)'" onmouseout="this.style.borderColor='var(--border)'">Select All</button>
-{indent}      <ul>
+{indent}      <label class="reviewed-toggle select-all-toggle" onclick="event.stopPropagation(); toggleAllReviewed(this)" style="margin-bottom:8px;font-weight:700;">
+{indent}        <input type="checkbox"> Select All
+{indent}      </label>
+{indent}      <ul style="padding-left:24px;">
 """)
     for f in failures:
         parts.append(
@@ -1914,7 +1925,9 @@ def _render_child_jobs(
 
         if child_groups:
             parts.append(
-                '    <button class="select-all-reviewed" onclick="toggleAllReviewed(this)" style="font-size:11px;padding:3px 10px;border-radius:6px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;margin-bottom:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor=\'var(--accent-blue)\'" onmouseout="this.style.borderColor=\'var(--border)\'">Select All</button>\n'
+                '    <label class="reviewed-toggle select-all-toggle" onclick="event.stopPropagation(); toggleAllReviewed(this)" style="margin-bottom:8px;font-weight:700;">\n'
+                '      <input type="checkbox"> Select All\n'
+                "    </label>\n"
             )
             for group in child_groups:
                 _render_group_card(
