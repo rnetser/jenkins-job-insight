@@ -535,3 +535,20 @@ class TestCreateIssueResponse:
         )
         assert resp.key == "PROJ-456"
         assert resp.comment_id == 0
+
+    def test_number_field_exists(self) -> None:
+        """Finding 3: CreateIssueResponse should have a number field."""
+        resp = CreateIssueResponse(
+            url="https://github.com/org/repo/issues/99",
+            title="Bug fix",
+            number=99,
+        )
+        assert resp.number == 99
+
+    def test_number_field_defaults_to_zero(self) -> None:
+        """Finding 3: number field should default to 0."""
+        resp = CreateIssueResponse(
+            url="https://github.com/org/repo/issues/99",
+            title="Bug fix",
+        )
+        assert resp.number == 0

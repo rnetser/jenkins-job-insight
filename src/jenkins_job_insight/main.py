@@ -7,6 +7,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from xml.etree.ElementTree import ParseError
 
+import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -1405,12 +1406,23 @@ async def create_github_issue_endpoint(
             detail="TESTS_REPO_URL and GITHUB_TOKEN must be configured to create GitHub issues",
         )
 
-    result = await create_github_issue(
-        title=body.title,
-        body=body.body,
-        repo_url=tests_repo_url,
-        github_token=github_token,
-    )
+    try:
+        result = await create_github_issue(
+            title=body.title,
+            body=body.body,
+            repo_url=tests_repo_url,
+            github_token=github_token,
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"GitHub API error: {exc.response.status_code}",
+        )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"GitHub API unreachable: {exc}",
+        )
 
     # Auto-add comment with issue link
     username = request.cookies.get("jji_username", "")
@@ -1431,6 +1443,7 @@ async def create_github_issue_endpoint(
 
     return {
         "url": result["url"],
+        "number": result.get("number", 0),
         "key": "",
         "title": body.title,
         "comment_id": comment_id,
@@ -1456,11 +1469,22 @@ async def create_jira_bug_endpoint(
             detail="Jira must be configured to create Jira bugs",
         )
 
-    result = await create_jira_bug(
-        title=body.title,
-        body=body.body,
-        settings=settings,
-    )
+    try:
+        result = await create_jira_bug(
+            title=body.title,
+            body=body.body,
+            settings=settings,
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Jira API error: {exc.response.status_code}",
+        )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Jira API unreachable: {exc}",
+        )
 
     # Auto-add comment with issue link
     username = request.cookies.get("jji_username", "")
@@ -1502,6 +1526,12 @@ async def override_classification_endpoint(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
     username = request.cookies.get("jji_username", "")
+
+    # Look up parent_job_name for the test_classifications entry
+    parent_job_name = await storage.get_parent_job_name_for_test(
+        body.test_name, job_id=job_id
+    )
+
     await storage.override_classification(
         job_id=job_id,
         test_name=body.test_name,
@@ -1509,6 +1539,7 @@ async def override_classification_endpoint(
         child_job_name=body.child_job_name,
         child_build_number=body.child_build_number,
         username=username,
+        parent_job_name=parent_job_name,
     )
     await _invalidate_cached_html(job_id)
     return {"status": "ok", "classification": body.classification}

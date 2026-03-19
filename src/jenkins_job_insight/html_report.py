@@ -298,21 +298,30 @@ def _modal_js() -> str:
         A JavaScript string (without ``<script>`` tags) ready to embed directly.
     """
     return """\
-function showConfirmModal(title, message, onConfirm) {
+function showConfirmModal(title, message, onConfirm, opts) {
+    opts = opts || {};
+    var confirmLabel = opts.confirmLabel || 'Delete';
+    var cancelLabel = opts.cancelLabel || 'Cancel';
+    var confirmOnly = opts.confirmOnly || false;
+
     var overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = '<div class="modal-dialog">' +
         '<h3 id="modal-title"></h3>' +
         '<p id="modal-message"></p>' +
         '<div class="modal-actions">' +
-        '<button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>' +
-        '<button class="modal-btn modal-btn-danger" id="modal-confirm">Delete</button>' +
+        (confirmOnly ? '' : '<button class="modal-btn modal-btn-cancel" id="modal-cancel"></button>') +
+        '<button class="modal-btn modal-btn-danger" id="modal-confirm"></button>' +
         '</div></div>';
     document.body.appendChild(overlay);
     overlay.querySelector('#modal-title').textContent = title;
     overlay.querySelector('#modal-message').textContent = message;
+    overlay.querySelector('#modal-confirm').textContent = confirmLabel;
 
-    overlay.querySelector('#modal-cancel').onclick = function() { overlay.remove(); };
+    if (!confirmOnly) {
+        overlay.querySelector('#modal-cancel').textContent = cancelLabel;
+        overlay.querySelector('#modal-cancel').onclick = function() { overlay.remove(); };
+    }
     overlay.querySelector('#modal-confirm').onclick = function() { overlay.remove(); onConfirm(); };
     overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
 }"""
@@ -1725,13 +1734,13 @@ async function submitIssue(type, title, body, testName, childJob, childBuild, ov
         var data = await resp.json();
         overlay.remove();
         var label = data.key || ('#' + (data.number || 'Issue'));
-        showConfirmModal('Issue Created', label + ' created: ' + (data.url || ''), function() {{}});
+        showConfirmModal('Issue Created', label + ' created: ' + (data.url || ''), function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
         // Reload comments to show the auto-added link
         await loadCommentsAndReviews();
         updateCommentBadges();
     }} catch (err) {{
         overlay.remove();
-        showConfirmModal('Error', 'Failed to create: ' + err.message, function() {{}});
+        showConfirmModal('Error', 'Failed to create: ' + err.message, function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
     }}
 }}
 
@@ -1752,7 +1761,7 @@ async function previewGithubIssue(btn) {{
         var data = await resp.json();
         showIssuePreviewModal('github', data, testName, childJob, childBuild);
     }} catch (err) {{
-        showConfirmModal('Error', 'Failed to generate issue preview: ' + err.message, function() {{}});
+        showConfirmModal('Error', 'Failed to generate issue preview: ' + err.message, function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
     }} finally {{
         btn.innerHTML = origHTML;
         btn.disabled = false;
@@ -1776,7 +1785,7 @@ async function previewJiraBug(btn) {{
         var data = await resp.json();
         showIssuePreviewModal('jira', data, testName, childJob, childBuild);
     }} catch (err) {{
-        showConfirmModal('Error', 'Failed to generate bug preview: ' + err.message, function() {{}});
+        showConfirmModal('Error', 'Failed to generate bug preview: ' + err.message, function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
     }} finally {{
         btn.innerHTML = origHTML;
         btn.disabled = false;
@@ -1801,7 +1810,13 @@ function overrideClassification(btn, testName, childJob, childBuild) {{
             currentTag.textContent = newClassification;
             currentTag.className = 'classification-tag ' + (newClassification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
             showCorrectBugButton(card, newClassification);
+        }} else {{
+            r.json().catch(function() {{ return {{}}; }}).then(function(d) {{
+                showConfirmModal('Override Failed', d.detail || 'HTTP ' + r.status, function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
+            }});
         }}
+    }}).catch(function(err) {{
+        showConfirmModal('Override Failed', 'Network error: ' + err.message, function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
     }});
 }}
 
@@ -2041,6 +2056,11 @@ def _render_group_card(
     else:
         card_title = failures[0].error or failures[0].test_name
 
+    # DESIGN DECISION: Bug creation buttons, override button, and comments all use
+    # failures[0] (the representative test).  This is correct because a bug card
+    # represents ONE root cause — all tests in the group share the same analysis
+    # and classification.  The override updates ALL tests with the same
+    # error_signature on the backend (see storage.override_classification).
     group_test_names = e(json.dumps([f.test_name for f in failures]))
     parts.append(f"""{indent}<details class="bug-card">
 {indent}  <summary class="bug-summary" data-test-names="{group_test_names}" data-child-job="{e(child_job_name)}">
@@ -3043,11 +3063,11 @@ function deleteJob(btn, jobId) {
                 }, 300);
             } else {
                 var errData = await resp.json().catch(function() { return {}; });
-                showConfirmModal('Delete Failed', errData.detail || 'Failed to delete analysis. HTTP ' + resp.status, function() {});
+                showConfirmModal('Delete Failed', errData.detail || 'Failed to delete analysis. HTTP ' + resp.status, function() {}, {confirmLabel: 'OK', confirmOnly: true});
             }
         } catch (err) {
             console.warn('Failed to delete job:', err);
-            showConfirmModal('Delete Failed', 'Failed to delete analysis. Please try again.', function() {});
+            showConfirmModal('Delete Failed', 'Failed to delete analysis. Please try again.', function() {}, {confirmLabel: 'OK', confirmOnly: true});
         }
     });
 }

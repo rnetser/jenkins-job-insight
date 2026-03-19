@@ -368,6 +368,22 @@ class TestParseGithubRepoUrl:
         assert owner == "myorg"
         assert repo == "myrepo"
 
+    def test_url_with_dots_in_repo_name(self):
+        """Finding 5: Repo names with dots should be parsed correctly."""
+        from jenkins_job_insight.bug_creation import _parse_github_repo_url
+
+        owner, repo = _parse_github_repo_url("https://github.com/org/my.repo")
+        assert owner == "org"
+        assert repo == "my.repo"
+
+    def test_url_with_dots_and_git_suffix(self):
+        """Finding 5: Repo names with dots AND .git suffix."""
+        from jenkins_job_insight.bug_creation import _parse_github_repo_url
+
+        owner, repo = _parse_github_repo_url("https://github.com/org/my.repo.git")
+        assert owner == "org"
+        assert repo == "my.repo"
+
     def test_invalid_url(self):
         from jenkins_job_insight.bug_creation import _parse_github_repo_url
 

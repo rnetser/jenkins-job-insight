@@ -456,6 +456,7 @@ class CreateIssueResponse(BaseModel):
 
     url: str = Field(description="URL to the created issue")
     key: str = Field(default="", description="Issue key (e.g., PROJ-123 for Jira)")
+    number: int = Field(default=0, description="Issue number (GitHub)")
     title: str = Field(description="Issue title as created")
     comment_id: int = Field(
         default=0,

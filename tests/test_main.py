@@ -2267,6 +2267,188 @@ class TestBugCreationIntegration:
             assert resp.json()["classification"] == "CODE ISSUE"
 
 
+class TestCreateGithubIssueApiErrors:
+    """Finding 4: create-github-issue should catch external API errors and return 502."""
+
+    @pytest.mark.asyncio
+    async def test_github_api_http_error_returns_502(self, test_client):
+        """HTTPStatusError from GitHub API should surface as 502."""
+        import httpx
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-gh-err", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.create_github_issue") as mock_create:
+            mock_create.side_effect = httpx.HTTPStatusError(
+                "Forbidden",
+                request=httpx.Request("POST", "https://api.github.com"),
+                response=httpx.Response(403),
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "TESTS_REPO_URL": "https://github.com/org/repo",
+                    "GITHUB_TOKEN": "ghp_test",
+                },
+            ):
+                from jenkins_job_insight.config import get_settings
+
+                get_settings.cache_clear()
+                response = test_client.post(
+                    "/results/job-gh-err/create-github-issue",
+                    json={
+                        "test_name": "test_foo",
+                        "title": "Bug",
+                        "body": "Details",
+                    },
+                )
+                get_settings.cache_clear()
+        assert response.status_code == 502
+        assert "GitHub API error" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_github_api_request_error_returns_502(self, test_client):
+        """RequestError (network unreachable) from GitHub should surface as 502."""
+        import httpx
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-gh-net-err", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.create_github_issue") as mock_create:
+            mock_create.side_effect = httpx.RequestError(
+                "Connection refused",
+                request=httpx.Request("POST", "https://api.github.com"),
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "TESTS_REPO_URL": "https://github.com/org/repo",
+                    "GITHUB_TOKEN": "ghp_test",
+                },
+            ):
+                from jenkins_job_insight.config import get_settings
+
+                get_settings.cache_clear()
+                response = test_client.post(
+                    "/results/job-gh-net-err/create-github-issue",
+                    json={
+                        "test_name": "test_foo",
+                        "title": "Bug",
+                        "body": "Details",
+                    },
+                )
+                get_settings.cache_clear()
+        assert response.status_code == 502
+        assert "GitHub API unreachable" in response.json()["detail"]
+
+
+class TestCreateJiraBugApiErrors:
+    """Finding 4: create-jira-bug should catch external API errors and return 502."""
+
+    @pytest.mark.asyncio
+    async def test_jira_api_http_error_returns_502(self, test_client):
+        """HTTPStatusError from Jira API should surface as 502."""
+        import httpx
+        from unittest.mock import PropertyMock
+        from jenkins_job_insight.config import Settings
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "PRODUCT BUG"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-jira-err", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.create_jira_bug") as mock_create:
+            mock_create.side_effect = httpx.HTTPStatusError(
+                "Forbidden",
+                request=httpx.Request("POST", "https://jira.example.com"),
+                response=httpx.Response(403),
+            )
+            with patch.object(
+                Settings, "jira_enabled", new_callable=PropertyMock, return_value=True
+            ):
+                response = test_client.post(
+                    "/results/job-jira-err/create-jira-bug",
+                    json={
+                        "test_name": "test_foo",
+                        "title": "Bug",
+                        "body": "Details",
+                    },
+                )
+        assert response.status_code == 502
+        assert "Jira API error" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_jira_api_request_error_returns_502(self, test_client):
+        """RequestError (network unreachable) from Jira should surface as 502."""
+        import httpx
+        from unittest.mock import PropertyMock
+        from jenkins_job_insight.config import Settings
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "PRODUCT BUG"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-jira-net-err", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.create_jira_bug") as mock_create:
+            mock_create.side_effect = httpx.RequestError(
+                "Connection refused",
+                request=httpx.Request("POST", "https://jira.example.com"),
+            )
+            with patch.object(
+                Settings, "jira_enabled", new_callable=PropertyMock, return_value=True
+            ):
+                response = test_client.post(
+                    "/results/job-jira-net-err/create-jira-bug",
+                    json={
+                        "test_name": "test_foo",
+                        "title": "Bug",
+                        "body": "Details",
+                    },
+                )
+        assert response.status_code == 502
+        assert "Jira API unreachable" in response.json()["detail"]
+
+
 class TestHistoryEndpoints:
     """Tests for the /history/* endpoints."""
 

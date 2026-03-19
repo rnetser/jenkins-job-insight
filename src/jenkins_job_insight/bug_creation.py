@@ -340,7 +340,7 @@ def _parse_github_repo_url(repo_url: str) -> tuple[str, str]:
 
     Raises ValueError if the URL cannot be parsed.
     """
-    match = re.match(r"https?://github\.com/([^/]+)/([^/.]+)", repo_url)
+    match = re.match(r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", repo_url)
     if not match:
         raise ValueError(f"Cannot parse GitHub repo URL: {repo_url}")
     return match.group(1), match.group(2)

@@ -1856,41 +1856,104 @@ async def override_classification(
     child_job_name: str = "",
     child_build_number: int = 0,
     username: str = "",
+    parent_job_name: str = "",
 ) -> None:
     """Override the classification of a failure in failure_history.
 
-    Updates the classification column in the failure_history table.
-    This allows users to correct AI misclassifications (e.g.,
-    changing CODE ISSUE to PRODUCT BUG or vice versa).
+    Updates ALL failure_history rows sharing the same error_signature
+    (within the same job) so that grouped failures stay in sync.
+    Also inserts a test_classifications entry so the AI can learn from
+    human overrides.
 
     Args:
         job_id: The analysis job ID.
-        test_name: Fully qualified test name.
+        test_name: Fully qualified test name (representative test from the group).
         classification: New classification ("CODE ISSUE" or "PRODUCT BUG").
         child_job_name: Child job name (for pipeline analyses).
         child_build_number: Child build number.
         username: User who made the override.
+        parent_job_name: Parent pipeline job name (for test_classifications).
     """
     logger.debug(
         f"override_classification: job_id={job_id}, test_name={test_name}, "
         f"classification={classification}, username={username}"
     )
     async with aiosqlite.connect(DB_PATH) as db:
-        if child_job_name:
-            await db.execute(
-                """UPDATE failure_history
-                   SET classification = ?
-                   WHERE job_id = ? AND test_name = ?
-                   AND child_job_name = ? AND child_build_number = ?""",
-                (classification, job_id, test_name, child_job_name, child_build_number),
-            )
+        # Look up the error_signature for this test so we can update
+        # ALL tests in the same group (same signature, same job).
+        cursor = await db.execute(
+            "SELECT error_signature FROM failure_history "
+            "WHERE job_id = ? AND test_name = ? LIMIT 1",
+            (job_id, test_name),
+        )
+        row = await cursor.fetchone()
+        error_signature = row[0] if row and row[0] else ""
+
+        if error_signature:
+            # Update ALL tests sharing the same error_signature in this job
+            if child_job_name:
+                await db.execute(
+                    """UPDATE failure_history
+                       SET classification = ?
+                       WHERE job_id = ? AND error_signature = ?
+                       AND child_job_name = ? AND child_build_number = ?""",
+                    (
+                        classification,
+                        job_id,
+                        error_signature,
+                        child_job_name,
+                        child_build_number,
+                    ),
+                )
+            else:
+                await db.execute(
+                    """UPDATE failure_history
+                       SET classification = ?
+                       WHERE job_id = ? AND error_signature = ?""",
+                    (classification, job_id, error_signature),
+                )
         else:
-            await db.execute(
-                """UPDATE failure_history
-                   SET classification = ?
-                   WHERE job_id = ? AND test_name = ?""",
-                (classification, job_id, test_name),
-            )
+            # No signature — fall back to exact test_name match
+            if child_job_name:
+                await db.execute(
+                    """UPDATE failure_history
+                       SET classification = ?
+                       WHERE job_id = ? AND test_name = ?
+                       AND child_job_name = ? AND child_build_number = ?""",
+                    (
+                        classification,
+                        job_id,
+                        test_name,
+                        child_job_name,
+                        child_build_number,
+                    ),
+                )
+            else:
+                await db.execute(
+                    """UPDATE failure_history
+                       SET classification = ?
+                       WHERE job_id = ? AND test_name = ?""",
+                    (classification, job_id, test_name),
+                )
+
+        # Also store in test_classifications so the AI learns from overrides
+        await db.execute(
+            "INSERT INTO test_classifications "
+            "(test_name, job_name, parent_job_name, job_id, classification, "
+            "reason, created_by, visible, child_build_number) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
+            (
+                test_name,
+                child_job_name,
+                parent_job_name,
+                job_id,
+                classification,
+                "User override",
+                username,
+                child_build_number,
+            ),
+        )
+
         await db.commit()
     logger.info(
         f"Classification overridden: job_id={job_id}, test_name={test_name}, "

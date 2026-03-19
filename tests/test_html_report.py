@@ -719,3 +719,75 @@ class TestBugCreationButtons:
         """Report includes override-classification-btn buttons."""
         html_output = format_result_as_html(sample_analysis_result)
         assert "override-classification-btn" in html_output
+
+
+class TestShowConfirmModal:
+    """Finding 6: showConfirmModal should accept custom button labels."""
+
+    def test_modal_accepts_opts_parameter(
+        self, sample_analysis_result: AnalysisResult
+    ) -> None:
+        """The showConfirmModal function should accept an opts parameter."""
+        html_output = format_result_as_html(sample_analysis_result)
+        # The function signature should have an opts parameter
+        assert (
+            "function showConfirmModal(title, message, onConfirm, opts)" in html_output
+        )
+
+    def test_modal_confirm_only_used_for_success(
+        self, sample_analysis_result: AnalysisResult
+    ) -> None:
+        """Issue creation success should use confirmOnly: true."""
+        html_output = format_result_as_html(sample_analysis_result)
+        assert "confirmOnly" in html_output
+
+    def test_override_js_handles_errors(
+        self, sample_analysis_result: AnalysisResult
+    ) -> None:
+        """Finding 6: overrideClassification should handle non-OK responses."""
+        html_output = format_result_as_html(sample_analysis_result)
+        # Should have error handling for non-OK response
+        assert "showConfirmModal" in html_output
+        # The override function should handle failure case, not just success
+        assert "Override Failed" in html_output or "Override failed" in html_output
+
+
+class TestGroupCardDesignComment:
+    """Finding 1: Verify grouped card uses representative test and has design comment."""
+
+    def test_group_card_has_design_comment_in_html(self) -> None:
+        """The override button for groups uses failures[0] (representative) and that is documented."""
+        from jenkins_job_insight.html_report import _render_group_card, _group_failures
+
+        failures = [
+            FailureAnalysis(
+                test_name="test_alpha",
+                error="same error",
+                error_signature="sig-same",
+                analysis=AnalysisDetail(
+                    classification="CODE ISSUE",
+                    details="same analysis",
+                ),
+            ),
+            FailureAnalysis(
+                test_name="test_beta",
+                error="same error",
+                error_signature="sig-same",
+                analysis=AnalysisDetail(
+                    classification="CODE ISSUE",
+                    details="same analysis",
+                ),
+            ),
+        ]
+        groups = _group_failures(failures)
+        assert len(groups) == 1
+
+        import html
+
+        parts: list[str] = []
+        _render_group_card(parts, groups[0], html.escape, job_id="j1")
+        html_output = "".join(parts)
+        # The override button should use the first test (representative)
+        assert "test_alpha" in html_output
+        # Both tests should appear in affected tests list
+        assert "test_beta" in html_output

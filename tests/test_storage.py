@@ -390,3 +390,104 @@ class TestOverrideClassification:
                 test_name="tests.TestX.test_missing",
                 classification="CODE ISSUE",
             )
+
+    async def test_override_updates_all_tests_with_same_error_signature(
+        self, setup_test_db: Path
+    ) -> None:
+        """Finding 1: Override should update ALL tests sharing the same error_signature in the same job."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            # Insert multiple failure_history rows with the same error_signature
+            async with aiosqlite.connect(setup_test_db) as db:
+                for test_name in [
+                    "tests.TestA.test_one",
+                    "tests.TestA.test_two",
+                    "tests.TestA.test_three",
+                ]:
+                    await db.execute(
+                        """INSERT INTO failure_history
+                           (job_id, job_name, build_number, test_name, classification,
+                            error_message, error_signature, analyzed_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                        (
+                            "job-group",
+                            "my-job",
+                            1,
+                            test_name,
+                            "CODE ISSUE",
+                            "same error",
+                            "sig-shared-abc",
+                        ),
+                    )
+                await db.commit()
+
+            # Override using just the first test (representative test)
+            await storage.override_classification(
+                job_id="job-group",
+                test_name="tests.TestA.test_one",
+                classification="PRODUCT BUG",
+                username="tester",
+            )
+
+            # ALL tests with the same error_signature should be updated
+            async with aiosqlite.connect(setup_test_db) as db:
+                cursor = await db.execute(
+                    "SELECT test_name, classification FROM failure_history "
+                    "WHERE job_id='job-group' ORDER BY test_name",
+                )
+                rows = await cursor.fetchall()
+                assert len(rows) == 3
+                for row in rows:
+                    assert row[1] == "PRODUCT BUG", (
+                        f"Test {row[0]} should be PRODUCT BUG but got {row[1]}"
+                    )
+
+    async def test_override_creates_test_classification_entry(
+        self, setup_test_db: Path
+    ) -> None:
+        """Finding 2: Override should also insert into test_classifications for AI learning."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            # Insert a failure_history row
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    """INSERT INTO failure_history
+                       (job_id, job_name, build_number, test_name, classification,
+                        error_message, child_job_name, child_build_number, analyzed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    (
+                        "job-tc",
+                        "parent-pipeline",
+                        10,
+                        "tests.TestC.test_classify",
+                        "CODE ISSUE",
+                        "some error",
+                        "child-job-1",
+                        5,
+                    ),
+                )
+                await db.commit()
+
+            await storage.override_classification(
+                job_id="job-tc",
+                test_name="tests.TestC.test_classify",
+                classification="PRODUCT BUG",
+                child_job_name="child-job-1",
+                child_build_number=5,
+                username="reviewer",
+            )
+
+            # Verify test_classifications entry was created
+            async with aiosqlite.connect(setup_test_db) as db:
+                cursor = await db.execute(
+                    "SELECT test_name, classification, created_by, visible, "
+                    "job_id, child_build_number "
+                    "FROM test_classifications WHERE test_name=?",
+                    ("tests.TestC.test_classify",),
+                )
+                row = await cursor.fetchone()
+                assert row is not None, "test_classifications entry should exist"
+                assert row[0] == "tests.TestC.test_classify"
+                assert row[1] == "PRODUCT BUG"
+                assert row[2] == "reviewer"
+                assert row[3] == 1  # visible
+                assert row[4] == "job-tc"
+                assert row[5] == 5
