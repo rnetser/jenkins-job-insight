@@ -592,7 +592,6 @@ def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str
 .severity-tag-inline.high {{ background: rgba(240,136,62,0.15); color: var(--accent-orange); }}
 .severity-tag-inline.medium {{ background: rgba(210,153,34,0.15); color: var(--accent-yellow); }}
 .severity-tag-inline.low {{ background: rgba(63,185,80,0.15); color: var(--accent-green); }}
-.severity-tag-inline.unknown {{ background: var(--bg-tertiary); color: var(--text-muted); }}
 /* Jira matches */
 .jira-matches {{ margin-top: 12px; }}
 .jira-match-link {{
@@ -891,20 +890,30 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 .jira-bug-btn:hover:not(:disabled) {{
     background: rgba(88,166,255,0.25);
 }}
-/* Classification override */
-.override-classification-btn {{
-    font-size: 10px;
-    padding: 1px 6px;
+/* Classification override dropdown */
+.classification-select {{
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 20px 2px 8px;
     border-radius: 4px;
-    background: none;
-    border: 1px solid var(--border);
-    color: var(--text-muted);
+    text-transform: uppercase;
+    border: none;
     cursor: pointer;
-    transition: border-color 0.15s;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22currentColor%22 stroke-width=%222%22><path d=%22M6 9l6 6 6-6%22/></svg>');
+    background-repeat: no-repeat;
+    background-position: right 4px center;
+    background-size: 10px;
 }}
-.override-classification-btn:hover {{
-    border-color: var(--accent-blue);
+.classification-select.code-issue {{
+    background-color: var(--accent-blue-bg);
     color: var(--accent-blue);
+}}
+.classification-select.product-bug {{
+    background-color: var(--accent-orange-bg);
+    color: var(--accent-orange);
 }}
 /* Preview modal extensions */
 .preview-modal .modal-dialog {{
@@ -1532,12 +1541,20 @@ async function loadClassifications() {{
                 if (cls.classification === 'CODE ISSUE' || cls.classification === 'PRODUCT BUG') {{
                     var card = toggle.closest('.bug-card') || toggle.closest('.failure-card');
                     if (card) {{
-                        var primaryTag = card.querySelector('.classification-tag.product-bug, .classification-tag.code-issue, .classification-tag.unknown');
-                        if (primaryTag) {{
-                            primaryTag.textContent = cls.classification;
-                            primaryTag.className = 'classification-tag ' +
+                        var select = card.querySelector('.classification-select');
+                        if (select) {{
+                            select.value = cls.classification;
+                            select.className = 'classification-select ' +
                                 (cls.classification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
                             showCorrectBugButton(card, cls.classification);
+                        }} else {{
+                            var primaryTag = card.querySelector('.classification-tag.product-bug, .classification-tag.code-issue, .classification-tag.unknown');
+                            if (primaryTag) {{
+                                primaryTag.textContent = cls.classification;
+                                primaryTag.className = 'classification-tag ' +
+                                    (cls.classification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
+                                showCorrectBugButton(card, cls.classification);
+                            }}
                         }}
                     }}
                 }}
@@ -1797,11 +1814,11 @@ async function previewIssue(btn, type) {{
     }}
 }}
 
-function overrideClassification(btn, testName, childJob, childBuild) {{
-    var card = btn.closest('.bug-card') || btn.closest('.failure-card');
-    var currentTag = card.querySelector('.classification-tag');
-    var current = currentTag ? currentTag.textContent.trim() : '';
-    var newClassification = current === 'PRODUCT BUG' ? 'CODE ISSUE' : 'PRODUCT BUG';
+function overrideClassification(select) {{
+    var newClassification = select.value;
+    var testName = select.dataset.testName;
+    var childJob = select.dataset.childJob || '';
+    var childBuild = parseInt(select.dataset.childBuild || '0');
 
     fetch(BASE_PATH + '/results/' + JOB_ID + '/override-classification', {{
         method: 'PUT',
@@ -1812,16 +1829,19 @@ function overrideClassification(btn, testName, childJob, childBuild) {{
         }}),
     }}).then(function(r) {{
         if (r.ok) {{
-            currentTag.textContent = newClassification;
-            currentTag.className = 'classification-tag ' + (newClassification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
-            showCorrectBugButton(card, newClassification);
+            select.className = 'classification-select ' +
+                (newClassification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
+            var card = select.closest('.bug-card') || select.closest('.failure-card');
+            if (card) showCorrectBugButton(card, newClassification);
         }} else {{
-            r.json().catch(function() {{ return {{}}; }}).then(function(d) {{
-                showConfirmModal('Override Failed', d.detail || 'HTTP ' + r.status, function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
+            r.json().then(function(data) {{
+                showConfirmModal('Error', data.detail || 'Failed to override', function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
+            }}).catch(function() {{
+                showConfirmModal('Error', 'Failed to override classification', function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
             }});
         }}
     }}).catch(function(err) {{
-        showConfirmModal('Override Failed', 'Network error: ' + err.message, function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
+        showConfirmModal('Error', 'Network error: ' + err.message, function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
     }});
 }}
 
@@ -1834,6 +1854,11 @@ function showCorrectBugButton(card, classification) {{
 
 function initBugCreationButtons() {{
     document.querySelectorAll('.bug-card, .failure-card').forEach(function(card) {{
+        var select = card.querySelector('.classification-select');
+        if (select) {{
+            showCorrectBugButton(card, select.value);
+            return;
+        }}
         var tag = card.querySelector('.classification-tag');
         if (!tag) return;
         var cls = tag.textContent.trim();
@@ -2072,9 +2097,11 @@ def _render_group_card(
 {indent}    <span class="bug-id">{e(bug_id)}</span>
 {indent}    <span class="bug-title">{e(card_title)}</span>
 {indent}    <span class="bug-count">{e(test_label)}</span>
-{indent}    <span class="classification-tag {e(cls_class)}">{e(cls)}</span>
-{indent}    <button class="override-classification-btn" onclick="event.stopPropagation(); overrideClassification(this, '{e(failures[0].test_name)}', '{e(child_job_name)}', {child_build_number})" title="Change classification">&#x21c4;</button>
-{indent}    <span class="severity-tag-inline {e(severity)}">{e(severity.upper())}</span>
+{indent}    <select class="classification-select {e(cls_class)}" data-test-name="{e(failures[0].test_name)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="event.stopPropagation()" onchange="overrideClassification(this)">
+{indent}      <option value="CODE ISSUE" {"selected" if cls == "CODE ISSUE" else ""}>CODE ISSUE</option>
+{indent}      <option value="PRODUCT BUG" {"selected" if cls == "PRODUCT BUG" else ""}>PRODUCT BUG</option>
+{indent}    </select>
+{indent}    {'<span class="severity-tag-inline ' + e(severity) + '">' + e(severity.upper()) + "</span>" if severity and severity.upper() != "UNKNOWN" else ""}
 {indent}    <span class="group-review-status status-chip" style="display:none"></span>
 {indent}  </summary>
 {indent}  <div class="bug-body">
