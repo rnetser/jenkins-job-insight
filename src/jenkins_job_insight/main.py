@@ -1296,8 +1296,13 @@ async def preview_github_issue(
     ai_provider = AI_PROVIDER
     ai_model = AI_MODEL
     base_url = _extract_base_url(request)
-    report_url = f"{base_url}/results/{job_id}.html"
     jenkins_url = result_data.get("jenkins_url", "")
+
+    if body.include_links:
+        report_url = f"{base_url}/results/{job_id}.html"
+    else:
+        report_url = f"results/{job_id}.html"
+        jenkins_url = jenkins_url or ""
 
     content = await generate_github_issue_content(
         failure=failure,
@@ -1305,6 +1310,7 @@ async def preview_github_issue(
         ai_provider=ai_provider,
         ai_model=ai_model,
         jenkins_url=jenkins_url,
+        include_links=body.include_links,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
@@ -1364,8 +1370,13 @@ async def preview_jira_bug(
     ai_provider = AI_PROVIDER
     ai_model = AI_MODEL
     base_url = _extract_base_url(request)
-    report_url = f"{base_url}/results/{job_id}.html"
     jenkins_url = result_data.get("jenkins_url", "")
+
+    if body.include_links:
+        report_url = f"{base_url}/results/{job_id}.html"
+    else:
+        report_url = f"results/{job_id}.html"
+        jenkins_url = jenkins_url or ""
 
     content = await generate_jira_bug_content(
         failure=failure,
@@ -1373,6 +1384,7 @@ async def preview_jira_bug(
         ai_provider=ai_provider,
         ai_model=ai_model,
         jenkins_url=jenkins_url,
+        include_links=body.include_links,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)

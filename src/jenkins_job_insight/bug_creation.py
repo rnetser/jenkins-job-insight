@@ -64,7 +64,7 @@ def _build_failure_context(failure: FailureAnalysis) -> dict:
 
 
 def _build_fallback_github_content(
-    ctx: dict, jenkins_url: str, report_url: str
+    ctx: dict, jenkins_url: str, report_url: str, include_links: bool = False
 ) -> dict:
     """Build GitHub issue content from structured data when AI fails."""
     test_short = (
@@ -101,15 +101,23 @@ def _build_fallback_github_content(
                 f"**Change:** {ctx['code_fix']['change']}",
             ]
         )
-    if jenkins_url:
-        body_parts.append(f"\n## Links\n- [Jenkins Build]({jenkins_url})")
-    if report_url:
-        body_parts.append(f"- [Analysis Report]({report_url})")
+    if include_links:
+        if jenkins_url:
+            body_parts.append(f"\n## Links\n- [Jenkins Build]({jenkins_url})")
+        if report_url:
+            body_parts.append(f"- [Analysis Report]({report_url})")
+    else:
+        if jenkins_url:
+            body_parts.append(f"\n## References\n- Jenkins Build: {jenkins_url}")
+        if report_url:
+            body_parts.append(f"- Report: {report_url}")
 
     return {"title": title, "body": "\n".join(body_parts)}
 
 
-def _build_fallback_jira_content(ctx: dict, jenkins_url: str, report_url: str) -> dict:
+def _build_fallback_jira_content(
+    ctx: dict, jenkins_url: str, report_url: str, include_links: bool = False
+) -> dict:
     """Build Jira bug content from structured data when AI fails."""
     test_short = (
         ctx["test_name"].rsplit(".", 1)[-1]
@@ -153,10 +161,16 @@ def _build_fallback_jira_content(ctx: dict, jenkins_url: str, report_url: str) -
 
     if ctx.get("artifacts_evidence"):
         body_parts.extend(["", "h2. Artifacts Evidence", ctx["artifacts_evidence"]])
-    if jenkins_url:
-        body_parts.append(f"\nh2. Links\n* [Jenkins Build|{jenkins_url}]")
-    if report_url:
-        body_parts.append(f"* [Analysis Report|{report_url}]")
+    if include_links:
+        if jenkins_url:
+            body_parts.append(f"\nh2. Links\n* [Jenkins Build|{jenkins_url}]")
+        if report_url:
+            body_parts.append(f"* [Analysis Report|{report_url}]")
+    else:
+        if jenkins_url:
+            body_parts.append(f"\nh2. References\n* Jenkins Build: {jenkins_url}")
+        if report_url:
+            body_parts.append(f"* Report: {report_url}")
 
     return {"title": title, "body": "\n".join(body_parts)}
 
@@ -206,10 +220,21 @@ async def generate_github_issue_content(
     ai_model: str = "",
     jenkins_url: str = "",
     ai_cli_timeout: int | None = None,
+    include_links: bool = False,
 ) -> dict:
     """Generate GitHub issue title and body from a failure analysis using AI.
 
     Falls back to template-based content if AI fails.
+
+    Args:
+        failure: The failure analysis to generate content from.
+        report_url: URL or reference text for the analysis report.
+        ai_provider: AI provider to use.
+        ai_model: AI model to use.
+        jenkins_url: URL or reference text for the Jenkins build.
+        ai_cli_timeout: AI CLI timeout in minutes.
+        include_links: When True, include full URLs as clickable links.
+            When False, include plain-text references only.
 
     Returns dict with "title" and "body" keys.
     """
@@ -239,6 +264,19 @@ async def generate_github_issue_content(
             f"  Evidence: {ctx['product_bug']['evidence']}"
         )
 
+    if include_links:
+        links_instruction = (
+            f"Jenkins build: {jenkins_url}\n"
+            f"Analysis report: {report_url}\n"
+            "Include clickable links to the Jenkins build and analysis report."
+        )
+    else:
+        links_instruction = (
+            f"Jenkins build: {jenkins_url}\n"
+            f"Analysis report: {report_url}\n"
+            "Include these as plain-text references (not clickable links)."
+        )
+
     prompt = f"""You are generating a GitHub issue from a test failure analysis.
 
 Test: {ctx["test_name"]}
@@ -247,8 +285,7 @@ Classification: {ctx["classification"]}
 Analysis: {ctx["details"]}
 {code_fix_section}{product_bug_section}{artifacts_section}
 
-Jenkins build: {jenkins_url}
-Analysis report: {report_url}
+{links_instruction}
 
 Generate a JSON object with exactly two keys:
 - "title": A concise, descriptive title (max 120 chars)
@@ -258,7 +295,7 @@ Generate a JSON object with exactly two keys:
   - AI analysis findings
   - Artifacts evidence (if available)
   - Suggested fix (if available)
-  - Links to Jenkins build and analysis report
+  - References to Jenkins build and analysis report
 
 Respond with ONLY the JSON object, no other text."""
 
@@ -278,7 +315,7 @@ Respond with ONLY the JSON object, no other text."""
     logger.warning(
         "AI content generation failed for GitHub issue, using fallback template"
     )
-    return _build_fallback_github_content(ctx, jenkins_url, report_url)
+    return _build_fallback_github_content(ctx, jenkins_url, report_url, include_links)
 
 
 async def generate_jira_bug_content(
@@ -288,10 +325,21 @@ async def generate_jira_bug_content(
     ai_model: str = "",
     jenkins_url: str = "",
     ai_cli_timeout: int | None = None,
+    include_links: bool = False,
 ) -> dict:
     """Generate Jira bug summary and description from a failure analysis using AI.
 
     Falls back to template-based content if AI fails.
+
+    Args:
+        failure: The failure analysis to generate content from.
+        report_url: URL or reference text for the analysis report.
+        ai_provider: AI provider to use.
+        ai_model: AI model to use.
+        jenkins_url: URL or reference text for the Jenkins build.
+        ai_cli_timeout: AI CLI timeout in minutes.
+        include_links: When True, include full URLs as clickable links.
+            When False, include plain-text references only.
 
     Returns dict with "title" and "body" keys.
     """
@@ -312,6 +360,19 @@ async def generate_jira_bug_content(
             f"  Evidence: {ctx['product_bug']['evidence']}"
         )
 
+    if include_links:
+        links_instruction = (
+            f"Jenkins build: {jenkins_url}\n"
+            f"Analysis report: {report_url}\n"
+            "Include clickable links to the Jenkins build and analysis report."
+        )
+    else:
+        links_instruction = (
+            f"Jenkins build: {jenkins_url}\n"
+            f"Analysis report: {report_url}\n"
+            "Include these as plain-text references (not clickable links)."
+        )
+
     prompt = f"""You are generating a Jira bug report from a test failure analysis.
 
 Test: {ctx["test_name"]}
@@ -320,8 +381,7 @@ Classification: {ctx["classification"]}
 Analysis: {ctx["details"]}
 {product_bug_section}{artifacts_section}
 
-Jenkins build: {jenkins_url}
-Analysis report: {report_url}
+{links_instruction}
 
 Generate a JSON object with exactly two keys:
 - "title": A concise, descriptive bug summary (max 120 chars)
@@ -331,7 +391,7 @@ Generate a JSON object with exactly two keys:
   - h2. Analysis
   - h2. Artifacts Evidence (if available)
   - h2. Evidence (if available)
-  - h2. Links (Jenkins build and analysis report)
+  - h2. References (Jenkins build and analysis report)
 
 Respond with ONLY the JSON object, no other text."""
 
@@ -349,7 +409,7 @@ Respond with ONLY the JSON object, no other text."""
             return parsed
 
     logger.warning("AI content generation failed for Jira bug, using fallback template")
-    return _build_fallback_jira_content(ctx, jenkins_url, report_url)
+    return _build_fallback_jira_content(ctx, jenkins_url, report_url, include_links)
 
 
 def _parse_github_repo_url(repo_url: str) -> tuple[str, str]:

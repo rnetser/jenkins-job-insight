@@ -411,6 +411,7 @@ class PreviewIssueRequest(_ChildJobFieldsValidator):
     """Request body for previewing a GitHub issue or Jira bug."""
 
     test_name: str
+    include_links: bool = False
 
 
 class CreateIssueRequest(_ChildJobFieldsValidator):
@@ -419,6 +420,7 @@ class CreateIssueRequest(_ChildJobFieldsValidator):
     test_name: str
     title: str
     body: str
+    include_links: bool = False
 
     @field_validator("title")
     @classmethod

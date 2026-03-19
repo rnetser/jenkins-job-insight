@@ -1680,7 +1680,7 @@ async function loadClassifications() {{
 
 // -- Bug creation: preview, create, classification override --
 
-function showIssuePreviewModal(type, data, testName, childJob, childBuild) {{
+function showIssuePreviewModal(type, data, testName, childJob, childBuild, includeLinks) {{
     var overlay = document.createElement('div');
     overlay.className = 'modal-overlay preview-modal';
 
@@ -1750,7 +1750,7 @@ function showIssuePreviewModal(type, data, testName, childJob, childBuild) {{
     createBtn.onclick = function() {{
         createBtn.textContent = 'Creating...';
         createBtn.disabled = true;
-        submitIssue(type, titleInput.value, bodyTextarea.value, testName, childJob, childBuild, overlay);
+        submitIssue(type, titleInput.value, bodyTextarea.value, testName, childJob, childBuild, includeLinks, overlay);
     }};
     actions.appendChild(createBtn);
     dialog.appendChild(actions);
@@ -1760,7 +1760,7 @@ function showIssuePreviewModal(type, data, testName, childJob, childBuild) {{
     overlay.onclick = function(ev) {{ if (ev.target === overlay) overlay.remove(); }};
 }}
 
-async function submitIssue(type, title, body, testName, childJob, childBuild, overlay) {{
+async function submitIssue(type, title, body, testName, childJob, childBuild, includeLinks, overlay) {{
     var endpoint = type === 'github' ? '/create-github-issue' : '/create-jira-bug';
     try {{
         var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + endpoint, {{
@@ -1768,7 +1768,7 @@ async function submitIssue(type, title, body, testName, childJob, childBuild, ov
             headers: {{'Content-Type': 'application/json'}},
             body: JSON.stringify({{
                 test_name: testName, child_job_name: childJob, child_build_number: childBuild,
-                title: title, body: body,
+                title: title, body: body, include_links: includeLinks,
             }}),
         }});
         if (!resp.ok) {{
@@ -1792,6 +1792,12 @@ async function previewIssue(btn, type) {{
     var testName = btn.dataset.testName;
     var childJob = btn.dataset.childJob || '';
     var childBuild = parseInt(btn.dataset.childBuild || '0');
+    var includeLinks = false;
+    var card = btn.closest('.bug-card') || btn.closest('.failure-card');
+    if (card) {{
+        var cb = card.querySelector('.include-links-cb');
+        if (cb) includeLinks = cb.checked;
+    }}
     var origHTML = btn.innerHTML;
     btn.textContent = 'Generating...';
     btn.disabled = true;
@@ -1800,11 +1806,14 @@ async function previewIssue(btn, type) {{
         var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + endpoint, {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{test_name: testName, child_job_name: childJob, child_build_number: childBuild}}),
+            body: JSON.stringify({{
+                test_name: testName, child_job_name: childJob, child_build_number: childBuild,
+                include_links: includeLinks,
+            }}),
         }});
         if (!resp.ok) {{ throw new Error('HTTP ' + resp.status); }}
         var data = await resp.json();
-        showIssuePreviewModal(type, data, testName, childJob, childBuild);
+        showIssuePreviewModal(type, data, testName, childJob, childBuild, includeLinks);
     }} catch (err) {{
         var label = type === 'github' ? 'issue' : 'bug';
         showConfirmModal('Error', 'Failed to generate ' + label + ' preview: ' + err.message, function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
@@ -2186,6 +2195,10 @@ def _render_group_card(
 {indent}      </div>
 {indent}    </div>
 {indent}    <div class="bug-actions">
+{indent}      <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);cursor:pointer;">
+{indent}        <input type="checkbox" class="include-links-cb">
+{indent}        Include links
+{indent}      </label>
 {indent}      <button class="create-issue-btn github-issue-btn" data-test-name="{e(comment_test)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="previewIssue(this, 'github')" style="display:none"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> Open GitHub Issue</button>
 {indent}      <button class="create-issue-btn jira-bug-btn" data-test-name="{e(comment_test)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="previewIssue(this, 'jira')" style="display:none"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M11.53 2c0 2.4 1.97 4.35 4.35 4.35h1.78v1.7c0 2.4 1.94 4.34 4.34 4.35V2.84a.84.84 0 00-.84-.84H11.53zM6.77 6.8a4.36 4.36 0 004.34 4.34h1.78v1.72a4.36 4.36 0 004.34 4.34V7.63a.84.84 0 00-.83-.83H6.77zM2 11.6c0 2.4 1.95 4.34 4.35 4.35h1.78v1.72c.01 2.39 1.95 4.33 4.35 4.33v-9.57a.84.84 0 00-.84-.83H2z"/></svg> Open Jira Bug</button>
 {indent}    </div>

@@ -338,10 +338,13 @@ class JJIClient:
         test_name: str,
         child_job_name: str = "",
         child_build_number: int = 0,
+        include_links: bool = False,
     ) -> dict:
         """Preview a GitHub issue. POST /results/{job_id}/preview-github-issue"""
         body = self._with_child_scope(
-            {"test_name": test_name}, child_job_name, child_build_number
+            {"test_name": test_name, "include_links": include_links},
+            child_job_name,
+            child_build_number,
         )
         return self._request(
             "POST", f"/results/{job_id}/preview-github-issue", json=body
@@ -353,10 +356,13 @@ class JJIClient:
         test_name: str,
         child_job_name: str = "",
         child_build_number: int = 0,
+        include_links: bool = False,
     ) -> dict:
         """Preview a Jira bug. POST /results/{job_id}/preview-jira-bug"""
         body = self._with_child_scope(
-            {"test_name": test_name}, child_job_name, child_build_number
+            {"test_name": test_name, "include_links": include_links},
+            child_job_name,
+            child_build_number,
         )
         return self._request("POST", f"/results/{job_id}/preview-jira-bug", json=body)
 
@@ -368,10 +374,16 @@ class JJIClient:
         body: str,
         child_job_name: str = "",
         child_build_number: int = 0,
+        include_links: bool = False,
     ) -> dict:
         """Create a GitHub issue. POST /results/{job_id}/create-github-issue"""
         payload = self._with_child_scope(
-            {"test_name": test_name, "title": title, "body": body},
+            {
+                "test_name": test_name,
+                "title": title,
+                "body": body,
+                "include_links": include_links,
+            },
             child_job_name,
             child_build_number,
         )
@@ -390,10 +402,16 @@ class JJIClient:
         body: str,
         child_job_name: str = "",
         child_build_number: int = 0,
+        include_links: bool = False,
     ) -> dict:
         """Create a Jira bug. POST /results/{job_id}/create-jira-bug"""
         payload = self._with_child_scope(
-            {"test_name": test_name, "title": title, "body": body},
+            {
+                "test_name": test_name,
+                "title": title,
+                "body": body,
+                "include_links": include_links,
+            },
             child_job_name,
             child_build_number,
         )
