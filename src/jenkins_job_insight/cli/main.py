@@ -208,7 +208,10 @@ def results_delete(
         data = client.delete_job(job_id)
     except JJIError as err:
         _handle_error(err)
-    typer.echo(f"Deleted job {data.get('job_id', job_id)}")
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        typer.echo(f"Deleted job {data.get('job_id', job_id)}")
 
 
 # -- Analyze ------------------------------------------------------------------
@@ -219,13 +222,27 @@ def analyze(
     job_name: str = typer.Argument(help="Jenkins job name."),
     build_number: int = typer.Argument(help="Build number to analyze."),
     sync: bool = typer.Option(False, "--sync", help="Wait for analysis to complete."),
+    provider: str = typer.Option(
+        "", "--provider", help="AI provider (e.g. claude, gemini, cursor)."
+    ),
+    model: str = typer.Option("", "--model", help="AI model to use."),
+    jira: bool = typer.Option(
+        False, "--jira", help="Enable Jira integration for this analysis."
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Submit a Jenkins job for analysis."""
     _set_json(json_output)
+    extras: dict = {}
+    if provider:
+        extras["ai_provider"] = provider
+    if model:
+        extras["ai_model"] = model
+    if jira:
+        extras["jira_enabled"] = True
     try:
         client = _get_client()
-        data = client.analyze(job_name, build_number, sync=sync)
+        data = client.analyze(job_name, build_number, sync=sync, **extras)
     except JJIError as err:
         _handle_error(err)
 
@@ -463,6 +480,8 @@ def classify(
     reason: str = typer.Option("", "--reason", "-r", help="Reason for classification."),
     job_name: str = typer.Option("", "--job-name", "-j"),
     references: str = typer.Option("", "--references", help="Bug URLs or ticket keys."),
+    child_job: str = typer.Option("", "--child-job", help="Child job name."),
+    child_build: int = typer.Option(0, "--child-build", help="Child build number."),
     json_output: bool = _JSON_OPTION,
 ):
     """Classify a test failure."""
@@ -476,10 +495,14 @@ def classify(
             reason=reason,
             job_name=job_name,
             references=references,
+            child_build_number=child_build,
         )
     except JJIError as err:
         _handle_error(err)
-    typer.echo(f"Classification created (id: {data.get('id', '')})")
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        typer.echo(f"Classification created (id: {data.get('id', '')})")
 
 
 # -- Classifications ---------------------------------------------------------
@@ -580,7 +603,10 @@ def comments_add(
         )
     except JJIError as err:
         _handle_error(err)
-    typer.echo(f"Comment added (id: {data.get('id', '')})")
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        typer.echo(f"Comment added (id: {data.get('id', '')})")
 
 
 @comments_app.command("delete")
@@ -593,7 +619,10 @@ def comments_delete(
     _set_json(json_output)
     try:
         client = _get_client()
-        client.delete_comment(job_id, comment_id)
+        data = client.delete_comment(job_id, comment_id)
     except JJIError as err:
         _handle_error(err)
-    typer.echo("Comment deleted.")
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        typer.echo("Comment deleted.")

@@ -288,6 +288,15 @@ class TestJJIClientUsername:
         client.delete_job("abc")
 
 
+class TestMalformedUrl:
+    def test_malformed_url_error(self):
+        """Malformed URLs should raise JJIError, not raw httpx exception."""
+        client = JJIClient(server_url="not-a-valid-url")
+        with pytest.raises(JJIError) as exc_info:
+            client.health()
+        assert exc_info.value.status_code == 0
+
+
 class TestJJIClientAnalyzeExtras:
     def test_analyze_with_ai_provider(self):
         def handler(request):

@@ -75,15 +75,15 @@ class JJIClient:
 
         try:
             response = self._client.request(method, path, params=params, json=json)
-        except httpx.ConnectError as exc:
-            raise JJIError(
-                status_code=0,
-                detail=f"Cannot connect to {self.server_url}: {exc}",
-            ) from exc
         except httpx.TimeoutException as exc:
             raise JJIError(
                 status_code=0,
                 detail=f"Request timed out: {exc}",
+            ) from exc
+        except httpx.RequestError as exc:
+            raise JJIError(
+                status_code=0,
+                detail=f"Cannot connect to {self.server_url}: {exc}",
             ) from exc
 
         if response.status_code not in accept_statuses:

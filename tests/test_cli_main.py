@@ -344,6 +344,96 @@ class TestNullFieldHandling:
         assert "ocp-e2e" in result.output
 
 
+class TestClassifyWithChildContext:
+    def test_classify_with_child_context(self, mock_client):
+        """classify should accept --child-job and --child-build."""
+        mock_client.classify_test.return_value = {"id": 1}
+        result = runner.invoke(
+            app,
+            [
+                "classify",
+                "test_foo",
+                "--type",
+                "REGRESSION",
+                "--reason",
+                "test",
+                "--job-id",
+                "job-1",
+                "--child-job",
+                "child-runner",
+                "--child-build",
+                "14",
+            ],
+        )
+        assert result.exit_code == 0
+        mock_client.classify_test.assert_called_once()
+        call_kwargs = mock_client.classify_test.call_args
+        assert (
+            call_kwargs.kwargs.get("child_build_number") == 14
+            or call_kwargs[1].get("child_build_number") == 14
+        )
+
+
+class TestJsonOnMutationCommands:
+    def test_delete_result_json_mode(self, mock_client):
+        """results delete --json should print raw API response."""
+        mock_client.delete_job.return_value = {"status": "deleted", "job_id": "job-1"}
+        result = runner.invoke(app, ["--json", "results", "delete", "job-1"])
+        assert result.exit_code == 0
+        assert '"status"' in result.output
+        assert '"deleted"' in result.output
+
+    def test_classify_json_mode(self, mock_client):
+        """classify --json should print raw API response."""
+        mock_client.classify_test.return_value = {"id": 42}
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "classify",
+                "test_foo",
+                "--type",
+                "REGRESSION",
+                "--job-id",
+                "j1",
+            ],
+        )
+        assert result.exit_code == 0
+        assert '"id"' in result.output
+
+    def test_comments_add_json_mode(self, mock_client):
+        """comments add --json should print raw API response."""
+        mock_client.add_comment.return_value = {"id": 10}
+        result = runner.invoke(
+            app,
+            ["--json", "comments", "add", "job-1", "--test", "test_foo", "-m", "msg"],
+        )
+        assert result.exit_code == 0
+        assert '"id"' in result.output
+
+
+class TestAnalyzeFlags:
+    def test_analyze_with_provider_and_model(self, mock_client):
+        """analyze should accept --provider and --model flags."""
+        mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "my-job",
+                "27",
+                "--provider",
+                "claude",
+                "--model",
+                "opus-4",
+                "--jira",
+            ],
+        )
+        assert result.exit_code == 0
+        call_kwargs = mock_client.analyze.call_args
+        assert "ai_provider" in str(call_kwargs)
+
+
 class TestJsonPerCommand:
     def test_json_flag_after_subcommand(self, mock_client):
         """--json should work when placed after the subcommand."""
