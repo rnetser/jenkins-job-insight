@@ -1878,6 +1878,7 @@ async def override_classification(
         f"override_classification: job_id={job_id}, test_name={test_name}, "
         f"classification={classification}, username={username}"
     )
+    _validate_child_identifier_pairing(child_job_name, child_build_number)
     async with aiosqlite.connect(DB_PATH) as db:
         # Look up the error_signature for this test so we can update
         # ALL tests in the same group (same signature, same job).
@@ -1917,11 +1918,12 @@ async def override_classification(
                 await db.execute(
                     """UPDATE failure_history
                        SET classification = ?
-                       WHERE job_id = ? AND error_signature = ?""",
+                       WHERE job_id = ? AND error_signature = ?
+                       AND child_job_name = '' AND child_build_number = 0""",
                     (classification, job_id, error_signature),
                 )
         else:
-            # No signature — fall back to exact test_name match
+            # No signature -- fall back to exact test_name match
             if child_job_name:
                 await db.execute(
                     """UPDATE failure_history
@@ -1940,7 +1942,8 @@ async def override_classification(
                 await db.execute(
                     """UPDATE failure_history
                        SET classification = ?
-                       WHERE job_id = ? AND test_name = ?""",
+                       WHERE job_id = ? AND test_name = ?
+                       AND child_job_name = '' AND child_build_number = 0""",
                     (classification, job_id, test_name),
                 )
 

@@ -1260,6 +1260,10 @@ async def enrich_comments(
     return {"enrichments": enrichments}
 
 
+# NOTE: Preview/create bug endpoints intentionally bypass _merge_settings().
+# These are server-level operations (GITHUB_TOKEN, TESTS_REPO_URL, Jira config)
+# that act on behalf of the server, not per-request analysis overrides. The
+# credentials and repo targets are fixed at deployment, not caller-supplied.
 @app.post("/results/{job_id}/preview-github-issue")
 async def preview_github_issue(
     job_id: str,
@@ -1303,18 +1307,25 @@ async def preview_github_issue(
         jenkins_url=jenkins_url,
     )
 
-    # Duplicate detection
+    # Duplicate detection (best-effort: failures must not break preview)
     tests_repo_url = str(settings.tests_repo_url or "")
     github_token = (
         settings.github_token.get_secret_value() if settings.github_token else ""
     )
     similar: list[dict] = []
     if tests_repo_url and github_token:
-        similar = await search_github_duplicates(
-            title=content["title"],
-            repo_url=tests_repo_url,
-            github_token=github_token,
-        )
+        try:
+            similar = await search_github_duplicates(
+                title=content["title"],
+                repo_url=tests_repo_url,
+                github_token=github_token,
+            )
+        except Exception:
+            logger.warning(
+                "GitHub duplicate search failed for job_id=%s",
+                job_id,
+                exc_info=True,
+            )
 
     return {
         "title": content["title"],
@@ -1364,13 +1375,20 @@ async def preview_jira_bug(
         jenkins_url=jenkins_url,
     )
 
-    # Duplicate detection
+    # Duplicate detection (best-effort: failures must not break preview)
     similar: list[dict] = []
     if settings.jira_enabled:
-        similar = await search_jira_duplicates(
-            title=content["title"],
-            settings=settings,
-        )
+        try:
+            similar = await search_jira_duplicates(
+                title=content["title"],
+                settings=settings,
+            )
+        except Exception:
+            logger.warning(
+                "Jira duplicate search failed for job_id=%s",
+                job_id,
+                exc_info=True,
+            )
 
     return {
         "title": content["title"],
@@ -1427,22 +1445,33 @@ async def create_github_issue_endpoint(
             detail=f"GitHub API unreachable: {exc}",
         )
 
-    # Auto-add comment with issue link
-    username = request.cookies.get("jji_username", "")
-    comment_text = f"GitHub Issue: {result['url']}"
-    error_signature = await _get_error_signature(
-        job_id, body.test_name, body.child_job_name, body.child_build_number
-    )
-    comment_id = await storage.add_comment(
-        job_id=job_id,
-        test_name=body.test_name,
-        comment=comment_text,
-        child_job_name=body.child_job_name,
-        child_build_number=body.child_build_number,
-        error_signature=error_signature,
-        username=username,
-    )
-    await _invalidate_cached_html(job_id)
+    # Auto-add comment with issue link (best-effort: the remote issue is
+    # already created, so a failure here must not lose the created URL).
+    comment_id = 0
+    try:
+        username = request.cookies.get("jji_username", "")
+        comment_text = f"GitHub Issue: {result['url']}"
+        error_signature = await _get_error_signature(
+            job_id, body.test_name, body.child_job_name, body.child_build_number
+        )
+        comment_id = await storage.add_comment(
+            job_id=job_id,
+            test_name=body.test_name,
+            comment=comment_text,
+            child_job_name=body.child_job_name,
+            child_build_number=body.child_build_number,
+            error_signature=error_signature,
+            username=username,
+        )
+        await _invalidate_cached_html(job_id)
+    except Exception:
+        logger.warning(
+            "Failed to add comment/invalidate cache after GitHub issue creation "
+            "for job_id=%s, issue url=%s",
+            job_id,
+            result["url"],
+            exc_info=True,
+        )
 
     return {
         "url": result["url"],
@@ -1489,22 +1518,33 @@ async def create_jira_bug_endpoint(
             detail=f"Jira API unreachable: {exc}",
         )
 
-    # Auto-add comment with issue link
-    username = request.cookies.get("jji_username", "")
-    comment_text = f"Jira Bug: {result['url']}"
-    error_signature = await _get_error_signature(
-        job_id, body.test_name, body.child_job_name, body.child_build_number
-    )
-    comment_id = await storage.add_comment(
-        job_id=job_id,
-        test_name=body.test_name,
-        comment=comment_text,
-        child_job_name=body.child_job_name,
-        child_build_number=body.child_build_number,
-        error_signature=error_signature,
-        username=username,
-    )
-    await _invalidate_cached_html(job_id)
+    # Auto-add comment with issue link (best-effort: the remote bug is
+    # already created, so a failure here must not lose the created URL).
+    comment_id = 0
+    try:
+        username = request.cookies.get("jji_username", "")
+        comment_text = f"Jira Bug: {result['url']}"
+        error_signature = await _get_error_signature(
+            job_id, body.test_name, body.child_job_name, body.child_build_number
+        )
+        comment_id = await storage.add_comment(
+            job_id=job_id,
+            test_name=body.test_name,
+            comment=comment_text,
+            child_job_name=body.child_job_name,
+            child_build_number=body.child_build_number,
+            error_signature=error_signature,
+            username=username,
+        )
+        await _invalidate_cached_html(job_id)
+    except Exception:
+        logger.warning(
+            "Failed to add comment/invalidate cache after Jira bug creation "
+            "for job_id=%s, bug url=%s",
+            job_id,
+            result["url"],
+            exc_info=True,
+        )
 
     return {
         "url": result["url"],

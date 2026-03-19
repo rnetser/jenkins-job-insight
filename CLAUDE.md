@@ -91,8 +91,8 @@ A `jji` CLI tool is available for querying the jenkins-job-insight API. Run `jji
 ### CLI Parity
 
 Every new API endpoint MUST also be supported via the `jji` CLI tool. When adding a new endpoint:
-1. Add the client method to `cli/client.py`
-2. Add the CLI command to `cli/main.py`
+1. Add the client method to `src/jenkins_job_insight/cli/client.py`
+2. Add the CLI command to `src/jenkins_job_insight/cli/main.py`
 3. Add tests for both in `tests/test_cli_client.py` and `tests/test_cli_main.py`
 
 ### Failure Deduplication

@@ -716,7 +716,13 @@ class TestBugCreationButtons:
     def test_override_classification_btn_present(
         self, sample_analysis_result: AnalysisResult
     ) -> None:
-        """Report includes override-classification-btn buttons."""
+        """Report includes override-classification-btn buttons.
+
+        NOTE: This is a UI structure test verifying the HTML contains the
+        correct elements. Integration testing of the actual PUT API call
+        to /results/{job_id}/override-classification is covered in
+        test_main.py (TestOverrideClassification, TestOverrideClassificationFlow).
+        """
         html_output = format_result_as_html(sample_analysis_result)
         assert "override-classification-btn" in html_output
 

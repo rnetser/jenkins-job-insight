@@ -50,7 +50,7 @@ def _build_failure_context(failure: FailureAnalysis) -> dict:
             "description": analysis.product_bug_report.description,
             "evidence": analysis.product_bug_report.evidence,
         }
-    return {
+    context: dict = {
         "test_name": failure.test_name,
         "error": failure.error,
         "classification": analysis.classification,
@@ -58,6 +58,9 @@ def _build_failure_context(failure: FailureAnalysis) -> dict:
         "code_fix": code_fix,
         "product_bug": product_bug,
     }
+    if analysis.artifacts_evidence:
+        context["artifacts_evidence"] = analysis.artifacts_evidence
+    return context
 
 
 def _build_fallback_github_content(
@@ -86,6 +89,8 @@ def _build_fallback_github_content(
         "## AI Analysis",
         ctx["details"],
     ]
+    if ctx.get("artifacts_evidence"):
+        body_parts.extend(["", "## Artifacts Evidence", ctx["artifacts_evidence"]])
     if ctx["code_fix"]:
         body_parts.extend(
             [
@@ -146,6 +151,8 @@ def _build_fallback_jira_content(ctx: dict, jenkins_url: str, report_url: str) -
             ctx["details"],
         ]
 
+    if ctx.get("artifacts_evidence"):
+        body_parts.extend(["", "h2. Artifacts Evidence", ctx["artifacts_evidence"]])
     if jenkins_url:
         body_parts.append(f"\nh2. Links\n* [Jenkins Build|{jenkins_url}]")
     if report_url:
@@ -185,6 +192,13 @@ def _parse_ai_issue_response(output: str) -> dict | None:
     return None
 
 
+# NOTE: The content generation functions below intentionally pass failure data
+# directly into the AI prompt. This is NOT the same as the analysis pipeline
+# where the AI should be given tools to explore data autonomously (per
+# CLAUDE.md "AI Tool Access"). Here the AI is generating formatted text from
+# *already-analyzed* data, not performing new analysis. The input is fully
+# known and the output is a structured document -- tool access would add
+# latency and complexity with no benefit.
 async def generate_github_issue_content(
     failure: FailureAnalysis,
     report_url: str = "",
@@ -210,6 +224,10 @@ async def generate_github_issue_content(
             f"  Change: {ctx['code_fix']['change']}"
         )
 
+    artifacts_section = ""
+    if ctx.get("artifacts_evidence"):
+        artifacts_section = f"\nArtifacts evidence:\n{ctx['artifacts_evidence']}"
+
     product_bug_section = ""
     if ctx["product_bug"]:
         product_bug_section = (
@@ -227,7 +245,7 @@ Test: {ctx["test_name"]}
 Error: {ctx["error"]}
 Classification: {ctx["classification"]}
 Analysis: {ctx["details"]}
-{code_fix_section}{product_bug_section}
+{code_fix_section}{product_bug_section}{artifacts_section}
 
 Jenkins build: {jenkins_url}
 Analysis report: {report_url}
@@ -278,6 +296,10 @@ async def generate_jira_bug_content(
     """
     ctx = _build_failure_context(failure)
 
+    artifacts_section = ""
+    if ctx.get("artifacts_evidence"):
+        artifacts_section = f"\nArtifacts evidence:\n{ctx['artifacts_evidence']}"
+
     product_bug_section = ""
     if ctx["product_bug"]:
         product_bug_section = (
@@ -295,7 +317,7 @@ Test: {ctx["test_name"]}
 Error: {ctx["error"]}
 Classification: {ctx["classification"]}
 Analysis: {ctx["details"]}
-{product_bug_section}
+{product_bug_section}{artifacts_section}
 
 Jenkins build: {jenkins_url}
 Analysis report: {report_url}

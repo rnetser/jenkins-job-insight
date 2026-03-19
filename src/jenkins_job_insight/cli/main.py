@@ -634,6 +634,18 @@ def comments_delete(
 # -- Bug Creation -------------------------------------------------------------
 
 
+def _validate_issue_type(issue_type: str) -> str:
+    """Validate and normalize issue type, exit on invalid input."""
+    normalized = issue_type.lower()
+    if normalized not in ("github", "jira"):
+        typer.echo(
+            f"Error: --type must be 'github' or 'jira', got '{issue_type}'",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return normalized
+
+
 @app.command("preview-issue")
 def preview_issue(
     job_id: str = typer.Argument(help="Job ID."),
@@ -645,28 +657,23 @@ def preview_issue(
 ):
     """Preview generated issue content (GitHub or Jira)."""
     _set_json(json_output)
+    normalized_type = _validate_issue_type(issue_type)
     try:
         client = _get_client()
-        if issue_type.lower() == "github":
+        if normalized_type == "github":
             data = client.preview_github_issue(
                 job_id=job_id,
                 test_name=test_name,
                 child_job_name=child_job_name,
                 child_build_number=child_build_number,
             )
-        elif issue_type.lower() == "jira":
+        else:
             data = client.preview_jira_bug(
                 job_id=job_id,
                 test_name=test_name,
                 child_job_name=child_job_name,
                 child_build_number=child_build_number,
             )
-        else:
-            typer.echo(
-                f"Error: --type must be 'github' or 'jira', got '{issue_type}'",
-                err=True,
-            )
-            raise typer.Exit(code=1)
     except JJIError as err:
         _handle_error(err)
 
@@ -696,9 +703,10 @@ def create_issue(
 ):
     """Create a GitHub issue or Jira bug from a failure analysis."""
     _set_json(json_output)
+    normalized_type = _validate_issue_type(issue_type)
     try:
         client = _get_client()
-        if issue_type.lower() == "github":
+        if normalized_type == "github":
             data = client.create_github_issue(
                 job_id=job_id,
                 test_name=test_name,
@@ -707,7 +715,7 @@ def create_issue(
                 child_job_name=child_job_name,
                 child_build_number=child_build_number,
             )
-        elif issue_type.lower() == "jira":
+        else:
             data = client.create_jira_bug(
                 job_id=job_id,
                 test_name=test_name,
@@ -716,12 +724,6 @@ def create_issue(
                 child_job_name=child_job_name,
                 child_build_number=child_build_number,
             )
-        else:
-            typer.echo(
-                f"Error: --type must be 'github' or 'jira', got '{issue_type}'",
-                err=True,
-            )
-            raise typer.Exit(code=1)
     except JJIError as err:
         _handle_error(err)
 

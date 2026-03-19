@@ -322,6 +322,16 @@ class JJIClient:
 
     # -- Bug Creation ---------------------------------------------------------
 
+    @staticmethod
+    def _with_child_scope(
+        payload: dict, child_job_name: str = "", child_build_number: int = 0
+    ) -> dict:
+        """Add child_job_name/child_build_number to *payload* when set."""
+        if child_job_name:
+            payload["child_job_name"] = child_job_name
+            payload["child_build_number"] = child_build_number
+        return payload
+
     def preview_github_issue(
         self,
         job_id: str,
@@ -330,10 +340,9 @@ class JJIClient:
         child_build_number: int = 0,
     ) -> dict:
         """Preview a GitHub issue. POST /results/{job_id}/preview-github-issue"""
-        body: dict = {"test_name": test_name}
-        if child_job_name:
-            body["child_job_name"] = child_job_name
-            body["child_build_number"] = child_build_number
+        body = self._with_child_scope(
+            {"test_name": test_name}, child_job_name, child_build_number
+        )
         return self._request(
             "POST", f"/results/{job_id}/preview-github-issue", json=body
         )
@@ -346,10 +355,9 @@ class JJIClient:
         child_build_number: int = 0,
     ) -> dict:
         """Preview a Jira bug. POST /results/{job_id}/preview-jira-bug"""
-        body: dict = {"test_name": test_name}
-        if child_job_name:
-            body["child_job_name"] = child_job_name
-            body["child_build_number"] = child_build_number
+        body = self._with_child_scope(
+            {"test_name": test_name}, child_job_name, child_build_number
+        )
         return self._request("POST", f"/results/{job_id}/preview-jira-bug", json=body)
 
     def create_github_issue(
@@ -362,14 +370,11 @@ class JJIClient:
         child_build_number: int = 0,
     ) -> dict:
         """Create a GitHub issue. POST /results/{job_id}/create-github-issue"""
-        payload: dict = {
-            "test_name": test_name,
-            "title": title,
-            "body": body,
-        }
-        if child_job_name:
-            payload["child_job_name"] = child_job_name
-            payload["child_build_number"] = child_build_number
+        payload = self._with_child_scope(
+            {"test_name": test_name, "title": title, "body": body},
+            child_job_name,
+            child_build_number,
+        )
         return self._request(
             "POST",
             f"/results/{job_id}/create-github-issue",
@@ -387,14 +392,11 @@ class JJIClient:
         child_build_number: int = 0,
     ) -> dict:
         """Create a Jira bug. POST /results/{job_id}/create-jira-bug"""
-        payload: dict = {
-            "test_name": test_name,
-            "title": title,
-            "body": body,
-        }
-        if child_job_name:
-            payload["child_job_name"] = child_job_name
-            payload["child_build_number"] = child_build_number
+        payload = self._with_child_scope(
+            {"test_name": test_name, "title": title, "body": body},
+            child_job_name,
+            child_build_number,
+        )
         return self._request(
             "POST",
             f"/results/{job_id}/create-jira-bug",
@@ -411,13 +413,11 @@ class JJIClient:
         child_build_number: int = 0,
     ) -> dict:
         """Override classification. PUT /results/{job_id}/override-classification"""
-        payload: dict = {
-            "test_name": test_name,
-            "classification": classification,
-        }
-        if child_job_name:
-            payload["child_job_name"] = child_job_name
-            payload["child_build_number"] = child_build_number
+        payload = self._with_child_scope(
+            {"test_name": test_name, "classification": classification},
+            child_job_name,
+            child_build_number,
+        )
         return self._request(
             "PUT", f"/results/{job_id}/override-classification", json=payload
         )

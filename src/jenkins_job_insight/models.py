@@ -402,6 +402,11 @@ class ReviewStatusResponse(BaseModel):
     comment_count: int
 
 
+# NOTE: Preview/create request models intentionally do NOT inherit
+# BaseAnalysisRequest. These are server-level operations that use deployment
+# config (GITHUB_TOKEN, TESTS_REPO_URL, Jira credentials), not per-request
+# analysis overrides. The caller identifies *which* failure to act on, but
+# the credentials and target repos are fixed at the server level.
 class PreviewIssueRequest(_ChildJobFieldsValidator):
     """Request body for previewing a GitHub issue or Jira bug."""
 

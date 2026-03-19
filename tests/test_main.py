@@ -2240,7 +2240,7 @@ class TestBugCreationIntegration:
 
     @pytest.mark.asyncio
     async def test_override_then_verify(self, test_client):
-        """Test: override classification returns correct response."""
+        """Test: override classification persists and is visible on GET."""
         result_data = {
             "status": "completed",
             "summary": "",
@@ -2255,16 +2255,19 @@ class TestBugCreationIntegration:
         await storage.save_result(
             "job-integ-override", "http://jenkins", "completed", result_data
         )
-        with patch("jenkins_job_insight.storage.override_classification"):
-            resp = test_client.put(
-                "/results/job-integ-override/override-classification",
-                json={
-                    "test_name": "test_login_success",
-                    "classification": "CODE ISSUE",
-                },
-            )
-            assert resp.status_code == 200
-            assert resp.json()["classification"] == "CODE ISSUE"
+        resp = test_client.put(
+            "/results/job-integ-override/override-classification",
+            json={
+                "test_name": "test_login_success",
+                "classification": "CODE ISSUE",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["classification"] == "CODE ISSUE"
+
+        # Verify the override persisted by fetching the result
+        get_resp = test_client.get("/results/job-integ-override")
+        assert get_resp.status_code == 200
 
 
 class TestCreateGithubIssueApiErrors:
