@@ -434,6 +434,58 @@ class TestAnalyzeFlags:
         assert "ai_provider" in str(call_kwargs)
 
 
+class TestClassifyForwardsChildJob:
+    def test_classify_forwards_child_job_name(self, mock_client):
+        """classify should forward --child-job as job_name to the client."""
+        mock_client.classify_test.return_value = {"id": 1}
+        result = runner.invoke(
+            app,
+            [
+                "classify",
+                "test_foo",
+                "--type",
+                "REGRESSION",
+                "--job-id",
+                "j1",
+                "--child-job",
+                "child-runner",
+                "--child-build",
+                "14",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.classify_test.call_args[1]
+        assert kwargs["job_name"] == "child-runner"  # NOT empty string
+        assert kwargs["child_build_number"] == 14
+
+
+class TestAnalyzeJiraField:
+    def test_analyze_jira_flag_correct_field(self, mock_client):
+        """--jira should send enable_jira=True, not jira_enabled=True."""
+        mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
+        result = runner.invoke(app, ["analyze", "my-job", "27", "--jira"])
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert "enable_jira" in kwargs  # NOT jira_enabled
+        assert kwargs["enable_jira"] is True
+
+
+class TestStatusJsonFull:
+    def test_status_json_returns_full_response(self, mock_client):
+        """status --json should return full API response, not trimmed."""
+        mock_client.get_result.return_value = {
+            "job_id": "j1",
+            "status": "completed",
+            "result": {"summary": "5 failures"},
+            "jenkins_url": "http://jenkins/job/1",
+        }
+        result = runner.invoke(app, ["--json", "status", "j1"])
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert "result" in output  # Full response, not just job_id+status
+        assert "jenkins_url" in output
+
+
 class TestJsonPerCommand:
     def test_json_flag_after_subcommand(self, mock_client):
         """--json should work when placed after the subcommand."""

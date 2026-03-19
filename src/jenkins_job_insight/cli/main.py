@@ -239,7 +239,7 @@ def analyze(
     if model:
         extras["ai_model"] = model
     if jira:
-        extras["jira_enabled"] = True
+        extras["enable_jira"] = True
     try:
         client = _get_client()
         data = client.analyze(job_name, build_number, sync=sync, **extras)
@@ -275,11 +275,14 @@ def status(
         data = client.get_result(job_id)
     except JJIError as err:
         _handle_error(err)
-    print_output(
-        {"job_id": data.get("job_id", ""), "status": data.get("status", "")},
-        columns=["job_id", "status"],
-        as_json=_state.get("json", False),
-    )
+    if _state.get("json"):
+        print_output(data, columns=[], as_json=True)
+    else:
+        print_output(
+            {"job_id": data.get("job_id", ""), "status": data.get("status", "")},
+            columns=["job_id", "status"],
+            as_json=False,
+        )
 
 
 # -- History ------------------------------------------------------------------
@@ -493,7 +496,7 @@ def classify(
             classification=classification.upper(),
             job_id=job_id,
             reason=reason,
-            job_name=job_name,
+            job_name=child_job if child_job else job_name,
             references=references,
             child_build_number=child_build,
         )
