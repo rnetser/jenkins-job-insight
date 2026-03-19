@@ -824,17 +824,11 @@ async def populate_failure_history(
         return
 
     async with aiosqlite.connect(DB_PATH) as db:
-        # Idempotency check: skip if already populated for this job_id
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM failure_history WHERE job_id = ?",
+        # Delete existing rows for this job_id (supports re-analysis)
+        await db.execute(
+            "DELETE FROM failure_history WHERE job_id = ?",
             (job_id,),
         )
-        existing_count = (await cursor.fetchone())[0]
-        if existing_count > 0:
-            logger.debug(
-                f"failure_history already populated for job_id={job_id}, skipping"
-            )
-            return
 
         # Use analyzed_at when provided (backfill), otherwise let the DB default apply
         if analyzed_at:
@@ -946,7 +940,7 @@ async def _get_failure_stats(
 
     # Last classification (most recent failure)
     cursor = await db.execute(
-        f"SELECT classification FROM failure_history WHERE test_name = ?{job_filter} ORDER BY analyzed_at DESC LIMIT 1",
+        f"SELECT classification FROM failure_history WHERE test_name = ?{job_filter} ORDER BY analyzed_at DESC, id DESC LIMIT 1",
         params,
     )
     last_classification = (await cursor.fetchone())[0] or ""
@@ -1073,7 +1067,7 @@ async def get_test_history(
             f"""SELECT job_id, job_name, build_number, error_message, error_signature,
                        classification, child_job_name, child_build_number, analyzed_at
                 FROM failure_history WHERE test_name = ?{job_filter}
-                ORDER BY analyzed_at DESC LIMIT ?""",
+                ORDER BY analyzed_at DESC, id DESC LIMIT ?""",
             [*params, limit],
         )
         recent_runs = [dict(row) for row in await cursor.fetchall()]
@@ -1205,7 +1199,7 @@ async def search_by_signature(signature: str, exclude_job_id: str = "") -> dict:
         # Last classification
         cursor = await db.execute(
             f"SELECT classification FROM failure_history "
-            f"WHERE error_signature = ?{exclude_filter} ORDER BY analyzed_at DESC LIMIT 1",
+            f"WHERE error_signature = ?{exclude_filter} ORDER BY analyzed_at DESC, id DESC LIMIT 1",
             base_params,
         )
         last_classification = (await cursor.fetchone())[0] or ""
@@ -1547,14 +1541,14 @@ async def get_parent_job_name_for_test(test_name: str, job_id: str = "") -> str:
             query = (
                 "SELECT job_name FROM failure_history "
                 "WHERE test_name = ? AND job_id = ? "
-                "ORDER BY analyzed_at DESC LIMIT 1"
+                "ORDER BY analyzed_at DESC, id DESC LIMIT 1"
             )
             params: tuple = (test_name, job_id)
         else:
             query = (
                 "SELECT job_name FROM failure_history "
                 "WHERE test_name = ? "
-                "ORDER BY analyzed_at DESC LIMIT 1"
+                "ORDER BY analyzed_at DESC, id DESC LIMIT 1"
             )
             params = (test_name,)
         cursor = await db.execute(query, params)
