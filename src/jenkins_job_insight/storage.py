@@ -1679,7 +1679,7 @@ async def get_test_classifications(
             f"tc.reason, tc.references_info, tc.created_by, tc.job_id, tc.child_build_number, tc.created_at "
             f"FROM test_classifications tc "
             f"WHERE {where} "
-            f"ORDER BY tc.created_at DESC",
+            f"ORDER BY tc.created_at DESC, tc.id DESC",
             params,
         )
         rows = await cursor.fetchall()
