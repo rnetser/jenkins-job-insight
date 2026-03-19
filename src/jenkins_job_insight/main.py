@@ -21,6 +21,14 @@ from jenkins_job_insight.analyzer import (
 )
 from jenkins_job_insight.config import Settings, get_settings
 from jenkins_job_insight.jira import enrich_with_jira_matches
+from jenkins_job_insight.bug_creation import (
+    create_github_issue,
+    create_jira_bug,
+    generate_github_issue_content,
+    generate_jira_bug_content,
+    search_github_duplicates,
+    search_jira_duplicates,
+)
 from jenkins_job_insight.models import (
     AddCommentRequest,
     AnalysisResult,
@@ -29,8 +37,11 @@ from jenkins_job_insight.models import (
     BaseAnalysisRequest,
     ChildJobAnalysis,
     ClassifyTestRequest,
+    CreateIssueRequest,
     FailureAnalysis,
     FailureAnalysisResult,
+    OverrideClassificationRequest,
+    PreviewIssueRequest,
     SetReviewedRequest,
 )
 from jenkins_job_insight.xml_enrichment import (
@@ -981,6 +992,75 @@ def _find_error_signature_in_children(
     return ""
 
 
+def _find_failure_in_children(
+    children: list[dict],
+    test_name: str,
+    child_job_name: str,
+    child_build_number: int = 0,
+) -> dict | None:
+    """Recursively find a failure dict in child job analyses."""
+    for child in children:
+        if child.get("job_name") == child_job_name and (
+            child_build_number == 0 or child.get("build_number") == child_build_number
+        ):
+            for f in child.get("failures", []):
+                if f.get("test_name") == test_name:
+                    return f
+        result = _find_failure_in_children(
+            child.get("failed_children", []),
+            test_name,
+            child_job_name,
+            child_build_number,
+        )
+        if result is not None:
+            return result
+    return None
+
+
+def _find_failure_in_result(
+    result_data: dict,
+    test_name: str,
+    child_job_name: str = "",
+    child_build_number: int = 0,
+) -> dict | None:
+    """Find a specific failure dict in the stored result data."""
+    if child_job_name:
+        return _find_failure_in_children(
+            result_data.get("child_job_analyses", []),
+            test_name,
+            child_job_name,
+            child_build_number,
+        )
+    for f in result_data.get("failures", []):
+        if f.get("test_name") == test_name:
+            return f
+    return None
+
+
+async def _get_error_signature(
+    job_id: str,
+    test_name: str,
+    child_job_name: str = "",
+    child_build_number: int = 0,
+) -> str:
+    """Look up the error_signature for a test from stored result data."""
+    stored = await storage.get_result(job_id)
+    if not stored or not stored.get("result"):
+        return ""
+    result_data = stored["result"]
+    if child_job_name:
+        return _find_error_signature_in_children(
+            result_data.get("child_job_analyses", []),
+            test_name,
+            child_job_name,
+            child_build_number,
+        )
+    for f in result_data.get("failures", []):
+        if f.get("test_name") == test_name:
+            return f.get("error_signature", "")
+    return ""
+
+
 async def _invalidate_cached_html(job_id: str) -> None:
     """Delete cached HTML report so next request regenerates it."""
     logger.debug(f"_invalidate_cached_html: job_id={job_id}")
@@ -1008,22 +1088,9 @@ async def add_comment(job_id: str, body: AddCommentRequest, request: Request) ->
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
 
-    # Read pre-computed error_signature from stored analysis
-    error_signature = ""
-    stored = await storage.get_result(job_id)
-    if stored and stored.get("result"):
-        if body.child_job_name:
-            error_signature = _find_error_signature_in_children(
-                stored["result"].get("child_job_analyses", []),
-                body.test_name,
-                body.child_job_name,
-                body.child_build_number,
-            )
-        else:
-            for f in stored["result"].get("failures", []):
-                if f.get("test_name") == body.test_name:
-                    error_signature = f.get("error_signature", "")
-                    break
+    error_signature = await _get_error_signature(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
 
     username = request.cookies.get("jji_username", "")
     try:
@@ -1190,6 +1257,261 @@ async def enrich_comments(
         f"enrich_comments: job_id={job_id}, enrichments_count={len(enrichments)}"
     )
     return {"enrichments": enrichments}
+
+
+@app.post("/results/{job_id}/preview-github-issue")
+async def preview_github_issue(
+    job_id: str,
+    body: PreviewIssueRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Generate preview content for a GitHub issue from a failure analysis."""
+    logger.debug(
+        f"POST /results/{job_id}/preview-github-issue: test_name={body.test_name}"
+    )
+    await _validate_test_name_in_result(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+    stored = await storage.get_result(job_id)
+    if not stored or not stored.get("result"):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    result_data = stored["result"]
+    failure_dict = _find_failure_in_result(
+        result_data, body.test_name, body.child_job_name, body.child_build_number
+    )
+    if not failure_dict:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Test '{body.test_name}' not found in job {job_id}",
+        )
+    failure = FailureAnalysis.model_validate(failure_dict)
+
+    # AI config is best-effort for preview — fallback content is generated if not configured
+    ai_provider = AI_PROVIDER
+    ai_model = AI_MODEL
+    base_url = _extract_base_url(request)
+    report_url = f"{base_url}/results/{job_id}.html"
+    jenkins_url = result_data.get("jenkins_url", "")
+
+    content = await generate_github_issue_content(
+        failure=failure,
+        job_id=job_id,
+        report_url=report_url,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        jenkins_url=jenkins_url,
+    )
+
+    # Duplicate detection
+    tests_repo_url = str(settings.tests_repo_url or "")
+    github_token = (
+        settings.github_token.get_secret_value() if settings.github_token else ""
+    )
+    similar: list[dict] = []
+    if tests_repo_url and github_token:
+        similar = await search_github_duplicates(
+            title=content["title"],
+            repo_url=tests_repo_url,
+            github_token=github_token,
+        )
+
+    return {
+        "title": content["title"],
+        "body": content["body"],
+        "similar_issues": similar,
+    }
+
+
+@app.post("/results/{job_id}/preview-jira-bug")
+async def preview_jira_bug(
+    job_id: str,
+    body: PreviewIssueRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Generate preview content for a Jira bug from a failure analysis."""
+    logger.debug(f"POST /results/{job_id}/preview-jira-bug: test_name={body.test_name}")
+    await _validate_test_name_in_result(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+    stored = await storage.get_result(job_id)
+    if not stored or not stored.get("result"):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    result_data = stored["result"]
+    failure_dict = _find_failure_in_result(
+        result_data, body.test_name, body.child_job_name, body.child_build_number
+    )
+    if not failure_dict:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Test '{body.test_name}' not found in job {job_id}",
+        )
+    failure = FailureAnalysis.model_validate(failure_dict)
+
+    # AI config is best-effort for preview — fallback content is generated if not configured
+    ai_provider = AI_PROVIDER
+    ai_model = AI_MODEL
+    base_url = _extract_base_url(request)
+    report_url = f"{base_url}/results/{job_id}.html"
+    jenkins_url = result_data.get("jenkins_url", "")
+
+    content = await generate_jira_bug_content(
+        failure=failure,
+        job_id=job_id,
+        report_url=report_url,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        jenkins_url=jenkins_url,
+    )
+
+    # Duplicate detection
+    similar: list[dict] = []
+    if settings.jira_enabled:
+        similar = await search_jira_duplicates(
+            title=content["title"],
+            settings=settings,
+        )
+
+    return {
+        "title": content["title"],
+        "body": content["body"],
+        "similar_issues": similar,
+    }
+
+
+@app.post("/results/{job_id}/create-github-issue", status_code=201)
+async def create_github_issue_endpoint(
+    job_id: str,
+    body: CreateIssueRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Create a GitHub issue from a failure analysis."""
+    logger.debug(
+        f"POST /results/{job_id}/create-github-issue: test_name={body.test_name}"
+    )
+    await _validate_test_name_in_result(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+    tests_repo_url = str(settings.tests_repo_url or "")
+    github_token = (
+        settings.github_token.get_secret_value() if settings.github_token else ""
+    )
+
+    if not tests_repo_url or not github_token:
+        raise HTTPException(
+            status_code=400,
+            detail="TESTS_REPO_URL and GITHUB_TOKEN must be configured to create GitHub issues",
+        )
+
+    result = await create_github_issue(
+        title=body.title,
+        body=body.body,
+        repo_url=tests_repo_url,
+        github_token=github_token,
+    )
+
+    # Auto-add comment with issue link
+    username = request.cookies.get("jji_username", "")
+    comment_text = f"GitHub Issue: {result['url']}"
+    error_signature = await _get_error_signature(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+    comment_id = await storage.add_comment(
+        job_id=job_id,
+        test_name=body.test_name,
+        comment=comment_text,
+        child_job_name=body.child_job_name,
+        child_build_number=body.child_build_number,
+        error_signature=error_signature,
+        username=username,
+    )
+    await _invalidate_cached_html(job_id)
+
+    return {
+        "url": result["url"],
+        "key": "",
+        "title": body.title,
+        "comment_id": comment_id,
+    }
+
+
+@app.post("/results/{job_id}/create-jira-bug", status_code=201)
+async def create_jira_bug_endpoint(
+    job_id: str,
+    body: CreateIssueRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Create a Jira bug from a failure analysis."""
+    logger.debug(f"POST /results/{job_id}/create-jira-bug: test_name={body.test_name}")
+    await _validate_test_name_in_result(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+
+    if not settings.jira_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Jira must be configured to create Jira bugs",
+        )
+
+    result = await create_jira_bug(
+        title=body.title,
+        body=body.body,
+        settings=settings,
+    )
+
+    # Auto-add comment with issue link
+    username = request.cookies.get("jji_username", "")
+    comment_text = f"Jira Bug: {result['url']}"
+    error_signature = await _get_error_signature(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+    comment_id = await storage.add_comment(
+        job_id=job_id,
+        test_name=body.test_name,
+        comment=comment_text,
+        child_job_name=body.child_job_name,
+        child_build_number=body.child_build_number,
+        error_signature=error_signature,
+        username=username,
+    )
+    await _invalidate_cached_html(job_id)
+
+    return {
+        "url": result["url"],
+        "key": result.get("key", ""),
+        "title": body.title,
+        "comment_id": comment_id,
+    }
+
+
+@app.put("/results/{job_id}/override-classification")
+async def override_classification_endpoint(
+    job_id: str,
+    body: OverrideClassificationRequest,
+    request: Request,
+) -> dict:
+    """Override the classification of a failure (CODE ISSUE / PRODUCT BUG)."""
+    logger.debug(
+        f"PUT /results/{job_id}/override-classification: test_name={body.test_name}, "
+        f"classification={body.classification}"
+    )
+    await _validate_test_name_in_result(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+    username = request.cookies.get("jji_username", "")
+    await storage.override_classification(
+        job_id=job_id,
+        test_name=body.test_name,
+        classification=body.classification,
+        child_job_name=body.child_job_name,
+        child_build_number=body.child_build_number,
+        username=username,
+    )
+    await _invalidate_cached_html(job_id)
+    return {"status": "ok", "classification": body.classification}
 
 
 @app.get("/results/{job_id}/review-status")
