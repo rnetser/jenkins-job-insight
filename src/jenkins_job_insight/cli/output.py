@@ -7,7 +7,6 @@ def format_table(
     data: list[dict],
     columns: list[str],
     labels: dict[str, str] | None = None,
-    max_width: int | None = None,
 ) -> str:
     """Format a list of dicts as an aligned text table.
 
@@ -16,7 +15,6 @@ def format_table(
         columns: Column keys to display, in order.
         labels: Optional mapping of column key to display label.
             If not provided, the column key is uppercased.
-        max_width: Reserved for caller-side formatting control.
 
     Returns:
         Formatted table string.
@@ -73,7 +71,6 @@ def print_output(
     columns: list[str],
     as_json: bool = False,
     labels: dict[str, str] | None = None,
-    max_width: int | None = None,
 ) -> None:
     """Print data to stdout in table or JSON format.
 
@@ -82,7 +79,6 @@ def print_output(
         columns: Column keys for table mode.
         as_json: If True, print as JSON. If False, print as table.
         labels: Optional column label overrides for table mode.
-        max_width: Reserved for caller-side formatting control.
     """
     if as_json:
         print(format_json(data))
@@ -90,4 +86,4 @@ def print_output(
 
     if isinstance(data, dict):
         data = [data]
-    print(format_table(data, columns=columns, labels=labels, max_width=max_width))
+    print(format_table(data, columns=columns, labels=labels))
