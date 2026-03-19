@@ -262,9 +262,18 @@ async def init_db() -> None:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_fh_job_test ON failure_history (job_name, test_name)"
         )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fh_job_context ON failure_history (job_id, test_name, child_job_name, child_build_number)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fh_classification ON failure_history (classification)"
+        )
 
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_tc_test_name ON test_classifications (test_name)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tc_job_id_visible ON test_classifications (job_id, visible)"
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_tc_classification ON test_classifications (classification)"
@@ -307,7 +316,7 @@ async def add_comment(
 ) -> int:
     """Add a comment to a test failure."""
     logger.debug(
-        f"add_comment: job_id={job_id}, test_name={test_name}, comment_length={len(comment)}, username={username}"
+        f"add_comment: job_id={job_id}, test_name={test_name}, comment_len={len(comment)}"
     )
     _validate_child_identifier_pairing(child_job_name, child_build_number)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -330,14 +339,14 @@ async def add_comment(
 async def delete_comment(comment_id: int, username: str, job_id: str = "") -> bool:
     """Delete a comment. Username check is a UI courtesy, not security.
 
-    This project has no authentication — all users are trusted.
-    See issue #55 for future auth plans.
+    DESIGN DECISION: No authentication in this project.
+    All users are trusted. Username matching is a UI convenience
+    (shows delete button only for your own comments), NOT a security control.
+    Any user can delete any comment. See issue #55 for future auth plans.
 
     Returns True if deleted, False if not found.
     """
-    logger.debug(
-        f"delete_comment: comment_id={comment_id}, username={username}, job_id={job_id}"
-    )
+    logger.debug(f"delete_comment: comment_id={comment_id}, job_id={job_id}")
     async with aiosqlite.connect(DB_PATH) as db:
         # Build query with optional scoping filters
         query = "DELETE FROM comments WHERE id = ?"
@@ -381,7 +390,7 @@ async def set_reviewed(
 ) -> None:
     """Set or update the reviewed state for a test failure."""
     logger.debug(
-        f"set_reviewed: job_id={job_id}, test_name={test_name}, reviewed={reviewed}, username={username}"
+        f"set_reviewed: job_id={job_id}, test_name={test_name}, reviewed={reviewed}"
     )
     _validate_child_identifier_pairing(child_job_name, child_build_number)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1069,13 +1078,17 @@ async def get_test_history(
         )
         recent_runs = [dict(row) for row in await cursor.fetchall()]
 
-        # Consecutive failures — every row in recent_runs is a failure
-        # (failure_history only records failures), so count them directly.
-        # NOTE: Without pass tracking we cannot detect an intervening
-        # successful build that would break the streak. The count here
-        # represents the number of recent consecutive failure records.
+        # Total failure record count — computed with a separate unbounded query
+        # so the value is not capped by the `limit` parameter used for recent_runs.
+        # NOTE: failure_history only records failures (not passes), so this is
+        # the total number of recorded failure events, not a true consecutive
+        # streak (an intervening pass would not be detected).
         # Adding pass tracking is deferred to a future enhancement.
-        consecutive_failures = len(recent_runs)
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM failure_history WHERE test_name = ?{job_filter}",
+            params,
+        )
+        consecutive_failures = (await cursor.fetchone())[0]
 
         # Count only completed results for the denominator so that
         # pending/running/failed analyses don't inflate total_runs.
@@ -1571,12 +1584,26 @@ async def set_test_classification(
         visible: Whether the classification is immediately visible.
             Set to 0 during AI analysis; revealed after analysis completes.
     """
+    _valid_classifications = {
+        "FLAKY",
+        "REGRESSION",
+        "INFRASTRUCTURE",
+        "KNOWN_BUG",
+        "INTERMITTENT",
+    }
+    if classification not in _valid_classifications:
+        raise ValueError(
+            f"Invalid classification: {classification}. "
+            f"Valid: {', '.join(sorted(_valid_classifications))}"
+        )
+    if visible not in (0, 1):
+        raise ValueError(f"visible must be 0 or 1, got {visible}")
     if not job_id or not job_id.strip():
         raise ValueError("job_id is required for test classification")
     _validate_child_identifier_pairing(job_name, child_build_number)
     logger.debug(
         f"set_test_classification: test_name={test_name}, classification={classification}, "
-        f"parent_job_name={parent_job_name}, job_id={job_id}, created_by={created_by}, visible={visible}"
+        f"parent_job_name={parent_job_name}, job_id={job_id}, visible={visible}"
     )
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
