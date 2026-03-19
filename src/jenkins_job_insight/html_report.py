@@ -976,11 +976,28 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     color: var(--accent-blue);
     text-decoration: none;
     font-size: 12px;
-    display: block;
-    padding: 2px 0;
+    display: inline;
 }}
 .similar-issues-box a:hover {{
     text-decoration: underline;
+}}
+.similar-issue-status {{
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    margin-left: 6px;
+    font-weight: 600;
+    text-transform: uppercase;
+    vertical-align: middle;
+}}
+.similar-issue-status.status-open {{
+    background: rgba(63,185,80,0.15);
+    color: #3fb950;
+}}
+.similar-issue-status.status-closed {{
+    background: rgba(139,148,158,0.15);
+    color: #8b949e;
 }}
 
 /* Responsive (page-specific) */
@@ -1758,12 +1775,30 @@ function showIssuePreviewModal(type, data, testName, childJob, childBuild, inclu
         boxH4.textContent = 'Similar existing issues found (' + data.similar_issues.length + ')';
         box.appendChild(boxH4);
         data.similar_issues.forEach(function(s) {{
+            var row = document.createElement('div');
+            row.style.cssText = 'padding:2px 0;';
             var link = document.createElement('a');
             link.href = s.url || '#';
             link.target = '_blank';
             link.rel = 'noopener';
+            link.style.cssText = 'color:var(--accent-blue);text-decoration:none;font-size:12px;';
             link.textContent = (s.key || '#' + (s.number || '')) + ': ' + (s.title || '');
-            box.appendChild(link);
+            link.onmouseover = function() {{ this.style.textDecoration = 'underline'; }};
+            link.onmouseout = function() {{ this.style.textDecoration = 'none'; }};
+            row.appendChild(link);
+            if (s.status) {{
+                var badge = document.createElement('span');
+                badge.className = 'similar-issue-status';
+                var st = (s.status || '').toLowerCase();
+                if (st === 'open' || st === 'in progress' || st === 'to do' || st === 'new' || st === 'reopened') {{
+                    badge.classList.add('status-open');
+                }} else {{
+                    badge.classList.add('status-closed');
+                }}
+                badge.textContent = s.status;
+                row.appendChild(badge);
+            }}
+            box.appendChild(row);
         }});
         dialog.appendChild(box);
     }}
