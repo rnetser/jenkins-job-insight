@@ -843,16 +843,6 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     background: var(--bg-hover);
     border-color: var(--accent-blue);
 }}
-.comment-test-select {{
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px;
-    color: var(--text-primary);
-    font-size: 12px;
-    font-family: var(--font-mono);
-}}
-
 {_modal_css()}
 
 /* Responsive (page-specific) */
@@ -1804,16 +1794,9 @@ def _render_group_card(
 """)
 
     # Comments section (populated by JavaScript)
-    # Build test name selector for multi-test groups
-    if len(failures) > 1:
-        select_html = (
-            f'{indent}        <select class="comment-test-select" style="width:100%;">'
-        )
-        for f in failures:
-            select_html += f'<option value="{e(f.test_name)}">{e(f.test_name)}</option>'
-        select_html += "</select>\n"
-    else:
-        select_html = f'{indent}        <input type="hidden" class="comment-test-select" value="{e(failures[0].test_name)}">\n'
+    # Always use the first (representative) test for comments
+    comment_test = failures[0].test_name
+    select_html = f'{indent}        <input type="hidden" class="comment-test-select" value="{e(comment_test)}">\n'
 
     all_test_names = e(json.dumps([f.test_name for f in failures]))
     parts.append(f"""{indent}    <div class="comments-section" data-test-names="{all_test_names}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}">
