@@ -10,6 +10,19 @@
 - Use everything you create: imports, variables, clones, instantiations
 - Remove unused code rather than leaving it dormant
 
+## No Duplicate Code — MANDATORY
+
+**ZERO tolerance for duplicate code. This is a hard rule, not a guideline.**
+
+- If the same logic exists in 2+ places, it is a BUG. Extract it immediately.
+- Before writing ANY code, search for existing helpers that do the same thing. Reuse first.
+- This applies to ALL code: Python, JavaScript, CSS, HTML templates, SQL queries.
+- Shared CSS → `_common_css()`, `_controls_css()`, `_modal_css()` helpers
+- Shared JavaScript → `_modal_js()`, `_user_badge_js()` helpers
+- Shared Python logic → extract functions, base classes, or mixins
+- Copy-paste is NEVER acceptable. Not even "just this once." Not even "it's small."
+- Every PR review will check for duplication. Duplicates found = code rejected.
+
 ## Smart Context Management
 
 - Prefer structured data (test reports, APIs) over raw logs
@@ -55,10 +68,26 @@ This project uses AI CLI tools (Claude CLI, Gemini CLI, Cursor Agent CLI) instea
 | `enrich_with_jira_matches()` | Post-processing: attaches Jira matches to PRODUCT BUG failures |
 | `_filter_matches_with_ai()` | AI-powered relevance filtering of Jira candidates |
 
+### AI Tool Access (IMPORTANT)
+
+Never pre-feed data to the AI in the prompt. Instead, give the AI tools (API endpoints, scripts, commands) and let it decide what data it needs and extract it itself.
+
+**DO:**
+- Expose API endpoints the AI can curl
+- Provide a skill file (e.g., FAILURE_HISTORY_ANALYSIS.md) documenting available tools
+- Let the AI query, explore, and interpret data on its own
+
+**DON'T:**
+- Pre-query the database and stuff results into the prompt
+- Summarize or filter data before the AI sees it
+- Make decisions about what data the AI needs — let the AI decide
+
+This principle applies to all AI integrations: failure history, test analysis, and any future AI-powered features.
+
 ### Failure Deduplication
 
 When multiple tests fail with the same error:
-1. Failures are grouped by error signature (MD5 hash of error + stack trace)
+1. Failures are grouped by error signature (SHA-256 hash of error + stack trace)
 2. Only one AI CLI call per unique error type
 3. Analysis is applied to all failures with matching signature
 4. Reduces redundant API calls and output

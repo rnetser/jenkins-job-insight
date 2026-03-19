@@ -400,3 +400,29 @@ class ReviewStatusResponse(BaseModel):
     total_failures: int
     reviewed_count: int
     comment_count: int
+
+
+class ClassifyTestRequest(BaseModel):
+    """Request body for classifying a test (e.g., FLAKY, REGRESSION)."""
+
+    test_name: str
+    classification: Literal[
+        "FLAKY", "REGRESSION", "INFRASTRUCTURE", "KNOWN_BUG", "INTERMITTENT"
+    ]
+    reason: str = ""
+    job_name: str = ""
+    references: str = ""
+    job_id: str
+    child_build_number: int = 0
+
+    @field_validator("job_id")
+    @classmethod
+    def job_id_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("job_id must not be empty")
+        return v
+
+    @field_validator("classification", mode="before")
+    @classmethod
+    def normalize_classification(cls, v: str) -> str:
+        return v.upper() if isinstance(v, str) else v

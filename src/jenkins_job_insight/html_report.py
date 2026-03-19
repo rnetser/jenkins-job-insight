@@ -87,7 +87,7 @@ body {
     padding: 16px 24px;
     margin: 0 -24px 32px;
 }
-.header-content { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.header-content { max-width: 1200px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 8px; }
 .header-content h1 { font-size: 20px; font-weight: 700; flex-shrink: 0; }
 
 /* Footer */
@@ -105,9 +105,263 @@ body {
 .report-footer a { color: var(--accent-blue); text-decoration: none; }
 .report-footer a:hover { text-decoration: underline; }
 
+/* Env chips */
+.env-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.env-chip {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    text-decoration: none;
+}
+.env-chip a { color: var(--accent-blue); text-decoration: none; }
+.env-chip a:hover { text-decoration: underline; }
+
+/* Section titles */
+.section-title {
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin: 32px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .header-content { flex-direction: column; align-items: flex-start; }
+}"""
+
+
+def _modal_css() -> str:
+    """Return CSS for the confirmation modal dialog.
+
+    Used by both the analysis report and dashboard pages.
+
+    Returns:
+        A CSS string (without ``<style>`` tags) ready to embed directly.
+    """
+    return """\
+/* Modal popup */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal-dialog {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+}
+.modal-dialog h3 {
+    font-size: 16px;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+.modal-dialog p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+}
+.modal-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+.modal-btn {
+    padding: 8px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    transition: background 0.15s, border-color 0.15s;
+}
+.modal-btn-cancel {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+.modal-btn-cancel:hover {
+    background: var(--bg-hover);
+}
+.modal-btn-danger {
+    background: rgba(248,81,73,0.12);
+    color: var(--accent-red);
+    border-color: var(--accent-red);
+}
+.modal-btn-danger:hover {
+    background: rgba(248,81,73,0.25);
+}"""
+
+
+def _controls_css() -> str:
+    """Return CSS for search, pagination, and per-page controls.
+
+    Used by both the dashboard and history pages.
+
+    Returns:
+        A CSS string (without ``<style>`` tags) ready to embed directly.
+    """
+    return """\
+/* Controls bar (search + per-page) */
+.controls-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+.search-input {
+    flex: 1;
+    min-width: 200px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color 0.15s;
+}
+.search-input::placeholder { color: var(--text-muted); }
+.search-input:focus { border-color: var(--accent-blue); }
+.per-page-select {
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    cursor: pointer;
+    outline: none;
+}
+.per-page-select:focus { border-color: var(--accent-blue); }
+/* Pagination controls */
+.pagination-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-top: 24px;
+    padding: 16px 0;
+}
+.pagination-btn {
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.pagination-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+}
+.pagination-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.page-info {
+    font-size: 13px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+}"""
+
+
+def _modal_js() -> str:
+    """Return JavaScript for the ``showConfirmModal`` function.
+
+    Used by both the analysis report and dashboard pages.
+
+    Returns:
+        A JavaScript string (without ``<script>`` tags) ready to embed directly.
+    """
+    return """\
+function showConfirmModal(title, message, onConfirm) {
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = '<div class="modal-dialog">' +
+        '<h3 id="modal-title"></h3>' +
+        '<p id="modal-message"></p>' +
+        '<div class="modal-actions">' +
+        '<button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>' +
+        '<button class="modal-btn modal-btn-danger" id="modal-confirm">Delete</button>' +
+        '</div></div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector('#modal-title').textContent = title;
+    overlay.querySelector('#modal-message').textContent = message;
+
+    overlay.querySelector('#modal-cancel').onclick = function() { overlay.remove(); };
+    overlay.querySelector('#modal-confirm').onclick = function() { overlay.remove(); onConfirm(); };
+    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+}"""
+
+
+def _user_badge_js() -> str:
+    """Return JavaScript for the fixed top-right user badge.
+
+    Used by the report page, dashboard, and history page.
+
+    Returns:
+        A JavaScript string (without ``<script>`` tags) ready to embed directly.
+    """
+    return """
+(function() {
+    var username = '';
+    try { username = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); } catch(e) {}
+    if (username) {
+        var userBadge = document.createElement('div');
+        userBadge.style.cssText = 'position:fixed;top:12px;right:24px;z-index:200;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
+        var escaped = document.createElement('span');
+        escaped.textContent = username;
+        userBadge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' + escaped.innerHTML;
+        document.body.appendChild(userBadge);
+    }
+})();
+"""
+
+
+def _classification_colors_js() -> str:
+    """Return JavaScript for the ``getClassificationStyle`` function.
+
+    Centralizes the classification-to-color mapping so all pages use a
+    single source of truth.  Call sites should invoke
+    ``getClassificationStyle(cls)`` to get the CSS style string.
+
+    Returns:
+        A JavaScript string (without ``<script>`` tags) ready to embed directly.
+    """
+    return """\
+function getClassificationStyle(cls) {
+    var styles = {
+        'FLAKY': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);',
+        'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red);',
+        'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange);',
+        'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple);',
+        'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);'
+    };
+    return styles[cls] || 'background:var(--bg-tertiary);color:var(--text-muted);';
 }"""
 
 
@@ -168,18 +422,6 @@ def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str
     align-items: center;
     gap: 4px;
 }}
-.env-chips {{ display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }}
-.env-chip {{
-    font-size: 12px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
-    color: var(--text-secondary);
-    text-decoration: none;
-}}
-.env-chip a {{ color: var(--accent-blue); text-decoration: none; }}
-.env-chip a:hover {{ text-decoration: underline; }}
 .regenerate-btn {{
     font-size: 12px;
     padding: 4px 10px;
@@ -197,18 +439,6 @@ def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str
 .regenerate-btn:hover {{
     background: var(--bg-hover);
     border-color: var(--accent-blue);
-}}
-
-/* Section titles */
-.section-title {{
-    font-size: 14px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--text-muted);
-    margin: 32px 0 16px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
 }}
 
 /* Failure cards */
@@ -613,20 +843,9 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     background: var(--bg-hover);
     border-color: var(--accent-blue);
 }}
-.comment-test-select {{
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px;
-    color: var(--text-primary);
-    font-size: 12px;
-    font-family: var(--font-mono);
-}}
+{_modal_css()}
 
 /* Responsive (page-specific) */
-@media (max-width: 768px) {{
-    .env-chips {{ margin-left: 0; }}
-}}
 @media (max-width: 480px) {{
     .failure-summary {{ font-size: 12px; gap: 8px; }}
 }}
@@ -637,19 +856,26 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 """)
 
     # --- STICKY HEADER ---
+    job_name_html = (
+        f'<a href="{e(jenkins_url_str)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">{e(job_name)}</a>'
+        if jenkins_url_str
+        else e(job_name)
+    )
     parts.append(f"""
 <div class="sticky-header">
   <div class="header-content">
-    <h1>{e(job_name)}</h1>
-    <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
-    <span id="overall-review-status" class="status-chip" style="display:none"></span>
-    <div class="env-chips">
+    <div id="header-line1" style="display:flex;align-items:center;gap:16px;width:100%;flex-wrap:wrap;">
+      <h1>{job_name_html}</h1>
+      <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
+      <span id="overall-review-status" class="status-chip" style="display:none"></span>
+      <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data" style="margin-left:auto;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap;">
       <span class="env-chip">Build: #{e(build_number)}</span>
       <span class="env-chip">Status: {e(result.status)}</span>
       <span class="env-chip">AI: {e(provider_info)}</span>
       {f'<span class="env-chip">Analyzed: {e(completed_at)}</span>' if completed_at else ""}
-      {f'<span class="env-chip"><a href="{e(jenkins_url_str)}" target="_blank" rel="noopener">Jenkins</a></span>' if jenkins_url_str else ""}
-      <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
+      <span id="overall-comment-count" style="display:none;margin-left:auto;"></span>
     </div>
   </div>
 </div>
@@ -744,6 +970,62 @@ const JOB_ID = "{e(result.job_id)}";
 // Derive base path for API calls (works behind reverse proxies with path prefixes)
 const BASE_PATH = window.location.pathname.replace(/\\/results\\/.*$/, '');
 
+function renderCommentBadge(badge, count) {{
+    if (count <= 0) {{
+        badge.style.display = 'none';
+        return;
+    }}
+    badge.style.display = '';
+    badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:13px;padding:4px 12px;border-radius:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;margin-left:auto;';
+    badge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> ' + count;
+}}
+
+function updateCommentBadges() {{
+    // Recalculate overall comment count
+    var totalComments = document.querySelectorAll('.comment-item').length;
+    var overallBadge = document.getElementById('overall-comment-count');
+    if (overallBadge) {{
+        renderCommentBadge(overallBadge, totalComments);
+    }}
+
+    // Remove all dynamically created comment badges before recreating
+    document.querySelectorAll('.dynamic-comment-badge').forEach(function(el) {{ el.remove(); }});
+
+    // Per child job comment counts — scope to direct children only
+    document.querySelectorAll('.child-job-summary').forEach(function(summary) {{
+        var childJobEl = summary.closest('.child-job');
+        if (!childJobEl) return;
+        var childJobName = childJobEl.getAttribute('data-child-job') || '';
+        var childBuild = childJobEl.getAttribute('data-child-build') || '';
+        // Only count comment items that belong directly to this child job, not grandchildren
+        var count = Array.from(childJobEl.querySelectorAll('.comment-item')).filter(function(item) {{
+            return item.closest('.child-job') === childJobEl;
+        }}).length;
+        // Find or create badge
+        var badge = summary.querySelector('.child-comment-badge');
+        if (!badge) {{
+            badge = document.createElement('span');
+            badge.className = 'child-comment-badge dynamic-comment-badge';
+            summary.appendChild(badge);
+        }}
+        renderCommentBadge(badge, count);
+    }});
+
+    // Per bug card comment counts
+    document.querySelectorAll('.bug-summary, .failure-summary').forEach(function(summary) {{
+        var card = summary.closest('.bug-card, .failure-card');
+        if (!card) return;
+        var count = card.querySelectorAll('.comment-item').length;
+        var badge = summary.querySelector('.card-comment-badge');
+        if (!badge) {{
+            badge = document.createElement('span');
+            badge.className = 'card-comment-badge dynamic-comment-badge';
+            summary.appendChild(badge);
+        }}
+        renderCommentBadge(badge, count);
+    }});
+}}
+
 async function loadCommentsAndReviews() {{
     try {{
         const resp = await fetch(`${{BASE_PATH}}/results/${{JOB_ID}}/comments`);
@@ -758,7 +1040,7 @@ async function loadCommentsAndReviews() {{
                 const sectionTests = JSON.parse(section.dataset.testNames || '[]');
                 const sectionChild = section.dataset.childJob || '';
                 const sectionChildBuild = parseInt(section.dataset.childBuild || '0');
-                if (sectionTests.includes(testNames) && sectionChild === childJob && sectionChildBuild === childBuildNumber) {{
+                if (sectionTests.includes(testNames) && sectionChild === childJob && (sectionChildBuild === childBuildNumber || childBuildNumber === 0)) {{
                     appendCommentToList(section, c);
                 }}
             }});
@@ -784,83 +1066,63 @@ async function loadCommentsAndReviews() {{
             }}
         }}
         updateReviewBadges();
+        // Reuse updateCommentBadges() which correctly scopes by
+        // child_job_name AND child_build_number via DOM .comment-item counts.
+        updateCommentBadges();
     }} catch (err) {{
         console.warn('Failed to load comments:', err);
     }}
 }}
 
+function applyReviewBadge(badge, container) {{
+    if (!container) return;
+    var toggles = container.querySelectorAll('.reviewed-toggle');
+    var total = toggles.length;
+    var checked = container.querySelectorAll('.reviewed-toggle.checked').length;
+    if (total === 0) return;
+    badge.style.display = '';
+    if (checked >= total) {{
+        badge.textContent = '\u2713 Reviewed';
+        badge.style.background = 'rgba(63,185,80,0.15)';
+        badge.style.color = 'var(--accent-green)';
+    }} else if (checked > 0) {{
+        badge.textContent = checked + '/' + total;
+        badge.style.background = 'rgba(210,153,34,0.15)';
+        badge.style.color = 'var(--accent-yellow)';
+    }} else {{
+        badge.textContent = 'Needs Review';
+        badge.style.background = 'rgba(248,81,73,0.12)';
+        badge.style.color = 'var(--accent-red)';
+    }}
+}}
+
 function updateReviewBadges() {{
     // Overall job review status
-    const allToggles = document.querySelectorAll('.reviewed-toggle');
-    const totalTests = allToggles.length;
-    const reviewedTests = document.querySelectorAll('.reviewed-toggle.checked').length;
-
     const overallBadge = document.getElementById('overall-review-status');
-    if (overallBadge && totalTests > 0) {{
-        overallBadge.style.display = '';
-        if (reviewedTests >= totalTests) {{
+    if (overallBadge) {{
+        overallBadge.style.fontSize = '13px';
+        overallBadge.style.padding = '4px 12px';
+        overallBadge.style.fontFamily = 'var(--font-mono)';
+        applyReviewBadge(overallBadge, document);
+        // Adjust text for overall: use "Fully Reviewed" instead of "Reviewed"
+        var allToggles = document.querySelectorAll('.reviewed-toggle');
+        var totalTests = allToggles.length;
+        var reviewedTests = document.querySelectorAll('.reviewed-toggle.checked').length;
+        if (totalTests > 0 && reviewedTests >= totalTests) {{
             overallBadge.textContent = '\u2713 Fully Reviewed';
-            overallBadge.style.background = 'rgba(63,185,80,0.15)';
-            overallBadge.style.color = 'var(--accent-green)';
-        }} else if (reviewedTests > 0) {{
+        }} else if (totalTests > 0 && reviewedTests > 0) {{
             overallBadge.textContent = reviewedTests + '/' + totalTests + ' Reviewed';
-            overallBadge.style.background = 'rgba(210,153,34,0.15)';
-            overallBadge.style.color = 'var(--accent-yellow)';
-        }} else {{
-            overallBadge.textContent = 'Needs Review';
-            overallBadge.style.background = 'rgba(248,81,73,0.12)';
-            overallBadge.style.color = 'var(--accent-red)';
         }}
     }}
 
     // Per child job review status
-    document.querySelectorAll('.child-review-status').forEach(badge => {{
-        const job = badge.closest('.child-job');
-        if (!job) return;
-        const toggles = job.querySelectorAll('.reviewed-toggle');
-        const total = toggles.length;
-        const checked = job.querySelectorAll('.reviewed-toggle.checked').length;
-        if (total === 0) return;
-
-        badge.style.display = '';
-        if (checked >= total) {{
-            badge.textContent = '\u2713 Reviewed';
-            badge.style.background = 'rgba(63,185,80,0.15)';
-            badge.style.color = 'var(--accent-green)';
-        }} else if (checked > 0) {{
-            badge.textContent = checked + '/' + total;
-            badge.style.background = 'rgba(210,153,34,0.15)';
-            badge.style.color = 'var(--accent-yellow)';
-        }} else {{
-            badge.textContent = 'Needs Review';
-            badge.style.background = 'rgba(248,81,73,0.12)';
-            badge.style.color = 'var(--accent-red)';
-        }}
+    document.querySelectorAll('.child-review-status').forEach(function(badge) {{
+        applyReviewBadge(badge, badge.closest('.child-job'));
     }});
 
     // Per bug card review status
-    document.querySelectorAll('.group-review-status').forEach(badge => {{
-        const card = badge.closest('.bug-card');
-        if (!card) return;
-        const toggles = card.querySelectorAll('.reviewed-toggle');
-        const total = toggles.length;
-        const checked = card.querySelectorAll('.reviewed-toggle.checked').length;
-        if (total === 0) return;
-
-        badge.style.display = '';
-        if (checked >= total) {{
-            badge.textContent = '\u2713 Reviewed';
-            badge.style.background = 'rgba(63,185,80,0.15)';
-            badge.style.color = 'var(--accent-green)';
-        }} else if (checked > 0) {{
-            badge.textContent = checked + '/' + total;
-            badge.style.background = 'rgba(210,153,34,0.15)';
-            badge.style.color = 'var(--accent-yellow)';
-        }} else {{
-            badge.textContent = 'Needs Review';
-            badge.style.background = 'rgba(248,81,73,0.12)';
-            badge.style.color = 'var(--accent-red)';
-        }}
+    document.querySelectorAll('.group-review-status').forEach(function(badge) {{
+        applyReviewBadge(badge, badge.closest('.bug-card') || badge.closest('.failure-card'));
     }});
 }}
 
@@ -871,9 +1133,42 @@ function appendCommentToList(section, comment) {{
     if (comment.id) item.dataset.commentId = comment.id;
     const text = autoLink(escapeHtml(comment.comment));
     var userLabel = comment.username ? '<span style="font-family:var(--font-mono);font-size:11px;color:var(--accent-purple);margin-right:6px;">' + escapeHtml(comment.username) + '</span>' : '';
+    var deleteBtn = '';
+    var currentUser = '';
+    try {{ currentUser = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
+    if (comment.username && comment.username === currentUser && comment.id) {{
+        deleteBtn = ' <button onclick="deleteComment(this, ' + comment.id + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;">Delete</button>';
+    }}
     // Safe: escapeHtml sanitizes all user content, autoLink only adds <a> tags for URL patterns
-    item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + '</div><div class="comment-text">' + userLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
+    item.innerHTML = '<div class="comment-timestamp">' + (comment.created_at || '') + deleteBtn + '</div><div class="comment-text">' + userLabel + text + '</div>';  // nosec: innerHTML is safe here because escapeHtml sanitizes user input
     list.appendChild(item);
+}}
+
+{_modal_js()}
+
+{_classification_colors_js()}
+
+async function deleteComment(btn, commentId) {{
+    showConfirmModal('Delete Comment', 'Are you sure you want to delete this comment?', async function() {{
+        try {{
+            var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + '/comments/' + commentId, {{
+                method: 'DELETE',
+            }});
+            if (resp.ok) {{
+                var item = btn.closest('.comment-item');
+                var section = item.closest('.comments-section');
+                item.remove();
+                var count = section.querySelectorAll('.comment-item').length;
+                section.querySelector('.comment-count').textContent = count;
+                updateCommentBadges();
+            }} else {{
+                var data = await resp.json();
+                alert(data.detail || 'Failed to delete');
+            }}
+        }} catch (err) {{
+            console.warn('Failed to delete comment:', err);
+        }}
+    }});
 }}
 
 function escapeHtml(str) {{
@@ -934,6 +1229,46 @@ async function toggleReviewed(label) {{
     }}
 }}
 
+async function toggleAllReviewed(btn) {{
+    var card = btn.closest('.bug-card') || btn.closest('.failure-card') || btn.closest('.child-job-body');
+    if (!card) return;
+    var toggles = card.querySelectorAll('.reviewed-toggle input[type="checkbox"]');
+    var allChecked = Array.from(toggles).every(function(cb) {{ return cb.checked; }});
+    var newState = !allChecked;
+
+    var promises = [];
+    toggles.forEach(function(cb) {{
+        if (cb.checked !== newState) {{
+            cb.checked = newState;
+            var label = cb.closest('.reviewed-toggle');
+            label.classList.toggle('checked', newState);
+
+            var testName = label.dataset.testName;
+            var childJob = label.dataset.childJob || '';
+            var childBuild = parseInt(label.dataset.childBuild || '0');
+
+            promises.push(
+                fetch(BASE_PATH + '/results/' + JOB_ID + '/reviewed', {{
+                    method: 'PUT',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{
+                        test_name: testName,
+                        child_job_name: childJob,
+                        child_build_number: childBuild,
+                        reviewed: newState
+                    }}),
+                }})
+            );
+        }}
+    }});
+
+    await Promise.all(promises);
+
+    btn.textContent = newState ? 'Deselect All' : 'Select All';
+
+    if (typeof updateReviewBadges === 'function') updateReviewBadges();
+}}
+
 async function addComment(btn) {{
     const row = btn.closest('.comment-input-row');
     const input = row.querySelector('.comment-input');
@@ -962,6 +1297,7 @@ async function addComment(btn) {{
             const count = section.querySelectorAll('.comment-item').length;
             section.querySelector('.comment-count').textContent = count;
             input.value = '';
+            updateCommentBadges();
             await loadEnrichments();
         }}
     }} catch (err) {{
@@ -1011,6 +1347,160 @@ async function loadEnrichments() {{
     }}
 }}
 
+async function loadClassifications() {{
+    try {{
+        var resp = await fetch(BASE_PATH + '/history/classifications?job_id=' + encodeURIComponent(JOB_ID));
+        if (!resp.ok) return;
+        var data = await resp.json();
+        var byKey = {{}};
+        (data.classifications || []).forEach(function(c) {{
+            // Normalize: empty job_name (root-job) uses '' as the key prefix,
+            // matching the toggle's data-child-job which is '' for root failures.
+            var scopeKey = c.job_name || '';
+            var key = scopeKey + '::' + c.test_name;
+            if (!byKey[key]) byKey[key] = [];
+            byKey[key].push(c);
+        }});
+
+        document.querySelectorAll('.reviewed-toggle').forEach(function(toggle) {{
+            var testName = toggle.dataset.testName;
+            var childJob = toggle.dataset.childJob || '';
+            if (!testName) return;
+            var key = childJob + '::' + testName;
+            var entries = byKey[key];
+            if (!entries) return;
+            entries.forEach(function(cls) {{
+                var badge = document.createElement('span');
+                badge.className = 'classification-tag';
+                badge.style.cssText = getClassificationStyle(cls.classification) + 'margin-left:6px;';
+                var badgeLabel = cls.classification.replace('_', ' ');
+                if (cls.classification === 'KNOWN_BUG') {{
+                    var jiraMatch = (cls.reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
+                    if (jiraMatch) badgeLabel = 'KNOWN BUG: ' + jiraMatch[1];
+                }}
+                badge.textContent = badgeLabel;
+                badge.title = (cls.reason || '') + (cls.references_info ? '\\nRef: ' + cls.references_info : '');
+                toggle.appendChild(badge);
+            }});
+        }});
+
+        // Add classification badges to bug card summaries
+        document.querySelectorAll('.bug-summary, .failure-summary').forEach(function(summary) {{
+            var card = summary.closest('.bug-card, .failure-card');
+            if (!card) return;
+            var toggles = card.querySelectorAll('.reviewed-toggle');
+            var cardClassifications = {{}};
+            var cardJiraKeys = {{}};
+            var cardReasons = {{}};
+            toggles.forEach(function(t) {{
+                var tn = t.dataset.testName;
+                var cj = t.dataset.childJob || '';
+                var key = cj + '::' + tn;
+                if (tn && byKey[key]) {{
+                    byKey[key].forEach(function(entry) {{
+                        var cls = entry.classification;
+                        cardClassifications[cls] = (cardClassifications[cls] || 0) + 1;
+                        if (!cardReasons[cls]) cardReasons[cls] = [];
+                        var r = entry.reason || '';
+                        var ri = entry.references_info || '';
+                        var tip = r + (ri ? '\\nRef: ' + ri : '');
+                        if (tip && cardReasons[cls].indexOf(tip) === -1) cardReasons[cls].push(tip);
+                        if (cls === 'KNOWN_BUG') {{
+                            var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
+                            if (jm && !cardJiraKeys[jm[1]]) cardJiraKeys[jm[1]] = true;
+                        }}
+                    }});
+                }}
+            }});
+            for (var cls in cardClassifications) {{
+                var badge = document.createElement('span');
+                badge.className = 'classification-tag';
+                badge.style.cssText = getClassificationStyle(cls) + 'margin-left:6px;';
+                var count = cardClassifications[cls];
+                var label = count > 1 ? count + ' ' + cls.replace('_', ' ') : cls.replace('_', ' ');
+                if (cls === 'KNOWN_BUG') {{
+                    var keys = Object.keys(cardJiraKeys);
+                    if (keys.length > 0) {{
+                        label = count > 1 ? count + ' KNOWN BUG: ' + keys.join(', ') : 'KNOWN BUG: ' + keys[0];
+                    }}
+                }}
+                badge.textContent = label;
+                badge.title = (cardReasons[cls] || []).join('; ');
+                summary.appendChild(badge);
+            }}
+        }});
+
+        // Add classification badges to child job summaries
+        document.querySelectorAll('.child-job-summary').forEach(function(summary) {{
+            var childCard = summary.closest('.child-job');
+            if (!childCard) return;
+            var toggles = childCard.querySelectorAll('.reviewed-toggle');
+            var childClassifications = {{}};
+            var childJiraKeys = {{}};
+            var childReasons = {{}};
+            toggles.forEach(function(t) {{
+                var tn = t.dataset.testName;
+                var cj = t.dataset.childJob || '';
+                var key = cj + '::' + tn;
+                if (tn && byKey[key]) {{
+                    byKey[key].forEach(function(entry) {{
+                        var cls = entry.classification;
+                        childClassifications[cls] = (childClassifications[cls] || 0) + 1;
+                        if (!childReasons[cls]) childReasons[cls] = [];
+                        var r = entry.reason || '';
+                        var ri = entry.references_info || '';
+                        var tip = r + (ri ? '\\nRef: ' + ri : '');
+                        if (tip && childReasons[cls].indexOf(tip) === -1) childReasons[cls].push(tip);
+                        if (cls === 'KNOWN_BUG') {{
+                            var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
+                            if (jm && !childJiraKeys[jm[1]]) childJiraKeys[jm[1]] = true;
+                        }}
+                    }});
+                }}
+            }});
+            for (var cls in childClassifications) {{
+                var badge = document.createElement('span');
+                badge.style.cssText = 'display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;white-space:nowrap;margin-left:6px;' + getClassificationStyle(cls);
+                var count = childClassifications[cls];
+                var label = count > 1 ? count + ' ' + cls.replace('_', ' ') : cls.replace('_', ' ');
+                if (cls === 'KNOWN_BUG') {{
+                    var keys = Object.keys(childJiraKeys);
+                    if (keys.length > 0) {{
+                        label = count > 1 ? count + ' KNOWN BUG: ' + keys.join(', ') : 'KNOWN BUG: ' + keys[0];
+                    }}
+                }}
+                badge.textContent = label;
+                badge.title = (childReasons[cls] || []).join('; ');
+                summary.appendChild(badge);
+            }}
+        }});
+
+        // Add classification summary to report header
+        var headerClassifications = {{}};
+        for (var key in byKey) {{
+            byKey[key].forEach(function(entry) {{
+                headerClassifications[entry.classification] = (headerClassifications[entry.classification] || 0) + 1;
+            }});
+        }}
+        var headerLine1 = document.getElementById('header-line1');
+        if (headerLine1) {{
+            var regenBtn = headerLine1.querySelector('.regenerate-btn');
+            for (var cls in headerClassifications) {{
+                var chip = document.createElement('span');
+                chip.style.cssText = 'display:inline-flex;align-items:center;font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;font-family:var(--font-mono);white-space:nowrap;' + getClassificationStyle(cls);
+                chip.textContent = headerClassifications[cls] + ' ' + cls.replace('_', ' ');
+                if (regenBtn) {{
+                    headerLine1.insertBefore(chip, regenBtn);
+                }} else {{
+                    headerLine1.appendChild(chip);
+                }}
+            }}
+        }}
+    }} catch (err) {{
+        console.warn('Failed to load classifications:', err);
+    }}
+}}
+
 document.addEventListener('DOMContentLoaded', async function() {{
     document.querySelectorAll('.reviewed-toggle input[type="checkbox"]').forEach(cb => {{
         cb.addEventListener('change', function(event) {{
@@ -1018,21 +1508,6 @@ document.addEventListener('DOMContentLoaded', async function() {{
             toggleReviewed(this.closest('.reviewed-toggle'));
         }});
     }});
-    // Show current user in header
-    var userCookie = document.cookie.split('; ').find(function(c) {{ return c.startsWith('jji_username='); }});
-    if (userCookie) {{
-        var uname = decodeURIComponent(userCookie.split('=')[1]);
-        var headerContent = document.querySelector('.header-content');
-        if (headerContent) {{
-            var chips = headerContent.querySelector('.env-chips');
-            if (chips) {{
-                var userChip = document.createElement('span');
-                userChip.className = 'env-chip';
-                userChip.textContent = 'User: ' + uname;
-                chips.appendChild(userChip);
-            }}
-        }}
-    }}
     // Enter to send, Shift+Enter for new line
     document.querySelectorAll('.comment-input').forEach(textarea => {{
         textarea.addEventListener('keydown', function(e) {{
@@ -1043,9 +1518,13 @@ document.addEventListener('DOMContentLoaded', async function() {{
             }}
         }});
     }});
+    await loadClassifications();
     await loadCommentsAndReviews();
     await loadEnrichments();
 }});
+</script>
+<script>
+{_user_badge_js()}
 </script>
 """)
 
@@ -1194,90 +1673,6 @@ def _group_failures(failures: list[FailureAnalysis]) -> list[dict]:
     return groups
 
 
-def _render_failure_card(
-    parts: list[str],
-    failure: FailureAnalysis,
-    e: Callable[[str], str],
-    indent: str = "",
-) -> None:
-    """Render a single collapsible failure card.
-
-    Args:
-        parts: List of HTML string parts to append to.
-        failure: A FailureAnalysis instance to render.
-        e: HTML escape function reference.
-        indent: HTML indentation prefix for nested cards.
-    """
-    detail = failure.analysis
-    cls = detail.classification or "Unknown"
-    cls_class = _classification_css_class(cls)
-
-    parts.append(f"""{indent}<details class="failure-card">
-{indent}  <summary class="failure-summary">
-{indent}    <span class="failure-title">{e(failure.test_name)}</span>
-{indent}    <span class="classification-tag {e(cls_class)}">{e(cls)}</span>
-{indent}  </summary>
-{indent}  <div class="failure-body">
-""")
-
-    # Error
-    parts.append(f"""{indent}    <h4>Error</h4>
-{indent}    <pre class="error-pre">{e(failure.error)}</pre>
-""")
-
-    # Analysis text
-    if detail.details:
-        parts.append(f"""{indent}    <h4>Analysis</h4>
-{indent}    <pre class="analysis-pre">{e(detail.details)}</pre>
-""")
-
-    # Code Fix details
-    if isinstance(detail.code_fix, CodeFix):
-        fix = detail.code_fix
-        parts.append(f"""{indent}    <h4>Code Fix</h4>
-{indent}    <div class="detail-grid">
-{indent}      <span class="detail-label">File:</span><span class="detail-value">{e(fix.file)}</span>
-{indent}      <span class="detail-label">Line:</span><span class="detail-value">{e(fix.line)}</span>
-{indent}      <span class="detail-label">Change:</span><span class="detail-value">{e(fix.change)}</span>
-{indent}    </div>
-""")
-
-    # Product Bug Report details
-    if isinstance(detail.product_bug_report, ProductBugReport):
-        bug = detail.product_bug_report
-
-        parts.append(f"""{indent}    <h4>Product Bug Report</h4>
-{indent}    <div class="detail-grid">
-{indent}      <span class="detail-label">Title:</span><span class="detail-value">{e(bug.title)}</span>
-{indent}      <span class="detail-label">Severity:</span><span class="detail-value">{e(bug.severity)}</span>
-{indent}      <span class="detail-label">Component:</span><span class="detail-value">{e(bug.component)}</span>
-{indent}      <span class="detail-label">Description:</span><span class="detail-value">{e(bug.description)}</span>
-{indent}      <span class="detail-label">Evidence:</span><span class="detail-value">{e(bug.evidence)}</span>
-{indent}    </div>
-""")
-        # Jira matches
-        if bug.jira_matches:
-            _render_jira_matches(parts, bug.jira_matches, e, indent)
-
-    # Artifacts evidence
-    _render_artifacts_evidence(parts, detail, e, indent)
-
-    # Affected tests
-    if detail.affected_tests:
-        parts.append(
-            f'{indent}    <h4>Affected Tests ({len(detail.affected_tests)})</h4>\n{indent}    <ul style="list-style:none;padding:0">\n'
-        )
-        for t in detail.affected_tests:
-            parts.append(
-                f'{indent}      <li style="padding:4px 0;font-size:13px;color:var(--text-secondary)"><code style="font-family:var(--font-mono);font-size:12px;color:var(--text-primary)">{e(t)}</code></li>\n'
-            )
-        parts.append(f"{indent}    </ul>\n")
-
-    parts.append(f"""{indent}  </div>
-{indent}</details>
-""")
-
-
 def _render_group_card(
     parts: list[str],
     group: dict,
@@ -1325,8 +1720,9 @@ def _render_group_card(
     else:
         card_title = failures[0].error or failures[0].test_name
 
+    group_test_names = e(json.dumps([f.test_name for f in failures]))
     parts.append(f"""{indent}<details class="bug-card">
-{indent}  <summary class="bug-summary">
+{indent}  <summary class="bug-summary" data-test-names="{group_test_names}" data-child-job="{e(child_job_name)}">
 {indent}    <span class="bug-id">{e(bug_id)}</span>
 {indent}    <span class="bug-title">{e(card_title)}</span>
 {indent}    <span class="bug-count">{e(test_label)}</span>
@@ -1379,6 +1775,7 @@ def _render_group_card(
     # Affected Tests
     parts.append(f"""{indent}    <div class="bug-tests">
 {indent}      <h4>Affected Tests ({test_count})</h4>
+{indent}      <button class="select-all-reviewed" onclick="toggleAllReviewed(this)" style="font-size:11px;padding:3px 10px;border-radius:6px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;margin-bottom:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor='var(--accent-blue)'" onmouseout="this.style.borderColor='var(--border)'">Select All</button>
 {indent}      <ul>
 """)
     for f in failures:
@@ -1397,23 +1794,19 @@ def _render_group_card(
 """)
 
     # Comments section (populated by JavaScript)
-    # Build test name selector for multi-test groups
-    if len(failures) > 1:
-        select_html = f'{indent}        <select class="comment-test-select">'
-        for f in failures:
-            select_html += f'<option value="{e(f.test_name)}">{e(f.test_name)}</option>'
-        select_html += "</select>"
-    else:
-        select_html = f'<input type="hidden" class="comment-test-select" value="{e(failures[0].test_name)}">'
+    # Always use the first (representative) test for comments
+    comment_test = failures[0].test_name
+    select_html = f'{indent}        <input type="hidden" class="comment-test-select" value="{e(comment_test)}">\n'
 
     all_test_names = e(json.dumps([f.test_name for f in failures]))
     parts.append(f"""{indent}    <div class="comments-section" data-test-names="{all_test_names}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}">
 {indent}      <div class="comments-header">Comments (<span class="comment-count">0</span>)</div>
 {indent}      <div class="comment-list"></div>
-{indent}      <div class="comment-input-row">
-{indent}        {select_html}
-{indent}        <textarea class="comment-input" placeholder="Add a comment (bug link, PR, notes...)" rows="1"></textarea>
-{indent}        <button class="comment-add-btn" onclick="addComment(this)">Add</button>
+{indent}      <div class="comment-input-row" style="flex-direction:column;gap:8px;">
+{select_html}{indent}        <div style="display:flex;gap:8px;">
+{indent}          <textarea class="comment-input" placeholder="Add a comment (bug link, PR, notes...)" rows="1" style="flex:1;"></textarea>
+{indent}          <button class="comment-add-btn" onclick="addComment(this)">Add</button>
+{indent}        </div>
 {indent}      </div>
 {indent}    </div>
 """)
@@ -1520,6 +1913,9 @@ def _render_child_jobs(
             )
 
         if child_groups:
+            parts.append(
+                '    <button class="select-all-reviewed" onclick="toggleAllReviewed(this)" style="font-size:11px;padding:3px 10px;border-radius:6px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;margin-bottom:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor=\'var(--accent-blue)\'" onmouseout="this.style.borderColor=\'var(--border)\'">Select All</button>\n'
+            )
             for group in child_groups:
                 _render_group_card(
                     parts,
@@ -1620,6 +2016,11 @@ def format_status_page(job_id: str, status: str, result: dict) -> str:
     jenkins_url = result.get("jenkins_url", "")
     created_at = result.get("created_at", "")
 
+    # Extract job_name and build_number from stored result data
+    result_data = result.get("result") or {}
+    job_name = result_data.get("job_name", "")
+    build_number = result_data.get("build_number", "")
+
     status_icon = "&#9203;" if status == "running" else "&#8987;"
     status_label = "Analyzing..." if status == "running" else "Queued"
     status_detail = (
@@ -1633,7 +2034,9 @@ def format_status_page(job_id: str, status: str, result: dict) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Analysis {e(status_label)} - {e(job_id)}</title>
+<title>Analysis {e(status_label)} - {
+        e(job_name) + " #" + e(str(build_number)) if job_name else e(job_id)
+    }</title>
 <link rel="icon" href="{FAVICON_DATA_URI}">
 <style>
 /* Minimal standalone styles — this lightweight status page intentionally
@@ -1647,6 +2050,7 @@ def format_status_page(job_id: str, status: str, result: dict) -> str:
     --text-muted: #6e7681;
     --accent-blue: #58a6ff;
     --accent-yellow: #d29922;
+    --accent-purple: #bc8cff;
     --font-mono: 'SF Mono', 'Cascadia Code', Consolas, monospace;
     --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     --radius: 8px;
@@ -1731,9 +2135,21 @@ body {{
 <body>
 <div class="status-container">
     <div class="status-icon">{status_icon}</div>
+    {
+        f'<div style="font-size:16px;color:var(--text-secondary);margin-bottom:8px;font-weight:600;">{e(job_name)} #{e(str(build_number))}</div>'
+        if job_name
+        else ""
+    }
     <div class="status-label"><span class="spinner"></span>{e(status_label)}</div>
     <div class="status-detail">{e(status_detail)}</div>
-    <div class="info-card">
+    <div class="info-card">{
+        f'''<div class="info-row">
+            <span class="info-label">Job</span>
+            <span class="info-value">{e(job_name)} #{e(str(build_number))}</span>
+        </div>'''
+        if job_name
+        else ""
+    }
         <div class="info-row">
             <span class="info-label">Job ID</span>
             <span class="info-value">{e(job_id)}</span>
@@ -1757,6 +2173,9 @@ body {{
     </div>
     <div class="refresh-note">Auto-refreshing every 10 seconds</div>
 </div>
+<script>
+{_user_badge_js()}
+</script>
 </body>
 </html>"""
 
@@ -1811,20 +2230,29 @@ def generate_dashboard_html(
 /* Dashboard cards */
 .dashboard-card {{
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 16px;
+    flex-wrap: wrap;
     padding: 16px 20px;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     margin-bottom: 8px;
-    text-decoration: none;
     color: inherit;
     transition: background 0.15s, border-color 0.15s;
 }}
 .dashboard-card:hover {{
     background: var(--bg-hover);
     border-color: var(--accent-blue);
+}}
+.card-link {{
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    text-decoration: none;
+    color: inherit;
 }}
 .card-main {{
     flex: 1;
@@ -1921,8 +2349,9 @@ def generate_dashboard_html(
 .card-meta {{
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
     flex-shrink: 0;
+    white-space: nowrap;
 }}
 .card-timestamp {{
     font-size: 12px;
@@ -1944,41 +2373,7 @@ def generate_dashboard_html(
     max-width: 120px;
 }}
 
-/* Controls bar (search + per-page) */
-.controls-bar {{
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-}}
-.search-input {{
-    flex: 1;
-    min-width: 200px;
-    padding: 10px 14px;
-    font-size: 14px;
-    font-family: var(--font-sans);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-    outline: none;
-    transition: border-color 0.15s;
-}}
-.search-input::placeholder {{ color: var(--text-muted); }}
-.search-input:focus {{ border-color: var(--accent-blue); }}
-.per-page-select {{
-    padding: 10px 14px;
-    font-size: 14px;
-    font-family: var(--font-sans);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-    cursor: pointer;
-    outline: none;
-}}
-.per-page-select:focus {{ border-color: var(--accent-blue); }}
+{_controls_css()}
 .limit-control {{
     display: flex;
     align-items: center;
@@ -2021,41 +2416,6 @@ def generate_dashboard_html(
     border-color: var(--accent-blue);
 }}
 
-/* Pagination controls */
-.pagination-controls {{
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    margin-top: 24px;
-    padding: 16px 0;
-}}
-.pagination-btn {{
-    padding: 8px 18px;
-    font-size: 13px;
-    font-weight: 600;
-    font-family: var(--font-sans);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-}}
-.pagination-btn:hover:not(:disabled) {{
-    background: var(--bg-hover);
-    border-color: var(--accent-blue);
-}}
-.pagination-btn:disabled {{
-    opacity: 0.4;
-    cursor: not-allowed;
-}}
-.page-info {{
-    font-size: 13px;
-    font-family: var(--font-mono);
-    color: var(--text-secondary);
-}}
-
 /* Empty state */
 .empty-state {{
     text-align: center;
@@ -2068,9 +2428,11 @@ def generate_dashboard_html(
     margin-top: 8px;
 }}
 
+{_modal_css()}
+
 /* Responsive (page-specific) */
 @media (max-width: 768px) {{
-    .dashboard-card {{ flex-direction: column; align-items: flex-start; gap: 10px; }}
+    .card-link {{ flex-direction: column; align-items: flex-start; gap: 10px; }}
     .card-meta {{ width: 100%; justify-content: space-between; }}
     .card-job-name {{ max-width: 100%; }}
     .controls-bar {{ flex-direction: column; }}
@@ -2093,6 +2455,7 @@ def generate_dashboard_html(
   <div class="header-content">
     <h1>Jenkins Job Insight</h1>
     <span id="jobs-badge" class="jobs-badge">{total_jobs} job{"s" if total_jobs != 1 else ""}{e(limit_note)}</span>
+    <a href="{e(base_url)}/history" style="color:var(--accent-blue);text-decoration:none;font-size:14px;">History</a>
   </div>
 </div>
 """)
@@ -2260,6 +2623,14 @@ def generate_dashboard_html(
     }}
   }});
 
+  // After a card is deleted, rebuild the cached card arrays and re-render
+  // so pagination counts, search state, and badge totals stay accurate.
+  window.addEventListener('dashboard-card-deleted', function() {{
+    allCards = Array.from(document.querySelectorAll('#job-cards .dashboard-card'));
+    totalAll = allCards.length;
+    applyFilter();
+  }});
+
   // Initial render
   render();
 }})();
@@ -2267,22 +2638,94 @@ def generate_dashboard_html(
 """)
 
     # --- USERNAME DISPLAY (always, regardless of job count) ---
+    parts.append(f"""
+<script>
+{_user_badge_js()}
+</script>
+""")
+
+    # --- CLASSIFICATION BADGES (global header summary + per-card by job_id) ---
+    parts.append(f"\n<script>\n{_classification_colors_js()}\n</script>")
     parts.append("""
 <script>
 (function() {
-    var userCookie = document.cookie.split('; ').find(function(c) { return c.startsWith('jji_username='); });
-    if (userCookie) {
-        var uname = decodeURIComponent(userCookie.split('=')[1]);
-        var headerContent = document.querySelector('.header-content');
-        if (headerContent) {
-            var userChip = document.createElement('span');
-            userChip.className = 'env-chip';
-            userChip.style.marginLeft = 'auto';
-            userChip.textContent = 'User: ' + uname;
-            headerContent.appendChild(userChip);
-        }
-    }
+    var BASE = window.location.pathname.replace(/\\/dashboard.*$/, '');
+    fetch(BASE + '/history/classifications').then(function(r) { return r.json(); }).then(function(data) {
+        var counts = {};
+        var byJobId = {};
+        var jiraKeysByJobId = {};
+        (data.classifications || []).forEach(function(c) {
+            counts[c.classification] = (counts[c.classification] || 0) + 1;
+            var jid = c.job_id || '';
+            if (jid) {
+                if (!byJobId[jid]) byJobId[jid] = {};
+                byJobId[jid][c.classification] = (byJobId[jid][c.classification] || 0) + 1;
+                if (c.classification === 'KNOWN_BUG') {
+                    var jm = (c.reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
+                    if (jm) {
+                        if (!jiraKeysByJobId[jid]) jiraKeysByJobId[jid] = {};
+                        jiraKeysByJobId[jid][jm[1]] = true;
+                    }
+                }
+            }
+        });
+
+        // Per-card classification badges (matched by job_id)
+        document.querySelectorAll('.classification-job-badges').forEach(function(span) {
+            var cardJobId = span.dataset.jobId;
+            if (!cardJobId || !byJobId[cardJobId]) return;
+            var html = '';
+            for (var cls in byJobId[cardJobId]) {
+                var count = byJobId[cardJobId][cls];
+                var color = getClassificationStyle(cls);
+                var label = count + ' ' + cls.replace('_', ' ');
+                if (cls === 'KNOWN_BUG' && jiraKeysByJobId[cardJobId]) {
+                    var keys = Object.keys(jiraKeysByJobId[cardJobId]);
+                    if (keys.length > 0) {
+                        label = count + ' KNOWN BUG: ' + keys.join(', ');
+                    }
+                }
+                html += '<span style="display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;' + color + 'white-space:nowrap;margin-right:4px;">' + label + '</span>';
+            }
+            span.style.display = '';
+            span.innerHTML = html;
+            var sec = span.closest('.card-secondary');
+            if (sec) sec.style.display = 'flex';
+        });
+    }).catch(function() {});
 })();
+</script>
+""")
+
+    # --- DELETE JOB JS ---
+    parts.append("\n<script>")
+    parts.append(_modal_js())
+    parts.append("""
+function deleteJob(btn, jobId) {
+    showConfirmModal('Delete Analysis', 'Are you sure you want to delete this analysis? All comments, reviews, and history data will be permanently removed.', async function() {
+        var BASE = window.location.pathname.replace(/\\/dashboard.*$/, '');
+        try {
+            var resp = await fetch(BASE + '/results/' + jobId, { method: 'DELETE' });
+            if (resp.ok) {
+                var card = btn.closest('.dashboard-card');
+                card.style.transition = 'opacity 0.3s';
+                card.style.opacity = '0';
+                setTimeout(function() {
+                    card.remove();
+                    // Dispatch a custom event so the pagination controller can
+                    // rebuild its cached card lists and re-render.
+                    window.dispatchEvent(new CustomEvent('dashboard-card-deleted'));
+                }, 300);
+            } else {
+                var errData = await resp.json().catch(function() { return {}; });
+                showConfirmModal('Delete Failed', errData.detail || 'Failed to delete analysis. HTTP ' + resp.status, function() {});
+            }
+        } catch (err) {
+            console.warn('Failed to delete job:', err);
+            showConfirmModal('Delete Failed', 'Failed to delete analysis. Please try again.', function() {});
+        }
+    });
+}
 </script>
 """)
 
@@ -2328,10 +2771,16 @@ def _render_dashboard_card(
         else:
             result_class = " result-passed"
 
+    # Use a <div> container with an <a> link inside (not wrapping the button)
+    # to avoid nesting interactive elements, which breaks keyboard/screen-reader accessibility.
+    # The outer <div> is the flex container; <a class="card-link"> takes flex:1 for the
+    # clickable area, and <div class="card-meta"> sits outside the link with the delete button.
     parts.append(
-        f'<a class="dashboard-card{result_class}" href="{e(report_href)}" target="_blank" rel="noopener">'
+        f'<div class="dashboard-card{result_class}" data-job-id="{e(job_id)}">'
     )
-    parts.append('  <div class="card-main">')
+    parts.append(
+        f'  <a class="card-link" href="{e(report_href)}" target="_blank" rel="noopener">'
+    )
 
     # Result icon for completed jobs with known failure count
     if status == "completed" and failure_count is not None:
@@ -2353,28 +2802,31 @@ def _render_dashboard_card(
                 "</svg></span>"
             )
 
-    parts.append(f'    <span class="card-job-name">{e(job_name)}</span>')
+    parts.append('    <div class="card-main">')
+    parts.append(f'      <span class="card-job-name">{e(job_name)}</span>')
 
     if build_number:
         parts.append(
-            f'    <span class="card-build-chip">#{e(str(build_number))}</span>'
+            f'      <span class="card-build-chip">#{e(str(build_number))}</span>'
         )
 
-    parts.append(f'    <span class="status-chip {e(status_class)}">{e(status)}</span>')
+    parts.append(
+        f'      <span class="status-chip {e(status_class)}">{e(status)}</span>'
+    )
 
     if failure_count is not None and failure_count > 0:
         parts.append(
-            f'    <span class="failure-count-badge">'
+            f'      <span class="failure-count-badge">'
             f"{failure_count} failure{'s' if failure_count != 1 else ''}"
             f"</span>"
         )
     elif status == "completed" and failure_count is not None:
-        parts.append('    <span class="passed-badge">passed</span>')
+        parts.append('      <span class="passed-badge">passed</span>')
 
     child_job_count = job.get("child_job_count")
     if child_job_count is not None and child_job_count > 0:
         parts.append(
-            f'    <span class="child-jobs-badge">'
+            f'      <span class="child-jobs-badge">'
             f"{child_job_count} child job{'s' if child_job_count != 1 else ''}"
             f"</span>"
         )
@@ -2385,37 +2837,49 @@ def _render_dashboard_card(
     if failure_count is not None and failure_count > 0:
         if reviewed_count >= failure_count:
             parts.append(
-                '    <span class="status-chip" '
+                '      <span class="status-chip" '
                 'style="background: rgba(63,185,80,0.15); color: var(--accent-green)">'
                 "\u2713 Fully Reviewed</span>"
             )
         elif reviewed_count > 0:
             parts.append(
-                '    <span class="status-chip" '
+                '      <span class="status-chip" '
                 'style="background: rgba(210,153,34,0.15); color: var(--accent-yellow)">'
                 f"{reviewed_count}/{failure_count} Reviewed</span>"
             )
         else:
             parts.append(
-                '    <span class="status-chip" '
+                '      <span class="status-chip" '
                 'style="background: rgba(248,81,73,0.12); color: var(--accent-red)">'
                 "Needs Review</span>"
             )
 
-    # Comment count badge
-    if comment_count > 0:
-        parts.append(
-            f'    <span class="card-build-chip">'
-            f"{comment_count} comment{'s' if comment_count != 1 else ''}"
-            f"</span>"
-        )
+    parts.append("    </div>")
+    parts.append("  </a>")
 
-    parts.append("  </div>")
+    # card-meta sits outside the <a> link so interactive elements (delete button) are
+    # not nested inside a link.  It stays on the right side of the card via flex layout.
     parts.append('  <div class="card-meta">')
     parts.append(
         f'    <span class="card-job-id" title="{e(job_id)}">{e(short_id)}</span>'
     )
     parts.append(f'    <span class="card-timestamp">{e(created_at)}</span>')
+
+    # Delete button inline in card-meta (no absolute positioning)
+    parts.append(
+        f'    <button class="delete-job-btn" data-job-id="{e(job_id)}"'
+        f' onclick="event.stopPropagation(); deleteJob(this, &#39;{e(job_id)}&#39;)"'
+        ' style="background:none;border:1px solid transparent;border-radius:4px;color:var(--text-muted);'
+        'cursor:pointer;padding:4px 6px;transition:all 0.15s;display:inline-flex;align-items:center;"'
+        ' onmouseover="this.style.color=&#39;var(--accent-red)&#39;;this.style.borderColor=&#39;var(--accent-red)&#39;;'
+        'this.style.background=&#39;rgba(248,81,73,0.12)&#39;"'
+        ' onmouseout="this.style.color=&#39;var(--text-muted)&#39;;this.style.borderColor=&#39;transparent&#39;;'
+        'this.style.background=&#39;none&#39;"'
+        ' title="Delete this analysis">'
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+        '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>'
+        '<path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>'
+    )
 
     if jenkins_url:
         parts.append(
@@ -2430,7 +2894,24 @@ def _render_dashboard_card(
         )
 
     parts.append("  </div>")
-    parts.append("</a>")
+
+    # Secondary row: classification badges (left) + comment badge (right-aligned)
+    # Placed as direct child of .dashboard-card so it spans full card width.
+    comment_badge = ""
+    if comment_count > 0:
+        comment_badge = (
+            f'<span class="card-build-chip"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+            f'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> {comment_count}</span>'
+        )
+    parts.append(
+        f'  <div class="card-secondary" style="display:flex;width:100%;align-items:center;gap:6px;padding-top:4px;">'
+        f'<span class="classification-job-badges" data-job-name="{e(job_name)}" data-job-id="{e(job_id)}" style="display:none"></span>'
+        f'<span style="flex:1"></span>'
+        f"{comment_badge}"
+        f"</div>"
+    )
+
+    parts.append("</div>")
 
 
 def generate_register_html() -> str:
@@ -2510,5 +2991,358 @@ def generate_register_html() -> str:
         <button class="register-btn" type="submit">Continue</button>
     </form>
 </div>
+</body>
+</html>"""
+
+
+def generate_history_html(base_url: str = "") -> str:
+    """Generate a self-contained HTML page for failure history exploration.
+
+    The page uses inline JavaScript to fetch paginated failure data from
+    the ``/history/failures`` API endpoint with search and classification
+    filtering.  A trends section is shown below the main table when
+    multi-day data is available.  All dynamic content is escaped via
+    ``escapeHtml()`` before DOM insertion.
+
+    Args:
+        base_url: External base URL for constructing API request URLs.
+
+    Returns:
+        A complete HTML document as a string.
+    """
+    e = html.escape
+    api = e(base_url)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jenkins Job Insight - Failure History</title>
+<link rel="icon" href="{FAVICON_DATA_URI}">
+<style>
+{_common_css()}
+.env-chip:hover {{ border-color: var(--accent-blue); color: var(--accent-blue); }}
+
+{_controls_css()}
+
+/* Table */
+.table-container {{
+    overflow-x: auto;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 24px;
+}}
+.table-container table {{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}}
+.table-container th {{
+    text-align: left;
+    padding: 10px 14px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}}
+.table-container td {{
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-primary);
+    vertical-align: top;
+}}
+.table-container tr:last-child td {{ border-bottom: none; }}
+.table-container tr:hover td {{ background: var(--bg-hover); }}
+
+/* Classification tags */
+.classification-tag {{
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+}}
+.classification-tag.product-bug {{
+    background: var(--accent-orange-bg);
+    color: var(--accent-orange);
+}}
+.classification-tag.code-issue {{
+    background: var(--accent-blue-bg);
+    color: var(--accent-blue);
+}}
+.classification-tag.known-bug {{
+    background: rgba(188, 140, 255, 0.12);
+    color: var(--accent-purple);
+}}
+.classification-tag.regression {{
+    background: var(--accent-red-bg);
+    color: var(--accent-red);
+}}
+.classification-tag.flaky {{
+    background: rgba(210, 153, 34, 0.15);
+    color: var(--accent-yellow);
+}}
+.classification-tag.infrastructure {{
+    background: var(--accent-orange-bg);
+    color: var(--accent-orange);
+}}
+.classification-tag.intermittent {{
+    background: rgba(210, 153, 34, 0.15);
+    color: var(--accent-yellow);
+}}
+.classification-tag.unknown {{
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+}}
+
+/* Test name column */
+.test-name {{
+    max-width: 400px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 12px;
+}}
+
+.empty-msg {{
+    text-align: center;
+    padding: 32px 20px;
+    color: var(--text-muted);
+    font-size: 14px;
+}}
+.mono {{ font-family: var(--font-mono); font-size: 12px; }}
+
+/* Responsive */
+@media (max-width: 768px) {{
+    .controls-bar {{ flex-direction: column; }}
+    .search-input {{ min-width: 100%; }}
+    .test-name {{ max-width: 200px; }}
+}}
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="sticky-header">
+  <div class="header-content">
+    <h1>Failure History</h1>
+    <div class="env-chips">
+      <a class="env-chip" href="{api}/dashboard">Dashboard</a>
+    </div>
+  </div>
+</div>
+
+<!-- Controls -->
+<div class="controls-bar">
+    <input class="search-input" placeholder="Search by test name, job, or error..." id="search-input">
+    <select class="per-page-select" id="classification-filter">
+        <option value="">All Classifications</option>
+        <option value="PRODUCT BUG">PRODUCT BUG</option>
+        <option value="CODE ISSUE">CODE ISSUE</option>
+        <option value="KNOWN_BUG">KNOWN_BUG</option>
+        <option value="REGRESSION">REGRESSION</option>
+        <option value="FLAKY">FLAKY</option>
+        <option value="INFRASTRUCTURE">INFRASTRUCTURE</option>
+        <option value="INTERMITTENT">INTERMITTENT</option>
+    </select>
+    <select class="per-page-select" id="per-page-select">
+        <option value="25">25 per page</option>
+        <option value="50" selected>50 per page</option>
+        <option value="100">100 per page</option>
+    </select>
+</div>
+
+<!-- Failures table -->
+<div class="table-container">
+<table>
+<thead>
+<tr><th>Test Name</th><th>Job</th><th>Build</th><th>Classification</th><th>Child Job</th><th>Date</th></tr>
+</thead>
+<tbody id="failures-tbody">
+<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px;">Loading failures...</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="pagination-controls">
+    <button class="pagination-btn" id="prev-btn" disabled>Previous</button>
+    <span class="page-info" id="page-info"></span>
+    <button class="pagination-btn" id="next-btn">Next</button>
+</div>
+
+<!-- Trends (shown only when multi-day data exists) -->
+<div id="trends-wrapper" style="display:none;">
+  <h2 class="section-title">Failure Trends (Last 30 Days)</h2>
+  <div id="trends-section">
+    <div class="empty-msg">Loading trends...</div>
+  </div>
+</div>
+
+<div class="report-footer">
+  <span>Jenkins Job Insight - Failure History</span>
+</div>
+
+</div>
+
+<script>
+(function() {{
+  var BASE = window.location.pathname.replace(/\\/history$/, '');
+
+  var currentPage = 1;
+  var perPage = 50;
+  var totalItems = 0;
+  var currentSearch = '';
+  var currentClassification = '';
+  var searchTimer = null;
+
+  function escapeHtml(s) {{
+    if (s == null) return '';
+    var el = document.createElement('div');
+    el.textContent = String(s);
+    return el.innerHTML;
+  }}
+
+  function fetchJson(url) {{
+    return fetch(url).then(function(r) {{
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }});
+  }}
+
+  function classificationClass(c) {{
+    switch(c) {{
+        case 'PRODUCT BUG': return 'product-bug';
+        case 'CODE ISSUE': return 'code-issue';
+        case 'KNOWN_BUG': return 'known-bug';
+        case 'REGRESSION': return 'regression';
+        case 'FLAKY': return 'flaky';
+        case 'INFRASTRUCTURE': return 'infrastructure';
+        case 'INTERMITTENT': return 'intermittent';
+        default: return 'unknown';
+    }}
+  }}
+
+  function loadFailures() {{
+    var offset = (currentPage - 1) * perPage;
+    var url = BASE + '/history/failures?limit=' + perPage + '&offset=' + offset;
+    if (currentSearch) url += '&search=' + encodeURIComponent(currentSearch);
+    if (currentClassification) url += '&classification=' + encodeURIComponent(currentClassification);
+
+    fetchJson(url).then(function(data) {{
+      totalItems = Number(data.total || 0);
+      renderTable(Array.isArray(data.failures) ? data.failures : []);
+      renderPagination();
+    }}).catch(function(err) {{
+      document.getElementById('failures-tbody').innerHTML =
+        '<tr><td colspan="6" style="text-align:center;color:var(--accent-red);padding:20px;">Failed to load: ' + escapeHtml(err.message) + '</td></tr>';
+    }});
+  }}
+
+  function renderTable(failures) {{
+    var tbody = document.getElementById('failures-tbody');
+    if (failures.length === 0) {{
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px;">No failures found</td></tr>';
+      return;
+    }}
+    tbody.innerHTML = failures.map(function(f) {{
+      return '<tr>' +
+        '<td class="test-name"><a href="' + BASE + '/history/test/' + encodeURIComponent(f.test_name) + '" style="color:var(--accent-blue);text-decoration:none;" title="' + escapeHtml(f.test_name) + '">' + escapeHtml(f.test_name) + '</a></td>' +
+        '<td>' + escapeHtml(f.job_name) + '</td>' +
+        '<td>' + f.build_number + '</td>' +
+        '<td><span class="classification-tag ' + classificationClass(f.classification) + '">' + escapeHtml(f.classification) + '</span></td>' +
+        '<td>' + escapeHtml(f.child_job_name || '-') + '</td>' +
+        '<td style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted);white-space:nowrap;">' + escapeHtml(f.analyzed_at || '') + '</td>' +
+        '</tr>';
+    }}).join('');
+  }}
+
+  function renderPagination() {{
+    var totalPages = Math.max(1, Math.ceil(totalItems / perPage));
+    document.getElementById('page-info').textContent = 'Page ' + currentPage + ' of ' + totalPages + ' (' + totalItems + ' failures)';
+    document.getElementById('prev-btn').disabled = currentPage <= 1;
+    document.getElementById('next-btn').disabled = currentPage >= totalPages;
+  }}
+
+  /* ---- Event listeners ---- */
+  var searchInput = document.getElementById('search-input');
+  searchInput.addEventListener('keyup', function() {{
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function() {{
+      currentSearch = searchInput.value.trim();
+      currentPage = 1;
+      loadFailures();
+    }}, 300);
+  }});
+
+  document.getElementById('classification-filter').addEventListener('change', function() {{
+    currentClassification = this.value;
+    currentPage = 1;
+    loadFailures();
+  }});
+
+  document.getElementById('per-page-select').addEventListener('change', function() {{
+    perPage = parseInt(this.value, 10);
+    currentPage = 1;
+    loadFailures();
+  }});
+
+  document.getElementById('prev-btn').addEventListener('click', function() {{
+    if (currentPage > 1) {{
+      currentPage--;
+      loadFailures();
+    }}
+  }});
+
+  document.getElementById('next-btn').addEventListener('click', function() {{
+    var totalPages = Math.max(1, Math.ceil(totalItems / perPage));
+    if (currentPage < totalPages) {{
+      currentPage++;
+      loadFailures();
+    }}
+  }});
+
+  /* ---- Trends (only show when multi-day data exists) ---- */
+  fetchJson(BASE + '/history/trends?period=daily&days=30')
+    .then(function(data) {{
+      var items = data.data || data.periods || [];
+      if (items.length <= 1) {{
+        // Single day or no data: keep trends hidden
+        return;
+      }}
+      document.getElementById('trends-wrapper').style.display = 'block';
+      var section = document.getElementById('trends-section');
+      var h = '<div class="table-container"><table>';
+      h += '<tr><th>Period</th><th>Total Failures</th><th>Unique Tests</th><th>Builds Analyzed</th></tr>';
+      for (var i = 0; i < items.length; i++) {{
+        var t = items[i];
+        h += '<tr>';
+        h += '<td class="mono">' + escapeHtml(t.date || t.period || '') + '</td>';
+        h += '<td class="mono">' + (t.failures != null ? t.failures : (t.total_failures != null ? t.total_failures : 0)) + '</td>';
+        h += '<td class="mono">' + (t.unique_tests != null ? t.unique_tests : '-') + '</td>';
+        h += '<td class="mono">' + (t.total_tests != null ? t.total_tests : '-') + '</td>';
+        h += '</tr>';
+      }}
+      h += '</table></div>';
+      section.innerHTML = h;
+    }})
+    .catch(function(err) {{
+      // Silently ignore trend load failures; the section stays hidden
+    }});
+
+  /* ---- Initial load ---- */
+  loadFailures();
+}})();
+</script>
+<script>
+{_user_badge_js()}
+</script>
 </body>
 </html>"""

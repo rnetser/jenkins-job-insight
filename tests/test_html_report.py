@@ -521,7 +521,7 @@ class TestGenerateDashboardHtml:
         assert 'id="search-input"' not in html_output
         assert 'id="prev-btn"' not in html_output
         assert 'id="per-page-select"' not in html_output
-        assert "<script>" not in html_output
+        assert "applyFilter" not in html_output
         # Limit control is always present
         assert 'id="limit-input"' in html_output
 

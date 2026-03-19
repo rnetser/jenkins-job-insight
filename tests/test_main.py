@@ -427,68 +427,6 @@ class TestAnalyzeFailuresEndpoint:
                     )
                     assert data["html_report_url"].endswith(".html")
 
-    def test_analyze_failures_passes_resolved_custom_prompt(self, test_client) -> None:
-        """Test that resolved custom prompt is forwarded to group analysis."""
-        mock_analysis = FailureAnalysis(
-            test_name="test_foo",
-            error="assert False",
-            analysis=AnalysisDetail(
-                classification="CODE ISSUE",
-                details="Test assertion failed",
-            ),
-        )
-
-        with patch("jenkins_job_insight.main.RepositoryManager") as mock_repo_cls:
-            mock_repo_instance = mock_repo_cls.return_value
-            mock_repo_instance.clone.return_value = Path("/tmp/test-repo")
-            mock_repo_instance.cleanup.return_value = None
-
-            with patch(
-                "jenkins_job_insight.main._resolve_custom_prompt",
-                return_value="Custom instructions",
-            ) as mock_resolve_prompt:
-                with patch(
-                    "jenkins_job_insight.main.analyze_failure_group",
-                    new_callable=AsyncMock,
-                ) as mock_analyze_group:
-                    mock_analyze_group.return_value = [mock_analysis]
-
-                    with patch(
-                        "jenkins_job_insight.main.run_parallel_with_limit",
-                        new_callable=AsyncMock,
-                    ) as mock_parallel:
-
-                        async def run_coroutines(coroutines, **kwargs):
-                            return [await coro for coro in coroutines]
-
-                        mock_parallel.side_effect = run_coroutines
-
-                        response = test_client.post(
-                            "/analyze-failures",
-                            json={
-                                "failures": [
-                                    {
-                                        "test_name": "test_foo",
-                                        "error_message": "assert False",
-                                        "stack_trace": "File test.py, line 10",
-                                    }
-                                ],
-                                "tests_repo_url": "https://github.com/example/repo",
-                                "raw_prompt": "Request prompt",
-                                "ai_provider": "claude",
-                                "ai_model": "test-model",
-                            },
-                        )
-
-                    assert response.status_code == 200
-                    mock_resolve_prompt.assert_called_once_with(
-                        "Request prompt", Path("/tmp/test-repo")
-                    )
-                    assert (
-                        mock_analyze_group.call_args.kwargs["custom_prompt"]
-                        == "Custom instructions"
-                    )
-
     def test_analyze_failures_empty_failures(self, test_client) -> None:
         """Test that empty failures list returns 422 (validator rejects empty list without raw_xml)."""
         response = test_client.post(
@@ -1867,3 +1805,62 @@ class TestChildScopeValidation:
             },
         )
         assert response.status_code == 422
+
+
+class TestHistoryEndpoints:
+    """Tests for the /history/* endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_get_test_history(self, test_client) -> None:
+        """Test that /history/test/{test_name} returns expected structure and values."""
+        response = test_client.get("/history/test/some.test.name")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["test_name"] == "some.test.name"
+        # Verify all expected keys are present with correct default values
+        assert data["total_runs"] == 0
+        assert data["failures"] == 0
+        assert data["passes"] == 0
+        assert data["failure_rate"] == 0.0
+        assert data["consecutive_failures"] == 0
+        assert isinstance(data["recent_runs"], list)
+        assert isinstance(data["comments"], list)
+        assert isinstance(data["classifications"], dict)
+
+    @pytest.mark.asyncio
+    async def test_search_by_signature(self, test_client) -> None:
+        """Test that /history/search returns expected structure."""
+        response = test_client.get("/history/search?signature=abc123")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["signature"] == "abc123"
+        assert isinstance(data.get("matches", []), list)
+
+    @pytest.mark.asyncio
+    async def test_search_by_signature_requires_param(self, test_client) -> None:
+        """Test that /history/search requires signature parameter."""
+        response = test_client.get("/history/search")
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_get_job_stats(self, test_client) -> None:
+        """Test that /history/stats/{job_name} returns expected structure and values."""
+        response = test_client.get("/history/stats/my-job")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["job_name"] == "my-job"
+        # Verify default values for a job with no history
+        assert data["total_builds_analyzed"] == 0
+        assert data["builds_with_failures"] == 0
+        assert data["overall_failure_rate"] == 0.0
+        assert isinstance(data["most_common_failures"], list)
+        assert data["recent_trend"] in ("stable", "improving", "worsening")
+
+    @pytest.mark.asyncio
+    async def test_get_trends(self, test_client) -> None:
+        """Test that /history/trends returns expected structure and values."""
+        response = test_client.get("/history/trends")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["period"] == "daily"
+        assert isinstance(data["data"], list)

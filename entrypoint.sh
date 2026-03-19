@@ -11,4 +11,22 @@ if [ -d /cursor-credentials ]; then
     cp -a /cursor-credentials/. "${XDG_CONFIG_HOME:-/home/appuser/.config}/cursor/"
 fi
 
-exec "$@"
+# Resolve PORT with a default so the exec-form CMD (which cannot expand
+# shell variables) gets the correct bind port at runtime.
+export PORT="${PORT:-8000}"
+
+# Check if any argument contains "uvicorn" to detect all uvicorn invocations
+has_uvicorn=false
+has_port=false
+for arg in "$@"; do
+    case "$arg" in
+        *uvicorn*) has_uvicorn=true ;;
+        --port|--port=*) has_port=true ;;
+    esac
+done
+
+if [ "$has_uvicorn" = true ] && [ "$has_port" = false ]; then
+    exec "$@" --port "$PORT"
+else
+    exec "$@"
+fi
