@@ -892,20 +892,29 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 }}
 /* Classification override dropdown */
 .classification-select {{
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 20px 2px 8px;
-    border-radius: 4px;
-    text-transform: uppercase;
-    border: none;
-    cursor: pointer;
-    outline: none;
     appearance: none;
     -webkit-appearance: none;
-    background-image: url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22currentColor%22 stroke-width=%222%22><path d=%22M6 9l6 6 6-6%22/></svg>');
+    padding: 3px 24px 3px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    outline: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
-    background-position: right 4px center;
+    background-position: right 6px center;
     background-size: 10px;
+    transition: border-color 0.15s;
+}}
+.classification-select:hover {{
+    border-color: var(--accent-blue);
+}}
+.classification-select option {{
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    padding: 4px 8px;
 }}
 .classification-select.code-issue {{
     background-color: var(--accent-blue-bg);
