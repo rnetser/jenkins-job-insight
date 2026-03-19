@@ -14,11 +14,13 @@ dependencies = [
     "python-jenkins",
     "python-multipart",
     "python-simple-logger",
+    "typer>=0.9.0",
     "uvicorn",
 ]
 
 [project.scripts]
 jenkins-job-insight = "jenkins_job_insight.main:run"
+jji = "jenkins_job_insight.cli.main:app"
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
