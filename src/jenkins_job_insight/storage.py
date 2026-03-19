@@ -900,6 +900,111 @@ async def backfill_failure_history() -> None:
     logger.info(f"Backfill complete: processed {backfilled}/{len(rows)} results")
 
 
+async def _get_failure_stats(
+    db: aiosqlite.Connection,
+    test_name: str,
+    job_filter: str,
+    params: list,
+) -> tuple[int, str | None, str | None, str]:
+    """Return (failure_count, first_seen, last_seen, last_classification).
+
+    Args:
+        db: Open aiosqlite connection with row_factory set.
+        test_name: Full test name to look up.
+        job_filter: SQL fragment for optional job_name/exclude_job_id filtering.
+        params: Bind parameters matching the job_filter placeholders
+                (first element is always test_name).
+    """
+    # Failure count — count distinct builds (job_ids) where this test
+    # failed, not raw rows. A test can fail multiple times in different
+    # child jobs within the same build, and counting rows would inflate
+    # the failure count relative to total_runs (which counts builds).
+    cursor = await db.execute(
+        f"SELECT COUNT(DISTINCT job_id) FROM failure_history WHERE test_name = ?{job_filter}",
+        params,
+    )
+    failures = (await cursor.fetchone())[0]
+
+    if failures == 0:
+        return 0, None, None, ""
+
+    # First and last seen
+    cursor = await db.execute(
+        f"SELECT MIN(analyzed_at), MAX(analyzed_at) FROM failure_history WHERE test_name = ?{job_filter}",
+        params,
+    )
+    row = await cursor.fetchone()
+    first_seen = row[0]
+    last_seen = row[1]
+
+    # Last classification (most recent failure)
+    cursor = await db.execute(
+        f"SELECT classification FROM failure_history WHERE test_name = ?{job_filter} ORDER BY analyzed_at DESC LIMIT 1",
+        params,
+    )
+    last_classification = (await cursor.fetchone())[0] or ""
+
+    return failures, first_seen, last_seen, last_classification
+
+
+async def _get_classification_breakdown(
+    db: aiosqlite.Connection,
+    test_name: str,
+    job_filter: str,
+    params: list,
+) -> dict[str, int]:
+    """Return a dict mapping classification labels to their counts.
+
+    Args:
+        db: Open aiosqlite connection with row_factory set.
+        test_name: Full test name to look up.
+        job_filter: SQL fragment for optional job_name/exclude_job_id filtering.
+        params: Bind parameters matching the job_filter placeholders
+                (first element is always test_name).
+    """
+    cursor = await db.execute(
+        f"SELECT classification, COUNT(*) FROM failure_history WHERE test_name = ?{job_filter} GROUP BY classification",
+        params,
+    )
+    classifications: dict[str, int] = {}
+    for row in await cursor.fetchall():
+        if row[0]:
+            classifications[row[0]] = row[1]
+    return classifications
+
+
+async def _get_related_comments(
+    db: aiosqlite.Connection,
+    test_name: str,
+    signatures: set[str],
+    exclude_job_id: str,
+) -> list[dict]:
+    """Return comments related to a test by name or error signature.
+
+    Args:
+        db: Open aiosqlite connection with row_factory set.
+        test_name: Full test name to look up.
+        signatures: Set of error_signature hashes from recent runs.
+        exclude_job_id: Exclude comments from this job ID.
+    """
+    comment_conditions = ["test_name = ?"]
+    comment_params: list = [test_name]
+    if signatures:
+        placeholders = ",".join("?" for _ in signatures)
+        comment_conditions.append(f"error_signature IN ({placeholders})")
+        comment_params.extend(signatures)
+
+    comment_where = " OR ".join(comment_conditions)
+    if exclude_job_id:
+        comment_where = f"({comment_where}) AND job_id != ?"
+        comment_params.append(exclude_job_id)
+    cursor = await db.execute(
+        f"SELECT comment, username, created_at FROM comments WHERE {comment_where} ORDER BY created_at DESC",
+        comment_params,
+    )
+    return [dict(row) for row in await cursor.fetchall()]
+
+
 async def get_test_history(
     test_name: str,
     limit: int = 20,
@@ -935,15 +1040,9 @@ async def get_test_history(
             job_filter += " AND job_id != ?"
             params.append(exclude_job_id)
 
-        # Failure count — count distinct builds (job_ids) where this test
-        # failed, not raw rows. A test can fail multiple times in different
-        # child jobs within the same build, and counting rows would inflate
-        # the failure count relative to total_runs (which counts builds).
-        cursor = await db.execute(
-            f"SELECT COUNT(DISTINCT job_id) FROM failure_history WHERE test_name = ?{job_filter}",
-            params,
+        failures, first_seen, last_seen, last_classification = await _get_failure_stats(
+            db, test_name, job_filter, params
         )
-        failures = (await cursor.fetchone())[0]
 
         if failures == 0:
             return {
@@ -962,31 +1061,9 @@ async def get_test_history(
                 "note": "No failure records found for this test.",
             }
 
-        # First and last seen
-        cursor = await db.execute(
-            f"SELECT MIN(analyzed_at), MAX(analyzed_at) FROM failure_history WHERE test_name = ?{job_filter}",
-            params,
+        classifications = await _get_classification_breakdown(
+            db, test_name, job_filter, params
         )
-        row = await cursor.fetchone()
-        first_seen = row[0]
-        last_seen = row[1]
-
-        # Last classification (most recent failure)
-        cursor = await db.execute(
-            f"SELECT classification FROM failure_history WHERE test_name = ?{job_filter} ORDER BY analyzed_at DESC LIMIT 1",
-            params,
-        )
-        last_classification = (await cursor.fetchone())[0] or ""
-
-        # Classification breakdown
-        cursor = await db.execute(
-            f"SELECT classification, COUNT(*) FROM failure_history WHERE test_name = ?{job_filter} GROUP BY classification",
-            params,
-        )
-        classifications = {}
-        for row in await cursor.fetchall():
-            if row[0]:
-                classifications[row[0]] = row[1]
 
         # Recent runs (failures only, since we only track failures)
         cursor = await db.execute(
@@ -1036,23 +1113,9 @@ async def get_test_history(
             r["error_signature"] for r in recent_runs if r.get("error_signature")
         }
 
-        # Comments related to this test (by test name or error signature)
-        comment_conditions = ["test_name = ?"]
-        comment_params: list = [test_name]
-        if signatures:
-            placeholders = ",".join("?" for _ in signatures)
-            comment_conditions.append(f"error_signature IN ({placeholders})")
-            comment_params.extend(signatures)
-
-        comment_where = " OR ".join(comment_conditions)
-        if exclude_job_id:
-            comment_where = f"({comment_where}) AND job_id != ?"
-            comment_params.append(exclude_job_id)
-        cursor = await db.execute(
-            f"SELECT comment, username, created_at FROM comments WHERE {comment_where} ORDER BY created_at DESC",
-            comment_params,
+        comments = await _get_related_comments(
+            db, test_name, signatures, exclude_job_id
         )
-        comments = [dict(row) for row in await cursor.fetchall()]
 
     logger.debug(
         f"get_test_history: test_name={test_name}, failures={failures}, passes={passes}, recent_runs={len(recent_runs)}"
@@ -1357,9 +1420,7 @@ async def get_trends(
             }
 
         # Iterate over all build buckets to include clean-build dates.
-        all_dates = sorted(
-            set(list(failure_map.keys()) + list(builds_per_bucket.keys()))
-        )
+        all_dates = sorted(failure_map.keys() | builds_per_bucket.keys())
         data = []
         for date in all_dates:
             bucket_total = builds_per_bucket.get(date, 0)
