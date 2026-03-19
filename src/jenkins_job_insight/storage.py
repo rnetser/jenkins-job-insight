@@ -1573,6 +1573,7 @@ async def set_test_classification(
     """
     if not job_id or not job_id.strip():
         raise ValueError("job_id is required for test classification")
+    _validate_child_identifier_pairing(job_name, child_build_number)
     logger.debug(
         f"set_test_classification: test_name={test_name}, classification={classification}, "
         f"parent_job_name={parent_job_name}, job_id={job_id}, created_by={created_by}, visible={visible}"
@@ -1679,9 +1680,9 @@ async def make_classifications_visible(job_id: str) -> None:
         # ORDER BY created_at DESC ensures latest-wins when deduplicating
         # by (test_name, job_name, child_build_number) below.
         cursor = await db.execute(
-            "SELECT test_name, job_name, child_build_number, classification "
-            "FROM test_classifications WHERE job_id = ? AND visible = 0 "
-            "ORDER BY created_at DESC",
+            "SELECT tc.id, test_name, job_name, child_build_number, classification "
+            "FROM test_classifications tc WHERE job_id = ? AND visible = 0 "
+            "ORDER BY tc.created_at DESC, tc.id DESC",
             (job_id,),
         )
         all_rows = await cursor.fetchall()
@@ -1775,7 +1776,7 @@ async def get_all_failures(
         cursor = await db.execute(
             f"SELECT id, job_id, job_name, build_number, test_name, error_message, "
             f"error_signature, classification, child_job_name, child_build_number, analyzed_at "
-            f"FROM failure_history WHERE {where} ORDER BY analyzed_at DESC LIMIT ? OFFSET ?",
+            f"FROM failure_history WHERE {where} ORDER BY analyzed_at DESC, id DESC LIMIT ? OFFSET ?",
             [*params, limit, offset],
         )
         rows = await cursor.fetchall()
