@@ -1469,10 +1469,15 @@ async def create_github_issue_endpoint(
             detail="TESTS_REPO_URL and GITHUB_TOKEN must be configured to create GitHub issues",
         )
 
+    username = request.cookies.get("jji_username", "")
+    issue_body = body.body
+    if username:
+        issue_body += f"\n\n---\n_Reported by: {username} via jenkins-job-insight_"
+
     try:
         result = await create_github_issue(
             title=body.title,
-            body=body.body,
+            body=issue_body,
             repo_url=tests_repo_url,
             github_token=github_token,
         )
@@ -1496,7 +1501,6 @@ async def create_github_issue_endpoint(
     # already created, so a failure here must not lose the created URL).
     comment_id = 0
     try:
-        username = request.cookies.get("jji_username", "")
         comment_text = f"GitHub Issue: {result['url']}"
         error_signature = await _get_error_signature(
             job_id, body.test_name, body.child_job_name, body.child_build_number
@@ -1548,10 +1552,15 @@ async def create_jira_bug_endpoint(
             detail="Jira must be configured to create Jira bugs",
         )
 
+    username = request.cookies.get("jji_username", "")
+    bug_body = body.body
+    if username:
+        bug_body += f"\n\n----\nReported by: {username} via jenkins-job-insight"
+
     try:
         result = await create_jira_bug(
             title=body.title,
-            body=body.body,
+            body=bug_body,
             settings=settings,
         )
     except httpx.HTTPStatusError as exc:
@@ -1569,7 +1578,6 @@ async def create_jira_bug_endpoint(
     # already created, so a failure here must not lose the created URL).
     comment_id = 0
     try:
-        username = request.cookies.get("jji_username", "")
         comment_text = f"Jira Bug: {result['url']}"
         error_signature = await _get_error_signature(
             job_id, body.test_name, body.child_job_name, body.child_build_number

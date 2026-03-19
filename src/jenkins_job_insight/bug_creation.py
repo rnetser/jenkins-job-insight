@@ -587,7 +587,7 @@ async def create_jira_bug(
     if settings.jira_email and token_value:
         # Cloud: Basic auth
         auth = (settings.jira_email, token_value)
-        api_path = "/rest/api/3"
+        api_path = "/rest/api/2"
     elif token_value:
         # Server/DC: Bearer PAT
         headers["Authorization"] = f"Bearer {token_value}"

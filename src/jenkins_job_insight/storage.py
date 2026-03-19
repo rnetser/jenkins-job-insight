@@ -1978,29 +1978,56 @@ async def get_effective_classification(
     child_job_name: str = "",
     child_build_number: int = 0,
 ) -> str:
-    """Return the current classification for a failure from failure_history.
+    """Return the primary classification override for a failure.
 
-    After an override, the ``failure_history`` row holds the effective
-    classification while the stored ``result_json`` still has the original
-    AI classification.  Preview endpoints call this to pick the right
-    content generator (e.g. Jira bug vs GitHub issue).
+    Only considers the primary override domain: ``CODE ISSUE`` and
+    ``PRODUCT BUG``.  History-system classifications (``FLAKY``,
+    ``REGRESSION``, ``KNOWN_BUG``, etc.) stored in
+    ``test_classifications`` are intentionally ignored.
+
+    Checks ``test_classifications`` first for a visible user override
+    (latest by ``id``, limited to ``CODE ISSUE`` / ``PRODUCT BUG``).
+    If no matching override exists, falls back to the
+    ``failure_history`` row.  This two-step lookup ensures overrides
+    survive even when ``failure_history`` rows are missing or rebuilt
+    from ``result_json``.
 
     Returns:
-        The classification string (e.g. "CODE ISSUE", "PRODUCT BUG"),
-        or "" if no row exists.
+        The classification string (``"CODE ISSUE"`` or
+        ``"PRODUCT BUG"``), or ``""`` if no row exists in either table.
     """
-    query = (
-        "SELECT classification FROM failure_history WHERE job_id = ? AND test_name = ?"
-    )
-    params: list = [job_id, test_name]
-    if child_job_name:
-        query += " AND child_job_name = ? AND child_build_number = ?"
-        params.extend([child_job_name, child_build_number])
-    else:
-        query += " AND child_job_name = '' AND child_build_number = 0"
-    query += " LIMIT 1"
+    _child_job_name = child_job_name or ""
+    _child_build_number = child_build_number or 0
 
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(query, params)
-        row = await cursor.fetchone()
-        return row[0] if row and row[0] else ""
+        # 1. Prefer visible override from test_classifications
+        override_row = await (
+            await db.execute(
+                "SELECT classification FROM test_classifications"
+                " WHERE test_name = ? AND job_id = ? AND job_name = ?"
+                " AND child_build_number = ? AND visible = 1"
+                " AND classification IN ('CODE ISSUE', 'PRODUCT BUG')"
+                " ORDER BY id DESC LIMIT 1",
+                [test_name, job_id, _child_job_name, _child_build_number],
+            )
+        ).fetchone()
+        if override_row and override_row[0]:
+            return override_row[0]
+
+        # 2. Fall back to failure_history (same domain filter so that
+        #    mirrored history-system labels like FLAKY don't leak through)
+        fh_query = (
+            "SELECT classification FROM failure_history"
+            " WHERE job_id = ? AND test_name = ?"
+            " AND classification IN ('CODE ISSUE', 'PRODUCT BUG')"
+        )
+        fh_params: list = [job_id, test_name]
+        if child_job_name:
+            fh_query += " AND child_job_name = ? AND child_build_number = ?"
+            fh_params.extend([child_job_name, child_build_number])
+        else:
+            fh_query += " AND child_job_name = '' AND child_build_number = 0"
+        fh_query += " LIMIT 1"
+
+        fh_row = await (await db.execute(fh_query, fh_params)).fetchone()
+        return fh_row[0] if fh_row and fh_row[0] else ""
