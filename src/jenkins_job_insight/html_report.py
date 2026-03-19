@@ -2845,7 +2845,7 @@ def generate_dashboard_html(
   <div class="header-content">
     <h1>Jenkins Job Insight</h1>
     <span id="jobs-badge" class="jobs-badge">{total_jobs} job{"s" if total_jobs != 1 else ""}{e(limit_note)}</span>
-    <a href="{e(base_url)}/history" style="color:var(--accent-blue);text-decoration:none;font-size:14px;">History</a>
+    <a class="env-chip" href="{e(base_url)}/history" style="margin-left:auto;text-decoration:none;color:var(--accent-blue);">History</a>
   </div>
 </div>
 """)
