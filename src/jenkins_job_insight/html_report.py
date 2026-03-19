@@ -1000,11 +1000,11 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     parts.append(f"""
 <div class="sticky-header">
   <div class="header-content">
-    <div id="header-line1" style="display:flex;align-items:center;gap:16px;width:100%;flex-wrap:wrap;">
+    <div id="header-line1" style="display:flex;align-items:center;gap:16px;width:100%;flex-wrap:nowrap;">
       <h1>{job_name_html}</h1>
       <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
       <span id="overall-review-status" class="status-chip" style="display:none"></span>
-      <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data" style="margin-left:auto;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
+      <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data" style="margin-left:auto;flex-shrink:0;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
     </div>
     <div style="display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap;">
       <span class="env-chip">Build: #{e(build_number)}</span>
