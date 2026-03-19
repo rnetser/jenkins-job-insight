@@ -368,7 +368,9 @@ function getClassificationStyle(cls) {
         'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red);',
         'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange);',
         'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple);',
-        'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);'
+        'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);',
+        'PRODUCT BUG': 'background:rgba(240,136,62,0.12);color:var(--accent-orange);',
+        'CODE ISSUE': 'background:rgba(88,166,255,0.08);color:var(--accent-blue);'
     };
     return styles[cls] || 'background:var(--bg-tertiary);color:var(--text-muted);';
 }"""
