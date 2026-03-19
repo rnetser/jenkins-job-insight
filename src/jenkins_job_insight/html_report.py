@@ -1239,6 +1239,46 @@ async function toggleReviewed(label) {{
     }}
 }}
 
+async function toggleAllReviewed(btn) {{
+    var card = btn.closest('.bug-card') || btn.closest('.failure-card') || btn.closest('.child-job-body');
+    if (!card) return;
+    var toggles = card.querySelectorAll('.reviewed-toggle input[type="checkbox"]');
+    var allChecked = Array.from(toggles).every(function(cb) {{ return cb.checked; }});
+    var newState = !allChecked;
+
+    var promises = [];
+    toggles.forEach(function(cb) {{
+        if (cb.checked !== newState) {{
+            cb.checked = newState;
+            var label = cb.closest('.reviewed-toggle');
+            label.classList.toggle('checked', newState);
+
+            var testName = label.dataset.testName;
+            var childJob = label.dataset.childJob || '';
+            var childBuild = parseInt(label.dataset.childBuild || '0');
+
+            promises.push(
+                fetch(BASE_PATH + '/results/' + JOB_ID + '/reviewed', {{
+                    method: 'PUT',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{
+                        test_name: testName,
+                        child_job_name: childJob,
+                        child_build_number: childBuild,
+                        reviewed: newState
+                    }}),
+                }})
+            );
+        }}
+    }});
+
+    await Promise.all(promises);
+
+    btn.textContent = newState ? 'Deselect All' : 'Select All';
+
+    if (typeof updateReviewBadges === 'function') updateReviewBadges();
+}}
+
 async function addComment(btn) {{
     const row = btn.closest('.comment-input-row');
     const input = row.querySelector('.comment-input');
@@ -1745,6 +1785,7 @@ def _render_group_card(
     # Affected Tests
     parts.append(f"""{indent}    <div class="bug-tests">
 {indent}      <h4>Affected Tests ({test_count})</h4>
+{indent}      <button class="select-all-reviewed" onclick="toggleAllReviewed(this)" style="font-size:11px;padding:3px 10px;border-radius:6px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;margin-bottom:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor='var(--accent-blue)'" onmouseout="this.style.borderColor='var(--border)'">Select All</button>
 {indent}      <ul>
 """)
     for f in failures:
@@ -1889,6 +1930,9 @@ def _render_child_jobs(
             )
 
         if child_groups:
+            parts.append(
+                '    <button class="select-all-reviewed" onclick="toggleAllReviewed(this)" style="font-size:11px;padding:3px 10px;border-radius:6px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;margin-bottom:8px;transition:background 0.15s,border-color 0.15s;" onmouseover="this.style.borderColor=\'var(--accent-blue)\'" onmouseout="this.style.borderColor=\'var(--border)\'">Select All</button>\n'
+            )
             for group in child_groups:
                 _render_group_card(
                     parts,
