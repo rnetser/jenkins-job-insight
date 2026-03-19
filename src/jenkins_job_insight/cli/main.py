@@ -31,6 +31,16 @@ app.add_typer(classifications_app, name="classifications")
 
 _state: dict = {}
 
+# Shared option definition reused across leaf commands so --json works
+# both globally (before the subcommand) and per-command (after it).
+_JSON_OPTION = typer.Option(False, "--json", help="Output as JSON instead of table.")
+
+
+def _set_json(json_output: bool) -> None:
+    """Set JSON mode from a per-command --json flag."""
+    if json_output:
+        _state["json"] = True
+
 
 def _get_client(server_url: str = "", username: str = "") -> JJIClient:
     """Build (or return cached) JJIClient from global state."""
@@ -42,6 +52,11 @@ def _get_client(server_url: str = "", username: str = "") -> JJIClient:
 def _handle_error(err: JJIError) -> None:
     """Print a JJIError and exit with code 1."""
     typer.echo(f"Error: {err}", err=True)
+    if err.status_code == 401:
+        typer.echo(
+            "Hint: Use --user <name> or set JJI_USERNAME to authenticate.",
+            err=True,
+        )
     raise typer.Exit(code=1)
 
 
@@ -88,16 +103,19 @@ def main_callback(
         server = urlunparse(parsed._replace(netloc=f"{parsed.hostname}:{port}"))
 
     _state["server_url"] = server
-    _state["json"] = json_output
     _state["username"] = username
+    _state["json"] = json_output
 
 
 # -- Health -------------------------------------------------------------------
 
 
 @app.command()
-def health():
+def health(
+    json_output: bool = _JSON_OPTION,
+):
     """Check server health."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.health()
@@ -112,8 +130,10 @@ def health():
 @results_app.command("list")
 def results_list(
     limit: int = typer.Option(50, "--limit", "-l", help="Max results to return."),
+    json_output: bool = _JSON_OPTION,
 ):
     """List recent analyzed jobs."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.list_results(limit=limit)
@@ -135,8 +155,10 @@ def results_list(
 def results_show(
     job_id: str = typer.Argument(help="Job ID to show."),
     full: bool = typer.Option(False, "--full", "-f", help="Show complete JSON result."),
+    json_output: bool = _JSON_OPTION,
 ):
     """Show analysis result for a job."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.get_result(job_id)
@@ -177,8 +199,10 @@ def results_show(
 @results_app.command("delete")
 def results_delete(
     job_id: str = typer.Argument(help="Job ID to delete."),
+    json_output: bool = _JSON_OPTION,
 ):
     """Delete a job and all related data."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.delete_job(job_id)
@@ -195,8 +219,10 @@ def analyze(
     job_name: str = typer.Argument(help="Jenkins job name."),
     build_number: int = typer.Argument(help="Build number to analyze."),
     sync: bool = typer.Option(False, "--sync", help="Wait for analysis to complete."),
+    json_output: bool = _JSON_OPTION,
 ):
     """Submit a Jenkins job for analysis."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.analyze(job_name, build_number, sync=sync)
@@ -223,8 +249,10 @@ def analyze(
 @app.command()
 def status(
     job_id: str = typer.Argument(help="Job ID to check."),
+    json_output: bool = _JSON_OPTION,
 ):
     """Check analysis status for a job."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.get_result(job_id)
@@ -245,8 +273,10 @@ def history_test(
     test_name: str = typer.Argument(help="Fully qualified test name."),
     limit: int = typer.Option(20, "--limit", "-l"),
     job_name: str = typer.Option("", "--job-name", "-j"),
+    json_output: bool = _JSON_OPTION,
 ):
     """Show failure history for a specific test."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.get_test_history(test_name, limit=limit, job_name=job_name)
@@ -256,9 +286,11 @@ def history_test(
     if _state.get("json", False):
         print_output(data, columns=[], as_json=True)
     else:
+        failure_rate = data.get("failure_rate")
+        rate_str = f"{failure_rate:.1%}" if failure_rate is not None else "N/A"
         typer.echo(f"Test: {data.get('test_name', '')}")
         typer.echo(f"Failures: {data.get('failures', 0)}")
-        typer.echo(f"Failure rate: {data.get('failure_rate', 0):.1%}")
+        typer.echo(f"Failure rate: {rate_str}")
         typer.echo(f"Last classification: {data.get('last_classification', 'N/A')}")
         runs = data.get("recent_runs", [])
         if runs:
@@ -285,8 +317,10 @@ def history_search(
     signature: str = typer.Option(
         ..., "--signature", "-s", help="Error signature hash."
     ),
+    json_output: bool = _JSON_OPTION,
 ):
     """Find tests that failed with the same error signature."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.search_by_signature(signature)
@@ -311,8 +345,10 @@ def history_search(
 @history_app.command("stats")
 def history_stats(
     job_name: str = typer.Argument(help="Jenkins job name."),
+    json_output: bool = _JSON_OPTION,
 ):
     """Show aggregate statistics for a job."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.get_job_stats(job_name)
@@ -322,10 +358,12 @@ def history_stats(
     if _state.get("json", False):
         print_output(data, columns=[], as_json=True)
     else:
+        overall_rate = data.get("overall_failure_rate")
+        overall_rate_str = f"{overall_rate:.1%}" if overall_rate is not None else "N/A"
         typer.echo(f"Job: {data.get('job_name', '')}")
         typer.echo(f"Builds analyzed: {data.get('total_builds_analyzed', 0)}")
         typer.echo(f"Builds with failures: {data.get('builds_with_failures', 0)}")
-        typer.echo(f"Failure rate: {data.get('overall_failure_rate', 0):.1%}")
+        typer.echo(f"Failure rate: {overall_rate_str}")
         failures = data.get("most_common_failures", [])
         if failures:
             typer.echo("\nMost common failures:")
@@ -343,8 +381,10 @@ def history_trends(
     ),
     days: int = typer.Option(30, "--days", "-d", help="Lookback window in days."),
     job_name: str = typer.Option("", "--job-name", "-j"),
+    json_output: bool = _JSON_OPTION,
 ):
     """Show failure rate trends over time."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.get_trends(period=period, days=days, job_name=job_name)
@@ -373,8 +413,10 @@ def history_failures(
     search: str = typer.Option("", "--search", "-s", help="Search test names."),
     classification: str = typer.Option("", "--classification", "-c"),
     job_name: str = typer.Option("", "--job-name", "-j"),
+    json_output: bool = _JSON_OPTION,
 ):
     """List paginated failure history."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.get_all_failures(
@@ -421,8 +463,10 @@ def classify(
     reason: str = typer.Option("", "--reason", "-r", help="Reason for classification."),
     job_name: str = typer.Option("", "--job-name", "-j"),
     references: str = typer.Option("", "--references", help="Bug URLs or ticket keys."),
+    json_output: bool = _JSON_OPTION,
 ):
     """Classify a test failure."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.classify_test(
@@ -447,8 +491,10 @@ def classifications_list(
     test_name: str = typer.Option("", "--test-name", "-t"),
     classification: str = typer.Option("", "--type", "-c"),
     job_name: str = typer.Option("", "--job-name", "-j"),
+    json_output: bool = _JSON_OPTION,
 ):
     """List test classifications."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.get_classifications(
@@ -487,8 +533,10 @@ def classifications_list(
 @comments_app.command("list")
 def comments_list(
     job_id: str = typer.Argument(help="Job ID to list comments for."),
+    json_output: bool = _JSON_OPTION,
 ):
     """List comments for a job."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.get_comments(job_id)
@@ -517,8 +565,10 @@ def comments_add(
     message: str = typer.Option(..., "--message", "-m", help="Comment text."),
     child_job_name: str = typer.Option("", "--child-job"),
     child_build_number: int = typer.Option(0, "--child-build"),
+    json_output: bool = _JSON_OPTION,
 ):
     """Add a comment to a test failure."""
+    _set_json(json_output)
     try:
         client = _get_client()
         data = client.add_comment(
@@ -537,8 +587,10 @@ def comments_add(
 def comments_delete(
     job_id: str = typer.Argument(help="Job ID."),
     comment_id: int = typer.Argument(help="Comment ID to delete."),
+    json_output: bool = _JSON_OPTION,
 ):
     """Delete a comment."""
+    _set_json(json_output)
     try:
         client = _get_client()
         client.delete_comment(job_id, comment_id)

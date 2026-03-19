@@ -1,6 +1,7 @@
 """Tests for jji CLI commands using typer test runner."""
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,11 +11,20 @@ from jenkins_job_insight.cli.main import app
 
 runner = CliRunner()
 
+_TEST_SERVER = "http://test-server:8000"
+
 
 @pytest.fixture
 def mock_client():
-    """Provide a mocked JJIClient for all CLI tests."""
-    with patch("jenkins_job_insight.cli.main._get_client") as mock_get:
+    """Provide a mocked JJIClient for all CLI tests.
+
+    Sets JJI_SERVER_URL so the main_callback does not exit early,
+    and patches _get_client so no real HTTP calls are made.
+    """
+    with (
+        patch.dict(os.environ, {"JJI_SERVER_URL": _TEST_SERVER}),
+        patch("jenkins_job_insight.cli.main._get_client") as mock_get,
+    ):
         client = MagicMock()
         mock_get.return_value = client
         yield client
@@ -254,6 +264,17 @@ class TestServerFlag:
             # Verify the server URL was stored in state by the callback
             assert mock_state.get("server_url") == "http://custom:9000"
 
+    def test_missing_server_url(self):
+        """CLI exits with error when no server URL is configured."""
+        with patch.dict(os.environ, {}, clear=False):
+            # Ensure JJI_SERVER_URL is not set
+            env = os.environ.copy()
+            env.pop("JJI_SERVER_URL", None)
+            with patch.dict(os.environ, env, clear=True):
+                result = runner.invoke(app, ["health"])
+                assert result.exit_code == 1
+                assert "Server URL" in result.output
+
 
 class TestErrorHandling:
     def test_connection_error(self, mock_client):
@@ -275,3 +296,75 @@ class TestErrorHandling:
         result = runner.invoke(app, ["results", "show", "nonexistent"])
         assert result.exit_code != 0
         assert "404" in result.output or "not found" in result.output.lower()
+
+    def test_401_error_hints_about_user_flag(self, mock_client):
+        """_handle_error should hint about --user when server returns 401."""
+        from jenkins_job_insight.cli.client import JJIError
+
+        mock_client.delete_job.side_effect = JJIError(
+            status_code=401, detail="Please register a username first"
+        )
+        result = runner.invoke(app, ["results", "delete", "job-123"])
+        assert result.exit_code == 1
+        assert "--user" in result.output
+
+
+class TestNullFieldHandling:
+    def test_history_test_with_null_failure_rate(self, mock_client):
+        """history test should handle None failure_rate without crashing."""
+        mock_client.get_test_history.return_value = {
+            "test_name": "tests.TestFoo.test_bar",
+            "total_runs": 10,
+            "failures": 3,
+            "passes": None,
+            "failure_rate": None,
+            "first_seen": "2026-03-01",
+            "last_seen": "2026-03-17",
+            "last_classification": "PRODUCT BUG",
+            "classifications": {"PRODUCT BUG": 3},
+            "recent_runs": [],
+            "consecutive_failures": 3,
+            "note": "estimated",
+        }
+        result = runner.invoke(app, ["history", "test", "tests.TestFoo.test_bar"])
+        assert result.exit_code == 0
+        assert "test_bar" in result.output or "TestFoo" in result.output
+
+    def test_history_stats_with_null_failure_rate(self, mock_client):
+        """history stats should handle None overall_failure_rate without crashing."""
+        mock_client.get_job_stats.return_value = {
+            "job_name": "ocp-e2e",
+            "total_builds_analyzed": 0,
+            "builds_with_failures": 0,
+            "overall_failure_rate": None,
+            "most_common_failures": [],
+        }
+        result = runner.invoke(app, ["history", "stats", "ocp-e2e"])
+        assert result.exit_code == 0
+        assert "ocp-e2e" in result.output
+
+
+class TestJsonPerCommand:
+    def test_json_flag_after_subcommand(self, mock_client):
+        """--json should work when placed after the subcommand."""
+        mock_client.health.return_value = {"status": "healthy"}
+        result = runner.invoke(app, ["health", "--json"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["status"] == "healthy"
+
+    def test_json_flag_after_nested_subcommand(self, mock_client):
+        """--json should work after a nested subcommand like 'results list'."""
+        mock_client.list_results.return_value = [
+            {
+                "job_id": "abc-123",
+                "status": "completed",
+                "jenkins_url": "https://jenkins.example.com/job/test/1/",
+                "created_at": "2026-03-18",
+            },
+        ]
+        result = runner.invoke(app, ["results", "list", "--json"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert isinstance(parsed, list)
+        assert parsed[0]["job_id"] == "abc-123"
