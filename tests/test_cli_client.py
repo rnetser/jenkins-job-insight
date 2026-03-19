@@ -297,6 +297,123 @@ class TestMalformedUrl:
         assert exc_info.value.status_code == 0
 
 
+class TestJJIClientBugCreation:
+    def test_preview_github_issue(self):
+        response_data = {
+            "title": "Fix: login handler",
+            "body": "## Details...",
+            "similar_issues": [],
+        }
+
+        def handler(request):
+            assert request.method == "POST"
+            assert "/preview-github-issue" in str(request.url)
+            return httpx.Response(200, json=response_data)
+
+        client = _make_client(handler)
+        result = client.preview_github_issue(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+        )
+        assert result["title"] == "Fix: login handler"
+
+    def test_preview_jira_bug(self):
+        response_data = {
+            "title": "DNS timeout",
+            "body": "h2. Summary...",
+            "similar_issues": [],
+        }
+
+        def handler(request):
+            assert "/preview-jira-bug" in str(request.url)
+            return httpx.Response(200, json=response_data)
+
+        client = _make_client(handler)
+        result = client.preview_jira_bug(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+        )
+        assert result["title"] == "DNS timeout"
+
+    def test_create_github_issue(self):
+        response_data = {
+            "url": "https://github.com/org/repo/issues/99",
+            "key": "",
+            "title": "Bug: login fails",
+            "comment_id": 42,
+        }
+
+        def handler(request):
+            assert request.method == "POST"
+            assert "/create-github-issue" in str(request.url)
+            return httpx.Response(201, json=response_data)
+
+        client = _make_client(handler)
+        result = client.create_github_issue(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            title="Bug: login fails",
+            body="Details...",
+        )
+        assert result["url"] == "https://github.com/org/repo/issues/99"
+
+    def test_create_jira_bug(self):
+        response_data = {
+            "url": "https://jira.example.com/browse/PROJ-456",
+            "key": "PROJ-456",
+            "title": "DNS timeout",
+            "comment_id": 43,
+        }
+
+        def handler(request):
+            assert "/create-jira-bug" in str(request.url)
+            return httpx.Response(201, json=response_data)
+
+        client = _make_client(handler)
+        result = client.create_jira_bug(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            title="DNS timeout",
+            body="Description...",
+        )
+        assert result["key"] == "PROJ-456"
+
+    def test_override_classification(self):
+        def handler(request):
+            assert request.method == "PUT"
+            assert "/override-classification" in str(request.url)
+            return httpx.Response(
+                200, json={"status": "ok", "classification": "PRODUCT BUG"}
+            )
+
+        client = _make_client(handler)
+        result = client.override_classification(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            classification="PRODUCT BUG",
+        )
+        assert result["classification"] == "PRODUCT BUG"
+
+    def test_preview_github_issue_with_child_job(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert body["child_job_name"] == "child-runner"
+            assert body["child_build_number"] == 5
+            return httpx.Response(
+                200,
+                json={"title": "Fix", "body": "Body", "similar_issues": []},
+            )
+
+        client = _make_client(handler)
+        result = client.preview_github_issue(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            child_job_name="child-runner",
+            child_build_number=5,
+        )
+        assert result["title"] == "Fix"
+
+
 class TestJJIClientAnalyzeExtras:
     def test_analyze_with_ai_provider(self):
         def handler(request):

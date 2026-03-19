@@ -459,6 +459,201 @@ class TestAnalyzeJiraField:
         assert kwargs["enable_jira"] is True
 
 
+class TestPreviewIssueCommand:
+    def test_preview_github(self, mock_client):
+        mock_client.preview_github_issue.return_value = {
+            "title": "Fix: login handler",
+            "body": "## Details...",
+            "similar_issues": [],
+        }
+        result = runner.invoke(
+            app,
+            [
+                "preview-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "github",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Fix: login handler" in result.output
+
+    def test_preview_jira(self, mock_client):
+        mock_client.preview_jira_bug.return_value = {
+            "title": "DNS timeout",
+            "body": "h2. Summary...",
+            "similar_issues": [],
+        }
+        result = runner.invoke(
+            app,
+            [
+                "preview-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "jira",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "DNS timeout" in result.output
+
+    def test_preview_invalid_type(self, mock_client):
+        result = runner.invoke(
+            app,
+            [
+                "preview-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "invalid",
+            ],
+        )
+        assert result.exit_code == 1
+
+    def test_preview_with_similar_issues(self, mock_client):
+        mock_client.preview_github_issue.return_value = {
+            "title": "Fix: login handler",
+            "body": "## Details...",
+            "similar_issues": [
+                {
+                    "number": 42,
+                    "key": "",
+                    "title": "Similar bug",
+                    "url": "https://github.com/org/repo/issues/42",
+                }
+            ],
+        }
+        result = runner.invoke(
+            app,
+            [
+                "preview-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "github",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Similar issues (1)" in result.output
+
+
+class TestCreateIssueCommand:
+    def test_create_github(self, mock_client):
+        mock_client.create_github_issue.return_value = {
+            "url": "https://github.com/org/repo/issues/99",
+            "key": "",
+            "title": "Bug fix",
+            "comment_id": 42,
+        }
+        result = runner.invoke(
+            app,
+            [
+                "create-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "github",
+                "--title",
+                "Bug fix",
+                "--body",
+                "Details...",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "github.com" in result.output or "99" in result.output
+
+    def test_create_jira(self, mock_client):
+        mock_client.create_jira_bug.return_value = {
+            "url": "https://jira.example.com/browse/PROJ-456",
+            "key": "PROJ-456",
+            "title": "DNS timeout",
+            "comment_id": 43,
+        }
+        result = runner.invoke(
+            app,
+            [
+                "create-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "jira",
+                "--title",
+                "DNS timeout",
+                "--body",
+                "Description...",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "PROJ-456" in result.output
+
+    def test_create_invalid_type(self, mock_client):
+        result = runner.invoke(
+            app,
+            [
+                "create-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "invalid",
+                "--title",
+                "X",
+                "--body",
+                "Y",
+            ],
+        )
+        assert result.exit_code == 1
+
+
+class TestOverrideClassificationCommand:
+    def test_override(self, mock_client):
+        mock_client.override_classification.return_value = {
+            "status": "ok",
+            "classification": "PRODUCT BUG",
+        }
+        result = runner.invoke(
+            app,
+            [
+                "override-classification",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--classification",
+                "PRODUCT BUG",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "PRODUCT BUG" in result.output
+
+    def test_override_json_mode(self, mock_client):
+        mock_client.override_classification.return_value = {
+            "status": "ok",
+            "classification": "CODE ISSUE",
+        }
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "override-classification",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--classification",
+                "CODE ISSUE",
+            ],
+        )
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["classification"] == "CODE ISSUE"
+
+
 class TestStatusJsonFull:
     def test_status_json_returns_full_response(self, mock_client):
         """status --json should return full API response, not trimmed."""

@@ -319,3 +319,105 @@ class JJIClient:
     def get_review_status(self, job_id: str) -> dict:
         """Get review summary for a job. GET /results/{job_id}/review-status"""
         return self._request("GET", f"/results/{job_id}/review-status")
+
+    # -- Bug Creation ---------------------------------------------------------
+
+    def preview_github_issue(
+        self,
+        job_id: str,
+        test_name: str,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+    ) -> dict:
+        """Preview a GitHub issue. POST /results/{job_id}/preview-github-issue"""
+        body: dict = {"test_name": test_name}
+        if child_job_name:
+            body["child_job_name"] = child_job_name
+            body["child_build_number"] = child_build_number
+        return self._request(
+            "POST", f"/results/{job_id}/preview-github-issue", json=body
+        )
+
+    def preview_jira_bug(
+        self,
+        job_id: str,
+        test_name: str,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+    ) -> dict:
+        """Preview a Jira bug. POST /results/{job_id}/preview-jira-bug"""
+        body: dict = {"test_name": test_name}
+        if child_job_name:
+            body["child_job_name"] = child_job_name
+            body["child_build_number"] = child_build_number
+        return self._request("POST", f"/results/{job_id}/preview-jira-bug", json=body)
+
+    def create_github_issue(
+        self,
+        job_id: str,
+        test_name: str,
+        title: str,
+        body: str,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+    ) -> dict:
+        """Create a GitHub issue. POST /results/{job_id}/create-github-issue"""
+        payload: dict = {
+            "test_name": test_name,
+            "title": title,
+            "body": body,
+        }
+        if child_job_name:
+            payload["child_job_name"] = child_job_name
+            payload["child_build_number"] = child_build_number
+        return self._request(
+            "POST",
+            f"/results/{job_id}/create-github-issue",
+            json=payload,
+            accept_statuses=(201,),
+        )
+
+    def create_jira_bug(
+        self,
+        job_id: str,
+        test_name: str,
+        title: str,
+        body: str,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+    ) -> dict:
+        """Create a Jira bug. POST /results/{job_id}/create-jira-bug"""
+        payload: dict = {
+            "test_name": test_name,
+            "title": title,
+            "body": body,
+        }
+        if child_job_name:
+            payload["child_job_name"] = child_job_name
+            payload["child_build_number"] = child_build_number
+        return self._request(
+            "POST",
+            f"/results/{job_id}/create-jira-bug",
+            json=payload,
+            accept_statuses=(201,),
+        )
+
+    def override_classification(
+        self,
+        job_id: str,
+        test_name: str,
+        classification: str,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+    ) -> dict:
+        """Override classification. PUT /results/{job_id}/override-classification"""
+        payload: dict = {
+            "test_name": test_name,
+            "classification": classification,
+        }
+        if child_job_name:
+            payload["child_job_name"] = child_job_name
+            payload["child_build_number"] = child_build_number
+        return self._request(
+            "PUT", f"/results/{job_id}/override-classification", json=payload
+        )
