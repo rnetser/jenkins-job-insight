@@ -359,11 +359,8 @@ class TestClassifyWithChildContext:
         )
         assert result.exit_code == 0
         mock_client.classify_test.assert_called_once()
-        call_kwargs = mock_client.classify_test.call_args
-        assert (
-            call_kwargs.kwargs.get("child_build_number") == 14
-            or call_kwargs[1].get("child_build_number") == 14
-        )
+        kwargs = mock_client.classify_test.call_args.kwargs
+        assert kwargs["child_build_number"] == 14
 
 
 class TestJsonOnMutationCommands:

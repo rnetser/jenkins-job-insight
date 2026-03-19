@@ -16,8 +16,7 @@ def format_table(
         columns: Column keys to display, in order.
         labels: Optional mapping of column key to display label.
             If not provided, the column key is uppercased.
-        max_width: Maximum width for any single column value.
-            Only truncates when explicitly set.
+        max_width: Reserved for caller-side formatting control.
 
     Returns:
         Formatted table string.
@@ -35,8 +34,6 @@ def format_table(
         row = []
         for col in columns:
             val = str(item.get(col, ""))
-            if max_width is not None and len(val) > max_width:
-                val = val[: max_width - 3] + "..."
             row.append(val)
         rows.append(row)
 
@@ -48,11 +45,13 @@ def format_table(
 
     # Build output
     lines: list[str] = []
-    header_line = "  ".join(h.ljust(w) for h, w in zip(headers, widths))
+    header_line = "  ".join(h.ljust(w) for h, w in zip(headers, widths, strict=True))
     lines.append(header_line)
     lines.append("  ".join("-" * w for w in widths))
     for row in rows:
-        lines.append("  ".join(cell.ljust(w) for cell, w in zip(row, widths)))
+        lines.append(
+            "  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True))
+        )
 
     return "\n".join(lines)
 
@@ -83,8 +82,7 @@ def print_output(
         columns: Column keys for table mode.
         as_json: If True, print as JSON. If False, print as table.
         labels: Optional column label overrides for table mode.
-        max_width: Maximum column width for table mode.
-            Only truncates when explicitly set.
+        max_width: Reserved for caller-side formatting control.
     """
     if as_json:
         print(format_json(data))

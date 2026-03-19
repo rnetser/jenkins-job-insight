@@ -48,11 +48,12 @@ class TestFormatTable:
         assert "Job ID" in result
         assert "abc" in result
 
-    def test_truncate_long_values(self):
+    def test_no_truncation(self):
         data = [{"val": "x" * 200}]
         result = format_table(data, columns=["val"], max_width=40)
-        # Truncated values should end with ...
-        assert "..." in result
+        # Full value is preserved, no truncation
+        assert "x" * 200 in result
+        assert "..." not in result
 
 
 class TestFormatJson:

@@ -91,7 +91,7 @@ class JJIClient:
             try:
                 body = response.json()
                 detail = body.get("detail", str(body))
-            except Exception:
+            except (ValueError, KeyError):
                 detail = response.text
             raise JJIError(
                 status_code=response.status_code,
