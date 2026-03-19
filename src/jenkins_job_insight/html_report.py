@@ -1518,20 +1518,20 @@ async function loadClassifications() {{
             if (!testName) return;
             var key = childJob + '#' + childBuild + '::' + testName;
             var entries = byKey[key];
-            if (!entries) return;
-            entries.forEach(function(cls) {{
-                var badge = document.createElement('span');
-                badge.className = 'classification-tag';
-                badge.style.cssText = getClassificationStyle(cls.classification) + 'margin-left:6px;';
-                var badgeLabel = cls.classification.replace('_', ' ');
-                if (cls.classification === 'KNOWN_BUG') {{
-                    var jiraMatch = (cls.reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
-                    if (jiraMatch) badgeLabel = 'KNOWN BUG: ' + jiraMatch[1];
-                }}
-                badge.textContent = badgeLabel;
-                badge.title = (cls.reason || '') + (cls.references_info ? '\\nRef: ' + cls.references_info : '');
-                toggle.appendChild(badge);
-            }});
+            if (!entries || entries.length === 0) return;
+            // Use only the latest (first) entry per key
+            var cls = entries[0];
+            var badge = document.createElement('span');
+            badge.className = 'classification-tag';
+            badge.style.cssText = getClassificationStyle(cls.classification) + 'margin-left:6px;';
+            var badgeLabel = cls.classification.replace('_', ' ');
+            if (cls.classification === 'KNOWN_BUG') {{
+                var jiraMatch = (cls.reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
+                if (jiraMatch) badgeLabel = 'KNOWN BUG: ' + jiraMatch[1];
+            }}
+            badge.textContent = badgeLabel;
+            badge.title = (cls.reason || '') + (cls.references_info ? '\\nRef: ' + cls.references_info : '');
+            toggle.appendChild(badge);
         }});
 
         // Apply classification overrides to primary classification tags.
@@ -1546,28 +1546,28 @@ async function loadClassifications() {{
             var entries = byKey[key];
             if (!entries || entries.length === 0) return;
 
-            entries.forEach(function(cls) {{
-                if (cls.classification === 'CODE ISSUE' || cls.classification === 'PRODUCT BUG') {{
-                    var card = toggle.closest('.bug-card') || toggle.closest('.failure-card');
-                    if (card) {{
-                        var select = card.querySelector('.classification-select');
-                        if (select) {{
-                            select.value = cls.classification;
-                            select.className = 'classification-select ' +
+            // For primary classification overrides, use only the latest (first) entry
+            var cls = entries[0];
+            if (cls.classification === 'CODE ISSUE' || cls.classification === 'PRODUCT BUG') {{
+                var card = toggle.closest('.bug-card') || toggle.closest('.failure-card');
+                if (card) {{
+                    var select = card.querySelector('.classification-select');
+                    if (select) {{
+                        select.value = cls.classification;
+                        select.className = 'classification-select ' +
+                            (cls.classification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
+                        showCorrectBugButton(card, cls.classification);
+                    }} else {{
+                        var primaryTag = card.querySelector('.classification-tag.product-bug, .classification-tag.code-issue, .classification-tag.unknown');
+                        if (primaryTag) {{
+                            primaryTag.textContent = cls.classification;
+                            primaryTag.className = 'classification-tag ' +
                                 (cls.classification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
                             showCorrectBugButton(card, cls.classification);
-                        }} else {{
-                            var primaryTag = card.querySelector('.classification-tag.product-bug, .classification-tag.code-issue, .classification-tag.unknown');
-                            if (primaryTag) {{
-                                primaryTag.textContent = cls.classification;
-                                primaryTag.className = 'classification-tag ' +
-                                    (cls.classification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
-                                showCorrectBugButton(card, cls.classification);
-                            }}
                         }}
                     }}
                 }}
-            }});
+            }}
         }});
 
         // Add classification badges to bug card summaries
@@ -1583,20 +1583,20 @@ async function loadClassifications() {{
                 var cj = t.dataset.childJob || '';
                 var cb = t.dataset.childBuild || '0';
                 var key = cj + '#' + cb + '::' + tn;
-                if (tn && byKey[key]) {{
-                    byKey[key].forEach(function(entry) {{
-                        var cls = entry.classification;
-                        cardClassifications[cls] = (cardClassifications[cls] || 0) + 1;
-                        if (!cardReasons[cls]) cardReasons[cls] = [];
-                        var r = entry.reason || '';
-                        var ri = entry.references_info || '';
-                        var tip = r + (ri ? '\\nRef: ' + ri : '');
-                        if (tip && cardReasons[cls].indexOf(tip) === -1) cardReasons[cls].push(tip);
-                        if (cls === 'KNOWN_BUG') {{
-                            var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
-                            if (jm && !cardJiraKeys[jm[1]]) cardJiraKeys[jm[1]] = true;
-                        }}
-                    }});
+                if (tn && byKey[key] && byKey[key].length > 0) {{
+                    // Use only latest classification per test for badge counts
+                    var entry = byKey[key][0];
+                    var cls = entry.classification;
+                    cardClassifications[cls] = (cardClassifications[cls] || 0) + 1;
+                    if (!cardReasons[cls]) cardReasons[cls] = [];
+                    var r = entry.reason || '';
+                    var ri = entry.references_info || '';
+                    var tip = r + (ri ? '\\nRef: ' + ri : '');
+                    if (tip && cardReasons[cls].indexOf(tip) === -1) cardReasons[cls].push(tip);
+                    if (cls === 'KNOWN_BUG') {{
+                        var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
+                        if (jm && !cardJiraKeys[jm[1]]) cardJiraKeys[jm[1]] = true;
+                    }}
                 }}
             }});
             for (var cls in cardClassifications) {{
@@ -1630,20 +1630,20 @@ async function loadClassifications() {{
                 var cj = t.dataset.childJob || '';
                 var cb = t.dataset.childBuild || '0';
                 var key = cj + '#' + cb + '::' + tn;
-                if (tn && byKey[key]) {{
-                    byKey[key].forEach(function(entry) {{
-                        var cls = entry.classification;
-                        childClassifications[cls] = (childClassifications[cls] || 0) + 1;
-                        if (!childReasons[cls]) childReasons[cls] = [];
-                        var r = entry.reason || '';
-                        var ri = entry.references_info || '';
-                        var tip = r + (ri ? '\\nRef: ' + ri : '');
-                        if (tip && childReasons[cls].indexOf(tip) === -1) childReasons[cls].push(tip);
-                        if (cls === 'KNOWN_BUG') {{
-                            var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
-                            if (jm && !childJiraKeys[jm[1]]) childJiraKeys[jm[1]] = true;
-                        }}
-                    }});
+                if (tn && byKey[key] && byKey[key].length > 0) {{
+                    // Use only latest classification per test for badge counts
+                    var entry = byKey[key][0];
+                    var cls = entry.classification;
+                    childClassifications[cls] = (childClassifications[cls] || 0) + 1;
+                    if (!childReasons[cls]) childReasons[cls] = [];
+                    var r = entry.reason || '';
+                    var ri = entry.references_info || '';
+                    var tip = r + (ri ? '\\nRef: ' + ri : '');
+                    if (tip && childReasons[cls].indexOf(tip) === -1) childReasons[cls].push(tip);
+                    if (cls === 'KNOWN_BUG') {{
+                        var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
+                        if (jm && !childJiraKeys[jm[1]]) childJiraKeys[jm[1]] = true;
+                    }}
                 }}
             }});
             for (var cls in childClassifications) {{
@@ -1664,11 +1664,13 @@ async function loadClassifications() {{
         }});
 
         // Add classification summary to report header (line 3 — badges row)
+        // Use only the latest (first) entry per key for header counts
         var headerClassifications = {{}};
         for (var key in byKey) {{
-            byKey[key].forEach(function(entry) {{
-                headerClassifications[entry.classification] = (headerClassifications[entry.classification] || 0) + 1;
-            }});
+            if (byKey[key] && byKey[key].length > 0) {{
+                var latestEntry = byKey[key][0];
+                headerClassifications[latestEntry.classification] = (headerClassifications[latestEntry.classification] || 0) + 1;
+            }}
         }}
         var headerLine3 = document.getElementById('header-line3');
         if (headerLine3) {{

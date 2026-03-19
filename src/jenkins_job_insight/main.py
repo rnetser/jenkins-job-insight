@@ -1299,12 +1299,13 @@ async def preview_github_issue(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
     if effective_cls and effective_cls != failure.analysis.classification:
+        updates: dict = {"classification": effective_cls}
+        if effective_cls == "CODE ISSUE":
+            updates["product_bug_report"] = False  # Clear stale product bug data
+        elif effective_cls == "PRODUCT BUG":
+            updates["code_fix"] = False  # Clear stale code fix data
         failure = failure.model_copy(
-            update={
-                "analysis": failure.analysis.model_copy(
-                    update={"classification": effective_cls}
-                )
-            }
+            update={"analysis": failure.analysis.model_copy(update=updates)}
         )
 
     # AI config is best-effort for preview — fallback content is generated if not configured
@@ -1389,12 +1390,13 @@ async def preview_jira_bug(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
     if effective_cls and effective_cls != failure.analysis.classification:
+        updates: dict = {"classification": effective_cls}
+        if effective_cls == "CODE ISSUE":
+            updates["product_bug_report"] = False  # Clear stale product bug data
+        elif effective_cls == "PRODUCT BUG":
+            updates["code_fix"] = False  # Clear stale code fix data
         failure = failure.model_copy(
-            update={
-                "analysis": failure.analysis.model_copy(
-                    update={"classification": effective_cls}
-                )
-            }
+            update={"analysis": failure.analysis.model_copy(update=updates)}
         )
 
     # AI config is best-effort for preview — fallback content is generated if not configured
