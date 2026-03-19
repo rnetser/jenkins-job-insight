@@ -1532,7 +1532,7 @@ async function loadClassifications() {{
                 if (cls.classification === 'CODE ISSUE' || cls.classification === 'PRODUCT BUG') {{
                     var card = toggle.closest('.bug-card') || toggle.closest('.failure-card');
                     if (card) {{
-                        var primaryTag = card.querySelector('.classification-tag.product-bug, .classification-tag.code-issue');
+                        var primaryTag = card.querySelector('.classification-tag.product-bug, .classification-tag.code-issue, .classification-tag.unknown');
                         if (primaryTag) {{
                             primaryTag.textContent = cls.classification;
                             primaryTag.className = 'classification-tag ' +
