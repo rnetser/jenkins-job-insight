@@ -1517,6 +1517,33 @@ async function loadClassifications() {{
             }});
         }});
 
+        // Apply classification overrides to primary classification tags.
+        // When a user overrides CODE ISSUE -> PRODUCT BUG (or vice-versa),
+        // the override is stored in test_classifications. On page refresh
+        // the primary tag comes from result_json (stale). Update it here.
+        document.querySelectorAll('.reviewed-toggle').forEach(function(toggle) {{
+            var testName = toggle.dataset.testName;
+            var childJob = toggle.dataset.childJob || '';
+            var key = childJob + '::' + testName;
+            var entries = byKey[key];
+            if (!entries || entries.length === 0) return;
+
+            entries.forEach(function(cls) {{
+                if (cls.classification === 'CODE ISSUE' || cls.classification === 'PRODUCT BUG') {{
+                    var card = toggle.closest('.bug-card') || toggle.closest('.failure-card');
+                    if (card) {{
+                        var primaryTag = card.querySelector('.classification-tag.product-bug, .classification-tag.code-issue');
+                        if (primaryTag) {{
+                            primaryTag.textContent = cls.classification;
+                            primaryTag.className = 'classification-tag ' +
+                                (cls.classification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
+                            showCorrectBugButton(card, cls.classification);
+                        }}
+                    }}
+                }}
+            }});
+        }});
+
         // Add classification badges to bug card summaries
         document.querySelectorAll('.bug-summary, .failure-summary').forEach(function(summary) {{
             var card = summary.closest('.bug-card, .failure-card');

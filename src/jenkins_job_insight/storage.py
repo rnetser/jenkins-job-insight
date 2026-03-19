@@ -1881,11 +1881,19 @@ async def override_classification(
     async with aiosqlite.connect(DB_PATH) as db:
         # Look up the error_signature for this test so we can update
         # ALL tests in the same group (same signature, same job).
-        cursor = await db.execute(
+        # Scope by child context when provided so that identically-named
+        # tests in different child jobs resolve the correct signature.
+        sig_query = (
             "SELECT error_signature FROM failure_history "
-            "WHERE job_id = ? AND test_name = ? LIMIT 1",
-            (job_id, test_name),
+            "WHERE job_id = ? AND test_name = ?"
         )
+        sig_params: list = [job_id, test_name]
+        if child_job_name:
+            sig_query += " AND child_job_name = ? AND child_build_number = ?"
+            sig_params.extend([child_job_name, child_build_number])
+        sig_query += " LIMIT 1"
+
+        cursor = await db.execute(sig_query, sig_params)
         row = await cursor.fetchone()
         error_signature = row[0] if row and row[0] else ""
 

@@ -1411,6 +1411,11 @@ async def create_github_issue_endpoint(
             repo_url=tests_repo_url,
             github_token=github_token,
         )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid TESTS_REPO_URL: {exc}",
+        )
     except httpx.HTTPStatusError as exc:
         raise HTTPException(
             status_code=502,
