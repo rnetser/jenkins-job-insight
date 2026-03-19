@@ -634,3 +634,88 @@ class TestGenerateDashboardHtml:
         assert ".sticky-header" in css
         assert ".report-footer" in css
         assert ".container" in css
+
+
+# ===========================================================================
+# TestBugCreationButtons
+# ===========================================================================
+
+
+class TestBugCreationButtons:
+    """Tests for bug creation buttons, preview modal JS, and classification override."""
+
+    def test_code_issue_has_github_button(
+        self, code_issue_failure: FailureAnalysis
+    ) -> None:
+        """CODE ISSUE failures include a GitHub issue button."""
+        result = AnalysisResult(
+            job_id="gh-btn-test",
+            job_name="test",
+            build_number=1,
+            jenkins_url="https://jenkins.example.com/job/test/1/",
+            status="completed",
+            summary="Code issue found",
+            failures=[code_issue_failure],
+        )
+        html_output = format_result_as_html(result)
+        assert "github-issue-btn" in html_output
+
+    def test_product_bug_has_jira_button(
+        self, product_bug_failure: FailureAnalysis
+    ) -> None:
+        """PRODUCT BUG failures include a Jira bug button."""
+        result = AnalysisResult(
+            job_id="jira-btn-test",
+            job_name="test",
+            build_number=1,
+            jenkins_url="https://jenkins.example.com/job/test/1/",
+            status="completed",
+            summary="Product bug found",
+            failures=[product_bug_failure],
+        )
+        html_output = format_result_as_html(result)
+        assert "jira-bug-btn" in html_output
+
+    def test_preview_modal_js_included(
+        self, sample_analysis_result: AnalysisResult
+    ) -> None:
+        """Report includes preview modal JavaScript functions."""
+        html_output = format_result_as_html(sample_analysis_result)
+        assert "showIssuePreviewModal" in html_output
+
+    def test_classification_override_control(
+        self, sample_analysis_result: AnalysisResult
+    ) -> None:
+        """Report includes classification override button."""
+        html_output = format_result_as_html(sample_analysis_result)
+        assert "overrideClassification" in html_output
+
+    def test_init_bug_creation_buttons_called(
+        self, sample_analysis_result: AnalysisResult
+    ) -> None:
+        """DOMContentLoaded handler calls initBugCreationButtons."""
+        html_output = format_result_as_html(sample_analysis_result)
+        assert "initBugCreationButtons" in html_output
+
+    def test_bug_creation_css_included(
+        self, sample_analysis_result: AnalysisResult
+    ) -> None:
+        """Report includes bug creation CSS classes."""
+        html_output = format_result_as_html(sample_analysis_result)
+        assert ".create-issue-btn" in html_output
+        assert ".github-issue-btn" in html_output
+        assert ".jira-bug-btn" in html_output
+
+    def test_preview_submit_js_included(
+        self, sample_analysis_result: AnalysisResult
+    ) -> None:
+        """Report includes submitIssue JavaScript function."""
+        html_output = format_result_as_html(sample_analysis_result)
+        assert "submitIssue" in html_output
+
+    def test_override_classification_btn_present(
+        self, sample_analysis_result: AnalysisResult
+    ) -> None:
+        """Report includes override-classification-btn buttons."""
+        html_output = format_result_as_html(sample_analysis_result)
+        assert "override-classification-btn" in html_output

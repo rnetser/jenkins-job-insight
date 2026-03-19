@@ -845,6 +845,121 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 }}
 {_modal_css()}
 
+/* Bug creation buttons */
+.bug-actions {{
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+}}
+.create-issue-btn {{
+    font-size: 12px;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    transition: background 0.15s, border-color 0.15s;
+}}
+.create-issue-btn:disabled {{
+    opacity: 0.5;
+    cursor: not-allowed;
+}}
+.github-issue-btn {{
+    background: rgba(63,185,80,0.12);
+    border: 1px solid var(--accent-green);
+    color: var(--accent-green);
+}}
+.github-issue-btn:hover:not(:disabled) {{
+    background: rgba(63,185,80,0.25);
+}}
+.jira-bug-btn {{
+    background: rgba(88,166,255,0.12);
+    border: 1px solid var(--accent-blue);
+    color: var(--accent-blue);
+}}
+.jira-bug-btn:hover:not(:disabled) {{
+    background: rgba(88,166,255,0.25);
+}}
+/* Classification override */
+.override-classification-btn {{
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: border-color 0.15s;
+}}
+.override-classification-btn:hover {{
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+}}
+/* Preview modal extensions */
+.preview-modal .modal-dialog {{
+    max-width: 700px;
+    text-align: left;
+}}
+.preview-modal .modal-dialog h3 {{
+    text-align: left;
+}}
+.preview-input {{
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 14px;
+    margin-bottom: 12px;
+    outline: none;
+}}
+.preview-input:focus {{
+    border-color: var(--accent-blue);
+}}
+.preview-textarea {{
+    width: 100%;
+    height: 300px;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: var(--font-mono);
+    resize: vertical;
+    margin-bottom: 12px;
+    outline: none;
+}}
+.preview-textarea:focus {{
+    border-color: var(--accent-blue);
+}}
+.similar-issues-box {{
+    background: rgba(240,136,62,0.08);
+    border: 1px solid var(--accent-orange);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    font-size: 13px;
+}}
+.similar-issues-box h4 {{
+    color: var(--accent-orange);
+    font-size: 12px;
+    margin-bottom: 8px;
+}}
+.similar-issues-box a {{
+    color: var(--accent-blue);
+    text-decoration: none;
+    font-size: 12px;
+    display: block;
+    padding: 2px 0;
+}}
+.similar-issues-box a:hover {{
+    text-decoration: underline;
+}}
+
 /* Responsive (page-specific) */
 @media (max-width: 480px) {{
     .failure-summary {{ font-size: 12px; gap: 8px; }}
@@ -1510,6 +1625,202 @@ async function loadClassifications() {{
     }}
 }}
 
+// -- Bug creation: preview, create, classification override --
+
+function showIssuePreviewModal(type, data, testName, childJob, childBuild) {{
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay preview-modal';
+
+    var dialog = document.createElement('div');
+    dialog.className = 'modal-dialog';
+
+    var h3 = document.createElement('h3');
+    h3.textContent = type === 'github' ? 'Create GitHub Issue' : 'Create Jira Bug';
+    dialog.appendChild(h3);
+
+    // Similar issues warning
+    if (data.similar_issues && data.similar_issues.length > 0) {{
+        var box = document.createElement('div');
+        box.className = 'similar-issues-box';
+        var boxH4 = document.createElement('h4');
+        boxH4.textContent = 'Similar existing issues found (' + data.similar_issues.length + ')';
+        box.appendChild(boxH4);
+        data.similar_issues.forEach(function(s) {{
+            var link = document.createElement('a');
+            link.href = s.url || '#';
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.textContent = (s.key || '#' + (s.number || '')) + ': ' + (s.title || '');
+            box.appendChild(link);
+        }});
+        dialog.appendChild(box);
+    }}
+
+    // Title input
+    var titleLabel = document.createElement('label');
+    titleLabel.style.cssText = 'display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;font-weight:600;';
+    titleLabel.textContent = 'Title';
+    dialog.appendChild(titleLabel);
+    var titleInput = document.createElement('input');
+    titleInput.type = 'text';
+    titleInput.className = 'preview-input';
+    titleInput.value = data.title || '';
+    dialog.appendChild(titleInput);
+
+    // Body textarea
+    var bodyLabel = document.createElement('label');
+    bodyLabel.style.cssText = 'display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;font-weight:600;';
+    bodyLabel.textContent = 'Body';
+    dialog.appendChild(bodyLabel);
+    var bodyTextarea = document.createElement('textarea');
+    bodyTextarea.className = 'preview-textarea';
+    bodyTextarea.value = data.body || '';
+    dialog.appendChild(bodyTextarea);
+
+    // Actions
+    var actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    actions.style.justifyContent = 'flex-end';
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.className = 'modal-btn modal-btn-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.onclick = function() {{ overlay.remove(); }};
+    actions.appendChild(cancelBtn);
+
+    var createBtn = document.createElement('button');
+    createBtn.className = 'modal-btn';
+    createBtn.style.cssText = type === 'github'
+        ? 'background:rgba(63,185,80,0.15);color:var(--accent-green);border-color:var(--accent-green);'
+        : 'background:rgba(88,166,255,0.12);color:var(--accent-blue);border-color:var(--accent-blue);';
+    createBtn.textContent = 'Create';
+    createBtn.onclick = function() {{
+        createBtn.textContent = 'Creating...';
+        createBtn.disabled = true;
+        submitIssue(type, titleInput.value, bodyTextarea.value, testName, childJob, childBuild, overlay);
+    }};
+    actions.appendChild(createBtn);
+    dialog.appendChild(actions);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    overlay.onclick = function(ev) {{ if (ev.target === overlay) overlay.remove(); }};
+}}
+
+async function submitIssue(type, title, body, testName, childJob, childBuild, overlay) {{
+    var endpoint = type === 'github' ? '/create-github-issue' : '/create-jira-bug';
+    try {{
+        var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + endpoint, {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{
+                test_name: testName, child_job_name: childJob, child_build_number: childBuild,
+                title: title, body: body,
+            }}),
+        }});
+        if (!resp.ok) {{
+            var errData = await resp.json().catch(function() {{ return {{}}; }});
+            throw new Error(errData.detail || 'HTTP ' + resp.status);
+        }}
+        var data = await resp.json();
+        overlay.remove();
+        var label = data.key || ('#' + (data.number || 'Issue'));
+        showConfirmModal('Issue Created', label + ' created: ' + (data.url || ''), function() {{}});
+        // Reload comments to show the auto-added link
+        await loadCommentsAndReviews();
+        updateCommentBadges();
+    }} catch (err) {{
+        overlay.remove();
+        showConfirmModal('Error', 'Failed to create: ' + err.message, function() {{}});
+    }}
+}}
+
+async function previewGithubIssue(btn) {{
+    var testName = btn.dataset.testName;
+    var childJob = btn.dataset.childJob || '';
+    var childBuild = parseInt(btn.dataset.childBuild || '0');
+    var origHTML = btn.innerHTML;
+    btn.textContent = 'Generating...';
+    btn.disabled = true;
+    try {{
+        var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + '/preview-github-issue', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{test_name: testName, child_job_name: childJob, child_build_number: childBuild}}),
+        }});
+        if (!resp.ok) {{ throw new Error('HTTP ' + resp.status); }}
+        var data = await resp.json();
+        showIssuePreviewModal('github', data, testName, childJob, childBuild);
+    }} catch (err) {{
+        showConfirmModal('Error', 'Failed to generate issue preview: ' + err.message, function() {{}});
+    }} finally {{
+        btn.innerHTML = origHTML;
+        btn.disabled = false;
+    }}
+}}
+
+async function previewJiraBug(btn) {{
+    var testName = btn.dataset.testName;
+    var childJob = btn.dataset.childJob || '';
+    var childBuild = parseInt(btn.dataset.childBuild || '0');
+    var origHTML = btn.innerHTML;
+    btn.textContent = 'Generating...';
+    btn.disabled = true;
+    try {{
+        var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + '/preview-jira-bug', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{test_name: testName, child_job_name: childJob, child_build_number: childBuild}}),
+        }});
+        if (!resp.ok) {{ throw new Error('HTTP ' + resp.status); }}
+        var data = await resp.json();
+        showIssuePreviewModal('jira', data, testName, childJob, childBuild);
+    }} catch (err) {{
+        showConfirmModal('Error', 'Failed to generate bug preview: ' + err.message, function() {{}});
+    }} finally {{
+        btn.innerHTML = origHTML;
+        btn.disabled = false;
+    }}
+}}
+
+function overrideClassification(btn, testName, childJob, childBuild) {{
+    var card = btn.closest('.bug-card') || btn.closest('.failure-card');
+    var currentTag = card.querySelector('.classification-tag');
+    var current = currentTag ? currentTag.textContent.trim() : '';
+    var newClassification = current === 'PRODUCT BUG' ? 'CODE ISSUE' : 'PRODUCT BUG';
+
+    fetch(BASE_PATH + '/results/' + JOB_ID + '/override-classification', {{
+        method: 'PUT',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{
+            test_name: testName, child_job_name: childJob, child_build_number: childBuild,
+            classification: newClassification,
+        }}),
+    }}).then(function(r) {{
+        if (r.ok) {{
+            currentTag.textContent = newClassification;
+            currentTag.className = 'classification-tag ' + (newClassification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
+            showCorrectBugButton(card, newClassification);
+        }}
+    }});
+}}
+
+function showCorrectBugButton(card, classification) {{
+    var ghBtn = card.querySelector('.github-issue-btn');
+    var jiraBtn = card.querySelector('.jira-bug-btn');
+    if (ghBtn) ghBtn.style.display = classification === 'CODE ISSUE' ? '' : 'none';
+    if (jiraBtn) jiraBtn.style.display = classification === 'PRODUCT BUG' ? '' : 'none';
+}}
+
+function initBugCreationButtons() {{
+    document.querySelectorAll('.bug-card, .failure-card').forEach(function(card) {{
+        var tag = card.querySelector('.classification-tag');
+        if (!tag) return;
+        var cls = tag.textContent.trim();
+        showCorrectBugButton(card, cls);
+    }});
+}}
+
 document.addEventListener('DOMContentLoaded', async function() {{
     document.querySelectorAll('.reviewed-toggle:not(.select-all-toggle) input[type="checkbox"]').forEach(cb => {{
         cb.addEventListener('change', function(event) {{
@@ -1527,6 +1838,7 @@ document.addEventListener('DOMContentLoaded', async function() {{
             }}
         }});
     }});
+    initBugCreationButtons();
     await loadClassifications();
     await loadCommentsAndReviews();
     await loadEnrichments();
@@ -1736,6 +2048,7 @@ def _render_group_card(
 {indent}    <span class="bug-title">{e(card_title)}</span>
 {indent}    <span class="bug-count">{e(test_label)}</span>
 {indent}    <span class="classification-tag {e(cls_class)}">{e(cls)}</span>
+{indent}    <button class="override-classification-btn" onclick="event.stopPropagation(); overrideClassification(this, '{e(failures[0].test_name)}', '{e(child_job_name)}', {child_build_number})" title="Change classification">&#x21c4;</button>
 {indent}    <span class="severity-tag-inline {e(severity)}">{e(severity.upper())}</span>
 {indent}    <span class="group-review-status status-chip" style="display:none"></span>
 {indent}  </summary>
@@ -1819,6 +2132,10 @@ def _render_group_card(
 {indent}          <button class="comment-add-btn" onclick="addComment(this)">Add</button>
 {indent}        </div>
 {indent}      </div>
+{indent}    </div>
+{indent}    <div class="bug-actions">
+{indent}      <button class="create-issue-btn github-issue-btn" data-test-name="{e(comment_test)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="previewGithubIssue(this)" style="display:none"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> Open GitHub Issue</button>
+{indent}      <button class="create-issue-btn jira-bug-btn" data-test-name="{e(comment_test)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="previewJiraBug(this)" style="display:none"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M11.53 2c0 2.4 1.97 4.35 4.35 4.35h1.78v1.7c0 2.4 1.94 4.34 4.34 4.35V2.84a.84.84 0 00-.84-.84H11.53zM6.77 6.8a4.36 4.36 0 004.34 4.34h1.78v1.72a4.36 4.36 0 004.34 4.34V7.63a.84.84 0 00-.83-.83H6.77zM2 11.6c0 2.4 1.95 4.34 4.35 4.35h1.78v1.72c.01 2.39 1.95 4.33 4.35 4.33v-9.57a.84.84 0 00-.84-.83H2z"/></svg> Open Jira Bug</button>
 {indent}    </div>
 """)
 
