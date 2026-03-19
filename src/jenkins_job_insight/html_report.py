@@ -1924,11 +1924,6 @@ def _render_child_jobs(
             )
 
         if child_groups:
-            parts.append(
-                '    <label class="reviewed-toggle select-all-toggle" onclick="event.stopPropagation(); toggleAllReviewed(this)" style="margin-bottom:8px;font-weight:700;">\n'
-                '      <input type="checkbox"> Select All\n'
-                "    </label>\n"
-            )
             for group in child_groups:
                 _render_group_card(
                     parts,
