@@ -187,7 +187,6 @@ def _parse_ai_issue_response(output: str) -> dict | None:
 
 async def generate_github_issue_content(
     failure: FailureAnalysis,
-    job_id: str,
     report_url: str = "",
     ai_provider: str = "",
     ai_model: str = "",
@@ -265,7 +264,6 @@ Respond with ONLY the JSON object, no other text."""
 
 async def generate_jira_bug_content(
     failure: FailureAnalysis,
-    job_id: str,
     report_url: str = "",
     ai_provider: str = "",
     ai_model: str = "",

@@ -1297,7 +1297,6 @@ async def preview_github_issue(
 
     content = await generate_github_issue_content(
         failure=failure,
-        job_id=job_id,
         report_url=report_url,
         ai_provider=ai_provider,
         ai_model=ai_model,
@@ -1359,7 +1358,6 @@ async def preview_jira_bug(
 
     content = await generate_jira_bug_content(
         failure=failure,
-        job_id=job_id,
         report_url=report_url,
         ai_provider=ai_provider,
         ai_model=ai_model,
