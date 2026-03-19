@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import aiosqlite
 import pytest
 
 from jenkins_job_insight import storage
@@ -278,3 +279,114 @@ class TestListResults:
             # Should NOT have result_json (it's not in the select)
             assert "result_json" not in result
             assert "result" not in result
+
+
+class TestOverrideClassification:
+    """Tests for the override_classification function."""
+
+    async def test_override_updates_failure_history(self, setup_test_db: Path) -> None:
+        """Override classification updates the failure_history table."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            # Insert a failure_history row first
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    """INSERT INTO failure_history
+                       (job_id, job_name, build_number, test_name, classification,
+                        error_message, analyzed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    (
+                        "job-1",
+                        "my-job",
+                        1,
+                        "tests.TestA.test_one",
+                        "CODE ISSUE",
+                        "error msg",
+                    ),
+                )
+                await db.commit()
+
+            await storage.override_classification(
+                job_id="job-1",
+                test_name="tests.TestA.test_one",
+                classification="PRODUCT BUG",
+            )
+
+            # Verify updated
+            async with aiosqlite.connect(setup_test_db) as db:
+                cursor = await db.execute(
+                    "SELECT classification FROM failure_history WHERE job_id=? AND test_name=?",
+                    ("job-1", "tests.TestA.test_one"),
+                )
+                row = await cursor.fetchone()
+                assert row[0] == "PRODUCT BUG"
+
+    async def test_override_with_child_job(self, setup_test_db: Path) -> None:
+        """Override classification with child job scoping."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            # Insert two rows: one with child job, one without
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    """INSERT INTO failure_history
+                       (job_id, job_name, build_number, test_name, classification,
+                        error_message, child_job_name, child_build_number, analyzed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    (
+                        "job-2",
+                        "parent-job",
+                        10,
+                        "tests.TestB.test_two",
+                        "CODE ISSUE",
+                        "error",
+                        "child-job",
+                        5,
+                    ),
+                )
+                await db.execute(
+                    """INSERT INTO failure_history
+                       (job_id, job_name, build_number, test_name, classification,
+                        error_message, analyzed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    (
+                        "job-2",
+                        "parent-job",
+                        10,
+                        "tests.TestB.test_two",
+                        "CODE ISSUE",
+                        "error",
+                    ),
+                )
+                await db.commit()
+
+            # Override only the child job row
+            await storage.override_classification(
+                job_id="job-2",
+                test_name="tests.TestB.test_two",
+                classification="PRODUCT BUG",
+                child_job_name="child-job",
+                child_build_number=5,
+            )
+
+            # Verify only the child job row was updated
+            async with aiosqlite.connect(setup_test_db) as db:
+                cursor = await db.execute(
+                    "SELECT classification, child_job_name FROM failure_history "
+                    "WHERE job_id=? AND test_name=? ORDER BY child_job_name",
+                    ("job-2", "tests.TestB.test_two"),
+                )
+                rows = await cursor.fetchall()
+                # Row without child_job_name should remain unchanged
+                assert rows[0][0] == "CODE ISSUE"
+                assert rows[0][1] == ""
+                # Row with child_job_name should be updated
+                assert rows[1][0] == "PRODUCT BUG"
+                assert rows[1][1] == "child-job"
+
+    async def test_override_no_matching_row(self, setup_test_db: Path) -> None:
+        """Override with no matching row completes without error."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            # Should not raise even if no rows match
+            await storage.override_classification(
+                job_id="nonexistent-job",
+                test_name="tests.TestX.test_missing",
+                classification="CODE ISSUE",
+            )

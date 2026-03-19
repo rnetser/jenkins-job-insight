@@ -1847,3 +1847,52 @@ async def get_html_report(job_id: str) -> str | None:
     if report_path.exists():
         return report_path.read_text(encoding="utf-8")
     return None
+
+
+async def override_classification(
+    job_id: str,
+    test_name: str,
+    classification: str,
+    child_job_name: str = "",
+    child_build_number: int = 0,
+    username: str = "",
+) -> None:
+    """Override the classification of a failure in failure_history.
+
+    Updates the classification column in the failure_history table.
+    This allows users to correct AI misclassifications (e.g.,
+    changing CODE ISSUE to PRODUCT BUG or vice versa).
+
+    Args:
+        job_id: The analysis job ID.
+        test_name: Fully qualified test name.
+        classification: New classification ("CODE ISSUE" or "PRODUCT BUG").
+        child_job_name: Child job name (for pipeline analyses).
+        child_build_number: Child build number.
+        username: User who made the override.
+    """
+    logger.debug(
+        f"override_classification: job_id={job_id}, test_name={test_name}, "
+        f"classification={classification}, username={username}"
+    )
+    async with aiosqlite.connect(DB_PATH) as db:
+        if child_job_name:
+            await db.execute(
+                """UPDATE failure_history
+                   SET classification = ?
+                   WHERE job_id = ? AND test_name = ?
+                   AND child_job_name = ? AND child_build_number = ?""",
+                (classification, job_id, test_name, child_job_name, child_build_number),
+            )
+        else:
+            await db.execute(
+                """UPDATE failure_history
+                   SET classification = ?
+                   WHERE job_id = ? AND test_name = ?""",
+                (classification, job_id, test_name),
+            )
+        await db.commit()
+    logger.info(
+        f"Classification overridden: job_id={job_id}, test_name={test_name}, "
+        f"classification={classification}, by={username or 'unknown'}"
+    )
