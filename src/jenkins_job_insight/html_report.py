@@ -2010,6 +2010,26 @@ async function submitIssue(type, title, body, testName, childJob, childBuild, in
         var data = await resp.json();
         overlay.remove();
         showIssueCreatedModal(type, data);
+        // Find and replace the original create button with a link
+        var cards = document.querySelectorAll('.bug-card');
+        cards.forEach(function(card) {{
+            var btns = card.querySelectorAll('.create-issue-btn');
+            btns.forEach(function(b) {{
+                if (b.dataset.testName === testName && b.dataset.childJob === childJob) {{
+                    if ((type === 'github' && b.classList.contains('github-issue-btn')) ||
+                        (type === 'jira' && b.classList.contains('jira-bug-btn'))) {{
+                        var link = document.createElement('a');
+                        link.href = data.url;
+                        link.target = '_blank';
+                        link.rel = 'noopener';
+                        link.className = b.className;
+                        link.style.cssText = 'text-decoration:none;pointer-events:auto;opacity:0.7;';
+                        link.textContent = type === 'github' ? ('Issue #' + (data.number || '')) : (data.key || 'Bug');
+                        b.replaceWith(link);
+                    }}
+                }}
+            }});
+        }});
         // Clear existing comments before reload to avoid duplicates
         document.querySelectorAll('.comment-list').forEach(function(cl) {{ cl.innerHTML = ''; }});
         // Reload comments to show the auto-added link
@@ -2131,6 +2151,8 @@ async function previewIssue(btn, type) {{
 
 function overrideClassification(select) {{
     var newClassification = select.value;
+    var prevValue = select.dataset.prevValue || select.value;
+    var prevClass = select.dataset.prevClass || select.className;
     var testName = select.dataset.testName;
     var childJob = select.dataset.childJob || '';
     var childBuild = parseInt(select.dataset.childBuild || '0');
@@ -2150,12 +2172,24 @@ function overrideClassification(select) {{
             if (card) showCorrectBugButton(card, newClassification);
         }} else {{
             r.json().then(function(data) {{
+                select.value = prevValue;
+                select.className = prevClass;
+                var card = select.closest('.bug-card') || select.closest('.failure-card');
+                if (card) showCorrectBugButton(card, prevValue);
                 showConfirmModal('Error', data.detail || 'Failed to override', function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
             }}).catch(function() {{
+                select.value = prevValue;
+                select.className = prevClass;
+                var card = select.closest('.bug-card') || select.closest('.failure-card');
+                if (card) showCorrectBugButton(card, prevValue);
                 showConfirmModal('Error', 'Failed to override classification', function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
             }});
         }}
     }}).catch(function(err) {{
+        select.value = prevValue;
+        select.className = prevClass;
+        var card = select.closest('.bug-card') || select.closest('.failure-card');
+        if (card) showCorrectBugButton(card, prevValue);
         showConfirmModal('Error', 'Network error: ' + err.message, function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
     }});
 }}
@@ -2499,7 +2533,7 @@ def _render_group_card(
 {indent}    <span class="bug-id">{e(bug_id)}</span>
 {indent}    <span class="bug-title">{e(card_title)}</span>
 {indent}    <span class="bug-count">{e(test_label)}</span>
-{indent}    <select class="classification-select {e(cls_class)}" data-test-name="{e(failures[0].test_name)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="event.stopPropagation()" onchange="overrideClassification(this)">
+{indent}    <select class="classification-select {e(cls_class)}" data-test-name="{e(failures[0].test_name)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="event.stopPropagation()" onfocus="this.dataset.prevValue=this.value;this.dataset.prevClass=this.className" onchange="overrideClassification(this)">
 {indent}      {'<option value="" disabled selected>' + e(cls) + "</option>" if cls not in ("CODE ISSUE", "PRODUCT BUG") else ""}
 {indent}      <option value="CODE ISSUE" {"selected" if cls == "CODE ISSUE" else ""}>CODE ISSUE</option>
 {indent}      <option value="PRODUCT BUG" {"selected" if cls == "PRODUCT BUG" else ""}>PRODUCT BUG</option>

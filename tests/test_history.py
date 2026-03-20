@@ -290,7 +290,9 @@ class TestBackfillFailureHistory:
                 count = (await cursor.fetchone())[0]
                 assert count == 1
 
-    async def test_backfill_skips_when_table_not_empty(self, setup_test_db):
+    async def test_backfill_processes_missing_results_when_table_not_empty(
+        self, setup_test_db
+    ):
         """Backfill should still process missing results even when failure_history has data."""
         import aiosqlite
 

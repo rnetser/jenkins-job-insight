@@ -975,31 +975,6 @@ async def _validate_test_name_in_result(
         )
 
 
-def _find_error_signature_in_children(
-    children: list[dict],
-    test_name: str,
-    child_job_name: str,
-    child_build_number: int = 0,
-) -> str:
-    """Recursively find error_signature for a test in child job analyses."""
-    for child in children:
-        if child.get("job_name") == child_job_name and (
-            child_build_number == 0 or child.get("build_number") == child_build_number
-        ):
-            for f in child.get("failures", []):
-                if f.get("test_name") == test_name:
-                    return f.get("error_signature", "")
-        result = _find_error_signature_in_children(
-            child.get("failed_children", []),
-            test_name,
-            child_job_name,
-            child_build_number,
-        )
-        if result:
-            return result
-    return ""
-
-
 def _find_failure_in_children(
     children: list[dict],
     test_name: str,
@@ -1055,18 +1030,13 @@ async def _get_error_signature(
     stored = await storage.get_result(job_id)
     if not stored or not stored.get("result"):
         return ""
-    result_data = stored["result"]
-    if child_job_name:
-        return _find_error_signature_in_children(
-            result_data.get("child_job_analyses", []),
-            test_name,
-            child_job_name,
-            child_build_number,
-        )
-    for f in result_data.get("failures", []):
-        if f.get("test_name") == test_name:
-            return f.get("error_signature", "")
-    return ""
+    failure = _find_failure_in_result(
+        stored["result"],
+        test_name,
+        child_job_name,
+        child_build_number,
+    )
+    return failure.get("error_signature", "") if failure else ""
 
 
 async def _invalidate_cached_html(job_id: str) -> None:
@@ -1475,6 +1445,16 @@ async def create_github_issue_endpoint(
             detail="TESTS_REPO_URL and GITHUB_TOKEN must be configured to create GitHub issues",
         )
 
+    # Verify classification matches tracker
+    effective_cls = await get_effective_classification(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+    if effective_cls == "PRODUCT BUG":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot create GitHub issue for a PRODUCT BUG classification. Use Jira instead.",
+        )
+
     username = request.cookies.get("jji_username", "")
     issue_body = body.body
     if username:
@@ -1556,6 +1536,16 @@ async def create_jira_bug_endpoint(
         raise HTTPException(
             status_code=400,
             detail="Jira must be configured to create Jira bugs",
+        )
+
+    # Verify classification matches tracker
+    effective_cls = await get_effective_classification(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
+    )
+    if effective_cls == "CODE ISSUE":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot create Jira bug for a CODE ISSUE classification. Use GitHub instead.",
         )
 
     username = request.cookies.get("jji_username", "")
