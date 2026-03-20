@@ -8,6 +8,7 @@ without external dependencies.
 import base64
 import html
 import json
+import re
 from collections.abc import Callable
 
 from jenkins_job_insight.models import (
@@ -941,6 +942,62 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     font-size: 12px;
     text-align: center;
 }}
+/* Custom combobox (replaces native datalist) */
+.custom-combo {{
+    position: relative;
+    display: inline-block;
+}}
+.custom-combo input {{
+    font-size: 12px;
+    padding: 3px 22px 3px 6px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    outline: none;
+}}
+.custom-combo input:focus {{
+    border-color: var(--accent-blue);
+}}
+.custom-combo .combo-arrow {{
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 2px 4px;
+    line-height: 1;
+}}
+.combo-dropdown {{
+    display: none;
+    position: fixed;
+    min-width: 100%;
+    max-height: 150px;
+    overflow-y: auto;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-top: 2px;
+    z-index: 10000;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}}
+.combo-dropdown.show {{
+    display: block;
+}}
+.combo-dropdown .combo-option {{
+    padding: 4px 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+    cursor: pointer;
+}}
+.combo-dropdown .combo-option:hover {{
+    background: rgba(56,139,253,0.15);
+    color: var(--accent-blue);
+}}
 /* Classification override dropdown */
 .classification-select {{
     appearance: none;
@@ -1142,13 +1199,13 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
         # Build lookup from failure analysis key to bug_id
         analysis_to_bug: dict[str, str] = {}
         for group in groups:
-            key = _grouping_key(group["analysis"])
+            key = _grouping_key(group["failures"][0])
             analysis_to_bug[key] = group["bug_id"]
 
         for idx, f in enumerate(result.failures, start=1):
             cls = f.analysis.classification or "Unknown"
             cls_class = _classification_css_class(cls)
-            bug_ref = analysis_to_bug.get(_grouping_key(f.analysis), "")
+            bug_ref = analysis_to_bug.get(_grouping_key(f), "")
             parts.append(f"""<tr>
   <td>{idx}</td>
   <td class="test-name">{e(f.test_name)}</td>
@@ -2010,14 +2067,10 @@ async function previewIssue(btn, type) {{
     if (card) {{
         var cb = card.querySelector('.include-links-cb');
         if (cb) includeLinks = cb.checked;
-        var ph = card.querySelector('.ai-combos-placeholder');
-        if (ph) {{
-            var testKey = ph.dataset.testKey;
-            var pEl = document.getElementById('ai-provider-' + testKey);
-            var mEl = document.getElementById('ai-model-' + testKey);
-            if (pEl) aiProvider = pEl.value;
-            if (mEl) aiModel = mEl.value;
-        }}
+        var pEl = card.querySelector('.ai-provider-input');
+        var mEl = card.querySelector('.ai-model-input');
+        if (pEl) aiProvider = pEl.value;
+        if (mEl) aiModel = mEl.value;
     }}
     var controller = new AbortController();
     var loadingOverlay = showLoadingModal(type);
@@ -2114,58 +2167,114 @@ function initBugCreationButtons() {{
     }});
 }}
 
+function createCombobox(options, defaultValue, width, placeholder, cssClass) {{
+    var wrapper = document.createElement('div');
+    wrapper.className = 'custom-combo';
+
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.className = cssClass;
+    input.value = defaultValue;
+    input.placeholder = placeholder;
+    input.style.width = width;
+
+    var arrow = document.createElement('button');
+    arrow.type = 'button';
+    arrow.className = 'combo-arrow';
+    arrow.innerHTML = '&#9660;';
+
+    var dropdown = document.createElement('div');
+    dropdown.className = 'combo-dropdown';
+
+    options.forEach(function(opt) {{
+        var item = document.createElement('div');
+        item.className = 'combo-option';
+        item.textContent = opt;
+        item.onclick = function(e) {{
+            e.stopPropagation();
+            input.value = opt;
+            dropdown.classList.remove('show');
+            input.dispatchEvent(new Event('change'));
+        }};
+        dropdown.appendChild(item);
+    }});
+
+    arrow.onclick = function(e) {{
+        e.stopPropagation();
+        document.querySelectorAll('.combo-dropdown.show').forEach(function(d) {{
+            if (d !== dropdown) d.classList.remove('show');
+        }});
+        positionDropdown(input, dropdown);
+        dropdown.classList.toggle('show');
+    }};
+
+    input.onfocus = function() {{
+        positionDropdown(input, dropdown);
+        dropdown.classList.add('show');
+    }};
+
+    input.oninput = function() {{
+        var val = input.value.toLowerCase();
+        dropdown.querySelectorAll('.combo-option').forEach(function(opt) {{
+            opt.style.display = opt.textContent.toLowerCase().indexOf(val) >= 0 ? '' : 'none';
+        }});
+        positionDropdown(input, dropdown);
+        dropdown.classList.add('show');
+    }};
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(arrow);
+    document.body.appendChild(dropdown);
+    wrapper._dropdown = dropdown;
+
+    return wrapper;
+}}
+
+function positionDropdown(input, dropdown) {{
+    var rect = input.getBoundingClientRect();
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.top = (rect.bottom + 2) + 'px';
+    dropdown.style.minWidth = rect.width + 'px';
+}}
+
+document.addEventListener('click', function() {{
+    document.querySelectorAll('.combo-dropdown.show').forEach(function(d) {{
+        d.classList.remove('show');
+    }});
+}});
+
+document.addEventListener('scroll', function() {{
+    document.querySelectorAll('.combo-dropdown.show').forEach(function(d) {{
+        d.classList.remove('show');
+    }});
+}}, true);
+
 function initAiComboboxes() {{
     if (!_aiConfigs.length) return;
     document.querySelectorAll('.ai-combos-placeholder').forEach(function(ph) {{
         if (ph.children.length > 0) return;
-        var testKey = ph.dataset.testKey;
-        var providerId = 'ai-provider-' + testKey;
-        var modelId = 'ai-model-' + testKey;
 
         var providerLabel = document.createElement('label');
         providerLabel.style.cssText = 'font-size:12px;color:var(--text-muted);margin-right:4px;';
         providerLabel.textContent = 'AI:';
 
-        var providerInput = document.createElement('input');
-        providerInput.setAttribute('list', providerId + '-list');
-        providerInput.id = providerId;
-        providerInput.style.cssText = 'width:100px;font-size:12px;padding:3px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);margin-right:6px;';
-        providerInput.placeholder = 'provider';
-        providerInput.value = CURRENT_AI_PROVIDER;
-
-        var providerDatalist = document.createElement('datalist');
-        providerDatalist.id = providerId + '-list';
-        var seenProviders = {{}};
+        var seenProviders = [];
         _aiConfigs.forEach(function(c) {{
-            if (!seenProviders[c.ai_provider]) {{
-                seenProviders[c.ai_provider] = true;
-                var opt = document.createElement('option');
-                opt.value = c.ai_provider;
-                providerDatalist.appendChild(opt);
-            }}
+            if (seenProviders.indexOf(c.ai_provider) < 0) seenProviders.push(c.ai_provider);
         }});
+        var providerCombo = createCombobox(seenProviders, CURRENT_AI_PROVIDER, '90px', 'provider', 'ai-provider-input');
+        providerCombo.style.marginRight = '6px';
 
-        var modelInput = document.createElement('input');
-        modelInput.setAttribute('list', modelId + '-list');
-        modelInput.id = modelId;
-        modelInput.style.cssText = 'width:180px;font-size:12px;padding:3px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);margin-right:8px;';
-        modelInput.placeholder = 'model';
-        modelInput.value = CURRENT_AI_MODEL;
-
-        var modelDatalist = document.createElement('datalist');
-        modelDatalist.id = modelId + '-list';
+        var models = [];
         _aiConfigs.forEach(function(c) {{
-            var opt = document.createElement('option');
-            opt.value = c.ai_model;
-            opt.textContent = c.ai_provider + ': ' + c.ai_model;
-            modelDatalist.appendChild(opt);
+            if (models.indexOf(c.ai_model) < 0) models.push(c.ai_model);
         }});
+        var modelCombo = createCombobox(models, CURRENT_AI_MODEL, '170px', 'model', 'ai-model-input');
+        modelCombo.style.marginRight = '8px';
 
         ph.appendChild(providerLabel);
-        ph.appendChild(providerInput);
-        ph.appendChild(providerDatalist);
-        ph.appendChild(modelInput);
-        ph.appendChild(modelDatalist);
+        ph.appendChild(providerCombo);
+        ph.appendChild(modelCombo);
     }});
 }}
 
@@ -2237,16 +2346,21 @@ def _classification_css_class(classification: str) -> str:
     return "unknown"
 
 
-def _grouping_key(detail: AnalysisDetail) -> str:
-    """Compute a grouping key for root cause aggregation.
+def _grouping_key(failure: FailureAnalysis) -> str:
+    """Generate a grouping key for a failure.
 
-    Groups by classification + first 4 words of the bug title
-    (for product bugs) or classification + file path (for code issues).
-    Falls back to full JSON match when neither is available.
-
-    The first 4 words of the title capture the essence of the bug
-    while tolerating minor phrasing variations from different AI calls.
+    Uses error_signature as the primary key (matches override semantics).
+    Falls back to analysis-based heuristics when signature is missing.
     """
+    detail = failure.analysis
+
+    # Primary: group by error_signature when available (matches override semantics)
+    sig = failure.error_signature or ""
+    if sig:
+        cls = (detail.classification or "").strip().upper()
+        return f"{cls}|sig:{sig}"
+
+    # Fallback: analysis-based heuristics when signature is missing
     cls = (detail.classification or "").strip().upper()
 
     # For product bugs, group by classification + first 4 words of title
@@ -2267,26 +2381,24 @@ def _grouping_key(detail: AnalysisDetail) -> str:
     return detail.model_dump_json()
 
 
-def _group_failures(failures: list[FailureAnalysis]) -> list[dict]:
+def _group_failures(failures: list[FailureAnalysis], prefix: str = "") -> list[dict]:
     """Group failures that share the same root cause.
 
-    Groups by classification + first 4 words of the bug title
-    (for product bugs) or classification + file path (for code issues).
-    Falls back to full AnalysisDetail JSON match when neither is available.
-
-    After initial grouping, singleton groups are merged into the dominant
-    group (if one exists with >50% of failures) when they share the same
-    classification. This handles cases where the AI uses different phrasing
-    for the same root cause.
+    Uses error_signature as the primary grouping key (matches override
+    semantics).  Falls back to analysis-based heuristics when the
+    signature is missing.
 
     Args:
         failures: List of FailureAnalysis instances to group.
+        prefix: String prepended to each ``bug_id`` to ensure DOM-wide
+            uniqueness when the function is called for different child jobs.
 
     Returns:
         A list of dicts, each containing:
         - ``analysis``: the representative AnalysisDetail
         - ``failures``: list of FailureAnalysis in this group
-        - ``bug_id``: a short identifier like ``"BUG-1"``
+        - ``bug_id``: a short identifier like ``"BUG-1"`` (or
+          ``"<prefix>BUG-1"`` when *prefix* is provided)
     """
     if not failures:
         return []
@@ -2295,40 +2407,11 @@ def _group_failures(failures: list[FailureAnalysis]) -> list[dict]:
     groups_map: dict[str, list[FailureAnalysis]] = {}
     order: list[str] = []
     for f in failures:
-        key = _grouping_key(f.analysis)
+        key = _grouping_key(f)
         if key not in groups_map:
             groups_map[key] = []
             order.append(key)
         groups_map[key].append(f)
-
-    # Second pass: merge singletons into the dominant group
-    total = len(failures)
-    if total > 2 and len(groups_map) > 1:
-        # Find the largest group
-        dominant_key = max(groups_map, key=lambda k: len(groups_map[k]))
-        dominant_size = len(groups_map[dominant_key])
-
-        if dominant_size > total * 0.5:
-            # Get the classification of the dominant group
-            dominant_cls = (
-                groups_map[dominant_key][0].analysis.classification.strip().upper()
-            )
-            # Merge singletons with the same classification
-            keys_to_remove: list[str] = []
-            for key in order:
-                if key == dominant_key:
-                    continue
-                if len(groups_map[key]) == 1:
-                    singleton_cls = (
-                        groups_map[key][0].analysis.classification.strip().upper()
-                    )
-                    if singleton_cls == dominant_cls:
-                        groups_map[dominant_key].extend(groups_map[key])
-                        keys_to_remove.append(key)
-
-            for key in keys_to_remove:
-                del groups_map[key]
-                order.remove(key)
 
     # Build final groups
     groups: list[dict] = []
@@ -2338,7 +2421,7 @@ def _group_failures(failures: list[FailureAnalysis]) -> list[dict]:
             {
                 "analysis": group_failures[0].analysis,
                 "failures": group_failures,
-                "bug_id": f"BUG-{idx}",
+                "bug_id": f"{prefix}BUG-{idx}" if prefix else f"BUG-{idx}",
             }
         )
     return groups
@@ -2493,7 +2576,7 @@ def _render_group_card(
 {indent}    <div class="bug-actions">
 {indent}      <button class="create-issue-btn github-issue-btn" data-test-name="{e(comment_test)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="previewIssue(this, 'github')" style="display:none"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> Open GitHub Issue</button>
 {indent}      <button class="create-issue-btn jira-bug-btn" data-test-name="{e(comment_test)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="previewIssue(this, 'jira')" style="display:none"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M11.53 2c0 2.4 1.97 4.35 4.35 4.35h1.78v1.7c0 2.4 1.94 4.34 4.34 4.35V2.84a.84.84 0 00-.84-.84H11.53zM6.77 6.8a4.36 4.36 0 004.34 4.34h1.78v1.72a4.36 4.36 0 004.34 4.34V7.63a.84.84 0 00-.83-.83H6.77zM2 11.6c0 2.4 1.95 4.34 4.35 4.35h1.78v1.72c.01 2.39 1.95 4.33 4.35 4.33v-9.57a.84.84 0 00-.84-.83H2z"/></svg> Open Jira Bug</button>
-{indent}      <span class="ai-combos-placeholder" data-test-key="{e(bug_id)}" style="display:inline-flex;align-items:center;"></span>
+{indent}      <span class="ai-combos-placeholder" style="display:inline-flex;align-items:center;"></span>
 {indent}      <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--text-muted);cursor:pointer;">
 {indent}        <input type="checkbox" class="include-links-cb" style="width:14px;height:14px;">
 {indent}        Include links
@@ -2565,7 +2648,14 @@ def _render_child_jobs(
     """
     for child in children:
         child_failures_count = len(child.failures)
-        child_groups = _group_failures(child.failures) if child.failures else []
+        child_prefix = (
+            re.sub(r"[^a-zA-Z0-9]", "_", f"{child.job_name}-{child.build_number}") + "-"
+        )
+        child_groups = (
+            _group_failures(child.failures, prefix=child_prefix)
+            if child.failures
+            else []
+        )
         child_groups_count = len(child_groups)
 
         # Show group count when grouping reduces the visible cards

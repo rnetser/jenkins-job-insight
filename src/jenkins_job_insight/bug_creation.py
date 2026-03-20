@@ -288,7 +288,20 @@ async def generate_github_issue_content(
             "Include these as plain-text references (not clickable links)."
         )
 
-    prompt = f"""You are generating an issue to fix test code. This is a CODE ISSUE — the test itself or its infrastructure has a bug that needs to be fixed. The issue will be opened in the tests repository for developers to fix the test code.
+    classification = ctx["classification"]
+    if classification.upper() == "CODE ISSUE":
+        framing = (
+            "You are generating an issue to fix test code. "
+            "This is a CODE ISSUE — the test itself or its infrastructure has a bug that needs to be fixed. "
+            "The issue will be opened in the tests repository for developers to fix the test code."
+        )
+    else:
+        framing = (
+            f"You are generating a GitHub issue for a test failure classified as {classification}. "
+            "Describe the problem found during testing and what needs to be addressed."
+        )
+
+    prompt = f"""{framing}
 
 Test: {ctx["test_name"]}
 Error: {ctx["error"]}
@@ -390,7 +403,21 @@ async def generate_jira_bug_content(
             "Include these as plain-text references (not clickable links)."
         )
 
-    prompt = f"""You are generating a product bug report. This is a PRODUCT BUG — the product being tested has a defect. The test is working correctly but it caught a real bug in the product. The bug report should describe what the product does wrong and what the expected behavior should be.
+    classification = ctx["classification"]
+    if classification.upper() == "PRODUCT BUG":
+        framing = (
+            "You are generating a product bug report. "
+            "This is a PRODUCT BUG — the product being tested has a defect. "
+            "The test is working correctly but it caught a real bug in the product. "
+            "The bug report should describe what the product does wrong and what the expected behavior should be."
+        )
+    else:
+        framing = (
+            f"You are generating a Jira bug report for a test failure classified as {classification}. "
+            "Describe the problem found during testing and what needs to be addressed."
+        )
+
+    prompt = f"""{framing}
 
 Test: {ctx["test_name"]}
 Error: {ctx["error"]}
