@@ -1,6 +1,5 @@
 """Tests for bug creation module (AI content generation and external API calls)."""
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -64,12 +63,16 @@ class TestGenerateGithubIssueContent:
         with patch("jenkins_job_insight.bug_creation.call_ai_cli") as mock_ai:
             mock_ai.return_value = (
                 True,
-                json.dumps(
-                    {
-                        "title": "Fix: login handler missing ValueError catch",
-                        "body": "## Test Failure\n\n**Test:** `tests.auth.test_login.TestLogin.test_valid_credentials`\n\n## Error\n\n```\nAssertionError: Expected status 200, got 500\n```\n\n## Analysis\n\nThe login endpoint handler does not catch ValueError.\n\n## Suggested Fix\n\n**File:** `src/auth/handlers.py` line 42\nAdd try/except around password_validator.",
-                    }
-                ),
+                "Fix: login handler missing ValueError catch\n\n"
+                "## Test Failure\n\n"
+                "**Test:** `tests.auth.test_login.TestLogin.test_valid_credentials`\n\n"
+                "## Error\n\n"
+                "```\nAssertionError: Expected status 200, got 500\n```\n\n"
+                "## Analysis\n\n"
+                "The login endpoint handler does not catch ValueError.\n\n"
+                "## Suggested Fix\n\n"
+                "**File:** `src/auth/handlers.py` line 42\n"
+                "Add try/except around password_validator.",
             )
 
             result = await generate_github_issue_content(
@@ -122,12 +125,11 @@ class TestGenerateJiraBugContent:
         with patch("jenkins_job_insight.bug_creation.call_ai_cli") as mock_ai:
             mock_ai.return_value = (
                 True,
-                json.dumps(
-                    {
-                        "title": "DNS resolution timeout on internal resolver",
-                        "body": "h2. Summary\n\nDNS resolution is failing intermittently.\n\nh2. Evidence\n\nTimeoutError at dns_client.py:88",
-                    }
-                ),
+                "DNS resolution timeout on internal resolver\n\n"
+                "h2. Summary\n\n"
+                "DNS resolution is failing intermittently.\n\n"
+                "h2. Evidence\n\n"
+                "TimeoutError at dns_client.py:88",
             )
 
             result = await generate_jira_bug_content(

@@ -459,6 +459,34 @@ class TestAnalyzeJiraField:
         assert kwargs["enable_jira"] is True
 
 
+class TestAiConfigsCommand:
+    def test_ai_configs(self, mock_client):
+        mock_client.get_ai_configs.return_value = [
+            {"ai_provider": "claude", "ai_model": "opus-4"},
+            {"ai_provider": "gemini", "ai_model": "2.5-pro"},
+        ]
+        result = runner.invoke(app, ["ai-configs"])
+        assert result.exit_code == 0
+        assert "claude" in result.output
+        assert "opus-4" in result.output
+
+    def test_ai_configs_json(self, mock_client):
+        mock_client.get_ai_configs.return_value = [
+            {"ai_provider": "claude", "ai_model": "opus-4"},
+        ]
+        result = runner.invoke(app, ["ai-configs", "--json"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert isinstance(parsed, list)
+        assert parsed[0]["ai_provider"] == "claude"
+
+    def test_ai_configs_empty(self, mock_client):
+        mock_client.get_ai_configs.return_value = []
+        result = runner.invoke(app, ["ai-configs"])
+        assert result.exit_code == 0
+        assert "No AI configurations found" in result.output
+
+
 class TestPreviewIssueCommand:
     def test_preview_github(self, mock_client):
         mock_client.preview_github_issue.return_value = {
@@ -513,6 +541,33 @@ class TestPreviewIssueCommand:
             ],
         )
         assert result.exit_code == 1
+
+    def test_preview_with_ai_config(self, mock_client):
+        mock_client.preview_github_issue.return_value = {
+            "title": "Fix: login handler",
+            "body": "## Details...",
+            "similar_issues": [],
+        }
+        result = runner.invoke(
+            app,
+            [
+                "preview-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "github",
+                "--ai-provider",
+                "claude",
+                "--ai-model",
+                "opus-4",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Fix: login handler" in result.output
+        kwargs = mock_client.preview_github_issue.call_args[1]
+        assert kwargs["ai_provider"] == "claude"
+        assert kwargs["ai_model"] == "opus-4"
 
     def test_preview_with_similar_issues(self, mock_client):
         mock_client.preview_github_issue.return_value = {

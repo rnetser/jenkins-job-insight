@@ -327,6 +327,27 @@ function showConfirmModal(title, message, onConfirm, opts) {
 }"""
 
 
+def _username_helper_js() -> str:
+    """Return JavaScript helper for reading jji_username cookie.
+
+    Defines a global ``getJjiUsername()`` function that safely decodes
+    the jji_username cookie with try/catch. Returns empty string on
+    failure or if not set.
+
+    Returns:
+        A JavaScript string (without ``<script>`` tags) ready to embed directly.
+    """
+    return """
+function getJjiUsername() {
+    try {
+        return decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || '');
+    } catch(e) {
+        return '';
+    }
+}
+"""
+
+
 def _user_badge_js() -> str:
     """Return JavaScript for the fixed top-right user badge.
 
@@ -337,8 +358,7 @@ def _user_badge_js() -> str:
     """
     return """
 (function() {
-    var username = '';
-    try { username = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); } catch(e) {}
+    var username = getJjiUsername();
     if (username) {
         var userBadge = document.createElement('div');
         userBadge.style.cssText = 'position:fixed;top:12px;right:24px;z-index:200;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
@@ -864,6 +884,8 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 .bug-actions {{
     margin-top: 12px;
     display: flex;
+    align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
 }}
 .create-issue-btn {{
@@ -896,6 +918,28 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 }}
 .jira-bug-btn:hover:not(:disabled) {{
     background: rgba(88,166,255,0.25);
+}}
+/* Loading modal spinner */
+.loading-spinner {{
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent-blue);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 12px;
+}}
+.loading-text {{
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 6px;
+}}
+.loading-subtext {{
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
 }}
 /* Classification override dropdown */
 .classification-select {{
@@ -1000,6 +1044,9 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     color: #8b949e;
 }}
 
+@keyframes spin {{
+    to {{ transform: rotate(360deg); }}
+}}
 /* Responsive (page-specific) */
 @media (max-width: 480px) {{
     .failure-summary {{ font-size: 12px; gap: 8px; }}
@@ -1126,6 +1173,19 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 const JOB_ID = "{e(result.job_id)}";
 // Derive base path for API calls (works behind reverse proxies with path prefixes)
 const BASE_PATH = window.location.pathname.replace(/\\/results\\/.*$/, '');
+const CURRENT_AI_PROVIDER = "{e(result.ai_provider or "")}";
+const CURRENT_AI_MODEL = "{e(result.ai_model or "")}";
+
+var _aiConfigs = [];
+(function loadAiConfigs() {{
+    fetch(BASE_PATH + '/ai-configs')
+        .then(function(r) {{ return r.ok ? r.json() : []; }})
+        .then(function(data) {{
+            _aiConfigs = data || [];
+            if (typeof initAiComboboxes === 'function') initAiComboboxes();
+        }})
+        .catch(function() {{}});
+}})();
 
 function renderCommentBadge(badge, count) {{
     if (count <= 0) {{
@@ -1291,8 +1351,7 @@ function appendCommentToList(section, comment) {{
     const text = autoLink(escapeHtml(comment.comment));
     var userLabel = comment.username ? '<span style="font-family:var(--font-mono);font-size:11px;color:var(--accent-purple);margin-right:6px;">' + escapeHtml(comment.username) + '</span>' : '';
     var deleteBtn = '';
-    var currentUser = '';
-    try {{ currentUser = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
+    var currentUser = getJjiUsername();
     if (comment.username && comment.username === currentUser && comment.id) {{
         deleteBtn = ' <button onclick="deleteComment(this, ' + comment.id + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;">Delete</button>';
     }}
@@ -1507,9 +1566,7 @@ async function addComment(btn) {{
         if (resp.ok) {{
             const result = await resp.json();
             const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-            var currentUser = '';
-            var uc = document.cookie.split('; ').find(function(c) {{ return c.startsWith('jji_username='); }});
-            if (uc) currentUser = decodeURIComponent(uc.split('=')[1]);
+            var currentUser = getJjiUsername();
             appendCommentToList(section, {{id: result.id, comment: comment, created_at: now, test_name: testName, username: currentUser}});
             const count = section.querySelectorAll('.comment-item').length;
             section.querySelector('.comment-count').textContent = count;
@@ -1756,7 +1813,7 @@ async function loadClassifications() {{
 
 // -- Bug creation: preview, create, classification override --
 
-function showIssuePreviewModal(type, data, testName, childJob, childBuild, includeLinks) {{
+function showIssuePreviewModal(type, data, testName, childJob, childBuild, includeLinks, aiProvider, aiModel) {{
     var overlay = document.createElement('div');
     overlay.className = 'modal-overlay preview-modal';
 
@@ -1824,6 +1881,15 @@ function showIssuePreviewModal(type, data, testName, childJob, childBuild, inclu
     bodyTextarea.value = data.body || '';
     dialog.appendChild(bodyTextarea);
 
+    // Attribution note
+    var attrNote = document.createElement('div');
+    attrNote.style.cssText = 'font-size:11px;color:var(--text-muted);margin-bottom:12px;font-style:italic;';
+    var cookieUser = getJjiUsername();
+    if (cookieUser) {{
+        attrNote.textContent = 'A "Reported by: ' + cookieUser + ' via jenkins-job-insight" line will be added automatically.';
+        dialog.appendChild(attrNote);
+    }}
+
     // Actions
     var actions = document.createElement('div');
     actions.className = 'modal-actions';
@@ -1844,7 +1910,7 @@ function showIssuePreviewModal(type, data, testName, childJob, childBuild, inclu
     createBtn.onclick = function() {{
         createBtn.textContent = 'Creating...';
         createBtn.disabled = true;
-        submitIssue(type, titleInput.value, bodyTextarea.value, testName, childJob, childBuild, includeLinks, overlay);
+        submitIssue(type, titleInput.value, bodyTextarea.value, testName, childJob, childBuild, includeLinks, overlay, aiProvider, aiModel);
     }};
     actions.appendChild(createBtn);
     dialog.appendChild(actions);
@@ -1854,16 +1920,19 @@ function showIssuePreviewModal(type, data, testName, childJob, childBuild, inclu
     overlay.onclick = function(ev) {{ if (ev.target === overlay) overlay.remove(); }};
 }}
 
-async function submitIssue(type, title, body, testName, childJob, childBuild, includeLinks, overlay) {{
+async function submitIssue(type, title, body, testName, childJob, childBuild, includeLinks, overlay, aiProvider, aiModel) {{
     var endpoint = type === 'github' ? '/create-github-issue' : '/create-jira-bug';
     try {{
+        var payload = {{
+            test_name: testName, child_job_name: childJob, child_build_number: childBuild,
+            title: title, body: body, include_links: includeLinks,
+        }};
+        if (aiProvider) payload.ai_provider = aiProvider;
+        if (aiModel) payload.ai_model = aiModel;
         var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + endpoint, {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{
-                test_name: testName, child_job_name: childJob, child_build_number: childBuild,
-                title: title, body: body, include_links: includeLinks,
-            }}),
+            body: JSON.stringify(payload),
         }});
         if (!resp.ok) {{
             var errData = await resp.json().catch(function() {{ return {{}}; }});
@@ -1881,38 +1950,115 @@ async function submitIssue(type, title, body, testName, childJob, childBuild, in
     }}
 }}
 
+function showLoadingModal(type) {{
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay preview-modal';
+
+    var dialog = document.createElement('div');
+    dialog.className = 'modal-dialog';
+    dialog.style.cssText = 'max-width:400px;text-align:center;';
+
+    var h3 = document.createElement('h3');
+    h3.style.textAlign = 'center';
+    h3.textContent = type === 'github' ? 'Create GitHub Issue' : 'Create Jira Bug';
+    dialog.appendChild(h3);
+
+    var spinnerContainer = document.createElement('div');
+    spinnerContainer.style.cssText = 'padding:24px 0 16px;';
+
+    var spinner = document.createElement('div');
+    spinner.className = 'loading-spinner';
+    spinnerContainer.appendChild(spinner);
+
+    var loadingText = document.createElement('div');
+    loadingText.className = 'loading-text';
+    loadingText.textContent = type === 'github' ? 'Generating issue...' : 'Generating bug...';
+    spinnerContainer.appendChild(loadingText);
+
+    var loadingSubtext = document.createElement('div');
+    loadingSubtext.className = 'loading-subtext';
+    loadingSubtext.textContent = 'AI is analyzing the failure and crafting the ' + (type === 'github' ? 'issue' : 'bug') + '.';
+    spinnerContainer.appendChild(loadingSubtext);
+
+    dialog.appendChild(spinnerContainer);
+
+    var actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    actions.style.justifyContent = 'center';
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.className = 'modal-btn modal-btn-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.onclick = function() {{ if (overlay._abortController) overlay._abortController.abort(); overlay.remove(); }};
+    actions.appendChild(cancelBtn);
+
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    overlay.onclick = function(ev) {{ if (ev.target === overlay) {{ if (overlay._abortController) overlay._abortController.abort(); overlay.remove(); }} }};
+    return overlay;
+}}
+
 async function previewIssue(btn, type) {{
     var testName = btn.dataset.testName;
     var childJob = btn.dataset.childJob || '';
     var childBuild = parseInt(btn.dataset.childBuild || '0');
     var includeLinks = false;
+    var aiProvider = '';
+    var aiModel = '';
     var card = btn.closest('.bug-card') || btn.closest('.failure-card');
     if (card) {{
         var cb = card.querySelector('.include-links-cb');
         if (cb) includeLinks = cb.checked;
+        var ph = card.querySelector('.ai-combos-placeholder');
+        if (ph) {{
+            var testKey = ph.dataset.testKey;
+            var pEl = document.getElementById('ai-provider-' + testKey);
+            var mEl = document.getElementById('ai-model-' + testKey);
+            if (pEl) aiProvider = pEl.value;
+            if (mEl) aiModel = mEl.value;
+        }}
     }}
-    var origHTML = btn.innerHTML;
-    btn.textContent = 'Generating...';
-    btn.disabled = true;
+    var controller = new AbortController();
+    var loadingOverlay = showLoadingModal(type);
+    loadingOverlay._abortController = controller;
     var endpoint = type === 'github' ? '/preview-github-issue' : '/preview-jira-bug';
     try {{
+        var payload = {{
+            test_name: testName, child_job_name: childJob, child_build_number: childBuild,
+            include_links: includeLinks,
+        }};
+        if (aiProvider) payload.ai_provider = aiProvider;
+        if (aiModel) payload.ai_model = aiModel;
         var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + endpoint, {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{
-                test_name: testName, child_job_name: childJob, child_build_number: childBuild,
-                include_links: includeLinks,
-            }}),
+            body: JSON.stringify(payload),
+            signal: controller.signal,
         }});
         if (!resp.ok) {{ throw new Error('HTTP ' + resp.status); }}
         var data = await resp.json();
-        showIssuePreviewModal(type, data, testName, childJob, childBuild, includeLinks);
+        loadingOverlay.remove();
+        showIssuePreviewModal(type, data, testName, childJob, childBuild, includeLinks, aiProvider, aiModel);
     }} catch (err) {{
-        var label = type === 'github' ? 'issue' : 'bug';
-        showConfirmModal('Error', 'Failed to generate ' + label + ' preview: ' + err.message, function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
-    }} finally {{
-        btn.innerHTML = origHTML;
-        btn.disabled = false;
+        if (err.name === 'AbortError') return;
+        var dlg = loadingOverlay.querySelector('.modal-dialog');
+        if (dlg) {{
+            var spinnerContainer = dlg.querySelector('.loading-spinner');
+            if (spinnerContainer) spinnerContainer.parentNode.remove();
+            var errDiv = document.createElement('div');
+            errDiv.style.cssText = 'padding:16px 0;text-align:center;';
+            var errIcon = document.createElement('div');
+            errIcon.style.cssText = 'font-size:24px;margin-bottom:8px;';
+            errIcon.textContent = '\u26a0';
+            errDiv.appendChild(errIcon);
+            var errText = document.createElement('div');
+            errText.style.cssText = 'color:var(--accent-red, #f85149);font-size:13px;';
+            var label = type === 'github' ? 'issue' : 'bug';
+            errText.textContent = 'Failed to generate ' + label + ' preview: ' + err.message;
+            errDiv.appendChild(errText);
+            dlg.querySelector('h3').insertAdjacentElement('afterend', errDiv);
+        }}
     }}
 }}
 
@@ -1968,6 +2114,61 @@ function initBugCreationButtons() {{
     }});
 }}
 
+function initAiComboboxes() {{
+    if (!_aiConfigs.length) return;
+    document.querySelectorAll('.ai-combos-placeholder').forEach(function(ph) {{
+        if (ph.children.length > 0) return;
+        var testKey = ph.dataset.testKey;
+        var providerId = 'ai-provider-' + testKey;
+        var modelId = 'ai-model-' + testKey;
+
+        var providerLabel = document.createElement('label');
+        providerLabel.style.cssText = 'font-size:12px;color:var(--text-muted);margin-right:4px;';
+        providerLabel.textContent = 'AI:';
+
+        var providerInput = document.createElement('input');
+        providerInput.setAttribute('list', providerId + '-list');
+        providerInput.id = providerId;
+        providerInput.style.cssText = 'width:100px;font-size:12px;padding:3px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);margin-right:6px;';
+        providerInput.placeholder = 'provider';
+        providerInput.value = CURRENT_AI_PROVIDER;
+
+        var providerDatalist = document.createElement('datalist');
+        providerDatalist.id = providerId + '-list';
+        var seenProviders = {{}};
+        _aiConfigs.forEach(function(c) {{
+            if (!seenProviders[c.ai_provider]) {{
+                seenProviders[c.ai_provider] = true;
+                var opt = document.createElement('option');
+                opt.value = c.ai_provider;
+                providerDatalist.appendChild(opt);
+            }}
+        }});
+
+        var modelInput = document.createElement('input');
+        modelInput.setAttribute('list', modelId + '-list');
+        modelInput.id = modelId;
+        modelInput.style.cssText = 'width:180px;font-size:12px;padding:3px 6px;background:var(--bg-primary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);margin-right:8px;';
+        modelInput.placeholder = 'model';
+        modelInput.value = CURRENT_AI_MODEL;
+
+        var modelDatalist = document.createElement('datalist');
+        modelDatalist.id = modelId + '-list';
+        _aiConfigs.forEach(function(c) {{
+            var opt = document.createElement('option');
+            opt.value = c.ai_model;
+            opt.textContent = c.ai_provider + ': ' + c.ai_model;
+            modelDatalist.appendChild(opt);
+        }});
+
+        ph.appendChild(providerLabel);
+        ph.appendChild(providerInput);
+        ph.appendChild(providerDatalist);
+        ph.appendChild(modelInput);
+        ph.appendChild(modelDatalist);
+    }});
+}}
+
 document.addEventListener('DOMContentLoaded', async function() {{
     document.querySelectorAll('.reviewed-toggle:not(.select-all-toggle) input[type="checkbox"]').forEach(cb => {{
         cb.addEventListener('change', function(event) {{
@@ -1986,12 +2187,14 @@ document.addEventListener('DOMContentLoaded', async function() {{
         }});
     }});
     initBugCreationButtons();
+    initAiComboboxes();
     await loadClassifications();
     await loadCommentsAndReviews();
     await loadEnrichments();
 }});
 </script>
 <script>
+{_username_helper_js()}
 {_user_badge_js()}
 </script>
 """)
@@ -2288,12 +2491,13 @@ def _render_group_card(
 {indent}      </div>
 {indent}    </div>
 {indent}    <div class="bug-actions">
-{indent}      <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);cursor:pointer;">
-{indent}        <input type="checkbox" class="include-links-cb">
-{indent}        Include links
-{indent}      </label>
 {indent}      <button class="create-issue-btn github-issue-btn" data-test-name="{e(comment_test)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="previewIssue(this, 'github')" style="display:none"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> Open GitHub Issue</button>
 {indent}      <button class="create-issue-btn jira-bug-btn" data-test-name="{e(comment_test)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="previewIssue(this, 'jira')" style="display:none"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M11.53 2c0 2.4 1.97 4.35 4.35 4.35h1.78v1.7c0 2.4 1.94 4.34 4.34 4.35V2.84a.84.84 0 00-.84-.84H11.53zM6.77 6.8a4.36 4.36 0 004.34 4.34h1.78v1.72a4.36 4.36 0 004.34 4.34V7.63a.84.84 0 00-.83-.83H6.77zM2 11.6c0 2.4 1.95 4.34 4.35 4.35h1.78v1.72c.01 2.39 1.95 4.33 4.35 4.33v-9.57a.84.84 0 00-.84-.83H2z"/></svg> Open Jira Bug</button>
+{indent}      <span class="ai-combos-placeholder" data-test-key="{e(bug_id)}" style="display:inline-flex;align-items:center;"></span>
+{indent}      <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--text-muted);cursor:pointer;">
+{indent}        <input type="checkbox" class="include-links-cb" style="width:14px;height:14px;">
+{indent}        Include links
+{indent}      </label>
 {indent}    </div>
 """)
 
@@ -2657,6 +2861,7 @@ body {{
     <div class="refresh-note">Auto-refreshing every 10 seconds</div>
 </div>
 <script>
+{_username_helper_js()}
 {_user_badge_js()}
 </script>
 </body>
@@ -3123,6 +3328,7 @@ def generate_dashboard_html(
     # --- USERNAME DISPLAY (always, regardless of job count) ---
     parts.append(f"""
 <script>
+{_username_helper_js()}
 {_user_badge_js()}
 </script>
 """)
@@ -3825,6 +4031,7 @@ def generate_history_html(base_url: str = "") -> str:
 }})();
 </script>
 <script>
+{_username_helper_js()}
 {_user_badge_js()}
 </script>
 </body>

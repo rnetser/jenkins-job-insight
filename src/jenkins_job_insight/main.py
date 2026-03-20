@@ -61,6 +61,7 @@ from jenkins_job_insight.output import send_callback
 from jenkins_job_insight.repository import RepositoryManager
 from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
+    get_ai_configs,
     get_effective_classification,
     get_html_report,
     get_result,
@@ -1309,8 +1310,8 @@ async def preview_github_issue(
         )
 
     # AI config is best-effort for preview — fallback content is generated if not configured
-    ai_provider = AI_PROVIDER
-    ai_model = AI_MODEL
+    ai_provider = body.ai_provider or AI_PROVIDER
+    ai_model = body.ai_model or AI_MODEL
     base_url = _extract_base_url(request)
     jenkins_url = result_data.get("jenkins_url", "")
 
@@ -1400,8 +1401,8 @@ async def preview_jira_bug(
         )
 
     # AI config is best-effort for preview — fallback content is generated if not configured
-    ai_provider = AI_PROVIDER
-    ai_model = AI_MODEL
+    ai_provider = body.ai_provider or AI_PROVIDER
+    ai_model = body.ai_model or AI_MODEL
     base_url = _extract_base_url(request)
     jenkins_url = result_data.get("jenkins_url", "")
 
@@ -1868,6 +1869,13 @@ async def get_classifications(
         job_id=job_id,
     )
     return {"classifications": classifications}
+
+
+@app.get("/ai-configs")
+async def get_ai_configs_endpoint() -> list[dict]:
+    """Get distinct AI provider/model pairs from completed analyses."""
+    logger.debug("GET /ai-configs")
+    return await get_ai_configs()
 
 
 @app.get("/health")

@@ -631,6 +631,35 @@ def comments_delete(
         typer.echo("Comment deleted.")
 
 
+# -- AI Configs ---------------------------------------------------------------
+
+
+@app.command("ai-configs")
+def ai_configs(
+    json_output: bool = _JSON_OPTION,
+):
+    """List known AI provider/model configurations from successful analyses."""
+    _set_json(json_output)
+    try:
+        client = _get_client()
+        data = client.get_ai_configs()
+    except JJIError as err:
+        _handle_error(err)
+
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        if not data:
+            typer.echo("No AI configurations found from completed analyses.")
+            raise typer.Exit()
+        print_output(
+            data,
+            columns=["ai_provider", "ai_model"],
+            labels={"ai_provider": "AI PROVIDER", "ai_model": "AI MODEL"},
+            as_json=False,
+        )
+
+
 # -- Bug Creation -------------------------------------------------------------
 
 
@@ -656,6 +685,12 @@ def preview_issue(
     include_links: bool = typer.Option(
         False, "--include-links", help="Include full URLs as clickable links."
     ),
+    ai_provider: str = typer.Option(
+        "", "--ai-provider", help="AI provider for content generation."
+    ),
+    ai_model: str = typer.Option(
+        "", "--ai-model", help="AI model for content generation."
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Preview generated issue content (GitHub or Jira)."""
@@ -670,6 +705,8 @@ def preview_issue(
                 child_job_name=child_job_name,
                 child_build_number=child_build_number,
                 include_links=include_links,
+                ai_provider=ai_provider,
+                ai_model=ai_model,
             )
         else:
             data = client.preview_jira_bug(
@@ -678,6 +715,8 @@ def preview_issue(
                 child_job_name=child_job_name,
                 child_build_number=child_build_number,
                 include_links=include_links,
+                ai_provider=ai_provider,
+                ai_model=ai_model,
             )
     except JJIError as err:
         _handle_error(err)

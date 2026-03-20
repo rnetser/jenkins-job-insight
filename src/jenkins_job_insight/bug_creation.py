@@ -4,7 +4,6 @@ Generates GitHub issue / Jira bug content using AI, searches for
 duplicates, and creates issues via the respective REST APIs.
 """
 
-import json
 import os
 import re
 
@@ -176,34 +175,46 @@ def _build_fallback_jira_content(
 
 
 def _parse_ai_issue_response(output: str) -> dict | None:
-    """Parse AI response expecting {"title": ..., "body": ...}.
+    """Parse AI response: first line = title, rest = body.
+
+    Expects the format:
+        Title text here
+
+        Body content here...
 
     Returns dict with title and body, or None if parsing fails.
     """
     text = output.strip()
-    # Strip markdown code blocks
-    if "```json" in text:
-        start = text.index("```json") + len("```json")
-        end = text.index("```", start)
-        text = text[start:end].strip()
-    elif "```" in text:
-        start = text.index("```") + len("```")
-        end = text.index("```", start)
-        text = text[start:end].strip()
+    # Strip markdown code blocks if AI wrapped the output anyway
+    if text.startswith("```"):
+        # Find closing backticks from the end
+        end = text.rindex("```")
+        if end > 3:
+            start = text.index("\n") + 1 if "\n" in text[:20] else len("```")
+            text = text[start:end].strip()
 
-    # Find JSON object
-    json_start = text.find("{")
-    json_end = text.rfind("}")
-    if json_start != -1 and json_end != -1:
-        text = text[json_start : json_end + 1]
+    if not text:
+        logger.debug("AI response is empty after stripping")
+        return None
 
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict) and "title" in data and "body" in data:
-            return {"title": data["title"], "body": data["body"]}
-    except (json.JSONDecodeError, ValueError):
-        pass
-    return None
+    # Split on first blank line: title is everything before, body is everything after
+    parts = text.split("\n\n", 1)
+    title = parts[0].strip()
+    body = parts[1].strip() if len(parts) > 1 else ""
+
+    # Clean common prefixes the AI might add
+    for prefix in ("Title:", "Summary:", "# "):
+        if title.startswith(prefix):
+            title = title[len(prefix) :].strip()
+
+    if not title:
+        logger.debug("AI response has no title line")
+        return None
+    if not body:
+        logger.debug("AI response has no body (no blank line separator found)")
+        return None
+
+    return {"title": title, "body": body}
 
 
 # NOTE: The content generation functions below intentionally pass failure data
@@ -277,7 +288,7 @@ async def generate_github_issue_content(
             "Include these as plain-text references (not clickable links)."
         )
 
-    prompt = f"""You are generating a GitHub issue from a test failure analysis.
+    prompt = f"""You are generating an issue to fix test code. This is a CODE ISSUE — the test itself or its infrastructure has a bug that needs to be fixed. The issue will be opened in the tests repository for developers to fix the test code.
 
 Test: {ctx["test_name"]}
 Error: {ctx["error"]}
@@ -287,9 +298,9 @@ Analysis: {ctx["details"]}
 
 {links_instruction}
 
-Generate a JSON object with exactly two keys:
-- "title": A concise, descriptive title (max 120 chars)
-- "body": Well-formatted markdown with sections:
+Generate the issue content in this format:
+First line: A concise, descriptive title (max 120 chars)
+Then a blank line, followed by the body in well-formatted markdown with sections:
   - Summary of the problem
   - Error details (error message and relevant stack trace)
   - AI analysis findings
@@ -297,7 +308,7 @@ Generate a JSON object with exactly two keys:
   - Suggested fix (if available)
   - References to Jenkins build and analysis report
 
-Respond with ONLY the JSON object, no other text."""
+Do not wrap in code blocks or JSON. Just the title on the first line, then the body."""
 
     success, output = await call_ai_cli(
         prompt,
@@ -311,6 +322,12 @@ Respond with ONLY the JSON object, no other text."""
         parsed = _parse_ai_issue_response(output)
         if parsed:
             return parsed
+        logger.debug(
+            "AI returned output but JSON parsing failed for GitHub issue, output=%s",
+            output[:500],
+        )
+    else:
+        logger.debug("AI CLI call failed for GitHub issue: %s", output[:500])
 
     logger.warning(
         "AI content generation failed for GitHub issue, using fallback template"
@@ -373,7 +390,7 @@ async def generate_jira_bug_content(
             "Include these as plain-text references (not clickable links)."
         )
 
-    prompt = f"""You are generating a Jira bug report from a test failure analysis.
+    prompt = f"""You are generating a product bug report. This is a PRODUCT BUG — the product being tested has a defect. The test is working correctly but it caught a real bug in the product. The bug report should describe what the product does wrong and what the expected behavior should be.
 
 Test: {ctx["test_name"]}
 Error: {ctx["error"]}
@@ -383,17 +400,17 @@ Analysis: {ctx["details"]}
 
 {links_instruction}
 
-Generate a JSON object with exactly two keys:
-- "title": A concise, descriptive bug summary (max 120 chars)
-- "body": Well-formatted Jira wiki markup with sections:
-  - h2. Summary
-  - h2. Error (with {{{{code}}}} blocks)
-  - h2. Analysis
-  - h2. Artifacts Evidence (if available)
-  - h2. Evidence (if available)
-  - h2. References (Jenkins build and analysis report)
+Generate the bug content in this format:
+First line: A concise, descriptive summary (max 120 chars)
+Then a blank line, followed by the description with sections:
+  - Summary of the problem
+  - Error details (error message and relevant stack trace)
+  - AI analysis findings
+  - Artifacts evidence (if available)
+  - Root cause assessment
+  - References to Jenkins build and analysis report
 
-Respond with ONLY the JSON object, no other text."""
+Do not wrap in code blocks or JSON. Just the summary on the first line, then the description."""
 
     success, output = await call_ai_cli(
         prompt,
@@ -407,6 +424,12 @@ Respond with ONLY the JSON object, no other text."""
         parsed = _parse_ai_issue_response(output)
         if parsed:
             return parsed
+        logger.debug(
+            "AI returned output but JSON parsing failed for Jira bug, output=%s",
+            output[:500],
+        )
+    else:
+        logger.debug("AI CLI call failed for Jira bug: %s", output[:500])
 
     logger.warning("AI content generation failed for Jira bug, using fallback template")
     return _build_fallback_jira_content(ctx, jenkins_url, report_url, include_links)

@@ -2031,3 +2031,31 @@ async def get_effective_classification(
 
         fh_row = await (await db.execute(fh_query, fh_params)).fetchone()
         return fh_row[0] if fh_row and fh_row[0] else ""
+
+
+async def get_ai_configs() -> list[dict]:
+    """Get distinct AI provider/model pairs from completed analysis results.
+
+    Queries the results table for unique (ai_provider, ai_model) combinations
+    from successfully completed analyses. These represent known-working configs.
+
+    Returns:
+        List of dicts with 'ai_provider' and 'ai_model' keys.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            SELECT DISTINCT
+                json_extract(result_json, '$.ai_provider') as ai_provider,
+                json_extract(result_json, '$.ai_model') as ai_model
+            FROM results
+            WHERE status = 'completed'
+              AND json_extract(result_json, '$.ai_provider') IS NOT NULL
+              AND json_extract(result_json, '$.ai_provider') != ''
+              AND json_extract(result_json, '$.ai_model') IS NOT NULL
+              AND json_extract(result_json, '$.ai_model') != ''
+            ORDER BY ai_provider, ai_model
+            """
+        )
+        rows = await cursor.fetchall()
+        return [{"ai_provider": row[0], "ai_model": row[1]} for row in rows]

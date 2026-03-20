@@ -414,6 +414,88 @@ class TestJJIClientBugCreation:
         assert result["title"] == "Fix"
 
 
+class TestJJIClientAiConfigs:
+    def test_get_ai_configs(self):
+        sample = [
+            {"ai_provider": "claude", "ai_model": "opus-4"},
+            {"ai_provider": "gemini", "ai_model": "2.5-pro"},
+        ]
+
+        def handler(request):
+            assert request.method == "GET"
+            assert "/ai-configs" in str(request.url)
+            return httpx.Response(200, json=sample)
+
+        client = _make_client(handler)
+        result = client.get_ai_configs()
+        assert len(result) == 2
+        assert result[0]["ai_provider"] == "claude"
+
+    def test_get_ai_configs_empty(self):
+        def handler(request):
+            return httpx.Response(200, json=[])
+
+        client = _make_client(handler)
+        result = client.get_ai_configs()
+        assert result == []
+
+
+class TestJJIClientPreviewWithAiConfig:
+    def test_preview_github_issue_with_ai_config(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert body["ai_provider"] == "claude"
+            assert body["ai_model"] == "opus-4"
+            return httpx.Response(
+                200,
+                json={"title": "Fix", "body": "Body", "similar_issues": []},
+            )
+
+        client = _make_client(handler)
+        result = client.preview_github_issue(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            ai_provider="claude",
+            ai_model="opus-4",
+        )
+        assert result["title"] == "Fix"
+
+    def test_preview_jira_bug_with_ai_config(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert body["ai_provider"] == "gemini"
+            assert body["ai_model"] == "2.5-pro"
+            return httpx.Response(
+                200,
+                json={"title": "Bug", "body": "Desc", "similar_issues": []},
+            )
+
+        client = _make_client(handler)
+        result = client.preview_jira_bug(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            ai_provider="gemini",
+            ai_model="2.5-pro",
+        )
+        assert result["title"] == "Bug"
+
+    def test_preview_github_issue_without_ai_config_omits_fields(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert "ai_provider" not in body
+            assert "ai_model" not in body
+            return httpx.Response(
+                200,
+                json={"title": "Fix", "body": "Body", "similar_issues": []},
+            )
+
+        client = _make_client(handler)
+        client.preview_github_issue(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+        )
+
+
 class TestJJIClientAnalyzeExtras:
     def test_analyze_with_ai_provider(self):
         def handler(request):

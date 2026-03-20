@@ -412,6 +412,10 @@ class PreviewIssueRequest(_ChildJobFieldsValidator):
 
     test_name: str
     include_links: bool = False
+    ai_provider: str = Field(
+        default="", description="AI provider for content generation"
+    )
+    ai_model: str = Field(default="", description="AI model for content generation")
 
 
 class CreateIssueRequest(_ChildJobFieldsValidator):

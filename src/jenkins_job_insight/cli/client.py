@@ -339,13 +339,16 @@ class JJIClient:
         child_job_name: str = "",
         child_build_number: int = 0,
         include_links: bool = False,
+        ai_provider: str = "",
+        ai_model: str = "",
     ) -> dict:
         """Preview a GitHub issue. POST /results/{job_id}/preview-github-issue"""
-        body = self._with_child_scope(
-            {"test_name": test_name, "include_links": include_links},
-            child_job_name,
-            child_build_number,
-        )
+        body: dict = {"test_name": test_name, "include_links": include_links}
+        if ai_provider:
+            body["ai_provider"] = ai_provider
+        if ai_model:
+            body["ai_model"] = ai_model
+        body = self._with_child_scope(body, child_job_name, child_build_number)
         return self._request(
             "POST", f"/results/{job_id}/preview-github-issue", json=body
         )
@@ -357,13 +360,16 @@ class JJIClient:
         child_job_name: str = "",
         child_build_number: int = 0,
         include_links: bool = False,
+        ai_provider: str = "",
+        ai_model: str = "",
     ) -> dict:
         """Preview a Jira bug. POST /results/{job_id}/preview-jira-bug"""
-        body = self._with_child_scope(
-            {"test_name": test_name, "include_links": include_links},
-            child_job_name,
-            child_build_number,
-        )
+        body: dict = {"test_name": test_name, "include_links": include_links}
+        if ai_provider:
+            body["ai_provider"] = ai_provider
+        if ai_model:
+            body["ai_model"] = ai_model
+        body = self._with_child_scope(body, child_job_name, child_build_number)
         return self._request("POST", f"/results/{job_id}/preview-jira-bug", json=body)
 
     def create_github_issue(
@@ -417,6 +423,14 @@ class JJIClient:
             json=payload,
             accept_statuses=(201,),
         )
+
+    # -- AI Configs -----------------------------------------------------------
+
+    def get_ai_configs(self) -> list[dict]:
+        """Get distinct AI provider/model pairs from completed analyses. GET /ai-configs"""
+        return self._request("GET", "/ai-configs")
+
+    # -- Classification Override ----------------------------------------------
 
     def override_classification(
         self,
