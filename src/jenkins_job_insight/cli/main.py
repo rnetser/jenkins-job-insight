@@ -629,3 +629,184 @@ def comments_delete(
         print_output(data, columns=[], as_json=True)
     else:
         typer.echo("Comment deleted.")
+
+
+# -- AI Configs ---------------------------------------------------------------
+
+
+@app.command("ai-configs")
+def ai_configs(
+    json_output: bool = _JSON_OPTION,
+):
+    """List known AI provider/model configurations from successful analyses."""
+    _set_json(json_output)
+    try:
+        client = _get_client()
+        data = client.get_ai_configs()
+    except JJIError as err:
+        _handle_error(err)
+
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        if not data:
+            typer.echo("No AI configurations found from completed analyses.")
+            raise typer.Exit()
+        print_output(
+            data,
+            columns=["ai_provider", "ai_model"],
+            labels={"ai_provider": "AI PROVIDER", "ai_model": "AI MODEL"},
+            as_json=False,
+        )
+
+
+# -- Bug Creation -------------------------------------------------------------
+
+
+def _validate_issue_type(issue_type: str) -> str:
+    """Validate and normalize issue type, exit on invalid input."""
+    normalized = issue_type.lower()
+    if normalized not in ("github", "jira"):
+        typer.echo(
+            f"Error: --type must be 'github' or 'jira', got '{issue_type}'",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return normalized
+
+
+@app.command("preview-issue")
+def preview_issue(
+    job_id: str = typer.Argument(help="Job ID."),
+    test_name: str = typer.Option(..., "--test", "-t", help="Test name."),
+    issue_type: str = typer.Option(..., "--type", help="github or jira."),
+    child_job_name: str = typer.Option("", "--child-job"),
+    child_build_number: int = typer.Option(0, "--child-build"),
+    include_links: bool = typer.Option(
+        False, "--include-links", help="Include full URLs as clickable links."
+    ),
+    ai_provider: str = typer.Option(
+        "", "--ai-provider", help="AI provider for content generation."
+    ),
+    ai_model: str = typer.Option(
+        "", "--ai-model", help="AI model for content generation."
+    ),
+    json_output: bool = _JSON_OPTION,
+):
+    """Preview generated issue content (GitHub or Jira)."""
+    _set_json(json_output)
+    normalized_type = _validate_issue_type(issue_type)
+    try:
+        client = _get_client()
+        if normalized_type == "github":
+            data = client.preview_github_issue(
+                job_id=job_id,
+                test_name=test_name,
+                child_job_name=child_job_name,
+                child_build_number=child_build_number,
+                include_links=include_links,
+                ai_provider=ai_provider,
+                ai_model=ai_model,
+            )
+        else:
+            data = client.preview_jira_bug(
+                job_id=job_id,
+                test_name=test_name,
+                child_job_name=child_job_name,
+                child_build_number=child_build_number,
+                include_links=include_links,
+                ai_provider=ai_provider,
+                ai_model=ai_model,
+            )
+    except JJIError as err:
+        _handle_error(err)
+
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        typer.echo(f"Title: {data.get('title', '')}")
+        typer.echo(f"\nBody:\n{data.get('body', '')}")
+        similar = data.get("similar_issues", [])
+        if similar:
+            typer.echo(f"\nSimilar issues ({len(similar)}):")
+            for s in similar:
+                label = s.get("key") or f"#{s.get('number', '')}"
+                typer.echo(f"  {label}: {s.get('title', '')} ({s.get('url', '')})")
+
+
+@app.command("create-issue")
+def create_issue(
+    job_id: str = typer.Argument(help="Job ID."),
+    test_name: str = typer.Option(..., "--test", "-t", help="Test name."),
+    issue_type: str = typer.Option(..., "--type", help="github or jira."),
+    title: str = typer.Option(..., "--title", help="Issue title."),
+    body: str = typer.Option(..., "--body", help="Issue body."),
+    child_job_name: str = typer.Option("", "--child-job"),
+    child_build_number: int = typer.Option(0, "--child-build"),
+    json_output: bool = _JSON_OPTION,
+):
+    """Create a GitHub issue or Jira bug from a failure analysis."""
+    _set_json(json_output)
+    normalized_type = _validate_issue_type(issue_type)
+    try:
+        client = _get_client()
+        if normalized_type == "github":
+            data = client.create_github_issue(
+                job_id=job_id,
+                test_name=test_name,
+                title=title,
+                body=body,
+                child_job_name=child_job_name,
+                child_build_number=child_build_number,
+            )
+        else:
+            data = client.create_jira_bug(
+                job_id=job_id,
+                test_name=test_name,
+                title=title,
+                body=body,
+                child_job_name=child_job_name,
+                child_build_number=child_build_number,
+            )
+    except JJIError as err:
+        _handle_error(err)
+
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        key_or_number = data.get("key") or f"#{data.get('number', '')}"
+        typer.echo(f"Created: {key_or_number}")
+        typer.echo(f"URL: {data.get('url', '')}")
+        if data.get("comment_id"):
+            typer.echo(f"Comment added (id: {data['comment_id']})")
+
+
+@app.command("override-classification")
+def override_classification_cmd(
+    job_id: str = typer.Argument(help="Job ID."),
+    test_name: str = typer.Option(..., "--test", "-t", help="Test name."),
+    classification: str = typer.Option(
+        ..., "--classification", "-c", help="CODE ISSUE or PRODUCT BUG."
+    ),
+    child_job_name: str = typer.Option("", "--child-job"),
+    child_build_number: int = typer.Option(0, "--child-build"),
+    json_output: bool = _JSON_OPTION,
+):
+    """Override the classification of a failure."""
+    _set_json(json_output)
+    try:
+        client = _get_client()
+        data = client.override_classification(
+            job_id=job_id,
+            test_name=test_name,
+            classification=classification,
+            child_job_name=child_job_name,
+            child_build_number=child_build_number,
+        )
+    except JJIError as err:
+        _handle_error(err)
+
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        typer.echo(f"Classification overridden to: {data.get('classification', '')}")

@@ -8,6 +8,7 @@ without external dependencies.
 import base64
 import html
 import json
+import re
 from collections.abc import Callable
 
 from jenkins_job_insight.models import (
@@ -298,24 +299,54 @@ def _modal_js() -> str:
         A JavaScript string (without ``<script>`` tags) ready to embed directly.
     """
     return """\
-function showConfirmModal(title, message, onConfirm) {
+function showConfirmModal(title, message, onConfirm, opts) {
+    opts = opts || {};
+    var confirmLabel = opts.confirmLabel || 'Delete';
+    var cancelLabel = opts.cancelLabel || 'Cancel';
+    var confirmOnly = opts.confirmOnly || false;
+
     var overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = '<div class="modal-dialog">' +
         '<h3 id="modal-title"></h3>' +
         '<p id="modal-message"></p>' +
         '<div class="modal-actions">' +
-        '<button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>' +
-        '<button class="modal-btn modal-btn-danger" id="modal-confirm">Delete</button>' +
+        (confirmOnly ? '' : '<button class="modal-btn modal-btn-cancel" id="modal-cancel"></button>') +
+        '<button class="modal-btn modal-btn-danger" id="modal-confirm"></button>' +
         '</div></div>';
     document.body.appendChild(overlay);
     overlay.querySelector('#modal-title').textContent = title;
     overlay.querySelector('#modal-message').textContent = message;
+    overlay.querySelector('#modal-confirm').textContent = confirmLabel;
 
-    overlay.querySelector('#modal-cancel').onclick = function() { overlay.remove(); };
+    if (!confirmOnly) {
+        overlay.querySelector('#modal-cancel').textContent = cancelLabel;
+        overlay.querySelector('#modal-cancel').onclick = function() { overlay.remove(); };
+    }
     overlay.querySelector('#modal-confirm').onclick = function() { overlay.remove(); onConfirm(); };
     overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
 }"""
+
+
+def _username_helper_js() -> str:
+    """Return JavaScript helper for reading jji_username cookie.
+
+    Defines a global ``getJjiUsername()`` function that safely decodes
+    the jji_username cookie with try/catch. Returns empty string on
+    failure or if not set.
+
+    Returns:
+        A JavaScript string (without ``<script>`` tags) ready to embed directly.
+    """
+    return """
+function getJjiUsername() {
+    try {
+        return decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || '');
+    } catch(e) {
+        return '';
+    }
+}
+"""
 
 
 def _user_badge_js() -> str:
@@ -328,8 +359,7 @@ def _user_badge_js() -> str:
     """
     return """
 (function() {
-    var username = '';
-    try { username = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); } catch(e) {}
+    var username = getJjiUsername();
     if (username) {
         var userBadge = document.createElement('div');
         userBadge.style.cssText = 'position:fixed;top:12px;right:24px;z-index:200;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 12px;border-radius:12px;background:rgba(188,140,255,0.15);border:1px solid var(--accent-purple);color:var(--accent-purple);font-weight:600;white-space:nowrap;';
@@ -359,13 +389,21 @@ function getClassificationStyle(cls) {
         'REGRESSION': 'background:rgba(248,81,73,0.12);color:var(--accent-red);',
         'INFRASTRUCTURE': 'background:rgba(240,136,62,0.12);color:var(--accent-orange);',
         'KNOWN_BUG': 'background:rgba(188,140,255,0.12);color:var(--accent-purple);',
-        'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);'
+        'INTERMITTENT': 'background:rgba(210,153,34,0.15);color:var(--accent-yellow);',
+        'PRODUCT BUG': 'background:rgba(240,136,62,0.12);color:var(--accent-orange);',
+        'CODE ISSUE': 'background:rgba(88,166,255,0.08);color:var(--accent-blue);'
     };
     return styles[cls] || 'background:var(--bg-tertiary);color:var(--text-muted);';
 }"""
 
 
-def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str:
+def format_result_as_html(
+    result: AnalysisResult,
+    completed_at: str = "",
+    *,
+    github_available: bool = False,
+    jira_available: bool = False,
+) -> str:
     """Generate a self-contained HTML report for an analysis result.
 
     Produces a complete HTML document with inline CSS using a dark
@@ -375,6 +413,10 @@ def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str
     Args:
         result: The analysis result to render.
         completed_at: Optional timestamp string for when the analysis completed.
+        github_available: Whether GitHub issue creation is available
+            (tests_repo_url and github_token both configured).
+        jira_available: Whether Jira bug creation is available
+            (Jira integration enabled and configured).
 
     Returns:
         A complete HTML document as a string.
@@ -476,23 +518,28 @@ def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str
     text-overflow: ellipsis;
     white-space: nowrap;
 }}
-.classification-tag {{
-    font-size: 11px;
+.classification-tag,
+.classification-select {{
     font-weight: 600;
-    padding: 2px 8px;
     border-radius: 4px;
     text-transform: uppercase;
 }}
-.classification-tag.product-bug {{
-    background: var(--accent-orange-bg);
+.classification-tag {{
+    font-size: 11px;
+    padding: 2px 8px;
+}}
+.classification-tag.product-bug,
+.classification-select.product-bug {{
+    background-color: var(--accent-orange-bg);
     color: var(--accent-orange);
 }}
-.classification-tag.code-issue {{
-    background: var(--accent-blue-bg);
+.classification-tag.code-issue,
+.classification-select.code-issue {{
+    background-color: var(--accent-blue-bg);
     color: var(--accent-blue);
 }}
 .classification-tag.unknown {{
-    background: var(--bg-tertiary);
+    background-color: var(--bg-tertiary);
     color: var(--text-muted);
 }}
 .bug-id {{
@@ -583,7 +630,6 @@ def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str
 .severity-tag-inline.high {{ background: rgba(240,136,62,0.15); color: var(--accent-orange); }}
 .severity-tag-inline.medium {{ background: rgba(210,153,34,0.15); color: var(--accent-yellow); }}
 .severity-tag-inline.low {{ background: rgba(63,185,80,0.15); color: var(--accent-green); }}
-.severity-tag-inline.unknown {{ background: var(--bg-tertiary); color: var(--text-muted); }}
 /* Jira matches */
 .jira-matches {{ margin-top: 12px; }}
 .jira-match-link {{
@@ -845,6 +891,229 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 }}
 {_modal_css()}
 
+/* Bug creation buttons */
+.bug-actions {{
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}}
+.create-issue-btn {{
+    font-size: 12px;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    transition: background 0.15s, border-color 0.15s;
+}}
+.create-issue-btn:disabled {{
+    opacity: 0.5;
+    cursor: not-allowed;
+}}
+.github-issue-btn {{
+    background: rgba(63,185,80,0.12);
+    border: 1px solid var(--accent-green);
+    color: var(--accent-green);
+}}
+.github-issue-btn:hover:not(:disabled) {{
+    background: rgba(63,185,80,0.25);
+}}
+.jira-bug-btn {{
+    background: rgba(88,166,255,0.12);
+    border: 1px solid var(--accent-blue);
+    color: var(--accent-blue);
+}}
+.jira-bug-btn:hover:not(:disabled) {{
+    background: rgba(88,166,255,0.25);
+}}
+/* Loading modal spinner */
+.loading-spinner {{
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent-blue);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 12px;
+}}
+.loading-text {{
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 6px;
+}}
+.loading-subtext {{
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+}}
+/* Custom combobox (replaces native datalist) */
+.custom-combo {{
+    position: relative;
+    display: inline-block;
+}}
+.custom-combo input {{
+    font-size: 12px;
+    padding: 3px 22px 3px 6px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    outline: none;
+}}
+.custom-combo input:focus {{
+    border-color: var(--accent-blue);
+}}
+.custom-combo .combo-arrow {{
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 2px 4px;
+    line-height: 1;
+}}
+.combo-dropdown {{
+    display: none;
+    position: fixed;
+    min-width: 100%;
+    max-height: 150px;
+    overflow-y: auto;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-top: 2px;
+    z-index: 10000;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}}
+.combo-dropdown.show {{
+    display: block;
+}}
+.combo-dropdown .combo-option {{
+    padding: 4px 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+    cursor: pointer;
+}}
+.combo-dropdown .combo-option:hover {{
+    background: rgba(56,139,253,0.15);
+    color: var(--accent-blue);
+}}
+/* Classification override dropdown */
+.classification-select {{
+    appearance: none;
+    -webkit-appearance: none;
+    padding: 3px 24px 3px 10px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    outline: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 6px center;
+    background-size: 10px;
+    transition: border-color 0.15s;
+}}
+.classification-select:hover {{
+    border-color: var(--accent-blue);
+}}
+.classification-select option {{
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    padding: 4px 8px;
+}}
+/* Preview modal extensions */
+.preview-modal .modal-dialog {{
+    max-width: 700px;
+    text-align: left;
+}}
+.preview-modal .modal-dialog h3 {{
+    text-align: left;
+}}
+.preview-input {{
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 14px;
+    margin-bottom: 12px;
+    outline: none;
+}}
+.preview-input:focus {{
+    border-color: var(--accent-blue);
+}}
+.preview-textarea {{
+    width: 100%;
+    height: 300px;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: var(--font-mono);
+    resize: vertical;
+    margin-bottom: 12px;
+    outline: none;
+}}
+.preview-textarea:focus {{
+    border-color: var(--accent-blue);
+}}
+.similar-issues-box {{
+    background: rgba(240,136,62,0.08);
+    border: 1px solid var(--accent-orange);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    font-size: 13px;
+}}
+.similar-issues-box h4 {{
+    color: var(--accent-orange);
+    font-size: 12px;
+    margin-bottom: 8px;
+}}
+.similar-issues-box a {{
+    color: var(--accent-blue);
+    text-decoration: none;
+    font-size: 12px;
+    display: inline;
+}}
+.similar-issues-box a:hover {{
+    text-decoration: underline;
+}}
+.similar-issue-status {{
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    margin-left: 6px;
+    font-weight: 600;
+    text-transform: uppercase;
+    vertical-align: middle;
+}}
+.similar-issue-status.status-open {{
+    background: rgba(63,185,80,0.15);
+    color: #3fb950;
+}}
+.similar-issue-status.status-closed {{
+    background: rgba(139,148,158,0.15);
+    color: #8b949e;
+}}
+
+@keyframes spin {{
+    to {{ transform: rotate(360deg); }}
+}}
 /* Responsive (page-specific) */
 @media (max-width: 480px) {{
     .failure-summary {{ font-size: 12px; gap: 8px; }}
@@ -864,11 +1133,9 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
     parts.append(f"""
 <div class="sticky-header">
   <div class="header-content">
-    <div id="header-line1" style="display:flex;align-items:center;gap:16px;width:100%;flex-wrap:wrap;">
+    <div id="header-line1" style="display:flex;align-items:center;gap:16px;width:100%;flex-wrap:nowrap;">
       <h1>{job_name_html}</h1>
-      <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
-      <span id="overall-review-status" class="status-chip" style="display:none"></span>
-      <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data" style="margin-left:auto;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
+      <a class="regenerate-btn" href="?refresh=1" title="Regenerate report from stored data" style="margin-left:auto;flex-shrink:0;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg> Regenerate</a>
     </div>
     <div style="display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap;">
       <span class="env-chip">Build: #{e(build_number)}</span>
@@ -876,6 +1143,10 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
       <span class="env-chip">AI: {e(provider_info)}</span>
       {f'<span class="env-chip">Analyzed: {e(completed_at)}</span>' if completed_at else ""}
       <span id="overall-comment-count" style="display:none;margin-left:auto;"></span>
+    </div>
+    <div id="header-line3" style="display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap;">
+      <span class="failure-badge">{total_failures} failure{"s" if total_failures != 1 else ""}</span>
+      <span id="overall-review-status" class="status-chip" style="display:none"></span>
     </div>
   </div>
 </div>
@@ -938,13 +1209,13 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
         # Build lookup from failure analysis key to bug_id
         analysis_to_bug: dict[str, str] = {}
         for group in groups:
-            key = _grouping_key(group["analysis"])
+            key = _grouping_key(group["failures"][0])
             analysis_to_bug[key] = group["bug_id"]
 
         for idx, f in enumerate(result.failures, start=1):
             cls = f.analysis.classification or "Unknown"
             cls_class = _classification_css_class(cls)
-            bug_ref = analysis_to_bug.get(_grouping_key(f.analysis), "")
+            bug_ref = analysis_to_bug.get(_grouping_key(f), "")
             parts.append(f"""<tr>
   <td>{idx}</td>
   <td class="test-name">{e(f.test_name)}</td>
@@ -969,6 +1240,21 @@ td.error-cell {{ font-family: var(--font-mono); font-size: 11px; max-width: 350p
 const JOB_ID = "{e(result.job_id)}";
 // Derive base path for API calls (works behind reverse proxies with path prefixes)
 const BASE_PATH = window.location.pathname.replace(/\\/results\\/.*$/, '');
+const CURRENT_AI_PROVIDER = "{e(result.ai_provider or "")}";
+const CURRENT_AI_MODEL = "{e(result.ai_model or "")}";
+var GITHUB_AVAILABLE = {"true" if github_available else "false"};
+var JIRA_AVAILABLE = {"true" if jira_available else "false"};
+
+var _aiConfigs = [];
+(function loadAiConfigs() {{
+    fetch(BASE_PATH + '/ai-configs')
+        .then(function(r) {{ return r.ok ? r.json() : []; }})
+        .then(function(data) {{
+            _aiConfigs = data || [];
+            if (typeof initAiComboboxes === 'function') initAiComboboxes();
+        }})
+        .catch(function() {{}});
+}})();
 
 function renderCommentBadge(badge, count) {{
     if (count <= 0) {{
@@ -1134,8 +1420,7 @@ function appendCommentToList(section, comment) {{
     const text = autoLink(escapeHtml(comment.comment));
     var userLabel = comment.username ? '<span style="font-family:var(--font-mono);font-size:11px;color:var(--accent-purple);margin-right:6px;">' + escapeHtml(comment.username) + '</span>' : '';
     var deleteBtn = '';
-    var currentUser = '';
-    try {{ currentUser = decodeURIComponent((document.cookie.match(/jji_username=([^;]+)/) || [])[1] || ''); }} catch(e) {{}}
+    var currentUser = getJjiUsername();
     if (comment.username && comment.username === currentUser && comment.id) {{
         deleteBtn = ' <button onclick="deleteComment(this, ' + comment.id + ')" style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(248,81,73,0.12);border:1px solid transparent;color:var(--accent-red);cursor:pointer;margin-left:8px;">Delete</button>';
     }}
@@ -1145,6 +1430,57 @@ function appendCommentToList(section, comment) {{
 }}
 
 {_modal_js()}
+
+function showIssueCreatedModal(type, data) {{
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+
+    var dialog = document.createElement('div');
+    dialog.className = 'modal-dialog';
+
+    var iconDiv = document.createElement('div');
+    iconDiv.style.marginBottom = '12px';
+    iconDiv.innerHTML = '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 12l2.5 2.5L16 9"/></svg>';
+    dialog.appendChild(iconDiv);
+
+    var h3 = document.createElement('h3');
+    h3.textContent = type === 'github' ? 'GitHub Issue Created' : 'Jira Bug Created';
+    dialog.appendChild(h3);
+
+    var issueUrl = data.url || '';
+    var displayName = '';
+    if (type === 'github' && issueUrl) {{
+        var match = issueUrl.match(/github\\.com\\/([^/]+)\\/([^/]+)\\/issues\\/(\\d+)/);
+        if (match) displayName = match[1] + '/' + match[2] + '#' + match[3];
+        else displayName = '#' + (data.number || '');
+    }} else if (type === 'jira') {{
+        displayName = data.key || issueUrl;
+    }}
+
+    var p = document.createElement('p');
+    p.style.marginBottom = '20px';
+    var link = document.createElement('a');
+    link.href = issueUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = displayName;
+    link.style.cssText = 'color:var(--accent-blue);text-decoration:none;font-size:16px;font-weight:600;font-family:var(--font-mono);';
+    p.appendChild(link);
+    dialog.appendChild(p);
+
+    var actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    var okBtn = document.createElement('button');
+    okBtn.className = 'modal-btn modal-btn-cancel';
+    okBtn.textContent = 'OK';
+    okBtn.onclick = function() {{ overlay.remove(); }};
+    actions.appendChild(okBtn);
+    dialog.appendChild(actions);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    overlay.onclick = function(e) {{ if (e.target === overlay) overlay.remove(); }};
+}}
 
 {_classification_colors_js()}
 
@@ -1299,9 +1635,7 @@ async function addComment(btn) {{
         if (resp.ok) {{
             const result = await resp.json();
             const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-            var currentUser = '';
-            var uc = document.cookie.split('; ').find(function(c) {{ return c.startsWith('jji_username='); }});
-            if (uc) currentUser = decodeURIComponent(uc.split('=')[1]);
+            var currentUser = getJjiUsername();
             appendCommentToList(section, {{id: result.id, comment: comment, created_at: now, test_name: testName, username: currentUser}});
             const count = section.querySelectorAll('.comment-item').length;
             section.querySelector('.comment-count').textContent = count;
@@ -1366,7 +1700,7 @@ async function loadClassifications() {{
             // Normalize: empty job_name (root-job) uses '' as the key prefix,
             // matching the toggle's data-child-job which is '' for root failures.
             var scopeKey = c.job_name || '';
-            var key = scopeKey + '::' + c.test_name;
+            var key = scopeKey + '#' + (c.child_build_number || 0) + '::' + c.test_name;
             if (!byKey[key]) byKey[key] = [];
             byKey[key].push(c);
         }});
@@ -1374,53 +1708,96 @@ async function loadClassifications() {{
         document.querySelectorAll('.reviewed-toggle').forEach(function(toggle) {{
             var testName = toggle.dataset.testName;
             var childJob = toggle.dataset.childJob || '';
+            var childBuild = toggle.dataset.childBuild || '0';
             if (!testName) return;
-            var key = childJob + '::' + testName;
+            var key = childJob + '#' + childBuild + '::' + testName;
             var entries = byKey[key];
-            if (!entries) return;
-            entries.forEach(function(cls) {{
-                var badge = document.createElement('span');
-                badge.className = 'classification-tag';
-                badge.style.cssText = getClassificationStyle(cls.classification) + 'margin-left:6px;';
-                var badgeLabel = cls.classification.replace('_', ' ');
-                if (cls.classification === 'KNOWN_BUG') {{
-                    var jiraMatch = (cls.reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
-                    if (jiraMatch) badgeLabel = 'KNOWN BUG: ' + jiraMatch[1];
-                }}
-                badge.textContent = badgeLabel;
-                badge.title = (cls.reason || '') + (cls.references_info ? '\\nRef: ' + cls.references_info : '');
-                toggle.appendChild(badge);
-            }});
+            if (!entries || entries.length === 0) return;
+            // Use only the latest (first) entry per key
+            var cls = entries[0];
+            var badge = document.createElement('span');
+            badge.className = 'classification-tag';
+            badge.style.cssText = getClassificationStyle(cls.classification) + 'margin-left:6px;';
+            var badgeLabel = cls.classification.replace('_', ' ');
+            if (cls.classification === 'KNOWN_BUG') {{
+                var jiraMatch = (cls.reason || '').match(/([A-Z][A-Z0-9]+-\\d+)/);
+                if (jiraMatch) badgeLabel = 'KNOWN BUG: ' + jiraMatch[1];
+            }}
+            badge.textContent = badgeLabel;
+            badge.title = (cls.reason || '') + (cls.references_info ? '\\nRef: ' + cls.references_info : '');
+            toggle.appendChild(badge);
         }});
+
+        // Apply classification overrides to primary classification tags.
+        // When a user overrides CODE ISSUE -> PRODUCT BUG (or vice-versa),
+        // the override is stored in test_classifications. On page refresh
+        // the primary tag comes from result_json (stale). Update it here.
+        document.querySelectorAll('.reviewed-toggle').forEach(function(toggle) {{
+            var testName = toggle.dataset.testName;
+            var childJob = toggle.dataset.childJob || '';
+            var childBuild = toggle.dataset.childBuild || '0';
+            var key = childJob + '#' + childBuild + '::' + testName;
+            var entries = byKey[key];
+            if (!entries || entries.length === 0) return;
+
+            // For primary classification overrides, use only the latest (first) entry
+            var cls = entries[0];
+            if (cls.classification === 'CODE ISSUE' || cls.classification === 'PRODUCT BUG') {{
+                var card = toggle.closest('.bug-card') || toggle.closest('.failure-card');
+                if (card) {{
+                    var select = card.querySelector('.classification-select');
+                    if (select) {{
+                        select.value = cls.classification;
+                        select.className = 'classification-select ' +
+                            (cls.classification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
+                        showCorrectBugButton(card, cls.classification);
+                    }} else {{
+                        var primaryTag = card.querySelector('.classification-tag.product-bug, .classification-tag.code-issue, .classification-tag.unknown');
+                        if (primaryTag) {{
+                            primaryTag.textContent = cls.classification;
+                            primaryTag.className = 'classification-tag ' +
+                                (cls.classification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
+                            showCorrectBugButton(card, cls.classification);
+                        }}
+                    }}
+                }}
+            }}
+        }});
+
+        function aggregateClassifications(toggles, byKey) {{
+            var classifications = {{}}, jiraKeys = {{}}, reasons = {{}};
+            toggles.forEach(function(t) {{
+                var tn = t.dataset.testName;
+                var cj = t.dataset.childJob || '';
+                var cb = t.dataset.childBuild || '0';
+                var key = cj + '#' + cb + '::' + tn;
+                if (tn && byKey[key] && byKey[key].length > 0) {{
+                    var entry = byKey[key][0];
+                    var cls = entry.classification;
+                    classifications[cls] = (classifications[cls] || 0) + 1;
+                    if (!reasons[cls]) reasons[cls] = [];
+                    var r = entry.reason || '';
+                    var ri = entry.references_info || '';
+                    var tip = r + (ri ? '\\nRef: ' + ri : '');
+                    if (tip && reasons[cls].indexOf(tip) === -1) reasons[cls].push(tip);
+                    if (cls === 'KNOWN_BUG') {{
+                        var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
+                        if (jm && !jiraKeys[jm[1]]) jiraKeys[jm[1]] = true;
+                    }}
+                }}
+            }});
+            return {{ classifications: classifications, jiraKeys: jiraKeys, reasons: reasons }};
+        }}
 
         // Add classification badges to bug card summaries
         document.querySelectorAll('.bug-summary, .failure-summary').forEach(function(summary) {{
             var card = summary.closest('.bug-card, .failure-card');
             if (!card) return;
             var toggles = card.querySelectorAll('.reviewed-toggle');
-            var cardClassifications = {{}};
-            var cardJiraKeys = {{}};
-            var cardReasons = {{}};
-            toggles.forEach(function(t) {{
-                var tn = t.dataset.testName;
-                var cj = t.dataset.childJob || '';
-                var key = cj + '::' + tn;
-                if (tn && byKey[key]) {{
-                    byKey[key].forEach(function(entry) {{
-                        var cls = entry.classification;
-                        cardClassifications[cls] = (cardClassifications[cls] || 0) + 1;
-                        if (!cardReasons[cls]) cardReasons[cls] = [];
-                        var r = entry.reason || '';
-                        var ri = entry.references_info || '';
-                        var tip = r + (ri ? '\\nRef: ' + ri : '');
-                        if (tip && cardReasons[cls].indexOf(tip) === -1) cardReasons[cls].push(tip);
-                        if (cls === 'KNOWN_BUG') {{
-                            var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
-                            if (jm && !cardJiraKeys[jm[1]]) cardJiraKeys[jm[1]] = true;
-                        }}
-                    }});
-                }}
-            }});
+            var agg = aggregateClassifications(toggles, byKey);
+            var cardClassifications = agg.classifications;
+            var cardJiraKeys = agg.jiraKeys;
+            var cardReasons = agg.reasons;
             for (var cls in cardClassifications) {{
                 var badge = document.createElement('span');
                 badge.className = 'classification-tag';
@@ -1444,29 +1821,10 @@ async function loadClassifications() {{
             var childCard = summary.closest('.child-job');
             if (!childCard) return;
             var toggles = childCard.querySelectorAll('.reviewed-toggle');
-            var childClassifications = {{}};
-            var childJiraKeys = {{}};
-            var childReasons = {{}};
-            toggles.forEach(function(t) {{
-                var tn = t.dataset.testName;
-                var cj = t.dataset.childJob || '';
-                var key = cj + '::' + tn;
-                if (tn && byKey[key]) {{
-                    byKey[key].forEach(function(entry) {{
-                        var cls = entry.classification;
-                        childClassifications[cls] = (childClassifications[cls] || 0) + 1;
-                        if (!childReasons[cls]) childReasons[cls] = [];
-                        var r = entry.reason || '';
-                        var ri = entry.references_info || '';
-                        var tip = r + (ri ? '\\nRef: ' + ri : '');
-                        if (tip && childReasons[cls].indexOf(tip) === -1) childReasons[cls].push(tip);
-                        if (cls === 'KNOWN_BUG') {{
-                            var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
-                            if (jm && !childJiraKeys[jm[1]]) childJiraKeys[jm[1]] = true;
-                        }}
-                    }});
-                }}
-            }});
+            var agg = aggregateClassifications(toggles, byKey);
+            var childClassifications = agg.classifications;
+            var childJiraKeys = agg.jiraKeys;
+            var childReasons = agg.reasons;
             for (var cls in childClassifications) {{
                 var badge = document.createElement('span');
                 badge.style.cssText = 'display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;white-space:nowrap;margin-left:6px;' + getClassificationStyle(cls);
@@ -1484,30 +1842,472 @@ async function loadClassifications() {{
             }}
         }});
 
-        // Add classification summary to report header
+        // Add classification summary to report header (line 3 — badges row)
+        // Use only the latest (first) entry per key for header counts
         var headerClassifications = {{}};
         for (var key in byKey) {{
-            byKey[key].forEach(function(entry) {{
-                headerClassifications[entry.classification] = (headerClassifications[entry.classification] || 0) + 1;
-            }});
+            if (byKey[key] && byKey[key].length > 0) {{
+                var latestEntry = byKey[key][0];
+                headerClassifications[latestEntry.classification] = (headerClassifications[latestEntry.classification] || 0) + 1;
+            }}
         }}
-        var headerLine1 = document.getElementById('header-line1');
-        if (headerLine1) {{
-            var regenBtn = headerLine1.querySelector('.regenerate-btn');
+        var headerLine3 = document.getElementById('header-line3');
+        if (headerLine3) {{
             for (var cls in headerClassifications) {{
                 var chip = document.createElement('span');
                 chip.style.cssText = 'display:inline-flex;align-items:center;font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;font-family:var(--font-mono);white-space:nowrap;' + getClassificationStyle(cls);
                 chip.textContent = headerClassifications[cls] + ' ' + cls.replace('_', ' ');
-                if (regenBtn) {{
-                    headerLine1.insertBefore(chip, regenBtn);
-                }} else {{
-                    headerLine1.appendChild(chip);
-                }}
+                headerLine3.appendChild(chip);
             }}
         }}
     }} catch (err) {{
         console.warn('Failed to load classifications:', err);
     }}
+}}
+
+// -- Bug creation: preview, create, classification override --
+
+function showIssuePreviewModal(type, data, testName, childJob, childBuild, includeLinks, aiProvider, aiModel) {{
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay preview-modal';
+
+    var dialog = document.createElement('div');
+    dialog.className = 'modal-dialog';
+
+    var h3 = document.createElement('h3');
+    h3.textContent = type === 'github' ? 'Create GitHub Issue' : 'Create Jira Bug';
+    dialog.appendChild(h3);
+
+    // Similar issues warning
+    if (data.similar_issues && data.similar_issues.length > 0) {{
+        var box = document.createElement('div');
+        box.className = 'similar-issues-box';
+        var boxH4 = document.createElement('h4');
+        boxH4.textContent = 'Similar existing issues found (' + data.similar_issues.length + ')';
+        box.appendChild(boxH4);
+        data.similar_issues.forEach(function(s) {{
+            var row = document.createElement('div');
+            row.style.cssText = 'padding:2px 0;';
+            var link = document.createElement('a');
+            link.href = s.url || '#';
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.style.cssText = 'color:var(--accent-blue);text-decoration:none;font-size:12px;';
+            link.textContent = (s.key || '#' + (s.number || '')) + ': ' + (s.title || '');
+            link.onmouseover = function() {{ this.style.textDecoration = 'underline'; }};
+            link.onmouseout = function() {{ this.style.textDecoration = 'none'; }};
+            row.appendChild(link);
+            if (s.status) {{
+                var badge = document.createElement('span');
+                badge.className = 'similar-issue-status';
+                var st = (s.status || '').toLowerCase();
+                if (st === 'open' || st === 'in progress' || st === 'to do' || st === 'new' || st === 'reopened') {{
+                    badge.classList.add('status-open');
+                }} else {{
+                    badge.classList.add('status-closed');
+                }}
+                badge.textContent = s.status;
+                row.appendChild(badge);
+            }}
+            box.appendChild(row);
+        }});
+        dialog.appendChild(box);
+    }}
+
+    // Title input
+    var titleLabel = document.createElement('label');
+    titleLabel.style.cssText = 'display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;font-weight:600;';
+    titleLabel.textContent = 'Title';
+    dialog.appendChild(titleLabel);
+    var titleInput = document.createElement('input');
+    titleInput.type = 'text';
+    titleInput.className = 'preview-input';
+    titleInput.value = data.title || '';
+    dialog.appendChild(titleInput);
+
+    // Body textarea
+    var bodyLabel = document.createElement('label');
+    bodyLabel.style.cssText = 'display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;font-weight:600;';
+    bodyLabel.textContent = 'Body';
+    dialog.appendChild(bodyLabel);
+    var bodyTextarea = document.createElement('textarea');
+    bodyTextarea.className = 'preview-textarea';
+    bodyTextarea.value = data.body || '';
+    dialog.appendChild(bodyTextarea);
+
+    // Attribution note
+    var attrNote = document.createElement('div');
+    attrNote.style.cssText = 'font-size:11px;color:var(--text-muted);margin-bottom:12px;font-style:italic;';
+    var cookieUser = getJjiUsername();
+    if (cookieUser) {{
+        attrNote.textContent = 'A "Reported by: ' + cookieUser + ' via jenkins-job-insight" line will be added automatically.';
+        dialog.appendChild(attrNote);
+    }}
+
+    // Actions
+    var actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    actions.style.justifyContent = 'flex-end';
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.className = 'modal-btn modal-btn-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.onclick = function() {{ overlay.remove(); }};
+    actions.appendChild(cancelBtn);
+
+    var createBtn = document.createElement('button');
+    createBtn.className = 'modal-btn';
+    createBtn.style.cssText = type === 'github'
+        ? 'background:rgba(63,185,80,0.15);color:var(--accent-green);border-color:var(--accent-green);'
+        : 'background:rgba(88,166,255,0.12);color:var(--accent-blue);border-color:var(--accent-blue);';
+    createBtn.textContent = 'Create';
+    createBtn.onclick = function() {{
+        createBtn.textContent = 'Creating...';
+        createBtn.disabled = true;
+        submitIssue(type, titleInput.value, bodyTextarea.value, testName, childJob, childBuild, includeLinks, overlay, aiProvider, aiModel);
+    }};
+    actions.appendChild(createBtn);
+    dialog.appendChild(actions);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    overlay.onclick = function(ev) {{ if (ev.target === overlay) overlay.remove(); }};
+}}
+
+async function submitIssue(type, title, body, testName, childJob, childBuild, includeLinks, overlay, aiProvider, aiModel) {{
+    var endpoint = type === 'github' ? '/create-github-issue' : '/create-jira-bug';
+    try {{
+        var payload = {{
+            test_name: testName, child_job_name: childJob, child_build_number: childBuild,
+            title: title, body: body, include_links: includeLinks,
+        }};
+        if (aiProvider) payload.ai_provider = aiProvider;
+        if (aiModel) payload.ai_model = aiModel;
+        var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + endpoint, {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify(payload),
+        }});
+        if (!resp.ok) {{
+            var errData = await resp.json().catch(function() {{ return {{}}; }});
+            throw new Error(errData.detail || 'HTTP ' + resp.status);
+        }}
+        var data = await resp.json();
+        overlay.remove();
+        showIssueCreatedModal(type, data);
+        // Find and replace the original create button with a link
+        var cards = document.querySelectorAll('.bug-card, .failure-card');
+        cards.forEach(function(card) {{
+            var btns = card.querySelectorAll('.create-issue-btn');
+            btns.forEach(function(b) {{
+                var btnChildBuild = parseInt(b.dataset.childBuild || '0');
+                if (b.dataset.testName === testName && b.dataset.childJob === childJob && btnChildBuild === childBuild) {{
+                    if ((type === 'github' && b.classList.contains('github-issue-btn')) ||
+                        (type === 'jira' && b.classList.contains('jira-bug-btn'))) {{
+                        var link = document.createElement('a');
+                        link.href = data.url;
+                        link.target = '_blank';
+                        link.rel = 'noopener';
+                        link.className = b.className;
+                        link.style.cssText = 'text-decoration:none;pointer-events:auto;opacity:0.7;';
+                        link.textContent = type === 'github' ? ('Issue #' + (data.number || '')) : (data.key || 'Bug');
+                        b.replaceWith(link);
+                    }}
+                }}
+            }});
+        }});
+        // Clear existing comments before reload to avoid duplicates
+        document.querySelectorAll('.comment-list').forEach(function(cl) {{ cl.innerHTML = ''; }});
+        // Reload comments to show the auto-added link
+        await loadCommentsAndReviews();
+        updateCommentBadges();
+    }} catch (err) {{
+        overlay.remove();
+        showConfirmModal('Error', 'Failed to create: ' + err.message, function() {{}}, {{confirmLabel: 'OK', confirmOnly: true}});
+    }}
+}}
+
+function showLoadingModal(type) {{
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay preview-modal';
+
+    var dialog = document.createElement('div');
+    dialog.className = 'modal-dialog';
+    dialog.style.cssText = 'max-width:400px;text-align:center;';
+
+    var h3 = document.createElement('h3');
+    h3.style.textAlign = 'center';
+    h3.textContent = type === 'github' ? 'Create GitHub Issue' : 'Create Jira Bug';
+    dialog.appendChild(h3);
+
+    var spinnerContainer = document.createElement('div');
+    spinnerContainer.style.cssText = 'padding:24px 0 16px;';
+
+    var spinner = document.createElement('div');
+    spinner.className = 'loading-spinner';
+    spinnerContainer.appendChild(spinner);
+
+    var loadingText = document.createElement('div');
+    loadingText.className = 'loading-text';
+    loadingText.textContent = type === 'github' ? 'Generating issue...' : 'Generating bug...';
+    spinnerContainer.appendChild(loadingText);
+
+    var loadingSubtext = document.createElement('div');
+    loadingSubtext.className = 'loading-subtext';
+    loadingSubtext.textContent = 'AI is analyzing the failure and crafting the ' + (type === 'github' ? 'issue' : 'bug') + '.';
+    spinnerContainer.appendChild(loadingSubtext);
+
+    dialog.appendChild(spinnerContainer);
+
+    var actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    actions.style.justifyContent = 'center';
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.className = 'modal-btn modal-btn-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.onclick = function() {{ if (overlay._abortController) overlay._abortController.abort(); overlay.remove(); }};
+    actions.appendChild(cancelBtn);
+
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    overlay.onclick = function(ev) {{ if (ev.target === overlay) {{ if (overlay._abortController) overlay._abortController.abort(); overlay.remove(); }} }};
+    return overlay;
+}}
+
+async function previewIssue(btn, type) {{
+    var testName = btn.dataset.testName;
+    var childJob = btn.dataset.childJob || '';
+    var childBuild = parseInt(btn.dataset.childBuild || '0');
+    var includeLinks = false;
+    var aiProvider = '';
+    var aiModel = '';
+    var card = btn.closest('.bug-card') || btn.closest('.failure-card');
+    if (card) {{
+        var cb = card.querySelector('.include-links-cb');
+        if (cb) includeLinks = cb.checked;
+        var pEl = card.querySelector('.ai-provider-input');
+        var mEl = card.querySelector('.ai-model-input');
+        if (pEl) aiProvider = pEl.value;
+        if (mEl) aiModel = mEl.value;
+    }}
+    var controller = new AbortController();
+    var loadingOverlay = showLoadingModal(type);
+    loadingOverlay._abortController = controller;
+    var endpoint = type === 'github' ? '/preview-github-issue' : '/preview-jira-bug';
+    try {{
+        var payload = {{
+            test_name: testName, child_job_name: childJob, child_build_number: childBuild,
+            include_links: includeLinks,
+        }};
+        if (aiProvider) payload.ai_provider = aiProvider;
+        if (aiModel) payload.ai_model = aiModel;
+        var resp = await fetch(BASE_PATH + '/results/' + JOB_ID + endpoint, {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+        }});
+        if (!resp.ok) {{ throw new Error('HTTP ' + resp.status); }}
+        var data = await resp.json();
+        loadingOverlay.remove();
+        showIssuePreviewModal(type, data, testName, childJob, childBuild, includeLinks, aiProvider, aiModel);
+    }} catch (err) {{
+        if (err.name === 'AbortError') return;
+        var dlg = loadingOverlay.querySelector('.modal-dialog');
+        if (dlg) {{
+            var spinnerContainer = dlg.querySelector('.loading-spinner');
+            if (spinnerContainer) spinnerContainer.parentNode.remove();
+            var errDiv = document.createElement('div');
+            errDiv.style.cssText = 'padding:16px 0;text-align:center;';
+            var errIcon = document.createElement('div');
+            errIcon.style.cssText = 'font-size:24px;margin-bottom:8px;';
+            errIcon.textContent = '\u26a0';
+            errDiv.appendChild(errIcon);
+            var errText = document.createElement('div');
+            errText.style.cssText = 'color:var(--accent-red, #f85149);font-size:13px;';
+            var label = type === 'github' ? 'issue' : 'bug';
+            errText.textContent = 'Failed to generate ' + label + ' preview: ' + err.message;
+            errDiv.appendChild(errText);
+            dlg.querySelector('h3').insertAdjacentElement('afterend', errDiv);
+        }}
+    }}
+}}
+
+function rollbackClassificationSelect(select, prevValue, prevClass) {{
+    select.value = prevValue;
+    select.className = prevClass;
+    var card = select.closest('.bug-card') || select.closest('.failure-card');
+    if (card) showCorrectBugButton(card, prevValue);
+}}
+
+function overrideClassification(select) {{
+    var newClassification = select.value;
+    var prevValue = select.dataset.prevValue || select.value;
+    var prevClass = select.dataset.prevClass || select.className;
+    var testName = select.dataset.testName;
+    var childJob = select.dataset.childJob || '';
+    var childBuild = parseInt(select.dataset.childBuild || '0');
+
+    fetch(BASE_PATH + '/results/' + JOB_ID + '/override-classification', {{
+        method: 'PUT',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{
+            test_name: testName, child_job_name: childJob, child_build_number: childBuild,
+            classification: newClassification,
+        }}),
+    }}).then(function(r) {{
+        if (r.ok) {{
+            select.className = 'classification-select ' +
+                (newClassification === 'PRODUCT BUG' ? 'product-bug' : 'code-issue');
+            var card = select.closest('.bug-card') || select.closest('.failure-card');
+            if (card) showCorrectBugButton(card, newClassification);
+        }} else {{
+            r.json().then(function(data) {{
+                rollbackClassificationSelect(select, prevValue, prevClass);
+                showConfirmModal('Error', data.detail || 'Failed to override', function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
+            }}).catch(function() {{
+                rollbackClassificationSelect(select, prevValue, prevClass);
+                showConfirmModal('Error', 'Failed to override classification', function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
+            }});
+        }}
+    }}).catch(function(err) {{
+        rollbackClassificationSelect(select, prevValue, prevClass);
+        showConfirmModal('Error', 'Network error: ' + err.message, function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
+    }});
+}}
+
+function showCorrectBugButton(card, classification) {{
+    var ghBtn = card.querySelector('.github-issue-btn');
+    var jiraBtn = card.querySelector('.jira-bug-btn');
+    if (ghBtn) ghBtn.style.display = (GITHUB_AVAILABLE && classification === 'CODE ISSUE') ? '' : 'none';
+    if (jiraBtn) jiraBtn.style.display = (JIRA_AVAILABLE && classification === 'PRODUCT BUG') ? '' : 'none';
+}}
+
+function initBugCreationButtons() {{
+    document.querySelectorAll('.bug-card, .failure-card').forEach(function(card) {{
+        var select = card.querySelector('.classification-select');
+        if (select) {{
+            showCorrectBugButton(card, select.value);
+            return;
+        }}
+        var tag = card.querySelector('.classification-tag');
+        if (!tag) return;
+        var cls = tag.textContent.trim();
+        showCorrectBugButton(card, cls);
+    }});
+}}
+
+function createCombobox(options, defaultValue, width, placeholder, cssClass) {{
+    var wrapper = document.createElement('div');
+    wrapper.className = 'custom-combo';
+
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.className = cssClass;
+    input.value = defaultValue;
+    input.placeholder = placeholder;
+    input.style.width = width;
+
+    var arrow = document.createElement('button');
+    arrow.type = 'button';
+    arrow.className = 'combo-arrow';
+    arrow.innerHTML = '&#9660;';
+
+    var dropdown = document.createElement('div');
+    dropdown.className = 'combo-dropdown';
+
+    options.forEach(function(opt) {{
+        var item = document.createElement('div');
+        item.className = 'combo-option';
+        item.textContent = opt;
+        item.onclick = function(e) {{
+            e.stopPropagation();
+            input.value = opt;
+            dropdown.classList.remove('show');
+            input.dispatchEvent(new Event('change'));
+        }};
+        dropdown.appendChild(item);
+    }});
+
+    arrow.onclick = function(e) {{
+        e.stopPropagation();
+        document.querySelectorAll('.combo-dropdown.show').forEach(function(d) {{
+            if (d !== dropdown) d.classList.remove('show');
+        }});
+        positionDropdown(input, dropdown);
+        dropdown.classList.toggle('show');
+    }};
+
+    input.onfocus = function() {{
+        positionDropdown(input, dropdown);
+        dropdown.classList.add('show');
+    }};
+
+    input.oninput = function() {{
+        var val = input.value.toLowerCase();
+        dropdown.querySelectorAll('.combo-option').forEach(function(opt) {{
+            opt.style.display = opt.textContent.toLowerCase().indexOf(val) >= 0 ? '' : 'none';
+        }});
+        positionDropdown(input, dropdown);
+        dropdown.classList.add('show');
+    }};
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(arrow);
+    document.body.appendChild(dropdown);
+    wrapper._dropdown = dropdown;
+
+    return wrapper;
+}}
+
+function positionDropdown(input, dropdown) {{
+    var rect = input.getBoundingClientRect();
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.top = (rect.bottom + 2) + 'px';
+    dropdown.style.minWidth = rect.width + 'px';
+}}
+
+document.addEventListener('click', function() {{
+    document.querySelectorAll('.combo-dropdown.show').forEach(function(d) {{
+        d.classList.remove('show');
+    }});
+}});
+
+document.addEventListener('scroll', function() {{
+    document.querySelectorAll('.combo-dropdown.show').forEach(function(d) {{
+        d.classList.remove('show');
+    }});
+}}, true);
+
+function initAiComboboxes() {{
+    if (!_aiConfigs.length) return;
+    document.querySelectorAll('.ai-combos-placeholder').forEach(function(ph) {{
+        if (ph.children.length > 0) return;
+
+        var providerLabel = document.createElement('label');
+        providerLabel.style.cssText = 'font-size:12px;color:var(--text-muted);margin-right:4px;';
+        providerLabel.textContent = 'AI:';
+
+        var seenProviders = [];
+        _aiConfigs.forEach(function(c) {{
+            if (seenProviders.indexOf(c.ai_provider) < 0) seenProviders.push(c.ai_provider);
+        }});
+        var providerCombo = createCombobox(seenProviders, CURRENT_AI_PROVIDER, '90px', 'provider', 'ai-provider-input');
+        providerCombo.style.marginRight = '6px';
+
+        var models = [];
+        _aiConfigs.forEach(function(c) {{
+            if (models.indexOf(c.ai_model) < 0) models.push(c.ai_model);
+        }});
+        var modelCombo = createCombobox(models, CURRENT_AI_MODEL, '170px', 'model', 'ai-model-input');
+        modelCombo.style.marginRight = '8px';
+
+        ph.appendChild(providerLabel);
+        ph.appendChild(providerCombo);
+        ph.appendChild(modelCombo);
+    }});
 }}
 
 document.addEventListener('DOMContentLoaded', async function() {{
@@ -1527,12 +2327,15 @@ document.addEventListener('DOMContentLoaded', async function() {{
             }}
         }});
     }});
+    initBugCreationButtons();
+    initAiComboboxes();
     await loadClassifications();
     await loadCommentsAndReviews();
     await loadEnrichments();
 }});
 </script>
 <script>
+{_username_helper_js()}
 {_user_badge_js()}
 </script>
 """)
@@ -1575,16 +2378,21 @@ def _classification_css_class(classification: str) -> str:
     return "unknown"
 
 
-def _grouping_key(detail: AnalysisDetail) -> str:
-    """Compute a grouping key for root cause aggregation.
+def _grouping_key(failure: FailureAnalysis) -> str:
+    """Generate a grouping key for a failure.
 
-    Groups by classification + first 4 words of the bug title
-    (for product bugs) or classification + file path (for code issues).
-    Falls back to full JSON match when neither is available.
-
-    The first 4 words of the title capture the essence of the bug
-    while tolerating minor phrasing variations from different AI calls.
+    Uses error_signature as the primary key (matches override semantics).
+    Falls back to analysis-based heuristics when signature is missing.
     """
+    detail = failure.analysis
+
+    # Primary: group by error_signature when available (matches override semantics)
+    sig = failure.error_signature or ""
+    if sig:
+        cls = (detail.classification or "").strip().upper()
+        return f"{cls}|sig:{sig}"
+
+    # Fallback: analysis-based heuristics when signature is missing
     cls = (detail.classification or "").strip().upper()
 
     # For product bugs, group by classification + first 4 words of title
@@ -1605,26 +2413,24 @@ def _grouping_key(detail: AnalysisDetail) -> str:
     return detail.model_dump_json()
 
 
-def _group_failures(failures: list[FailureAnalysis]) -> list[dict]:
+def _group_failures(failures: list[FailureAnalysis], prefix: str = "") -> list[dict]:
     """Group failures that share the same root cause.
 
-    Groups by classification + first 4 words of the bug title
-    (for product bugs) or classification + file path (for code issues).
-    Falls back to full AnalysisDetail JSON match when neither is available.
-
-    After initial grouping, singleton groups are merged into the dominant
-    group (if one exists with >50% of failures) when they share the same
-    classification. This handles cases where the AI uses different phrasing
-    for the same root cause.
+    Uses error_signature as the primary grouping key (matches override
+    semantics).  Falls back to analysis-based heuristics when the
+    signature is missing.
 
     Args:
         failures: List of FailureAnalysis instances to group.
+        prefix: String prepended to each ``bug_id`` to ensure DOM-wide
+            uniqueness when the function is called for different child jobs.
 
     Returns:
         A list of dicts, each containing:
         - ``analysis``: the representative AnalysisDetail
         - ``failures``: list of FailureAnalysis in this group
-        - ``bug_id``: a short identifier like ``"BUG-1"``
+        - ``bug_id``: a short identifier like ``"BUG-1"`` (or
+          ``"<prefix>BUG-1"`` when *prefix* is provided)
     """
     if not failures:
         return []
@@ -1633,40 +2439,11 @@ def _group_failures(failures: list[FailureAnalysis]) -> list[dict]:
     groups_map: dict[str, list[FailureAnalysis]] = {}
     order: list[str] = []
     for f in failures:
-        key = _grouping_key(f.analysis)
+        key = _grouping_key(f)
         if key not in groups_map:
             groups_map[key] = []
             order.append(key)
         groups_map[key].append(f)
-
-    # Second pass: merge singletons into the dominant group
-    total = len(failures)
-    if total > 2 and len(groups_map) > 1:
-        # Find the largest group
-        dominant_key = max(groups_map, key=lambda k: len(groups_map[k]))
-        dominant_size = len(groups_map[dominant_key])
-
-        if dominant_size > total * 0.5:
-            # Get the classification of the dominant group
-            dominant_cls = (
-                groups_map[dominant_key][0].analysis.classification.strip().upper()
-            )
-            # Merge singletons with the same classification
-            keys_to_remove: list[str] = []
-            for key in order:
-                if key == dominant_key:
-                    continue
-                if len(groups_map[key]) == 1:
-                    singleton_cls = (
-                        groups_map[key][0].analysis.classification.strip().upper()
-                    )
-                    if singleton_cls == dominant_cls:
-                        groups_map[dominant_key].extend(groups_map[key])
-                        keys_to_remove.append(key)
-
-            for key in keys_to_remove:
-                del groups_map[key]
-                order.remove(key)
 
     # Build final groups
     groups: list[dict] = []
@@ -1676,7 +2453,7 @@ def _group_failures(failures: list[FailureAnalysis]) -> list[dict]:
             {
                 "analysis": group_failures[0].analysis,
                 "failures": group_failures,
-                "bug_id": f"BUG-{idx}",
+                "bug_id": f"{prefix}BUG-{idx}" if prefix else f"BUG-{idx}",
             }
         )
     return groups
@@ -1729,14 +2506,23 @@ def _render_group_card(
     else:
         card_title = failures[0].error or failures[0].test_name
 
+    # DESIGN DECISION: Bug creation buttons, override button, and comments all use
+    # failures[0] (the representative test).  This is correct because a bug card
+    # represents ONE root cause — all tests in the group share the same analysis
+    # and classification.  The override updates ALL tests with the same
+    # error_signature on the backend (see storage.override_classification).
     group_test_names = e(json.dumps([f.test_name for f in failures]))
     parts.append(f"""{indent}<details class="bug-card">
 {indent}  <summary class="bug-summary" data-test-names="{group_test_names}" data-child-job="{e(child_job_name)}">
 {indent}    <span class="bug-id">{e(bug_id)}</span>
 {indent}    <span class="bug-title">{e(card_title)}</span>
 {indent}    <span class="bug-count">{e(test_label)}</span>
-{indent}    <span class="classification-tag {e(cls_class)}">{e(cls)}</span>
-{indent}    <span class="severity-tag-inline {e(severity)}">{e(severity.upper())}</span>
+{indent}    <select class="classification-select {e(cls_class)}" data-test-name="{e(failures[0].test_name)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="event.stopPropagation()" onfocus="this.dataset.prevValue=this.value;this.dataset.prevClass=this.className" onchange="overrideClassification(this)">
+{indent}      {'<option value="" disabled selected>' + e(cls) + "</option>" if cls not in ("CODE ISSUE", "PRODUCT BUG") else ""}
+{indent}      <option value="CODE ISSUE" {"selected" if cls == "CODE ISSUE" else ""}>CODE ISSUE</option>
+{indent}      <option value="PRODUCT BUG" {"selected" if cls == "PRODUCT BUG" else ""}>PRODUCT BUG</option>
+{indent}    </select>
+{indent}    {'<span class="severity-tag-inline ' + e(severity) + '">' + e(severity.upper()) + "</span>" if severity and severity.upper() != "UNKNOWN" else ""}
 {indent}    <span class="group-review-status status-chip" style="display:none"></span>
 {indent}  </summary>
 {indent}  <div class="bug-body">
@@ -1820,6 +2606,15 @@ def _render_group_card(
 {indent}        </div>
 {indent}      </div>
 {indent}    </div>
+{indent}    <div class="bug-actions">
+{indent}      <button class="create-issue-btn github-issue-btn" data-test-name="{e(comment_test)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="previewIssue(this, 'github')" style="display:none"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> Open GitHub Issue</button>
+{indent}      <button class="create-issue-btn jira-bug-btn" data-test-name="{e(comment_test)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="previewIssue(this, 'jira')" style="display:none"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M11.53 2c0 2.4 1.97 4.35 4.35 4.35h1.78v1.7c0 2.4 1.94 4.34 4.34 4.35V2.84a.84.84 0 00-.84-.84H11.53zM6.77 6.8a4.36 4.36 0 004.34 4.34h1.78v1.72a4.36 4.36 0 004.34 4.34V7.63a.84.84 0 00-.83-.83H6.77zM2 11.6c0 2.4 1.95 4.34 4.35 4.35h1.78v1.72c.01 2.39 1.95 4.33 4.35 4.33v-9.57a.84.84 0 00-.84-.83H2z"/></svg> Open Jira Bug</button>
+{indent}      <span class="ai-combos-placeholder" style="display:inline-flex;align-items:center;"></span>
+{indent}      <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--text-muted);cursor:pointer;">
+{indent}        <input type="checkbox" class="include-links-cb" style="width:14px;height:14px;">
+{indent}        Include links
+{indent}      </label>
+{indent}    </div>
 """)
 
     parts.append(f"""{indent}  </div>
@@ -1886,7 +2681,14 @@ def _render_child_jobs(
     """
     for child in children:
         child_failures_count = len(child.failures)
-        child_groups = _group_failures(child.failures) if child.failures else []
+        child_prefix = (
+            re.sub(r"[^a-zA-Z0-9]", "_", f"{child.job_name}-{child.build_number}") + "-"
+        )
+        child_groups = (
+            _group_failures(child.failures, prefix=child_prefix)
+            if child.failures
+            else []
+        )
         child_groups_count = len(child_groups)
 
         # Show group count when grouping reduces the visible cards
@@ -2182,6 +2984,7 @@ body {{
     <div class="refresh-note">Auto-refreshing every 10 seconds</div>
 </div>
 <script>
+{_username_helper_js()}
 {_user_badge_js()}
 </script>
 </body>
@@ -2463,7 +3266,7 @@ def generate_dashboard_html(
   <div class="header-content">
     <h1>Jenkins Job Insight</h1>
     <span id="jobs-badge" class="jobs-badge">{total_jobs} job{"s" if total_jobs != 1 else ""}{e(limit_note)}</span>
-    <a href="{e(base_url)}/history" style="color:var(--accent-blue);text-decoration:none;font-size:14px;">History</a>
+    <a class="env-chip" href="{e(base_url)}/history" style="margin-left:auto;text-decoration:none;color:var(--accent-blue);">History</a>
   </div>
 </div>
 """)
@@ -2648,6 +3451,7 @@ def generate_dashboard_html(
     # --- USERNAME DISPLAY (always, regardless of job count) ---
     parts.append(f"""
 <script>
+{_username_helper_js()}
 {_user_badge_js()}
 </script>
 """)
@@ -2726,11 +3530,11 @@ function deleteJob(btn, jobId) {
                 }, 300);
             } else {
                 var errData = await resp.json().catch(function() { return {}; });
-                showConfirmModal('Delete Failed', errData.detail || 'Failed to delete analysis. HTTP ' + resp.status, function() {});
+                showConfirmModal('Delete Failed', errData.detail || 'Failed to delete analysis. HTTP ' + resp.status, function() {}, {confirmLabel: 'OK', confirmOnly: true});
             }
         } catch (err) {
             console.warn('Failed to delete job:', err);
-            showConfirmModal('Delete Failed', 'Failed to delete analysis. Please try again.', function() {});
+            showConfirmModal('Delete Failed', 'Failed to delete analysis. Please try again.', function() {}, {confirmLabel: 'OK', confirmOnly: true});
         }
     });
 }
@@ -3350,6 +4154,7 @@ def generate_history_html(base_url: str = "") -> str:
 }})();
 </script>
 <script>
+{_username_helper_js()}
 {_user_badge_js()}
 </script>
 </body>

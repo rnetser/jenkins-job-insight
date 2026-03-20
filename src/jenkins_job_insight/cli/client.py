@@ -319,3 +319,133 @@ class JJIClient:
     def get_review_status(self, job_id: str) -> dict:
         """Get review summary for a job. GET /results/{job_id}/review-status"""
         return self._request("GET", f"/results/{job_id}/review-status")
+
+    # -- Bug Creation ---------------------------------------------------------
+
+    @staticmethod
+    def _with_child_scope(
+        payload: dict, child_job_name: str = "", child_build_number: int = 0
+    ) -> dict:
+        """Add child_job_name/child_build_number to *payload* when set."""
+        if child_job_name:
+            payload["child_job_name"] = child_job_name
+            payload["child_build_number"] = child_build_number
+        return payload
+
+    def preview_github_issue(
+        self,
+        job_id: str,
+        test_name: str,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+        include_links: bool = False,
+        ai_provider: str = "",
+        ai_model: str = "",
+    ) -> dict:
+        """Preview a GitHub issue. POST /results/{job_id}/preview-github-issue"""
+        body: dict = {"test_name": test_name, "include_links": include_links}
+        if ai_provider:
+            body["ai_provider"] = ai_provider
+        if ai_model:
+            body["ai_model"] = ai_model
+        body = self._with_child_scope(body, child_job_name, child_build_number)
+        return self._request(
+            "POST", f"/results/{job_id}/preview-github-issue", json=body
+        )
+
+    def preview_jira_bug(
+        self,
+        job_id: str,
+        test_name: str,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+        include_links: bool = False,
+        ai_provider: str = "",
+        ai_model: str = "",
+    ) -> dict:
+        """Preview a Jira bug. POST /results/{job_id}/preview-jira-bug"""
+        body: dict = {"test_name": test_name, "include_links": include_links}
+        if ai_provider:
+            body["ai_provider"] = ai_provider
+        if ai_model:
+            body["ai_model"] = ai_model
+        body = self._with_child_scope(body, child_job_name, child_build_number)
+        return self._request("POST", f"/results/{job_id}/preview-jira-bug", json=body)
+
+    def create_github_issue(
+        self,
+        job_id: str,
+        test_name: str,
+        title: str,
+        body: str,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+    ) -> dict:
+        """Create a GitHub issue. POST /results/{job_id}/create-github-issue"""
+        payload = self._with_child_scope(
+            {
+                "test_name": test_name,
+                "title": title,
+                "body": body,
+            },
+            child_job_name,
+            child_build_number,
+        )
+        return self._request(
+            "POST",
+            f"/results/{job_id}/create-github-issue",
+            json=payload,
+            accept_statuses=(201,),
+        )
+
+    def create_jira_bug(
+        self,
+        job_id: str,
+        test_name: str,
+        title: str,
+        body: str,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+    ) -> dict:
+        """Create a Jira bug. POST /results/{job_id}/create-jira-bug"""
+        payload = self._with_child_scope(
+            {
+                "test_name": test_name,
+                "title": title,
+                "body": body,
+            },
+            child_job_name,
+            child_build_number,
+        )
+        return self._request(
+            "POST",
+            f"/results/{job_id}/create-jira-bug",
+            json=payload,
+            accept_statuses=(201,),
+        )
+
+    # -- AI Configs -----------------------------------------------------------
+
+    def get_ai_configs(self) -> list[dict]:
+        """Get distinct AI provider/model pairs from completed analyses. GET /ai-configs"""
+        return self._request("GET", "/ai-configs")
+
+    # -- Classification Override ----------------------------------------------
+
+    def override_classification(
+        self,
+        job_id: str,
+        test_name: str,
+        classification: str,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+    ) -> dict:
+        """Override classification. PUT /results/{job_id}/override-classification"""
+        payload = self._with_child_scope(
+            {"test_name": test_name, "classification": classification},
+            child_job_name,
+            child_build_number,
+        )
+        return self._request(
+            "PUT", f"/results/{job_id}/override-classification", json=payload
+        )

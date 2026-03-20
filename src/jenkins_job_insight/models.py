@@ -402,6 +402,78 @@ class ReviewStatusResponse(BaseModel):
     comment_count: int
 
 
+# NOTE: Preview/create request models intentionally do NOT inherit
+# BaseAnalysisRequest. These are server-level operations that use deployment
+# config (GITHUB_TOKEN, TESTS_REPO_URL, Jira credentials), not per-request
+# analysis overrides. The caller identifies *which* failure to act on, but
+# the credentials and target repos are fixed at the server level.
+class PreviewIssueRequest(_ChildJobFieldsValidator):
+    """Request body for previewing a GitHub issue or Jira bug."""
+
+    test_name: str
+    include_links: bool = False
+    ai_provider: str = Field(
+        default="", description="AI provider for content generation"
+    )
+    ai_model: str = Field(default="", description="AI model for content generation")
+
+
+class CreateIssueRequest(_ChildJobFieldsValidator):
+    """Request body for creating a GitHub issue or Jira bug."""
+
+    test_name: str
+    title: str
+    body: str
+
+    @field_validator("title")
+    @classmethod
+    def title_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("title must not be empty")
+        return v
+
+
+class OverrideClassificationRequest(_ChildJobFieldsValidator):
+    """Request body for overriding a failure's classification."""
+
+    test_name: str
+    classification: Literal["CODE ISSUE", "PRODUCT BUG"]
+
+
+class SimilarIssue(BaseModel):
+    """A similar issue found during duplicate detection."""
+
+    number: int | None = Field(default=None, description="Issue number (GitHub)")
+    key: str = Field(default="", description="Issue key (Jira)")
+    title: str = Field(default="", description="Issue title/summary")
+    url: str = Field(default="", description="URL to the issue")
+    status: str = Field(default="", description="Issue status")
+
+
+class PreviewIssueResponse(BaseModel):
+    """Response from preview-github-issue or preview-jira-bug."""
+
+    title: str = Field(description="Generated issue title")
+    body: str = Field(description="Generated issue body (markdown)")
+    similar_issues: list[SimilarIssue] = Field(
+        default_factory=list,
+        description="Similar existing issues found",
+    )
+
+
+class CreateIssueResponse(BaseModel):
+    """Response from create-github-issue or create-jira-bug."""
+
+    url: str = Field(description="URL to the created issue")
+    key: str = Field(default="", description="Issue key (e.g., PROJ-123 for Jira)")
+    number: int = Field(default=0, description="Issue number (GitHub)")
+    title: str = Field(description="Issue title as created")
+    comment_id: int = Field(
+        default=0,
+        description="ID of the auto-created comment linking to the issue",
+    )
+
+
 class ClassifyTestRequest(BaseModel):
     """Request body for classifying a test (e.g., FLAKY, REGRESSION)."""
 

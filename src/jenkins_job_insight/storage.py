@@ -1679,7 +1679,7 @@ async def get_test_classifications(
             f"tc.reason, tc.references_info, tc.created_by, tc.job_id, tc.child_build_number, tc.created_at "
             f"FROM test_classifications tc "
             f"WHERE {where} "
-            f"ORDER BY tc.created_at DESC",
+            f"ORDER BY tc.created_at DESC, tc.id DESC",
             params,
         )
         rows = await cursor.fetchall()
@@ -1847,3 +1847,236 @@ async def get_html_report(job_id: str) -> str | None:
     if report_path.exists():
         return report_path.read_text(encoding="utf-8")
     return None
+
+
+async def override_classification(
+    job_id: str,
+    test_name: str,
+    classification: str,
+    child_job_name: str = "",
+    child_build_number: int = 0,
+    username: str = "",
+    parent_job_name: str = "",
+) -> None:
+    """Override the classification of a failure in failure_history.
+
+    Updates ALL failure_history rows sharing the same error_signature
+    (within the same job) so that grouped failures stay in sync.
+    Also inserts a test_classifications entry so the AI can learn from
+    human overrides.
+
+    Args:
+        job_id: The analysis job ID.
+        test_name: Fully qualified test name (representative test from the group).
+        classification: New classification ("CODE ISSUE" or "PRODUCT BUG").
+        child_job_name: Child job name (for pipeline analyses).
+        child_build_number: Child build number.
+        username: User who made the override.
+        parent_job_name: Parent pipeline job name (for test_classifications).
+    """
+    logger.debug(
+        f"override_classification: job_id={job_id}, test_name={test_name}, "
+        f"classification={classification}, username={username}"
+    )
+    _validate_child_identifier_pairing(child_job_name, child_build_number)
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Look up the error_signature for this test so we can update
+        # ALL tests in the same group (same signature, same job).
+        # Scope by child context when provided so that identically-named
+        # tests in different child jobs resolve the correct signature.
+        sig_query = (
+            "SELECT error_signature FROM failure_history "
+            "WHERE job_id = ? AND test_name = ?"
+        )
+        sig_params: list = [job_id, test_name]
+        if child_job_name:
+            sig_query += " AND child_job_name = ? AND child_build_number = ?"
+            sig_params.extend([child_job_name, child_build_number])
+        sig_query += " LIMIT 1"
+
+        cursor = await db.execute(sig_query, sig_params)
+        row = await cursor.fetchone()
+        error_signature = row[0] if row and row[0] else ""
+
+        if error_signature:
+            # Update ALL tests sharing the same error_signature in this job
+            if child_job_name:
+                await db.execute(
+                    """UPDATE failure_history
+                       SET classification = ?
+                       WHERE job_id = ? AND error_signature = ?
+                       AND child_job_name = ? AND child_build_number = ?""",
+                    (
+                        classification,
+                        job_id,
+                        error_signature,
+                        child_job_name,
+                        child_build_number,
+                    ),
+                )
+            else:
+                await db.execute(
+                    """UPDATE failure_history
+                       SET classification = ?
+                       WHERE job_id = ? AND error_signature = ?
+                       AND child_job_name = '' AND child_build_number = 0""",
+                    (classification, job_id, error_signature),
+                )
+        else:
+            # No signature -- fall back to exact test_name match
+            if child_job_name:
+                await db.execute(
+                    """UPDATE failure_history
+                       SET classification = ?
+                       WHERE job_id = ? AND test_name = ?
+                       AND child_job_name = ? AND child_build_number = ?""",
+                    (
+                        classification,
+                        job_id,
+                        test_name,
+                        child_job_name,
+                        child_build_number,
+                    ),
+                )
+            else:
+                await db.execute(
+                    """UPDATE failure_history
+                       SET classification = ?
+                       WHERE job_id = ? AND test_name = ?
+                       AND child_job_name = '' AND child_build_number = 0""",
+                    (classification, job_id, test_name),
+                )
+
+        # Find all test_names in this signature group
+        if error_signature:
+            if child_job_name:
+                group_cursor = await db.execute(
+                    "SELECT DISTINCT test_name FROM failure_history "
+                    "WHERE job_id = ? AND error_signature = ? "
+                    "AND child_job_name = ? AND child_build_number = ?",
+                    (job_id, error_signature, child_job_name, child_build_number),
+                )
+            else:
+                group_cursor = await db.execute(
+                    "SELECT DISTINCT test_name FROM failure_history "
+                    "WHERE job_id = ? AND error_signature = ? "
+                    "AND child_job_name = '' AND child_build_number = 0",
+                    (job_id, error_signature),
+                )
+            group_tests = [row[0] for row in await group_cursor.fetchall()]
+        else:
+            group_tests = [test_name]
+
+        # Persist override for ALL tests in the group
+        for t in group_tests:
+            await db.execute(
+                "INSERT INTO test_classifications "
+                "(test_name, job_name, parent_job_name, job_id, classification, "
+                "reason, created_by, visible, child_build_number) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
+                (
+                    t,
+                    child_job_name,
+                    parent_job_name,
+                    job_id,
+                    classification,
+                    "User override",
+                    username,
+                    child_build_number,
+                ),
+            )
+
+        await db.commit()
+    logger.info(
+        f"Classification overridden: job_id={job_id}, test_name={test_name}, "
+        f"classification={classification}, by={username or 'unknown'}"
+    )
+
+
+async def get_effective_classification(
+    job_id: str,
+    test_name: str,
+    child_job_name: str = "",
+    child_build_number: int = 0,
+) -> str:
+    """Return the primary classification override for a failure.
+
+    Only considers the primary override domain: ``CODE ISSUE`` and
+    ``PRODUCT BUG``.  History-system classifications (``FLAKY``,
+    ``REGRESSION``, ``KNOWN_BUG``, etc.) stored in
+    ``test_classifications`` are intentionally ignored.
+
+    Checks ``test_classifications`` first for a visible user override
+    (latest by ``id``, limited to ``CODE ISSUE`` / ``PRODUCT BUG``).
+    If no matching override exists, falls back to the
+    ``failure_history`` row.  This two-step lookup ensures overrides
+    survive even when ``failure_history`` rows are missing or rebuilt
+    from ``result_json``.
+
+    Returns:
+        The classification string (``"CODE ISSUE"`` or
+        ``"PRODUCT BUG"``), or ``""`` if no row exists in either table.
+    """
+    _child_job_name = child_job_name or ""
+    _child_build_number = child_build_number or 0
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # 1. Prefer visible override from test_classifications
+        override_row = await (
+            await db.execute(
+                "SELECT classification FROM test_classifications"
+                " WHERE test_name = ? AND job_id = ? AND job_name = ?"
+                " AND child_build_number = ? AND visible = 1"
+                " AND classification IN ('CODE ISSUE', 'PRODUCT BUG')"
+                " ORDER BY id DESC LIMIT 1",
+                [test_name, job_id, _child_job_name, _child_build_number],
+            )
+        ).fetchone()
+        if override_row and override_row[0]:
+            return override_row[0]
+
+        # 2. Fall back to failure_history (same domain filter so that
+        #    mirrored history-system labels like FLAKY don't leak through)
+        fh_query = (
+            "SELECT classification FROM failure_history"
+            " WHERE job_id = ? AND test_name = ?"
+            " AND classification IN ('CODE ISSUE', 'PRODUCT BUG')"
+        )
+        fh_params: list = [job_id, test_name]
+        if child_job_name:
+            fh_query += " AND child_job_name = ? AND child_build_number = ?"
+            fh_params.extend([child_job_name, child_build_number])
+        else:
+            fh_query += " AND child_job_name = '' AND child_build_number = 0"
+        fh_query += " LIMIT 1"
+
+        fh_row = await (await db.execute(fh_query, fh_params)).fetchone()
+        return fh_row[0] if fh_row and fh_row[0] else ""
+
+
+async def get_ai_configs() -> list[dict]:
+    """Get distinct AI provider/model pairs from completed analysis results.
+
+    Queries the results table for unique (ai_provider, ai_model) combinations
+    from successfully completed analyses. These represent known-working configs.
+
+    Returns:
+        List of dicts with 'ai_provider' and 'ai_model' keys.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            SELECT DISTINCT
+                json_extract(result_json, '$.ai_provider') as ai_provider,
+                json_extract(result_json, '$.ai_model') as ai_model
+            FROM results
+            WHERE status = 'completed'
+              AND json_extract(result_json, '$.ai_provider') IS NOT NULL
+              AND json_extract(result_json, '$.ai_provider') != ''
+              AND json_extract(result_json, '$.ai_model') IS NOT NULL
+              AND json_extract(result_json, '$.ai_model') != ''
+            ORDER BY ai_provider, ai_model
+            """
+        )
+        rows = await cursor.fetchall()
+        return [{"ai_provider": row[0], "ai_model": row[1]} for row in rows]

@@ -1807,6 +1807,651 @@ class TestChildScopeValidation:
         assert response.status_code == 422
 
 
+class TestPreviewGithubIssue:
+    """Tests for POST /results/{job_id}/preview-github-issue."""
+
+    @pytest.mark.asyncio
+    async def test_preview_returns_title_and_body(self, test_client):
+        """POST /results/{job_id}/preview-github-issue returns generated content."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_login_success",
+                    "error": "AssertionError: Expected 200, got 500",
+                    "analysis": {
+                        "classification": "CODE ISSUE",
+                        "details": "Login handler missing catch",
+                    },
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-preview-gh", "http://jenkins", "completed", result_data
+        )
+        with patch(
+            "jenkins_job_insight.main.generate_github_issue_content"
+        ) as mock_gen:
+            mock_gen.return_value = {
+                "title": "Fix: login handler missing catch",
+                "body": "## Test Failure\n\nDetails...",
+            }
+            with patch("jenkins_job_insight.main.search_github_duplicates") as mock_dup:
+                mock_dup.return_value = []
+                response = test_client.post(
+                    "/results/job-preview-gh/preview-github-issue",
+                    json={"test_name": "test_login_success"},
+                )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["title"] == "Fix: login handler missing catch"
+        assert "body" in data
+        assert "similar_issues" in data
+
+    @pytest.mark.asyncio
+    async def test_preview_not_found(self, test_client):
+        response = test_client.post(
+            "/results/nonexistent/preview-github-issue",
+            json={"test_name": "tests.TestA.test_one"},
+        )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_preview_invalid_test(self, test_client):
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_login_success",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-preview-gh-2", "http://jenkins", "completed", result_data
+        )
+        response = test_client.post(
+            "/results/job-preview-gh-2/preview-github-issue",
+            json={"test_name": "nonexistent_test"},
+        )
+        assert response.status_code == 400
+
+
+class TestPreviewJiraBug:
+    """Tests for POST /results/{job_id}/preview-jira-bug."""
+
+    @pytest.mark.asyncio
+    async def test_preview_returns_title_and_body(self, test_client):
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_login_success",
+                    "error": "TimeoutError",
+                    "analysis": {
+                        "classification": "PRODUCT BUG",
+                        "details": "DNS timeout",
+                    },
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-preview-jira", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.generate_jira_bug_content") as mock_gen:
+            mock_gen.return_value = {
+                "title": "DNS timeout on internal resolver",
+                "body": "h2. Summary\n\nDNS resolution fails",
+            }
+            with patch("jenkins_job_insight.main.search_jira_duplicates") as mock_dup:
+                mock_dup.return_value = []
+                response = test_client.post(
+                    "/results/job-preview-jira/preview-jira-bug",
+                    json={"test_name": "test_login_success"},
+                )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["title"]
+        assert data["body"]
+
+
+class TestCreateGithubIssue:
+    """Tests for POST /results/{job_id}/create-github-issue."""
+
+    @pytest.mark.asyncio
+    async def test_creates_issue_and_adds_comment(self, test_client):
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_login_success",
+                    "error": "err",
+                    "error_signature": "sig123",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-create-gh", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.create_github_issue") as mock_create:
+            mock_create.return_value = {
+                "url": "https://github.com/org/repo/issues/99",
+                "number": 99,
+            }
+            with patch.dict(
+                os.environ,
+                {
+                    "TESTS_REPO_URL": "https://github.com/org/repo",
+                    "GITHUB_TOKEN": "ghp_test",
+                },
+            ):
+                from jenkins_job_insight.config import get_settings
+
+                get_settings.cache_clear()
+                response = test_client.post(
+                    "/results/job-create-gh/create-github-issue",
+                    json={
+                        "test_name": "test_login_success",
+                        "title": "Bug: login fails",
+                        "body": "## Details\nLogin returns 500",
+                    },
+                )
+                get_settings.cache_clear()
+        assert response.status_code == 201
+        data = response.json()
+        assert "https://github.com" in data["url"]
+        assert data["comment_id"] > 0
+
+    @pytest.mark.asyncio
+    async def test_create_missing_config_returns_400(self, test_client):
+        """Creating a GitHub issue without TESTS_REPO_URL/GITHUB_TOKEN returns 400."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-create-gh-noconfig", "http://jenkins", "completed", result_data
+        )
+        response = test_client.post(
+            "/results/job-create-gh-noconfig/create-github-issue",
+            json={
+                "test_name": "test_foo",
+                "title": "Bug",
+                "body": "Details",
+            },
+        )
+        assert response.status_code == 400
+        assert "TESTS_REPO_URL" in response.json()["detail"]
+
+
+class TestCreateJiraBug:
+    """Tests for POST /results/{job_id}/create-jira-bug."""
+
+    @pytest.mark.asyncio
+    async def test_creates_bug_and_adds_comment(self, test_client):
+        from unittest.mock import PropertyMock
+        from jenkins_job_insight.config import Settings
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_login_success",
+                    "error": "err",
+                    "error_signature": "sig456",
+                    "analysis": {"classification": "PRODUCT BUG"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-create-jira", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.create_jira_bug") as mock_create:
+            mock_create.return_value = {
+                "key": "PROJ-456",
+                "url": "https://jira.example.com/browse/PROJ-456",
+            }
+            # Mock settings to have jira_enabled=True
+            with patch.object(
+                Settings, "jira_enabled", new_callable=PropertyMock, return_value=True
+            ):
+                response = test_client.post(
+                    "/results/job-create-jira/create-jira-bug",
+                    json={
+                        "test_name": "test_login_success",
+                        "title": "DNS timeout",
+                        "body": "DNS resolution fails",
+                    },
+                )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["key"] == "PROJ-456"
+        assert data["comment_id"] > 0
+
+    @pytest.mark.asyncio
+    async def test_create_jira_not_configured_returns_400(self, test_client):
+        """Creating a Jira bug without Jira configured returns 400."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "PRODUCT BUG"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-create-jira-noconfig", "http://jenkins", "completed", result_data
+        )
+        response = test_client.post(
+            "/results/job-create-jira-noconfig/create-jira-bug",
+            json={
+                "test_name": "test_foo",
+                "title": "Bug",
+                "body": "Details",
+            },
+        )
+        assert response.status_code == 400
+
+
+class TestOverrideClassification:
+    """Tests for PUT /results/{job_id}/override-classification."""
+
+    @pytest.mark.asyncio
+    async def test_overrides_classification(self, test_client):
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_login_success",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-override-1", "http://jenkins", "completed", result_data
+        )
+        with patch(
+            "jenkins_job_insight.storage.override_classification"
+        ) as mock_override:
+            response = test_client.put(
+                "/results/job-override-1/override-classification",
+                json={
+                    "test_name": "test_login_success",
+                    "classification": "PRODUCT BUG",
+                },
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert data["classification"] == "PRODUCT BUG"
+        mock_override.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_override_invalid_test(self, test_client):
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_login_success",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-override-2", "http://jenkins", "completed", result_data
+        )
+        response = test_client.put(
+            "/results/job-override-2/override-classification",
+            json={
+                "test_name": "nonexistent_test",
+                "classification": "CODE ISSUE",
+            },
+        )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_override_nonexistent_job(self, test_client):
+        response = test_client.put(
+            "/results/nonexistent-job/override-classification",
+            json={
+                "test_name": "test_foo",
+                "classification": "PRODUCT BUG",
+            },
+        )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_override_invalid_classification(self, test_client):
+        """Invalid classification values should be rejected by Pydantic validation."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-override-3", "http://jenkins", "completed", result_data
+        )
+        response = test_client.put(
+            "/results/job-override-3/override-classification",
+            json={
+                "test_name": "test_foo",
+                "classification": "UNKNOWN",
+            },
+        )
+        assert response.status_code == 422
+
+
+class TestBugCreationIntegration:
+    """Integration tests for the full bug creation flow."""
+
+    @pytest.mark.asyncio
+    async def test_full_flow_github(self, test_client):
+        """Test full flow: preview -> create -> verify comment."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_login_success",
+                    "error": "err",
+                    "error_signature": "sig789",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-integ-gh", "http://jenkins", "completed", result_data
+        )
+        with (
+            patch("jenkins_job_insight.main.generate_github_issue_content") as mock_gen,
+            patch("jenkins_job_insight.main.search_github_duplicates") as mock_dup,
+            patch("jenkins_job_insight.main.create_github_issue") as mock_create,
+        ):
+            mock_gen.return_value = {"title": "Bug title", "body": "Bug body"}
+            mock_dup.return_value = []
+            mock_create.return_value = {
+                "url": "https://github.com/org/repo/issues/1",
+                "number": 1,
+            }
+
+            # Preview
+            preview_resp = test_client.post(
+                "/results/job-integ-gh/preview-github-issue",
+                json={"test_name": "test_login_success"},
+            )
+            assert preview_resp.status_code == 200
+
+            # Create (need settings with TESTS_REPO_URL and GITHUB_TOKEN)
+            with patch.dict(
+                os.environ,
+                {
+                    "TESTS_REPO_URL": "https://github.com/org/repo",
+                    "GITHUB_TOKEN": "ghp_test",
+                },
+            ):
+                from jenkins_job_insight.config import get_settings
+
+                get_settings.cache_clear()
+                create_resp = test_client.post(
+                    "/results/job-integ-gh/create-github-issue",
+                    json={
+                        "test_name": "test_login_success",
+                        "title": "Bug title",
+                        "body": "Bug body",
+                    },
+                )
+                get_settings.cache_clear()
+            assert create_resp.status_code == 201
+            data = create_resp.json()
+            assert data["comment_id"] > 0
+
+            # Verify comment was added
+            comments_resp = test_client.get("/results/job-integ-gh/comments")
+            assert comments_resp.status_code == 200
+            comments = comments_resp.json()["comments"]
+            assert any("github.com" in c["comment"] for c in comments)
+
+    @pytest.mark.asyncio
+    async def test_override_then_verify(self, test_client):
+        """Test: override classification persists and is visible on GET."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_login_success",
+                    "error": "err",
+                    "analysis": {"classification": "PRODUCT BUG"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-integ-override", "http://jenkins", "completed", result_data
+        )
+        resp = test_client.put(
+            "/results/job-integ-override/override-classification",
+            json={
+                "test_name": "test_login_success",
+                "classification": "CODE ISSUE",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["classification"] == "CODE ISSUE"
+
+        # Verify the override persisted by fetching the result
+        get_resp = test_client.get("/results/job-integ-override")
+        assert get_resp.status_code == 200
+
+
+class TestCreateGithubIssueApiErrors:
+    """Finding 4: create-github-issue should catch external API errors and return 502."""
+
+    @pytest.mark.asyncio
+    async def test_github_api_http_error_returns_502(self, test_client):
+        """HTTPStatusError from GitHub API should surface as 502."""
+        import httpx
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-gh-err", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.create_github_issue") as mock_create:
+            mock_create.side_effect = httpx.HTTPStatusError(
+                "Forbidden",
+                request=httpx.Request("POST", "https://api.github.com"),
+                response=httpx.Response(403),
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "TESTS_REPO_URL": "https://github.com/org/repo",
+                    "GITHUB_TOKEN": "ghp_test",
+                },
+            ):
+                from jenkins_job_insight.config import get_settings
+
+                get_settings.cache_clear()
+                response = test_client.post(
+                    "/results/job-gh-err/create-github-issue",
+                    json={
+                        "test_name": "test_foo",
+                        "title": "Bug",
+                        "body": "Details",
+                    },
+                )
+                get_settings.cache_clear()
+        assert response.status_code == 502
+        assert "GitHub API error" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_github_api_request_error_returns_502(self, test_client):
+        """RequestError (network unreachable) from GitHub should surface as 502."""
+        import httpx
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-gh-net-err", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.create_github_issue") as mock_create:
+            mock_create.side_effect = httpx.RequestError(
+                "Connection refused",
+                request=httpx.Request("POST", "https://api.github.com"),
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "TESTS_REPO_URL": "https://github.com/org/repo",
+                    "GITHUB_TOKEN": "ghp_test",
+                },
+            ):
+                from jenkins_job_insight.config import get_settings
+
+                get_settings.cache_clear()
+                response = test_client.post(
+                    "/results/job-gh-net-err/create-github-issue",
+                    json={
+                        "test_name": "test_foo",
+                        "title": "Bug",
+                        "body": "Details",
+                    },
+                )
+                get_settings.cache_clear()
+        assert response.status_code == 502
+        assert "GitHub API unreachable" in response.json()["detail"]
+
+
+class TestCreateJiraBugApiErrors:
+    """Finding 4: create-jira-bug should catch external API errors and return 502."""
+
+    @pytest.mark.asyncio
+    async def test_jira_api_http_error_returns_502(self, test_client):
+        """HTTPStatusError from Jira API should surface as 502."""
+        import httpx
+        from unittest.mock import PropertyMock
+        from jenkins_job_insight.config import Settings
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "PRODUCT BUG"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-jira-err", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.create_jira_bug") as mock_create:
+            mock_create.side_effect = httpx.HTTPStatusError(
+                "Forbidden",
+                request=httpx.Request("POST", "https://jira.example.com"),
+                response=httpx.Response(403),
+            )
+            with patch.object(
+                Settings, "jira_enabled", new_callable=PropertyMock, return_value=True
+            ):
+                response = test_client.post(
+                    "/results/job-jira-err/create-jira-bug",
+                    json={
+                        "test_name": "test_foo",
+                        "title": "Bug",
+                        "body": "Details",
+                    },
+                )
+        assert response.status_code == 502
+        assert "Jira API error" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_jira_api_request_error_returns_502(self, test_client):
+        """RequestError (network unreachable) from Jira should surface as 502."""
+        import httpx
+        from unittest.mock import PropertyMock
+        from jenkins_job_insight.config import Settings
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "PRODUCT BUG"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-jira-net-err", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.create_jira_bug") as mock_create:
+            mock_create.side_effect = httpx.RequestError(
+                "Connection refused",
+                request=httpx.Request("POST", "https://jira.example.com"),
+            )
+            with patch.object(
+                Settings, "jira_enabled", new_callable=PropertyMock, return_value=True
+            ):
+                response = test_client.post(
+                    "/results/job-jira-net-err/create-jira-bug",
+                    json={
+                        "test_name": "test_foo",
+                        "title": "Bug",
+                        "body": "Details",
+                    },
+                )
+        assert response.status_code == 502
+        assert "Jira API unreachable" in response.json()["detail"]
+
+
 class TestHistoryEndpoints:
     """Tests for the /history/* endpoints."""
 

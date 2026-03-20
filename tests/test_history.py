@@ -290,20 +290,49 @@ class TestBackfillFailureHistory:
                 count = (await cursor.fetchone())[0]
                 assert count == 1
 
-    async def test_backfill_skips_when_table_not_empty(self, setup_test_db):
-        """Backfill should not run when failure_history already has data."""
+    async def test_backfill_processes_missing_results_when_table_not_empty(
+        self, setup_test_db
+    ):
+        """Backfill should still process missing results even when failure_history has data."""
         import aiosqlite
 
         with patch.object(storage, "DB_PATH", setup_test_db):
-            # Insert existing failure_history row
+            # Insert existing failure_history row (table is non-empty)
             async with aiosqlite.connect(setup_test_db) as db:
                 await db.execute(
                     "INSERT INTO failure_history (job_id, job_name, build_number, test_name) VALUES (?, ?, ?, ?)",
                     ("existing-1", "some-job", 1, "test_existing"),
                 )
+                # Insert a completed result whose job_id is already in failure_history
+                await db.execute(
+                    "INSERT INTO results (job_id, jenkins_url, status, result_json) VALUES (?, ?, ?, ?)",
+                    (
+                        "existing-1",
+                        "https://jenkins.example.com/job/test/100/",
+                        "completed",
+                        json.dumps(
+                            {
+                                "job_name": "some-job",
+                                "build_number": 1,
+                                "failures": [
+                                    {
+                                        "test_name": "test_existing",
+                                        "error": "e",
+                                        "error_signature": "s",
+                                        "analysis": {
+                                            "classification": "CODE ISSUE",
+                                            "details": "d",
+                                        },
+                                    }
+                                ],
+                                "child_job_analyses": [],
+                            }
+                        ),
+                    ),
+                )
                 await db.commit()
 
-            # Insert a completed result
+            # Insert a NEW completed result not yet in failure_history
             result_data = {
                 "job_name": "ocp-4.16-e2e",
                 "build_number": 200,
@@ -334,14 +363,24 @@ class TestBackfillFailureHistory:
 
             await storage.backfill_failure_history()
 
-            # Should NOT have backfilled since table was not empty
+            # The missing result (backfill-2) SHOULD have been backfilled
+            # even though the table already had data — the backfill is resumable
             async with aiosqlite.connect(setup_test_db) as db:
                 cursor = await db.execute(
                     "SELECT COUNT(*) FROM failure_history WHERE job_id = ?",
                     ("backfill-2",),
                 )
                 count = (await cursor.fetchone())[0]
-                assert count == 0
+                assert count == 1
+
+            # The already-present result (existing-1) should NOT be duplicated
+            async with aiosqlite.connect(setup_test_db) as db:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM failure_history WHERE job_id = ?",
+                    ("existing-1",),
+                )
+                count = (await cursor.fetchone())[0]
+                assert count == 1
 
     async def test_backfill_skips_non_completed_results(self, setup_test_db):
         """Backfill should only process completed results."""
