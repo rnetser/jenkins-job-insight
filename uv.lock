@@ -274,7 +274,7 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dev = [
+tests = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -288,15 +288,15 @@ requires-dist = [
     { name = "gitpython" },
     { name = "httpx" },
     { name = "pydantic-settings" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'" },
+    { name = "pytest", marker = "extra == 'tests'" },
+    { name = "pytest-asyncio", marker = "extra == 'tests'" },
     { name = "python-jenkins" },
     { name = "python-multipart" },
     { name = "python-simple-logger" },
     { name = "typer", specifier = ">=0.9.0" },
     { name = "uvicorn" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["tests"]
 
 [[package]]
 name = "markdown-it-py"

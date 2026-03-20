@@ -15,6 +15,18 @@ fi
 # shell variables) gets the correct bind port at runtime.
 export PORT="${PORT:-8000}"
 
+# Dev mode: start Vite dev server in background for frontend HMR
+if [ "${DEV_MODE:-}" = "true" ] && [ -f /app/frontend/package.json ]; then
+    echo "[DEV] Frontend source detected, starting Vite dev server..."
+    cd /app/frontend
+    if [ ! -d node_modules ]; then
+        echo "[DEV] Installing frontend dependencies..."
+        npm install --no-audit --no-fund 2>&1 | tail -1
+    fi
+    npm run dev -- --host 0.0.0.0 --port 5173 &
+    cd /app
+fi
+
 # Check if any argument contains "uvicorn" to detect all uvicorn invocations
 has_uvicorn=false
 has_port=false
@@ -25,8 +37,17 @@ for arg in "$@"; do
     esac
 done
 
+# Build final arguments
+extra_args=""
 if [ "$has_uvicorn" = true ] && [ "$has_port" = false ]; then
-    exec "$@" --port "$PORT"
+    extra_args="$extra_args --port $PORT"
+fi
+if [ "$has_uvicorn" = true ] && [ "${DEV_MODE:-}" = "true" ]; then
+    extra_args="$extra_args --reload --reload-dir /app/src"
+fi
+
+if [ -n "$extra_args" ]; then
+    exec "$@" $extra_args
 else
     exec "$@"
 fi

@@ -11,7 +11,6 @@ from simple_logger.logger import get_logger
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 DB_PATH = Path(os.getenv("DB_PATH", "/data/results.db"))
-REPORTS_DIR = DB_PATH.parent / "reports"
 
 
 async def init_db() -> None:
@@ -1511,23 +1510,6 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
         return results
 
 
-async def save_html_report(job_id: str, html_content: str) -> Path:
-    """Save an HTML report to disk.
-
-    Args:
-        job_id: Unique identifier for the analysis job.
-        html_content: The HTML report content.
-
-    Returns:
-        Path to the saved HTML file.
-    """
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    report_path = REPORTS_DIR / f"{job_id}.html"
-    report_path.write_text(html_content, encoding="utf-8")
-    logger.debug(f"Saved HTML report for job_id: {job_id} at {report_path}")
-    return report_path
-
-
 async def get_parent_job_name_for_test(test_name: str, job_id: str = "") -> str:
     """Look up the parent pipeline job name for a test from failure_history.
 
@@ -1594,7 +1576,6 @@ async def set_test_classification(
         raise ValueError(f"visible must be 0 or 1, got {visible}")
     if not job_id or not job_id.strip():
         raise ValueError("job_id is required for test classification")
-    _validate_child_identifier_pairing(job_name, child_build_number)
     logger.debug(
         f"set_test_classification: test_name={test_name}, classification={classification}, "
         f"parent_job_name={parent_job_name}, job_id={job_id}, visible={visible}"
@@ -1820,33 +1801,7 @@ async def delete_job(job_id: str) -> bool:
         job_existed = cursor.rowcount > 0
         await db.commit()
 
-        # Delete cached HTML report (best-effort — a race with another
-        # remover or a transient OS error should not turn a successful
-        # DB delete into a 500).
-        try:
-            report_path = REPORTS_DIR / f"{job_id}.html"
-            report_path.unlink(missing_ok=True)
-        except OSError:
-            logger.debug(
-                f"delete_job: failed to remove cached report for job_id={job_id}"
-            )
-
         return job_existed
-
-
-async def get_html_report(job_id: str) -> str | None:
-    """Read an HTML report from disk.
-
-    Args:
-        job_id: Unique identifier for the analysis job.
-
-    Returns:
-        HTML content as string, or None if not found.
-    """
-    report_path = REPORTS_DIR / f"{job_id}.html"
-    if report_path.exists():
-        return report_path.read_text(encoding="utf-8")
-    return None
 
 
 async def override_classification(

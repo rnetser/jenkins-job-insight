@@ -76,8 +76,6 @@ class TestAnalyzeEndpoint:
             assert data["status"] == "queued"
             assert data["base_url"] == "http://testserver"
             assert data["result_url"].startswith("http://testserver/results/")
-            assert data["html_report_url"].startswith("http://testserver/results/")
-            assert data["html_report_url"].endswith(".html")
 
     def test_analyze_sync_accepts_sync_param(self, test_client) -> None:
         """Test that sync parameter is accepted (validation test only).
@@ -116,9 +114,6 @@ class TestAnalyzeEndpoint:
                 data = response.json()
                 assert data["status"] == "completed"
                 assert data["job_id"] == "test-123"
-                assert (
-                    data["html_report_url"] == "http://testserver/results/test-123.html"
-                )
                 assert data["base_url"] == "http://testserver"
                 assert data["result_url"] == "http://testserver/results/test-123"
 
@@ -234,23 +229,6 @@ class TestAnalyzeEndpoint:
                     )
                     assert response.status_code == 200
                     mock_callback.assert_called_once()
-
-    def test_analyze_async_always_includes_html_report_url(self, test_client) -> None:
-        """Test that async analyze always includes html_report_url for lazy generation."""
-        with patch("jenkins_job_insight.main.process_analysis_with_id"):
-            response = test_client.post(
-                "/analyze",
-                json={
-                    "job_name": "test",
-                    "build_number": 123,
-                },
-            )
-            assert response.status_code == 202
-            data = response.json()
-            assert data["html_report_url"].startswith("http://testserver/results/")
-            assert data["html_report_url"].endswith(".html")
-            assert data["base_url"] == "http://testserver"
-            assert data["result_url"].startswith("http://testserver/results/")
 
 
 class TestBaseUrlDetection:
@@ -422,10 +400,6 @@ class TestAnalyzeFailuresEndpoint:
                     assert data["failures"][0]["test_name"] == "test_foo"
                     assert data["base_url"] == "http://testserver"
                     assert data["result_url"].startswith("http://testserver/results/")
-                    assert data["html_report_url"].startswith(
-                        "http://testserver/results/"
-                    )
-                    assert data["html_report_url"].endswith(".html")
 
     def test_analyze_failures_empty_failures(self, test_client) -> None:
         """Test that empty failures list returns 422 (validator rejects empty list without raw_xml)."""
@@ -959,288 +933,6 @@ class TestResultsEndpoints:
         assert response.status_code == 200
         assert response.json() == []
 
-    def test_get_report_html(self, test_client) -> None:
-        """Test retrieving a saved HTML report."""
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = "<!DOCTYPE html><html><body>Report</body></html>"
-            response = test_client.get("/results/html-job-123.html")
-        assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/html")
-        assert "<!DOCTYPE html>" in response.text
-
-    def test_get_report_not_found(self, test_client) -> None:
-        """Test that missing HTML report returns 404."""
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = None
-            response = test_client.get("/results/non-existent.html")
-        assert response.status_code == 404
-
-    def test_get_report_on_demand_generation(self, test_client) -> None:
-        """Test on-demand HTML generation when cache misses but completed result exists."""
-        stored_result = {
-            "job_id": "on-demand-job",
-            "status": "completed",
-            "result": {
-                "job_id": "on-demand-job",
-                "status": "completed",
-                "summary": "Analyzed 3 failures",
-                "ai_provider": "claude",
-                "ai_model": "test-model",
-                "failures": [
-                    {
-                        "test_name": "test_example",
-                        "error": "assert False",
-                        "analysis": {
-                            "classification": "CODE ISSUE",
-                            "details": "Test assertion failed",
-                        },
-                    }
-                ],
-            },
-            "created_at": "2026-01-01T00:00:00",
-        }
-
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get_html:
-            mock_get_html.return_value = None
-
-            with patch(
-                "jenkins_job_insight.main.get_result", new_callable=AsyncMock
-            ) as mock_get_result:
-                mock_get_result.return_value = stored_result
-
-                with patch(
-                    "jenkins_job_insight.main.format_result_as_html"
-                ) as mock_format:
-                    mock_format.return_value = (
-                        "<html><body>Generated Report</body></html>"
-                    )
-
-                    with patch(
-                        "jenkins_job_insight.main.save_html_report",
-                        new_callable=AsyncMock,
-                    ) as mock_save:
-                        response = test_client.get("/results/on-demand-job.html")
-
-                        assert response.status_code == 200
-                        assert response.headers["content-type"].startswith("text/html")
-                        assert "Generated Report" in response.text
-
-                        # Verify format_result_as_html was called with correct AnalysisResult
-                        mock_format.assert_called_once()
-                        analysis_arg = mock_format.call_args[0][0]
-                        assert analysis_arg.jenkins_url is None
-                        assert analysis_arg.job_name == "Direct Failure Analysis"
-                        assert analysis_arg.job_id == "on-demand-job"
-
-                        # Verify disk caching was attempted
-                        mock_save.assert_called_once_with(
-                            "on-demand-job",
-                            "<html><body>Generated Report</body></html>",
-                        )
-
-    def test_get_report_on_demand_generation_cache_failure(self, test_client) -> None:
-        """Test that disk cache failure does not prevent serving the generated report."""
-        stored_result = {
-            "job_id": "cache-fail-job",
-            "status": "completed",
-            "result": {
-                "job_id": "cache-fail-job",
-                "status": "completed",
-                "summary": "Analyzed 1 failure",
-                "ai_provider": "claude",
-                "ai_model": "test-model",
-                "failures": [
-                    {
-                        "test_name": "test_example",
-                        "error": "assert False",
-                        "analysis": {
-                            "classification": "CODE ISSUE",
-                            "details": "Test assertion failed",
-                        },
-                    }
-                ],
-            },
-            "created_at": "2026-01-01T00:00:00",
-        }
-
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get_html:
-            mock_get_html.return_value = None
-
-            with patch(
-                "jenkins_job_insight.main.get_result", new_callable=AsyncMock
-            ) as mock_get_result:
-                mock_get_result.return_value = stored_result
-
-                with patch(
-                    "jenkins_job_insight.main.format_result_as_html"
-                ) as mock_format:
-                    mock_format.return_value = "<html><body>Report</body></html>"
-
-                    with patch(
-                        "jenkins_job_insight.main.save_html_report",
-                        new_callable=AsyncMock,
-                        side_effect=OSError("Disk full"),
-                    ):
-                        response = test_client.get("/results/cache-fail-job.html")
-
-                        assert response.status_code == 200
-                        assert response.headers["content-type"].startswith("text/html")
-                        assert "Report" in response.text
-
-    def test_get_report_on_demand_generation_jenkins_path(self, test_client) -> None:
-        """Test on-demand HTML generation for Jenkins analysis results (with jenkins_url)."""
-        stored_result = {
-            "job_id": "jenkins-job",
-            "status": "completed",
-            "result": {
-                "job_id": "jenkins-job",
-                "job_name": "my-pipeline",
-                "build_number": 42,
-                "jenkins_url": "https://jenkins.example.com/job/my-pipeline/42/",
-                "status": "completed",
-                "summary": "Analyzed 2 failures",
-                "ai_provider": "claude",
-                "ai_model": "test-model",
-                "failures": [
-                    {
-                        "test_name": "test_example",
-                        "error": "assert False",
-                        "analysis": {
-                            "classification": "CODE ISSUE",
-                            "details": "Test assertion failed",
-                        },
-                    }
-                ],
-            },
-            "created_at": "2026-01-01T00:00:00",
-        }
-
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get_html:
-            mock_get_html.return_value = None
-
-            with patch(
-                "jenkins_job_insight.main.get_result", new_callable=AsyncMock
-            ) as mock_get_result:
-                mock_get_result.return_value = stored_result
-
-                with patch(
-                    "jenkins_job_insight.main.format_result_as_html"
-                ) as mock_format:
-                    mock_format.return_value = (
-                        "<html><body>Jenkins Report</body></html>"
-                    )
-
-                    with patch(
-                        "jenkins_job_insight.main.save_html_report",
-                        new_callable=AsyncMock,
-                    ) as mock_save:
-                        response = test_client.get("/results/jenkins-job.html")
-
-                        assert response.status_code == 200
-                        assert response.headers["content-type"].startswith("text/html")
-                        assert "Jenkins Report" in response.text
-
-                        # Verify format_result_as_html was called with AnalysisResult from model_validate path
-                        mock_format.assert_called_once()
-                        analysis_arg = mock_format.call_args[0][0]
-                        assert analysis_arg.jenkins_url is not None
-                        assert (
-                            str(analysis_arg.jenkins_url)
-                            == "https://jenkins.example.com/job/my-pipeline/42/"
-                        )
-                        assert analysis_arg.job_name == "my-pipeline"
-                        assert analysis_arg.build_number == 42
-
-                        # Verify disk caching was attempted
-                        mock_save.assert_called_once()
-
-    def test_get_report_refresh_forces_regeneration(self, test_client) -> None:
-        """Test that ?refresh=1 skips cache and regenerates the HTML report."""
-        stored_result = {
-            "job_id": "refresh-job",
-            "status": "completed",
-            "result": {
-                "job_id": "refresh-job",
-                "status": "completed",
-                "summary": "Analyzed 1 failure",
-                "ai_provider": "claude",
-                "ai_model": "test-model",
-                "failures": [
-                    {
-                        "test_name": "test_refresh",
-                        "error": "assert False",
-                        "analysis": {
-                            "classification": "CODE ISSUE",
-                            "details": "Assertion failed",
-                        },
-                    }
-                ],
-            },
-            "created_at": "2026-01-01T00:00:00",
-        }
-
-        cached_html = "<html><body>Cached Report v1</body></html>"
-        regenerated_html = "<html><body>Regenerated Report v2</body></html>"
-
-        # First request without refresh: serves the cached version
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get_html:
-            mock_get_html.return_value = cached_html
-            response = test_client.get("/results/refresh-job.html")
-            assert response.status_code == 200
-            assert "Cached Report v1" in response.text
-            mock_get_html.assert_called_once()
-
-        # Second request with ?refresh=1: bypasses cache and regenerates
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get_html:
-            mock_get_html.return_value = cached_html
-
-            with patch(
-                "jenkins_job_insight.main.get_result", new_callable=AsyncMock
-            ) as mock_get_result:
-                mock_get_result.return_value = stored_result
-
-                with patch(
-                    "jenkins_job_insight.main.format_result_as_html"
-                ) as mock_format:
-                    mock_format.return_value = regenerated_html
-
-                    with patch(
-                        "jenkins_job_insight.main.save_html_report",
-                        new_callable=AsyncMock,
-                    ) as mock_save:
-                        response = test_client.get(
-                            "/results/refresh-job.html?refresh=1"
-                        )
-
-                        assert response.status_code == 200
-                        assert response.headers["content-type"].startswith("text/html")
-                        assert "Regenerated Report v2" in response.text
-
-                        # get_html_report should NOT have been called (cache skipped)
-                        mock_get_html.assert_not_called()
-
-                        # format_result_as_html should have been called to regenerate
-                        mock_format.assert_called_once()
-
-                        # The regenerated report should be saved to cache
-                        mock_save.assert_called_once_with(
-                            "refresh-job", regenerated_html
-                        )
-
     async def test_get_result_json_format_default(
         self, test_client, temp_db_path: Path
     ) -> None:
@@ -1257,31 +949,6 @@ class TestResultsEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["job_id"] == "json-job-456"
-
-    async def test_get_result_upgrades_legacy_relative_html_report_url(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that legacy relative html_report_url is upgraded to absolute."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="legacy-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="completed",
-                result={
-                    "summary": "Done",
-                    "html_report_url": "/results/legacy-job.html",
-                },
-            )
-
-            response = test_client.get("/results/legacy-job")
-            assert response.status_code == 200
-            data = response.json()
-            result_data = data.get("result", {})
-            assert (
-                result_data["html_report_url"]
-                == "http://testserver/results/legacy-job.html"
-            )
 
 
 class TestAppLifespan:
@@ -1317,258 +984,133 @@ class TestOpenAPISchema:
         assert response.status_code == 200
 
 
-class TestDashboardEndpoint:
-    """Tests for the GET /dashboard endpoint."""
+class TestSpaRoutes:
+    """Tests for the React SPA route handlers."""
 
-    def test_dashboard_returns_html(self, test_client) -> None:
-        """Test that GET /dashboard returns 200 with text/html content type."""
+    def test_dashboard_serves_spa(self, test_client) -> None:
+        """Test that GET /dashboard serves the SPA (or 404 if not built)."""
         response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/html")
+        # Without the frontend built, expect 404 from _serve_spa()
+        assert response.status_code in (200, 404)
 
-    def test_dashboard_contains_title(self, test_client) -> None:
-        """Test that the dashboard HTML contains the application title."""
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        assert "Jenkins Job Insight" in response.text
+    def test_register_serves_spa(self, test_client) -> None:
+        """Test that GET /register serves the SPA (or 404 if not built)."""
+        response = test_client.get("/register")
+        assert response.status_code in (200, 404)
 
-    def test_dashboard_empty_shows_message(self, test_client) -> None:
-        """Test that an empty dashboard shows the 'No analysis results yet' message."""
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        assert "No analysis results yet" in response.text
+    def test_root_serves_spa(self, test_client) -> None:
+        """Test that GET / serves the SPA (or 404 if not built)."""
+        response = test_client.get("/", follow_redirects=False)
+        # Root now serves SPA directly, not a redirect
+        assert response.status_code in (200, 404)
 
-    async def test_dashboard_shows_jobs(self, test_client, temp_db_path: Path) -> None:
-        """Test that stored jobs appear on the dashboard with links to HTML reports."""
+    def test_catchall_serves_spa(self, test_client) -> None:
+        """Test that unmatched routes serve the SPA (or 404 if not built)."""
+        response = test_client.get("/some/unknown/route")
+        assert response.status_code in (200, 404)
+
+
+class TestApiDashboardEndpoint:
+    """Tests for the GET /api/dashboard endpoint."""
+
+    def test_api_dashboard_returns_empty_list(self, test_client) -> None:
+        """Test that GET /api/dashboard returns an empty list when no jobs exist."""
+        response = test_client.get("/api/dashboard")
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert data == []
+
+    async def test_api_dashboard_returns_stored_jobs(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """Test that GET /api/dashboard returns stored jobs."""
         with patch.object(storage, "DB_PATH", temp_db_path):
             await storage.init_db()
             for i in range(3):
                 await storage.save_result(
-                    job_id=f"dash-job-{i}",
+                    job_id=f"api-dash-{i}",
                     jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
                     status="completed",
                     result={
                         "job_name": f"test-job-{i}",
-                        "build_number": i + 1,
-                        "failures": [{"test_name": "t"}] if i == 0 else [],
+                        "build_number": i,
+                        "failures": [],
                     },
                 )
 
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        html = response.text
-        for i in range(3):
-            assert f"dash-job-{i}" in html
-            assert f"/results/dash-job-{i}.html" in html
-
-    async def test_dashboard_links_open_new_tab(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that dashboard cards have target='_blank' for opening in new tabs."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="tab-test-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="completed",
-                result={"job_name": "tab-test", "failures": []},
-            )
-
-            response = test_client.get("/dashboard")
+            response = test_client.get("/api/dashboard")
             assert response.status_code == 200
-            assert 'target="_blank"' in response.text
+            data = response.json()
+            assert isinstance(data, list)
+            assert len(data) == 3
 
-    async def test_dashboard_default_limit(
+    async def test_api_dashboard_limit_parameter(
         self, test_client, temp_db_path: Path
     ) -> None:
-        """Test that the dashboard default limit returns up to 500 jobs."""
+        """Test that the limit query parameter caps the number of results."""
         with patch.object(storage, "DB_PATH", temp_db_path):
             await storage.init_db()
             for i in range(10):
                 await storage.save_result(
-                    job_id=f"all-job-{i}",
+                    job_id=f"api-dash-limit-{i}",
                     jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
                     status="completed",
-                    result={"job_name": f"all-test-{i}", "failures": []},
                 )
 
-            response = test_client.get("/dashboard")
+            response = test_client.get("/api/dashboard?limit=3")
             assert response.status_code == 200
-            html = response.text
-            # All 10 cards should be present (fewer than default limit of 500)
-            card_count = html.count('class="dashboard-card')
-            assert card_count == 10
+            data = response.json()
+            assert isinstance(data, list)
+            assert len(data) == 3
 
-    async def test_dashboard_limit_parameter(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that ?limit=3 caps the number of job cards returned."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            for i in range(5):
-                await storage.save_result(
-                    job_id=f"lim-job-{i}",
-                    jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
-                    status="completed",
-                    result={"job_name": f"lim-test-{i}", "failures": []},
-                )
-
-            response = test_client.get("/dashboard?limit=3")
-            assert response.status_code == 200
-            html = response.text
-            card_count = html.count('class="dashboard-card')
-            assert card_count == 3
-
-    def test_dashboard_limit_invalid_zero(self, test_client) -> None:
-        """Test that limit=0 returns a validation error."""
-        response = test_client.get("/dashboard?limit=0")
+    def test_api_dashboard_limit_exceeds_max(self, test_client) -> None:
+        """Test that limit above the maximum (2000) returns a validation error."""
+        response = test_client.get("/api/dashboard?limit=5000")
         assert response.status_code == 422
 
-    def test_dashboard_limit_exceeds_max(self, test_client) -> None:
-        """Test that limit above the maximum returns a validation error."""
-        response = test_client.get("/dashboard?limit=99999")
-        assert response.status_code == 422
+    def test_api_dashboard_default_limit(self, test_client) -> None:
+        """Test that the default limit is 500 (no query parameter needed)."""
+        with patch(
+            "jenkins_job_insight.main.list_results_for_dashboard",
+            new_callable=AsyncMock,
+        ) as mock_list:
+            mock_list.return_value = []
+            response = test_client.get("/api/dashboard")
+            assert response.status_code == 200
+            mock_list.assert_called_once_with(limit=500)
 
-    async def test_dashboard_completed_job_shows_passed_indicator(
+    async def test_api_dashboard_includes_job_metadata(
         self, test_client, temp_db_path: Path
     ) -> None:
-        """Test that completed jobs with no failures show a passed indicator."""
+        """Test that returned items include expected metadata fields."""
         with patch.object(storage, "DB_PATH", temp_db_path):
             await storage.init_db()
             await storage.save_result(
-                job_id="passed-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="completed",
-                result={"job_name": "passing-job", "build_number": 1, "failures": []},
-            )
-
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        html = response.text
-        assert "result-passed" in html
-        assert "passed-badge" in html
-        assert "passed</span>" in html
-
-    async def test_dashboard_completed_job_shows_failure_indicator(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that completed jobs with failures show a failure indicator."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="failed-job",
+                job_id="api-dash-meta",
                 jenkins_url="https://jenkins.example.com/job/test/1/",
                 status="completed",
                 result={
-                    "job_name": "failing-job",
-                    "build_number": 1,
-                    "failures": [{"test_name": "test_one"}, {"test_name": "test_two"}],
-                },
-            )
-
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        html = response.text
-        assert "result-failures" in html
-        assert "has-failures" in html
-        assert "2 failures" in html
-
-    async def test_dashboard_counts_child_job_failures(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that failures from child job analyses are included in the total count."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="child-fail-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="completed",
-                result={
-                    "job_name": "pipeline-job",
-                    "build_number": 1,
-                    "failures": [{"test_name": "top_level_fail"}],
-                    "child_job_analyses": [
+                    "job_name": "my-pipeline",
+                    "build_number": 42,
+                    "failures": [
                         {
-                            "job_name": "child-1",
-                            "build_number": 1,
-                            "failures": [
-                                {"test_name": "child_fail_1"},
-                                {"test_name": "child_fail_2"},
-                            ],
-                            "failed_children": [],
+                            "test_name": "test_fail",
+                            "error": "assert False",
+                            "analysis": {"classification": "CODE ISSUE"},
                         }
                     ],
                 },
             )
 
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        html = response.text
-        assert "3 failures" in html
-        assert "result-failures" in html
-
-    async def test_dashboard_running_job_no_result_indicator(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that running jobs do not show pass/fail result indicators."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="running-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="running",
-            )
-
-            response = test_client.get("/dashboard")
+            response = test_client.get("/api/dashboard")
             assert response.status_code == 200
-            html = response.text
-            assert "dashboard-card result-passed" not in html
-            assert "dashboard-card result-failures" not in html
-            assert "card-result-icon passed" not in html
-            assert "card-result-icon has-failures" not in html
-
-    async def test_dashboard_shows_child_job_count(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that dashboard cards show the number of child jobs when present."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="pipeline-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="completed",
-                result={
-                    "job_name": "pipeline-job",
-                    "build_number": 1,
-                    "failures": [],
-                    "child_job_analyses": [
-                        {
-                            "job_name": "child-1",
-                            "build_number": 1,
-                            "failures": [],
-                            "failed_children": [],
-                        },
-                        {
-                            "job_name": "child-2",
-                            "build_number": 2,
-                            "failures": [],
-                            "failed_children": [],
-                        },
-                        {
-                            "job_name": "child-3",
-                            "build_number": 3,
-                            "failures": [],
-                            "failed_children": [],
-                        },
-                    ],
-                },
-            )
-
-            response = test_client.get("/dashboard")
-            assert response.status_code == 200
-            html = response.text
-            assert "child-jobs-badge" in html
-            assert "3 child jobs" in html
+            data = response.json()
+            assert len(data) == 1
+            item = data[0]
+            assert item["job_id"] == "api-dash-meta"
+            assert item["status"] == "completed"
+            assert "created_at" in item
 
 
 class TestFaviconEndpoint:

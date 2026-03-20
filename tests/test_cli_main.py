@@ -77,6 +77,35 @@ class TestResultsCommands:
         assert "deleted" in result.output.lower()
 
 
+class TestDashboardCommand:
+    def test_dashboard_default(self, mock_client):
+        mock_client.dashboard.return_value = [
+            {
+                "job_id": "abc-123",
+                "job_name": "test-job",
+                "status": "completed",
+                "failure_count": 5,
+                "reviewed_count": 3,
+                "comment_count": 2,
+                "created_at": "2024-01-15T10:00:00",
+            }
+        ]
+        result = runner.invoke(app, ["results", "dashboard"])
+        assert result.exit_code == 0
+        assert "test-job" in result.output
+
+    def test_dashboard_json(self, mock_client):
+        mock_client.dashboard.return_value = []
+        result = runner.invoke(app, ["results", "dashboard", "--json"])
+        assert result.exit_code == 0
+
+    def test_dashboard_custom_limit(self, mock_client):
+        mock_client.dashboard.return_value = []
+        result = runner.invoke(app, ["results", "dashboard", "--limit", "10"])
+        assert result.exit_code == 0
+        mock_client.dashboard.assert_called_once_with(limit=10)
+
+
 class TestAnalyzeCommand:
     def test_analyze_async(self, mock_client):
         mock_client.analyze.return_value = {
@@ -457,6 +486,16 @@ class TestAnalyzeJiraField:
         kwargs = mock_client.analyze.call_args[1]
         assert "enable_jira" in kwargs  # NOT jira_enabled
         assert kwargs["enable_jira"] is True
+
+
+class TestCapabilitiesCommand:
+    def test_capabilities(self, mock_client):
+        mock_client.capabilities.return_value = {
+            "github_issues": True,
+            "jira_bugs": False,
+        }
+        result = runner.invoke(app, ["capabilities"])
+        assert result.exit_code == 0
 
 
 class TestAiConfigsCommand:

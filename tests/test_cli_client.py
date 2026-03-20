@@ -109,6 +109,34 @@ class TestJJIClientResults:
         assert result["status"] == "deleted"
 
 
+class TestJJIClientDashboard:
+    def test_dashboard_default(self):
+        """Test dashboard with default limit."""
+
+        def dashboard_handler(request):
+            assert request.url.path == "/api/dashboard"
+            assert request.url.params.get("limit") == "500"
+            return httpx.Response(
+                200, json=[{"job_id": "test-1", "status": "completed"}]
+            )
+
+        client = _make_client(dashboard_handler)
+        result = client.dashboard()
+        assert len(result) == 1
+        assert result[0]["job_id"] == "test-1"
+
+    def test_dashboard_custom_limit(self):
+        """Test dashboard with custom limit."""
+
+        def dashboard_handler(request):
+            assert request.url.params.get("limit") == "10"
+            return httpx.Response(200, json=[])
+
+        client = _make_client(dashboard_handler)
+        result = client.dashboard(limit=10)
+        assert result == []
+
+
 class TestJJIClientAnalyze:
     def test_analyze_async(self):
         response_data = {
@@ -412,6 +440,18 @@ class TestJJIClientBugCreation:
             child_build_number=5,
         )
         assert result["title"] == "Fix"
+
+
+class TestJJIClientCapabilities:
+    def test_capabilities(self):
+        def handler(request):
+            assert request.url.path == "/api/capabilities"
+            return httpx.Response(200, json={"github_issues": True, "jira_bugs": False})
+
+        client = _make_client(handler)
+        result = client.capabilities()
+        assert result["github_issues"] is True
+        assert result["jira_bugs"] is False
 
 
 class TestJJIClientAiConfigs:

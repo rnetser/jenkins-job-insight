@@ -151,6 +151,37 @@ def results_list(
     )
 
 
+@results_app.command("dashboard")
+def dashboard(
+    limit: int = typer.Option(500, "--limit", "-l", help="Maximum number of results"),
+    json_output: bool = _JSON_OPTION,
+):
+    """List analysis jobs with dashboard metadata (failure counts, review progress)."""
+    _set_json(json_output)
+    try:
+        client = _get_client()
+        data = client.dashboard(limit=limit)
+    except JJIError as err:
+        _handle_error(err)
+
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        print_output(
+            data,
+            columns=[
+                "job_id",
+                "job_name",
+                "status",
+                "failure_count",
+                "reviewed_count",
+                "comment_count",
+                "created_at",
+            ],
+            as_json=False,
+        )
+
+
 @results_app.command("show")
 def results_show(
     job_id: str = typer.Argument(help="Job ID to show."),
@@ -632,6 +663,24 @@ def comments_delete(
 
 
 # -- AI Configs ---------------------------------------------------------------
+
+
+@app.command()
+def capabilities(
+    json_output: bool = _JSON_OPTION,
+):
+    """Show which optional features are configured on the server."""
+    _set_json(json_output)
+    try:
+        client = _get_client()
+        data = client.capabilities()
+    except JJIError as err:
+        _handle_error(err)
+
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        print_output(data, columns=["github_issues", "jira_bugs"], as_json=False)
 
 
 @app.command("ai-configs")

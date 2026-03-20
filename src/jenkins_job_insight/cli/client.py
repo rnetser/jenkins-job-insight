@@ -112,6 +112,10 @@ class JJIClient:
         """List recent analyzed jobs. GET /results?limit="""
         return self._request("GET", "/results", params={"limit": limit})
 
+    def dashboard(self, limit: int = 500) -> list[dict]:
+        """List analysis jobs with dashboard metadata. GET /api/dashboard"""
+        return self._request("GET", "/api/dashboard", params={"limit": limit})
+
     def get_result(self, job_id: str) -> dict:
         """Get a stored result by job_id. GET /results/{job_id}"""
         return self._request("GET", f"/results/{job_id}")
@@ -423,6 +427,12 @@ class JJIClient:
             json=payload,
             accept_statuses=(201,),
         )
+
+    # -- Capabilities ---------------------------------------------------------
+
+    def capabilities(self) -> dict:
+        """Get server capabilities. GET /api/capabilities"""
+        return self._request("GET", "/api/capabilities")
 
     # -- AI Configs -----------------------------------------------------------
 

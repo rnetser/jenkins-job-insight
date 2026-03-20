@@ -10,6 +10,8 @@ logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 _GITHUB_PR_PATTERN = re.compile(r"https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)")
 
+_GITHUB_ISSUE_PATTERN = re.compile(r"https?://github\.com/([^/]+)/([^/]+)/issues/(\d+)")
+
 _JIRA_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
 
 
@@ -25,6 +27,21 @@ def detect_github_prs(text: str) -> list[dict]:
     matches = _GITHUB_PR_PATTERN.findall(text)
     result = [{"owner": m[0], "repo": m[1], "number": int(m[2])} for m in matches]
     logger.debug(f"detect_github_prs: found={len(result)}")
+    return result
+
+
+def detect_github_issues(text: str) -> list[dict]:
+    """Detect GitHub issue URLs in text.
+
+    Args:
+        text: The comment text to scan.
+
+    Returns:
+        List of dicts with 'owner', 'repo', and 'number' keys.
+    """
+    matches = _GITHUB_ISSUE_PATTERN.findall(text)
+    result = [{"owner": m[0], "repo": m[1], "number": int(m[2])} for m in matches]
+    logger.debug(f"detect_github_issues: found={len(result)}")
     return result
 
 
@@ -89,6 +106,52 @@ async def fetch_github_pr_status(
     except Exception:
         logger.debug(
             f"fetch_github_pr_status: {owner}/{repo}#{number} failed", exc_info=True
+        )
+        return None
+
+
+async def fetch_github_issue_status(
+    owner: str,
+    repo: str,
+    number: int,
+    *,
+    token: str | None = None,
+) -> str | None:
+    """Fetch the status of a GitHub issue.
+
+    Args:
+        owner: Repository owner.
+        repo: Repository name.
+        number: Issue number.
+        token: Optional GitHub personal access token for authentication.
+
+    Returns:
+        Capitalized state string (e.g. 'Open', 'Closed') or None if fetch fails.
+    """
+    logger.debug(
+        f"fetch_github_issue_status: owner={owner}, repo={repo}, number={number}"
+    )
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues/{number}"
+    headers: dict[str, str] = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code != 200:
+                logger.debug(
+                    f"fetch_github_issue_status: {owner}/{repo}#{number} returned status {resp.status_code}"
+                )
+                return None
+            data = resp.json()
+            status = data.get("state", "unknown").capitalize()
+            logger.debug(
+                f"fetch_github_issue_status: {owner}/{repo}#{number} status={status}"
+            )
+            return status
+    except Exception:
+        logger.debug(
+            f"fetch_github_issue_status: {owner}/{repo}#{number} failed", exc_info=True
         )
         return None
 

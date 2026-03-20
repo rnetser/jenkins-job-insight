@@ -6,11 +6,13 @@ import urllib.parse
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from pathlib import Path
 from xml.etree.ElementTree import ParseError
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import SecretStr
 from simple_logger.logger import get_logger
@@ -50,30 +52,23 @@ from jenkins_job_insight.xml_enrichment import (
     build_enriched_xml,
     extract_test_failures,
 )
-from jenkins_job_insight.html_report import (
-    FAVICON_SVG,
-    format_result_as_html,
-    format_status_page,
-    generate_dashboard_html,
-    generate_history_html,
-    generate_register_html,
-)
 from jenkins_job_insight.output import send_callback
 from jenkins_job_insight.repository import RepositoryManager
 from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
     get_ai_configs,
     get_effective_classification,
-    get_html_report,
     get_result,
     init_db,
     list_results,
     list_results_for_dashboard,
     populate_failure_history,
-    save_html_report,
     save_result,
     update_status,
 )
+
+# Inline favicon
+FAVICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="0.9em" font-size="90">\xf0\x9f\x94\x8d</text></svg>'
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
@@ -216,25 +211,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# React frontend static assets
+_FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+if _FRONTEND_DIR.is_dir():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(_FRONTEND_DIR / "assets")),
+        name="frontend-assets",
+    )
+
 
 class UsernameMiddleware(BaseHTTPMiddleware):
-    """Middleware that checks for jji_username cookie and redirects to /register if missing."""
+    """Middleware that reads jji_username cookie and sets request.state.username."""
 
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        if path in ("/register", "/health", "/favicon.ico") or path.startswith(
-            "/register"
-        ):
-            return await call_next(request)
-
-        username = request.cookies.get("jji_username", "")
-        if not username:
-            # Only redirect browser requests, not API calls
-            accept = request.headers.get("accept", "")
-            if "text/html" in accept:
-                return RedirectResponse(url="/register", status_code=303)
-
-        request.state.username = username
+        request.state.username = request.cookies.get("jji_username", "")
         return await call_next(request)
 
 
@@ -242,32 +233,9 @@ app.add_middleware(UsernameMiddleware)
 
 
 @app.get("/", include_in_schema=False)
-async def root() -> RedirectResponse:
-    """Redirect root to dashboard."""
-    return RedirectResponse(url="/dashboard")
-
-
-@app.get("/register", response_class=HTMLResponse)
-async def register_page() -> str:
-    """Show registration page for new users."""
-    return generate_register_html()
-
-
-@app.post("/register")
-async def register(request: Request) -> RedirectResponse:
-    """Set username cookie and redirect to dashboard."""
-    form = await request.form()
-    username = str(form.get("username", "")).strip()
-    if not username:
-        return RedirectResponse(url="/register", status_code=303)
-    response = RedirectResponse(url="/dashboard", status_code=303)
-    response.set_cookie(
-        key="jji_username",
-        value=username,
-        max_age=365 * 24 * 60 * 60,  # 1 year
-        samesite="lax",
-    )
-    return response
+async def root() -> HTMLResponse:
+    """Serve the React SPA."""
+    return _serve_spa()
 
 
 def _resolve_ai_config_values(
@@ -483,7 +451,6 @@ async def process_analysis_with_id(
         result_data = result.model_dump(mode="json")
         result_data["base_url"] = base_url
         result_data["result_url"] = f"{base_url}/results/{job_id}"
-        result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
 
         # Save to storage
         await update_status(job_id, result.status, result_data)
@@ -505,7 +472,6 @@ async def process_analysis_with_id(
 
         # Reveal classifications created during analysis
         await storage.make_classifications_visible(job_id)
-        await _invalidate_cached_html(job_id)
 
         await deliver_results(result, body, settings)
 
@@ -585,14 +551,12 @@ async def analyze(
 
         # Reveal classifications created during analysis
         await storage.make_classifications_visible(result.job_id)
-        await _invalidate_cached_html(result.job_id)
 
         await deliver_results(result, body, merged)
 
         content = result.model_dump(mode="json")
         content["base_url"] = base_url
         content["result_url"] = f"{base_url}/results/{result.job_id}"
-        content["html_report_url"] = f"{base_url}/results/{result.job_id}.html"
 
         return JSONResponse(content=content, status_code=200)
 
@@ -625,7 +589,6 @@ async def analyze(
         "message": message,
         "base_url": base_url,
         "result_url": f"{base_url}/results/{job_id}",
-        "html_report_url": f"{base_url}/results/{job_id}.html",
     }
 
     return response
@@ -667,7 +630,6 @@ async def analyze_failures(
             result_data = analysis_result.model_dump(mode="json")
             result_data["base_url"] = base_url
             result_data["result_url"] = f"{base_url}/results/{job_id}"
-            result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
             return JSONResponse(content=result_data)
     else:
         if not body.failures:
@@ -749,7 +711,7 @@ async def analyze_failures(
         enriched_xml = None
         if raw_xml is not None:
             enriched_xml = build_enriched_xml(
-                raw_xml, all_analyses, f"{base_url}/results/{job_id}.html"
+                raw_xml, all_analyses, f"{base_url}/results/{job_id}"
             )
 
         analysis_result = FailureAnalysisResult(
@@ -765,7 +727,6 @@ async def analyze_failures(
         result_data = analysis_result.model_dump(mode="json")
         result_data["base_url"] = base_url
         result_data["result_url"] = f"{base_url}/results/{job_id}"
-        result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
 
         await update_status(job_id, "completed", result_data)
 
@@ -781,7 +742,6 @@ async def analyze_failures(
 
         # Reveal classifications created during analysis
         await storage.make_classifications_visible(job_id)
-        await _invalidate_cached_html(job_id)
 
         return JSONResponse(content=result_data)
 
@@ -804,114 +764,17 @@ async def analyze_failures(
         repo_manager.cleanup()
 
 
-def _build_analysis_result(job_id: str, result_data: dict) -> AnalysisResult:
-    """Reconstruct an AnalysisResult from stored result JSON.
-
-    Handles both Jenkins analysis results (which have jenkins_url) and
-    direct failure analysis results (which don't).
-
-    Args:
-        job_id: The job identifier.
-        result_data: The stored result JSON dict.
-
-    Returns:
-        AnalysisResult suitable for HTML report generation.
-    """
-    if result_data.get("jenkins_url"):
-        return AnalysisResult.model_validate(result_data)
-
-    # Direct failure analysis — wrap in AnalysisResult
-    return AnalysisResult(
-        job_id=job_id,
-        job_name=result_data.get("job_name", "Direct Failure Analysis"),
-        build_number=result_data.get("build_number", 0),
-        jenkins_url=None,
-        status="completed",
-        summary=result_data.get("summary", ""),
-        ai_provider=result_data.get("ai_provider", ""),
-        ai_model=result_data.get("ai_model", ""),
-        failures=[
-            FailureAnalysis.model_validate(f) for f in result_data.get("failures", [])
-        ],
-    )
-
-
-@app.get("/results/{job_id}.html", response_class=HTMLResponse)
-async def get_job_report(
-    job_id: str,
-    *,
-    refresh: bool = Query(
-        default=False, description="Force regeneration of the HTML report"
-    ),
-    settings: Settings = Depends(get_settings),
-) -> HTMLResponse:
-    """Serve an HTML report, generating it on-demand if needed.
-
-    Reports are generated lazily from stored results and cached to disk.
-    Pass ``?refresh=1`` to force regeneration (e.g. after a code update).
-    """
-    logger.debug(f"GET /results/{job_id}.html: refresh={refresh}")
-    # NOTE: The cached HTML bakes in github_available / jira_available at render
-    # time.  If integration settings change (e.g. GITHUB_TOKEN added), stale
-    # button state may be served until the cache is refreshed (?refresh=1) or
-    # a re-analysis invalidates it.  In practice this is rare because config
-    # changes require a server restart, but callers can force regeneration via
-    # the refresh query parameter.
-
-    # Compute availability flags first so we can compare against what the cache
-    # would contain.
-    github_available = bool(settings.tests_repo_url and settings.github_token)
-    jira_available = settings.jira_enabled
-
-    # Try disk cache first (skip when refresh requested)
-    if not refresh:
-        html_content = await get_html_report(job_id)
-        if html_content:
-            return HTMLResponse(html_content)
-
-    # Check if the job exists
-    result = await get_result(job_id)
-    if not result:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Job '{job_id}' not found.",
-        )
-
-    status = result.get("status", "unknown")
-    if status in ("pending", "running"):
-        return HTMLResponse(
-            format_status_page(job_id, status, result),
-            headers={"Refresh": "10"},
-        )
-
-    # Generate HTML on-demand from stored result data
-    result_data = result.get("result")
-    if result_data and status == "completed":
-        analysis_result = _build_analysis_result(job_id, result_data)
-        html_content = format_result_as_html(
-            analysis_result,
-            completed_at=result.get("created_at", ""),
-            github_available=github_available,
-            jira_available=jira_available,
-        )
-        try:
-            await save_html_report(job_id, html_content)
-        except OSError:
-            logger.warning(
-                "Failed to cache HTML report for job_id: %s", job_id, exc_info=True
-            )
-        logger.info(f"HTML report generated on-demand for job_id: {job_id}")
-        return HTMLResponse(html_content)
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"No report available for job '{job_id}'.",
-    )
-
-
 @app.get("/results/{job_id}", response_model=None)
-async def get_job_result(request: Request, job_id: str) -> dict:
-    """Retrieve stored result by job_id."""
+async def get_job_result(request: Request, job_id: str):
+    """Retrieve stored result by job_id, or serve SPA for browser requests."""
+    # Content negotiation: browsers requesting HTML get the SPA
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept and "application/json" not in accept:
+        result = await get_result(job_id)
+        if result and result.get("status") in ("pending", "running"):
+            return RedirectResponse(url=f"/status/{job_id}", status_code=302)
+        return _serve_spa()
+
     logger.debug(f"GET /results/{job_id}")
     result = await get_result(job_id)
     if not result:
@@ -919,13 +782,6 @@ async def get_job_result(request: Request, job_id: str) -> dict:
     base_url = _extract_base_url(request)
     result["base_url"] = base_url
     result["result_url"] = f"{base_url}/results/{job_id}"
-    result_data = result.get("result")
-    if isinstance(result_data, dict) and "html_report_url" in result_data:
-        # Ensure it's a full URL (update legacy relative paths)
-        if result_data["html_report_url"].startswith("/"):
-            result_data["html_report_url"] = (
-                f"{base_url}{result_data['html_report_url']}"
-            )
     return result
 
 
@@ -1089,16 +945,6 @@ async def _resolve_effective_failure(
     )
 
 
-async def _invalidate_cached_html(job_id: str) -> None:
-    """Delete cached HTML report so next request regenerates it."""
-    logger.debug(f"_invalidate_cached_html: job_id={job_id}")
-    try:
-        report_path = storage.REPORTS_DIR / f"{job_id}.html"
-        await asyncio.to_thread(lambda: report_path.unlink(missing_ok=True))
-    except OSError:
-        pass  # Cache cleanup is best-effort
-
-
 @app.get("/results/{job_id}/comments")
 async def get_comments(job_id: str) -> dict:
     """Get all comments and review states for a job."""
@@ -1133,7 +979,6 @@ async def add_comment(job_id: str, body: AddCommentRequest, request: Request) ->
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    await _invalidate_cached_html(job_id)
     return {"id": comment_id}
 
 
@@ -1157,7 +1002,6 @@ async def delete_comment_endpoint(
             status_code=404, detail="Comment not found or not owned by you"
         )
 
-    await _invalidate_cached_html(job_id)
     return {"status": "deleted"}
 
 
@@ -1182,7 +1026,6 @@ async def set_reviewed(job_id: str, body: SetReviewedRequest, request: Request) 
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    await _invalidate_cached_html(job_id)
     return {"status": "ok"}
 
 
@@ -1193,8 +1036,10 @@ async def enrich_comments(
     """Fetch live statuses for GitHub PRs and Jira tickets found in comments."""
     logger.debug(f"POST /results/{job_id}/enrich-comments")
     from jenkins_job_insight.comment_enrichment import (
+        detect_github_issues,
         detect_github_prs,
         detect_jira_keys,
+        fetch_github_issue_status,
         fetch_github_pr_status,
         fetch_jira_ticket_status,
     )
@@ -1249,6 +1094,24 @@ async def enrich_comments(
                 {
                     "type": "github_pr",
                     "key": f"{pr['owner']}/{pr['repo']}#{pr['number']}",
+                },
+            )
+
+        for issue in detect_github_issues(c["comment"]):
+            idx = len(tasks)
+            tasks.append(
+                fetch_github_issue_status(
+                    issue["owner"],
+                    issue["repo"],
+                    issue["number"],
+                    token=github_token,
+                )
+            )
+            task_map[idx] = (
+                str(c["id"]),
+                {
+                    "type": "github_issue",
+                    "key": f"{issue['owner']}/{issue['repo']}#{issue['number']}",
                 },
             )
 
@@ -1331,9 +1194,9 @@ async def preview_github_issue(
     jenkins_url = result_data.get("jenkins_url", "")
 
     if body.include_links:
-        report_url = f"{base_url}/results/{job_id}.html"
+        report_url = f"{base_url}/results/{job_id}"
     else:
-        report_url = f"results/{job_id}.html"
+        report_url = f"results/{job_id}"
         job_name = result_data.get("job_name", "")
         build_number = result_data.get("build_number", 0)
         jenkins_url = f"{job_name} #{build_number}" if job_name else ""
@@ -1412,9 +1275,9 @@ async def preview_jira_bug(
     jenkins_url = result_data.get("jenkins_url", "")
 
     if body.include_links:
-        report_url = f"{base_url}/results/{job_id}.html"
+        report_url = f"{base_url}/results/{job_id}"
     else:
-        report_url = f"results/{job_id}.html"
+        report_url = f"results/{job_id}"
         job_name = result_data.get("job_name", "")
         build_number = result_data.get("build_number", 0)
         jenkins_url = f"{job_name} #{build_number}" if job_name else ""
@@ -1545,10 +1408,9 @@ async def create_github_issue_endpoint(
             error_signature=error_signature,
             username=username,
         )
-        await _invalidate_cached_html(job_id)
     except Exception:
         logger.warning(
-            "Failed to add comment/invalidate cache after GitHub issue creation "
+            "Failed to add comment after GitHub issue creation "
             "for job_id=%s, issue url=%s",
             job_id,
             result["url"],
@@ -1647,11 +1509,9 @@ async def create_jira_bug_endpoint(
             error_signature=error_signature,
             username=username,
         )
-        await _invalidate_cached_html(job_id)
     except Exception:
         logger.warning(
-            "Failed to add comment/invalidate cache after Jira bug creation "
-            "for job_id=%s, bug url=%s",
+            "Failed to add comment after Jira bug creation for job_id=%s, bug url=%s",
             job_id,
             result["url"],
             exc_info=True,
@@ -1663,6 +1523,70 @@ async def create_jira_bug_endpoint(
         "title": body.title,
         "comment_id": comment_id,
     }
+
+
+def _apply_classification_override(
+    result_data: dict,
+    test_name: str,
+    classification: str,
+    child_job_name: str,
+    child_build_number: int,
+) -> None:
+    """Mutate result_data to apply a classification override to matching failures."""
+
+    def _patch_failures(failures: list[dict]) -> None:
+        for f in failures:
+            if f.get("test_name") == test_name:
+                analysis = f.get("analysis", {})
+                if isinstance(analysis, dict):
+                    analysis["classification"] = classification
+
+    if child_job_name:
+        # Override in child job failures
+        for child in result_data.get("child_job_analyses", []):
+            if (
+                child.get("job_name") == child_job_name
+                and child.get("build_number") == child_build_number
+            ):
+                _patch_failures(child.get("failures", []))
+            # Also check nested failed_children recursively
+            _patch_children(
+                child.get("failed_children", []),
+                test_name,
+                classification,
+                child_job_name,
+                child_build_number,
+            )
+    else:
+        # Override in top-level failures
+        _patch_failures(result_data.get("failures", []))
+
+
+def _patch_children(
+    children: list[dict],
+    test_name: str,
+    classification: str,
+    child_job_name: str,
+    child_build_number: int,
+) -> None:
+    """Recursively patch classification in nested children."""
+    for child in children:
+        if (
+            child.get("job_name") == child_job_name
+            and child.get("build_number") == child_build_number
+        ):
+            for f in child.get("failures", []):
+                if f.get("test_name") == test_name:
+                    analysis = f.get("analysis", {})
+                    if isinstance(analysis, dict):
+                        analysis["classification"] = classification
+        _patch_children(
+            child.get("failed_children", []),
+            test_name,
+            classification,
+            child_job_name,
+            child_build_number,
+        )
 
 
 @app.put("/results/{job_id}/override-classification")
@@ -1695,7 +1619,20 @@ async def override_classification_endpoint(
         username=username,
         parent_job_name=parent_job_name,
     )
-    await _invalidate_cached_html(job_id)
+
+    # Persist the override into result_json so page refresh reflects it
+    stored = await get_result(job_id)
+    if stored and stored.get("result"):
+        result_data = stored["result"]
+        _apply_classification_override(
+            result_data,
+            body.test_name,
+            body.classification,
+            body.child_job_name,
+            body.child_build_number,
+        )
+        await update_status(job_id, "completed", result_data)
+
     return {"status": "ok", "classification": body.classification}
 
 
@@ -1740,32 +1677,25 @@ async def delete_job_endpoint(job_id: str, request: Request) -> dict:
     return {"status": "deleted", "job_id": job_id}
 
 
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(
-    request: Request,
-    limit: int = Query(500, ge=1, le=10000),
-) -> HTMLResponse:
-    """Serve the dashboard page listing analysis reports.
-
-    Args:
-        request: The incoming request (used for base URL detection).
-        limit: Maximum number of jobs to load from the database.
-    """
-    logger.debug(f"GET /dashboard: limit={limit}")
-    base_url = _extract_base_url(request)
-    jobs = await list_results_for_dashboard(limit)
-    logger.debug(f"GET /dashboard: jobs_count={len(jobs)}")
-    html_content = generate_dashboard_html(jobs, base_url, limit=limit)
-    return HTMLResponse(html_content)
+@app.get("/api/dashboard")
+async def api_dashboard(
+    limit: int = Query(default=500, le=2000, description="Maximum number of results"),
+) -> list[dict]:
+    """Return dashboard job list as JSON for the React frontend."""
+    return await list_results_for_dashboard(limit=limit)
 
 
-@app.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request) -> HTMLResponse:
-    """Serve the failure history page."""
-    logger.debug("GET /history")
-    base_url = _extract_base_url(request)
-    html_content = generate_history_html(base_url)
-    return HTMLResponse(html_content)
+@app.get("/api/capabilities")
+async def get_capabilities(settings: Settings = Depends(get_settings)) -> dict:
+    """Report which optional features are configured on this server."""
+    tests_repo_url = str(settings.tests_repo_url or "")
+    github_token = (
+        settings.github_token.get_secret_value() if settings.github_token else ""
+    )
+    return {
+        "github_issues": bool(tests_repo_url and github_token),
+        "jira_bugs": settings.jira_enabled,
+    }
 
 
 @app.get("/history/failures")
@@ -1898,8 +1828,6 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
         child_build_number=body.child_build_number,
         visible=visible,
     )
-    if classify_job_id:
-        await _invalidate_cached_html(classify_job_id)
     return {"id": classification_id}
 
 
@@ -1947,6 +1875,27 @@ async def favicon() -> Response:
         media_type="image/svg+xml",
         headers={"Cache-Control": "public, max-age=86400"},
     )
+
+
+def _serve_spa() -> HTMLResponse:
+    """Read and serve the React SPA index.html."""
+    index_file = _FRONTEND_DIR / "index.html"
+    if not index_file.is_file():
+        raise HTTPException(status_code=404, detail="Frontend not built")
+    return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
+
+
+# SPA catch-all routes — must be AFTER all API routes
+@app.get("/register", include_in_schema=False)
+async def serve_spa_known_routes() -> HTMLResponse:
+    """Serve the React SPA for known frontend routes."""
+    return _serve_spa()
+
+
+@app.get("/{path:path}", include_in_schema=False)
+async def serve_frontend_catchall(path: str) -> HTMLResponse:
+    """Catch-all: serve the React SPA for any unmatched route."""
+    return _serve_spa()
 
 
 def run() -> None:

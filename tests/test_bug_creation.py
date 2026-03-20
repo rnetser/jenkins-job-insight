@@ -79,7 +79,7 @@ class TestGenerateGithubIssueContent:
 
             result = await generate_github_issue_content(
                 failure=code_issue_failure,
-                report_url="https://jji.example.com/results/job-123.html",
+                report_url="https://jji.example.com/results/job-123",
                 ai_provider="claude",
                 ai_model="sonnet",
             )
@@ -95,7 +95,7 @@ class TestGenerateGithubIssueContent:
 
             result = await generate_github_issue_content(
                 failure=code_issue_failure,
-                report_url="https://jji.example.com/results/job-123.html",
+                report_url="https://jji.example.com/results/job-123",
                 ai_provider="claude",
                 ai_model="sonnet",
             )
@@ -136,7 +136,7 @@ class TestGenerateJiraBugContent:
 
             result = await generate_jira_bug_content(
                 failure=product_bug_failure,
-                report_url="https://jji.example.com/results/job-456.html",
+                report_url="https://jji.example.com/results/job-456",
                 ai_provider="claude",
                 ai_model="sonnet",
             )

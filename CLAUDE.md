@@ -17,11 +17,30 @@
 - If the same logic exists in 2+ places, it is a BUG. Extract it immediately.
 - Before writing ANY code, search for existing helpers that do the same thing. Reuse first.
 - This applies to ALL code: Python, JavaScript, CSS, HTML templates, SQL queries.
-- Shared CSS → `_common_css()`, `_controls_css()`, `_modal_css()` helpers
-- Shared JavaScript → `_modal_js()`, `_user_badge_js()` helpers
+- Shared React components → extract to `components/shared/` or `components/ui/`
+- Shared TypeScript logic → extract to `lib/` utilities
 - Shared Python logic → extract functions, base classes, or mixins
 - Copy-paste is NEVER acceptable. Not even "just this once." Not even "it's small."
 - Every PR review will check for duplication. Duplicates found = code rejected.
+
+## Testing — MANDATORY
+
+**`tox` must pass before every commit. No exceptions.**
+
+Run all tests:
+```bash
+uvx --with tox-uv tox
+```
+
+This runs both environments:
+- `backend` — Python tests via `uv run pytest tests/ -q`
+- `frontend` — Frontend build (`vite build`) + Vitest tests (`npm test`)
+
+Individual environments:
+```bash
+uvx --with tox-uv tox -e backend    # Python only
+uvx --with tox-uv tox -e frontend   # Frontend only
+```
 
 ## Smart Context Management
 
@@ -67,6 +86,26 @@ This project uses AI CLI tools (Claude CLI, Gemini CLI, Cursor Agent CLI) instea
 | `JiraClient` | Searches Jira for matching bugs (Cloud + Server/DC) |
 | `enrich_with_jira_matches()` | Post-processing: attaches Jira matches to PRODUCT BUG failures |
 | `_filter_matches_with_ai()` | AI-powered relevance filtering of Jira candidates |
+
+### Frontend (React + TypeScript)
+
+The frontend is in `/frontend/` — a Vite + React 19 + TypeScript + Tailwind CSS + shadcn/ui application.
+
+| Directory | Purpose |
+|-----------|---------|
+| `frontend/src/pages/` | Page components (one per route) |
+| `frontend/src/pages/report/` | Report page subcomponents (FailureCard, CommentsSection, etc.) |
+| `frontend/src/components/ui/` | shadcn/ui primitives (Button, Card, Dialog, etc.) |
+| `frontend/src/components/shared/` | App-level shared components (ClassificationBadge, StatusChip, etc.) |
+| `frontend/src/components/layout/` | Layout shell (NavBar, UserBadge) |
+| `frontend/src/lib/` | Utilities (api.ts, cookies.ts, grouping.ts) |
+| `frontend/src/types/` | TypeScript types mirroring Python models |
+
+Key patterns:
+- **State**: Report page uses `useReducer` via `ReportContext` (page-scoped, not global)
+- **API**: Centralized `api.get/post/put/delete` wrapper in `lib/api.ts`
+- **Auth**: Cookie-based (`jji_username`), read/written client-side
+- **Grouping**: `lib/grouping.ts` ports Python's `_grouping_key()` to TypeScript
 
 ### AI Tool Access (IMPORTANT)
 

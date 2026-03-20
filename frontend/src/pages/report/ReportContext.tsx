@@ -1,0 +1,129 @@
+import { createContext, useContext, useReducer, type Dispatch, type ReactNode } from 'react'
+import type { AnalysisResult, Comment, ReviewState, CommentsAndReviews, AiConfig, CommentEnrichment } from '@/types'
+
+interface ReportState {
+  result: AnalysisResult | null
+  completedAt: string
+  comments: Comment[]
+  reviews: Record<string, ReviewState>
+  enrichments: Record<string, CommentEnrichment[]>
+  classifications: Record<string, string>
+  githubAvailable: boolean
+  jiraAvailable: boolean
+  aiConfigs: AiConfig[]
+  loading: boolean
+  error: string
+}
+
+type ReportAction =
+  | { type: 'SET_RESULT'; payload: { result: AnalysisResult; completedAt: string } }
+  | { type: 'SET_COMMENTS_AND_REVIEWS'; payload: CommentsAndReviews }
+  | { type: 'ADD_COMMENT'; payload: Comment }
+  | { type: 'REMOVE_COMMENT'; payload: number }
+  | { type: 'SET_REVIEW'; payload: { key: string; state: ReviewState } }
+  | { type: 'SET_GITHUB_AVAILABLE'; payload: boolean }
+  | { type: 'SET_JIRA_AVAILABLE'; payload: boolean }
+  | { type: 'SET_AI_CONFIGS'; payload: AiConfig[] }
+  | { type: 'SET_ENRICHMENTS'; payload: Record<string, CommentEnrichment[]> }
+  | { type: 'SET_CLASSIFICATIONS'; payload: Record<string, string> }
+  | { type: 'SET_LOADING'; payload: boolean }
+  | { type: 'SET_ERROR'; payload: string }
+  | {
+      type: 'OVERRIDE_CLASSIFICATION'
+      payload: {
+        testName: string
+        classification: string
+        childJobName?: string
+        childBuildNumber?: number
+      }
+    }
+
+const initialState: ReportState = {
+  result: null,
+  completedAt: '',
+  comments: [],
+  reviews: {},
+  enrichments: {},
+  classifications: {},
+  githubAvailable: false,
+  jiraAvailable: false,
+  aiConfigs: [],
+  loading: true,
+  error: '',
+}
+
+function reportReducer(state: ReportState, action: ReportAction): ReportState {
+  switch (action.type) {
+    case 'SET_RESULT':
+      return { ...state, result: action.payload.result, completedAt: action.payload.completedAt, loading: false }
+    case 'SET_COMMENTS_AND_REVIEWS':
+      return { ...state, comments: action.payload.comments, reviews: action.payload.reviews }
+    case 'ADD_COMMENT':
+      return { ...state, comments: [...state.comments, action.payload] }
+    case 'REMOVE_COMMENT':
+      return { ...state, comments: state.comments.filter((c) => c.id !== action.payload) }
+    case 'SET_REVIEW':
+      return { ...state, reviews: { ...state.reviews, [action.payload.key]: action.payload.state } }
+    case 'SET_GITHUB_AVAILABLE':
+      return { ...state, githubAvailable: action.payload }
+    case 'SET_JIRA_AVAILABLE':
+      return { ...state, jiraAvailable: action.payload }
+    case 'SET_AI_CONFIGS':
+      return { ...state, aiConfigs: action.payload }
+    case 'SET_ENRICHMENTS':
+      return { ...state, enrichments: action.payload }
+    case 'SET_CLASSIFICATIONS':
+      return { ...state, classifications: action.payload }
+    case 'SET_LOADING':
+      return { ...state, loading: action.payload }
+    case 'SET_ERROR':
+      return { ...state, error: action.payload, loading: false }
+    case 'OVERRIDE_CLASSIFICATION': {
+      if (!state.result) return state
+      const { testName, classification, childJobName, childBuildNumber } = action.payload
+      const patchFailures = (fs: typeof state.result.failures) =>
+        fs.map((f) =>
+          f.test_name === testName ? { ...f, analysis: { ...f.analysis, classification } } : f,
+        )
+      const patchChildren = (
+        cs: typeof state.result.child_job_analyses,
+      ): typeof state.result.child_job_analyses =>
+        cs.map((c) =>
+          childJobName && c.job_name === childJobName && c.build_number === childBuildNumber
+            ? { ...c, failures: patchFailures(c.failures), failed_children: patchChildren(c.failed_children) }
+            : { ...c, failed_children: patchChildren(c.failed_children) },
+        )
+      return {
+        ...state,
+        result: {
+          ...state.result,
+          failures: childJobName ? state.result.failures : patchFailures(state.result.failures),
+          child_job_analyses: patchChildren(state.result.child_job_analyses),
+        },
+      }
+    }
+    default:
+      return state
+  }
+}
+
+const StateCtx = createContext<ReportState>(initialState)
+const DispatchCtx = createContext<Dispatch<ReportAction>>(() => {})
+
+export function ReportProvider({ children }: { children: ReactNode }) {
+  const [state, dispatch] = useReducer(reportReducer, initialState)
+  return (
+    <StateCtx.Provider value={state}>
+      <DispatchCtx.Provider value={dispatch}>{children}</DispatchCtx.Provider>
+    </StateCtx.Provider>
+  )
+}
+
+export const useReportState = () => useContext(StateCtx)
+export const useReportDispatch = () => useContext(DispatchCtx)
+
+/** Build the review lookup key matching the backend format. */
+export function reviewKey(testName: string, childJobName?: string, childBuildNumber?: number): string {
+  if (childJobName && childBuildNumber) return `${childJobName}#${childBuildNumber}::${testName}`
+  return testName
+}

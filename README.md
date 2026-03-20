@@ -1,6 +1,6 @@
 # Jenkins Job Insight
 
-A containerized webhook service that analyzes Jenkins job failures, classifies them as code issues or product bugs, and provides actionable suggestions. This service operates without a UI, receiving requests via webhooks and delivering results through callbacks.
+A containerized service that analyzes Jenkins job failures, classifies them as code issues or product bugs, and provides a React-based dashboard for exploring results.
 
 ## Overview
 
@@ -19,7 +19,7 @@ For each failure, the service provides detailed explanations and either fix sugg
 - **Optional Jira integration**: Searches Jira for matching bugs on PRODUCT BUG failures with AI-powered relevance filtering
 - **SQLite result storage**: Persists analysis results for later retrieval
 - **Callback webhooks**: Delivers results to your specified endpoint with custom headers
-- **HTML report output**: Generate self-contained, dark-themed HTML failure reports viewable in any browser
+- **React-based dashboard and report UI**: Browse analysis results, explore failures, and manage reviews in a modern web interface
 - **Direct failure analysis**: Analyze raw test failures without Jenkins via `POST /analyze-failures`
 - **pytest JUnit XML integration**: Enrich JUnit XML reports with AI analysis via a pytest plugin
 - **Raw XML analysis**: Accept raw JUnit XML via API, extract failures, analyze, and return enriched XML
@@ -27,7 +27,7 @@ For each failure, the service provides detailed explanations and either fix sugg
 
 ### One-Click Bug Creation
 
-Failure cards in the HTML report include bug creation buttons based on classification:
+Failure cards in the report page include bug creation buttons based on classification:
 
 - **CODE ISSUE** failures show an "Open GitHub Issue" button (requires `GITHUB_TOKEN` and `TESTS_REPO_URL`)
 - **PRODUCT BUG** failures show an "Open Jira Bug" button (requires Jira configuration)
@@ -105,6 +105,34 @@ jji results list --json
 
 Run `jji --help` for all commands.
 
+## Frontend
+
+The web UI is built with React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui. It's served by the same FastAPI container -- no separate frontend service needed.
+
+### Pages
+
+| Page | Route | Description |
+|------|-------|-------------|
+| Register | `/register` | Set your username (stored as cookie) |
+| Dashboard | `/` | Card grid of all analysis runs with search, pagination, delete |
+| Report | `/results/{jobId}` | Full failure analysis with comments, review toggles, classification overrides, bug creation |
+| Status | `/status/{jobId}` | Polling status page while analysis is running |
+| History | `/history` | Searchable failure history with classification filters |
+
+### Development
+
+For local frontend development:
+
+```bash
+cd frontend
+npm install
+npm run dev    # Vite dev server with HMR on port 5173
+npm test       # Run Vitest test suite
+npm run build  # Production build to dist/
+```
+
+The Vite dev server proxies API requests to `localhost:8000` (the FastAPI backend).
+
 ## Quick Start
 
 > **Note:** The `data` directory must exist on the host before starting the container. Docker creates mounted directories as root, but the container runs as a non-root user for security.
@@ -146,7 +174,6 @@ Configure the service using environment variables. The service is tied to a sing
 | `CALLBACK_HEADERS` | No | - | Default callback headers as JSON (can be overridden per-request) |
 | **Other** | | | |
 | `TESTS_REPO_URL` | No | - | Default tests repository URL (can be overridden per-request) |
-| `HTML_REPORT` | No | `true` | Generate HTML reports (set to `false` to disable) |
 | `DEBUG` | No | `false` | Enable debug mode with hot reload for development |
 | **Jira (Optional)** | | | |
 | `ENABLE_JIRA` | No | *(auto-detect)* | Explicitly enable/disable Jira integration (overrides auto-detection) |
@@ -312,7 +339,6 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | --                   | `raw_prompt`         | No       | Both                   | Additional AI instructions (overrides repo-level prompt file)  |
 | `CALLBACK_URL`       | `callback_url`       | No       | `/analyze`             | Callback webhook URL for results                               |
 | `CALLBACK_HEADERS`   | `callback_headers`   | No       | `/analyze`             | Headers for callback requests                                  |
-| `HTML_REPORT`        | `html_report`        | No       | `/analyze`             | Generate HTML report (default: true)                           |
 | **Jenkins**          |                      |          |                        |                                                                |
 | `JENKINS_URL`        | `jenkins_url`        | Yes*     | `/analyze`             | Jenkins server URL                                             |
 | `JENKINS_USER`       | `jenkins_user`       | Yes*     | `/analyze`             | Jenkins username                                               |
@@ -352,7 +378,7 @@ When the AI classifies a failure as **PRODUCT BUG**, the service can optionally 
 2. After analysis completes, the service searches Jira for Bug-type issues using those keywords
 3. AI evaluates each Jira candidate by reading its summary and description to determine actual relevance
 4. Only relevant matches are attached to the response as `jira_matches`
-5. HTML reports render matches as clickable links
+5. The report UI renders matches as clickable links
 6. JUnit XML reports include matches as properties
 
 Jira integration works with all analysis endpoints: `/analyze`, `/analyze?sync=true`, and `/analyze-failures`.
@@ -532,7 +558,7 @@ Projects can enhance the AI's history analysis by placing a `JOB_INSIGHT_FAILURE
 
 #### History Page
 
-The `/history` endpoint serves an interactive HTML page accessible from the dashboard header. It provides a UI for exploring failure trends and searching test history.
+The `/history` route serves the React-based failure history page with searchable, paginated failure data and trend visualization.
 
 ### SSL Verification
 
@@ -674,8 +700,7 @@ This context helps the AI distinguish between test infrastructure issues (CODE I
 | `/analyze`               | POST   | Submit analysis job (async, returns 202)          |
 | `/analyze?sync=true`     | POST   | Submit and wait for result (returns JSON)         |
 | `/analyze-failures`      | POST   | Analyze raw test failures directly (no Jenkins)   |
-| `/results/{job_id}`      | GET    | Retrieve stored result (JSON)                     |
-| `/results/{job_id}.html` | GET    | Retrieve stored result as an HTML report (supports `?refresh=1`) |
+| `/results/{job_id}`      | GET    | Retrieve stored result (JSON or serve SPA for browsers)       |
 | `/results`               | GET    | List recent analysis jobs (default: 50, max: 100) |
 | `/results/{job_id}/comments` | GET | Get all comments and review states for a job     |
 | `/results/{job_id}/comments` | POST | Add a comment to a test failure                 |
@@ -688,8 +713,9 @@ This context helps the AI distinguish between test infrastructure issues (CODE I
 | `/results/{job_id}/create-github-issue` | POST | Create a GitHub issue (returns 201)          |
 | `/results/{job_id}/create-jira-bug` | POST | Create a Jira bug (returns 201)                |
 | `/results/{job_id}/override-classification` | PUT | Override failure classification            |
-| `/dashboard`             | GET    | HTML dashboard listing all analysis reports       |
-| `/history`               | GET    | Interactive failure history page (HTML)            |
+| `/api/dashboard`         | GET    | Dashboard job list as JSON (for React frontend)   |
+| `/dashboard`             | GET    | React SPA (dashboard view)                        |
+| `/history`               | GET    | React SPA (history view)                          |
 | `/history/test/{test_name}` | GET | Pass/fail history for a specific test              |
 | `/history/search`        | GET    | Find tests by error signature                     |
 | `/history/stats/{job_name}` | GET | Aggregate statistics for a job                     |
@@ -781,8 +807,7 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
         }
       }
     ],
-  "child_job_analyses": [],
-  "html_report_url": "/results/550e8400-e29b-41d4-a716-446655440000.html"
+  "child_job_analyses": []
 }
 ```
 
@@ -966,7 +991,6 @@ Note: `enriched_xml` is only present when `raw_xml` was provided in the request.
 | `jenkins_url` | string | URL of the analyzed Jenkins build |
 | `status` | string | Analysis status: `pending`, `running`, `completed`, or `failed` |
 | `summary` | string | Summary of the analysis findings |
-| `html_report_url` | string | URL to view the HTML report (only present when `html_report` is enabled) |
 
 For the full result (via `/results/{job_id}`), each failure contains:
 
@@ -981,8 +1005,6 @@ For the full result (via `/results/{job_id}`), each failure contains:
 
 ## Output Formats
 
-By default, HTML reports are automatically generated and saved alongside JSON results. The sync response includes an `html_report_url` field with the link. Set `html_report` to `false` to disable HTML generation.
-
 ### JSON
 
 ```bash
@@ -991,36 +1013,6 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
   -H "Content-Type: application/json" \
   -d '{"job_name": "my-project", "build_number": 123, "ai_provider": "claude", "ai_model": "sonnet"}'
 ```
-
-### HTML Report
-
-Retrieve an analysis as a self-contained HTML report with a dark theme and collapsible failure details. While the analysis is still running, the HTML endpoint serves a status page that auto-refreshes every 10 seconds:
-
-```bash
-curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000.html -o report.html
-
-# Open in browser
-open report.html  # macOS
-xdg-open report.html  # Linux
-```
-
-By default, HTML reports are served from disk cache once generated. To force regeneration of the report from stored data, append the `?refresh=1` query parameter:
-
-```bash
-curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000.html?refresh=1 -o report.html
-```
-
-This is useful after server code updates when cached reports may be stale and need to reflect the latest rendering logic.
-
-The HTML report includes:
-
-- **Sticky header** with job name, build number, and failure count badge
-- **Root cause analysis cards** grouped by bug, with BUG-ID, classification, and severity badges
-- **Collapsible bug cards** with AI analysis, code fix or product bug report details, affected tests list, and error details
-- **All failures table** listing every failure with test name, error, classification, and bug reference
-- **Key takeaway** callout summarizing the analysis
-
-The report is fully self-contained (no external CSS/JS) and can be shared as a single file.
 
 ## pytest Integration
 
@@ -1084,18 +1076,18 @@ For each failed test case, the JUnit XML is enriched with:
 ### Setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/jenkins-job-insight.git
+git clone https://github.com/myk-org/jenkins-job-insight.git
 cd jenkins-job-insight
 
-# Install with development dependencies
-pip install -e ".[dev]"
+# Backend
+uv sync
+uv run pytest
 
-# Run tests
-pytest
-
-# Run locally with hot reload
-DEBUG=true jenkins-job-insight
+# Frontend
+cd frontend
+npm install
+npm test
+npm run build
 ```
 
 ### Environment File
@@ -1165,8 +1157,7 @@ The `/data` volume mount ensures SQLite database persistence across container re
 4. **AI analysis**: Send collected data to the configured AI provider (Claude, Gemini, or Cursor)
 5. **Classify failures**: AI determines if each failure is a code issue or product bug
 6. **Store result**: Save analysis to SQLite database for retrieval
-7. **Generate HTML report**: Save self-contained HTML report to disk (if enabled)
-8. **Deliver result**: Send to callback URL
+7. **Deliver result**: Send to callback URL
 
 ## License
 

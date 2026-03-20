@@ -1,3 +1,20 @@
+# Frontend build stage
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /frontend
+
+# Copy package files first for layer caching
+COPY frontend/package.json frontend/package-lock.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy frontend source
+COPY frontend/ .
+
+# Build the frontend (vite build only — type checking runs in tox/CI)
+RUN npx vite build
+
 FROM python:3.12-slim AS builder
 
 WORKDIR /app
@@ -66,6 +83,9 @@ COPY --chown=appuser:0 --from=builder /app/pyproject.toml /app/uv.lock ./
 
 # Copy source code
 COPY --chown=appuser:0 --from=builder /app/src /app/src
+
+# Copy built frontend assets from frontend builder
+COPY --chown=appuser:0 --from=frontend-builder /frontend/dist /app/frontend/dist
 
 # Copy entrypoint script
 COPY --chown=appuser:0 entrypoint.sh /app/entrypoint.sh
