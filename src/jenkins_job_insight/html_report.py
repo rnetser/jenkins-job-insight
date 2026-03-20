@@ -1764,35 +1764,40 @@ async function loadClassifications() {{
             }}
         }});
 
-        // Add classification badges to bug card summaries
-        document.querySelectorAll('.bug-summary, .failure-summary').forEach(function(summary) {{
-            var card = summary.closest('.bug-card, .failure-card');
-            if (!card) return;
-            var toggles = card.querySelectorAll('.reviewed-toggle');
-            var cardClassifications = {{}};
-            var cardJiraKeys = {{}};
-            var cardReasons = {{}};
+        function aggregateClassifications(toggles, byKey) {{
+            var classifications = {{}}, jiraKeys = {{}}, reasons = {{}};
             toggles.forEach(function(t) {{
                 var tn = t.dataset.testName;
                 var cj = t.dataset.childJob || '';
                 var cb = t.dataset.childBuild || '0';
                 var key = cj + '#' + cb + '::' + tn;
                 if (tn && byKey[key] && byKey[key].length > 0) {{
-                    // Use only latest classification per test for badge counts
                     var entry = byKey[key][0];
                     var cls = entry.classification;
-                    cardClassifications[cls] = (cardClassifications[cls] || 0) + 1;
-                    if (!cardReasons[cls]) cardReasons[cls] = [];
+                    classifications[cls] = (classifications[cls] || 0) + 1;
+                    if (!reasons[cls]) reasons[cls] = [];
                     var r = entry.reason || '';
                     var ri = entry.references_info || '';
                     var tip = r + (ri ? '\\nRef: ' + ri : '');
-                    if (tip && cardReasons[cls].indexOf(tip) === -1) cardReasons[cls].push(tip);
+                    if (tip && reasons[cls].indexOf(tip) === -1) reasons[cls].push(tip);
                     if (cls === 'KNOWN_BUG') {{
                         var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
-                        if (jm && !cardJiraKeys[jm[1]]) cardJiraKeys[jm[1]] = true;
+                        if (jm && !jiraKeys[jm[1]]) jiraKeys[jm[1]] = true;
                     }}
                 }}
             }});
+            return {{ classifications: classifications, jiraKeys: jiraKeys, reasons: reasons }};
+        }}
+
+        // Add classification badges to bug card summaries
+        document.querySelectorAll('.bug-summary, .failure-summary').forEach(function(summary) {{
+            var card = summary.closest('.bug-card, .failure-card');
+            if (!card) return;
+            var toggles = card.querySelectorAll('.reviewed-toggle');
+            var agg = aggregateClassifications(toggles, byKey);
+            var cardClassifications = agg.classifications;
+            var cardJiraKeys = agg.jiraKeys;
+            var cardReasons = agg.reasons;
             for (var cls in cardClassifications) {{
                 var badge = document.createElement('span');
                 badge.className = 'classification-tag';
@@ -1816,30 +1821,10 @@ async function loadClassifications() {{
             var childCard = summary.closest('.child-job');
             if (!childCard) return;
             var toggles = childCard.querySelectorAll('.reviewed-toggle');
-            var childClassifications = {{}};
-            var childJiraKeys = {{}};
-            var childReasons = {{}};
-            toggles.forEach(function(t) {{
-                var tn = t.dataset.testName;
-                var cj = t.dataset.childJob || '';
-                var cb = t.dataset.childBuild || '0';
-                var key = cj + '#' + cb + '::' + tn;
-                if (tn && byKey[key] && byKey[key].length > 0) {{
-                    // Use only latest classification per test for badge counts
-                    var entry = byKey[key][0];
-                    var cls = entry.classification;
-                    childClassifications[cls] = (childClassifications[cls] || 0) + 1;
-                    if (!childReasons[cls]) childReasons[cls] = [];
-                    var r = entry.reason || '';
-                    var ri = entry.references_info || '';
-                    var tip = r + (ri ? '\\nRef: ' + ri : '');
-                    if (tip && childReasons[cls].indexOf(tip) === -1) childReasons[cls].push(tip);
-                    if (cls === 'KNOWN_BUG') {{
-                        var jm = (r).match(/([A-Z][A-Z0-9]+-\\d+)/);
-                        if (jm && !childJiraKeys[jm[1]]) childJiraKeys[jm[1]] = true;
-                    }}
-                }}
-            }});
+            var agg = aggregateClassifications(toggles, byKey);
+            var childClassifications = agg.classifications;
+            var childJiraKeys = agg.jiraKeys;
+            var childReasons = agg.reasons;
             for (var cls in childClassifications) {{
                 var badge = document.createElement('span');
                 badge.style.cssText = 'display:inline;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;white-space:nowrap;margin-left:6px;' + getClassificationStyle(cls);

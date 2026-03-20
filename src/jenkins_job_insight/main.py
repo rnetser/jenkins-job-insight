@@ -851,6 +851,18 @@ async def get_job_report(
     Pass ``?refresh=1`` to force regeneration (e.g. after a code update).
     """
     logger.debug(f"GET /results/{job_id}.html: refresh={refresh}")
+    # NOTE: The cached HTML bakes in github_available / jira_available at render
+    # time.  If integration settings change (e.g. GITHUB_TOKEN added), stale
+    # button state may be served until the cache is refreshed (?refresh=1) or
+    # a re-analysis invalidates it.  In practice this is rare because config
+    # changes require a server restart, but callers can force regeneration via
+    # the refresh query parameter.
+
+    # Compute availability flags first so we can compare against what the cache
+    # would contain.
+    github_available = bool(settings.tests_repo_url and settings.github_token)
+    jira_available = settings.jira_enabled
+
     # Try disk cache first (skip when refresh requested)
     if not refresh:
         html_content = await get_html_report(job_id)
@@ -876,12 +888,11 @@ async def get_job_report(
     result_data = result.get("result")
     if result_data and status == "completed":
         analysis_result = _build_analysis_result(job_id, result_data)
-        github_available = bool(settings.tests_repo_url and settings.github_token)
         html_content = format_result_as_html(
             analysis_result,
             completed_at=result.get("created_at", ""),
             github_available=github_available,
-            jira_available=settings.jira_enabled,
+            jira_available=jira_available,
         )
         try:
             await save_html_report(job_id, html_content)
@@ -945,13 +956,24 @@ def _find_test_in_children(
 async def _validate_test_name_in_result(
     job_id: str, test_name: str, child_job_name: str = "", child_build_number: int = 0
 ) -> None:
-    """Validate that a test_name exists in the stored result."""
+    """Validate that a test_name exists in the stored result.
+
+    Also checks job status before looking for the test -- if the job is still
+    pending/running or has failed, the caller gets a clear status-based error
+    instead of a misleading "Test not found".
+    """
     logger.debug(
         f"_validate_test_name_in_result: job_id={job_id}, test_name={test_name}, child_job_name={child_job_name}"
     )
     stored = await storage.get_result(job_id)
     if not stored:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    status = stored.get("status", "unknown")
+    if status in ("pending", "running"):
+        raise HTTPException(status_code=202, detail=f"Job {job_id} is still pending")
+    if status == "failed":
+        raise HTTPException(status_code=409, detail=f"Job {job_id} failed")
 
     result_data = stored.get("result") or {}
 
@@ -1500,7 +1522,7 @@ async def create_github_issue_endpoint(
             status_code=502,
             detail=f"GitHub API unreachable: {exc}",
         ) from exc
-    except (KeyError, json.JSONDecodeError) as exc:
+    except (TypeError, KeyError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=502,
             detail=f"GitHub API returned unexpected response: {exc}",
@@ -1602,7 +1624,7 @@ async def create_jira_bug_endpoint(
             status_code=502,
             detail=f"Jira API unreachable: {exc}",
         ) from exc
-    except (KeyError, json.JSONDecodeError) as exc:
+    except (TypeError, KeyError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=502,
             detail=f"Jira API returned unexpected response: {exc}",
