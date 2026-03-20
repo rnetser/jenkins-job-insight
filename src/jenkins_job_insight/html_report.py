@@ -2011,11 +2011,12 @@ async function submitIssue(type, title, body, testName, childJob, childBuild, in
         overlay.remove();
         showIssueCreatedModal(type, data);
         // Find and replace the original create button with a link
-        var cards = document.querySelectorAll('.bug-card');
+        var cards = document.querySelectorAll('.bug-card, .failure-card');
         cards.forEach(function(card) {{
             var btns = card.querySelectorAll('.create-issue-btn');
             btns.forEach(function(b) {{
-                if (b.dataset.testName === testName && b.dataset.childJob === childJob) {{
+                var btnChildBuild = parseInt(b.dataset.childBuild || '0');
+                if (b.dataset.testName === testName && b.dataset.childJob === childJob && btnChildBuild === childBuild) {{
                     if ((type === 'github' && b.classList.contains('github-issue-btn')) ||
                         (type === 'jira' && b.classList.contains('jira-bug-btn'))) {{
                         var link = document.createElement('a');
@@ -2149,6 +2150,13 @@ async function previewIssue(btn, type) {{
     }}
 }}
 
+function rollbackClassificationSelect(select, prevValue, prevClass) {{
+    select.value = prevValue;
+    select.className = prevClass;
+    var card = select.closest('.bug-card') || select.closest('.failure-card');
+    if (card) showCorrectBugButton(card, prevValue);
+}}
+
 function overrideClassification(select) {{
     var newClassification = select.value;
     var prevValue = select.dataset.prevValue || select.value;
@@ -2172,24 +2180,15 @@ function overrideClassification(select) {{
             if (card) showCorrectBugButton(card, newClassification);
         }} else {{
             r.json().then(function(data) {{
-                select.value = prevValue;
-                select.className = prevClass;
-                var card = select.closest('.bug-card') || select.closest('.failure-card');
-                if (card) showCorrectBugButton(card, prevValue);
+                rollbackClassificationSelect(select, prevValue, prevClass);
                 showConfirmModal('Error', data.detail || 'Failed to override', function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
             }}).catch(function() {{
-                select.value = prevValue;
-                select.className = prevClass;
-                var card = select.closest('.bug-card') || select.closest('.failure-card');
-                if (card) showCorrectBugButton(card, prevValue);
+                rollbackClassificationSelect(select, prevValue, prevClass);
                 showConfirmModal('Error', 'Failed to override classification', function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
             }});
         }}
     }}).catch(function(err) {{
-        select.value = prevValue;
-        select.className = prevClass;
-        var card = select.closest('.bug-card') || select.closest('.failure-card');
-        if (card) showCorrectBugButton(card, prevValue);
+        rollbackClassificationSelect(select, prevValue, prevClass);
         showConfirmModal('Error', 'Network error: ' + err.message, function(){{}}, {{confirmLabel: 'OK', confirmOnly: true}});
     }});
 }}

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import urllib.parse
@@ -1039,6 +1040,33 @@ async def _get_error_signature(
     return failure.get("error_signature", "") if failure else ""
 
 
+async def _resolve_effective_failure(
+    job_id: str,
+    failure: FailureAnalysis,
+    child_job_name: str = "",
+    child_build_number: int = 0,
+) -> FailureAnalysis:
+    """Resolve the effective classification and return an updated failure.
+
+    Checks test_classifications for overrides. If an override exists,
+    updates the failure's classification and clears stale subtype data.
+    Falls back to the original classification if no override found.
+    """
+    effective_cls = await get_effective_classification(
+        job_id, failure.test_name, child_job_name, child_build_number
+    )
+    if not effective_cls or effective_cls == failure.analysis.classification:
+        return failure
+    updates: dict = {"classification": effective_cls}
+    if effective_cls == "CODE ISSUE":
+        updates["product_bug_report"] = False
+    elif effective_cls == "PRODUCT BUG":
+        updates["code_fix"] = False
+    return failure.model_copy(
+        update={"analysis": failure.analysis.model_copy(update=updates)}
+    )
+
+
 async def _invalidate_cached_html(job_id: str) -> None:
     """Delete cached HTML report so next request regenerates it."""
     logger.debug(f"_invalidate_cached_html: job_id={job_id}")
@@ -1269,20 +1297,10 @@ async def preview_github_issue(
         )
     failure = FailureAnalysis.model_validate(failure_dict)
 
-    # Check if classification was overridden (failure_history holds the
-    # effective classification; result_json may be stale after an override).
-    effective_cls = await get_effective_classification(
-        job_id, body.test_name, body.child_job_name, body.child_build_number
+    # Apply any classification override from test_classifications
+    failure = await _resolve_effective_failure(
+        job_id, failure, body.child_job_name, body.child_build_number
     )
-    if effective_cls and effective_cls != failure.analysis.classification:
-        updates: dict = {"classification": effective_cls}
-        if effective_cls == "CODE ISSUE":
-            updates["product_bug_report"] = False  # Clear stale product bug data
-        elif effective_cls == "PRODUCT BUG":
-            updates["code_fix"] = False  # Clear stale code fix data
-        failure = failure.model_copy(
-            update={"analysis": failure.analysis.model_copy(update=updates)}
-        )
 
     # AI config is best-effort for preview — fallback content is generated if not configured
     ai_provider = body.ai_provider or AI_PROVIDER
@@ -1360,20 +1378,10 @@ async def preview_jira_bug(
         )
     failure = FailureAnalysis.model_validate(failure_dict)
 
-    # Check if classification was overridden (failure_history holds the
-    # effective classification; result_json may be stale after an override).
-    effective_cls = await get_effective_classification(
-        job_id, body.test_name, body.child_job_name, body.child_build_number
+    # Apply any classification override from test_classifications
+    failure = await _resolve_effective_failure(
+        job_id, failure, body.child_job_name, body.child_build_number
     )
-    if effective_cls and effective_cls != failure.analysis.classification:
-        updates: dict = {"classification": effective_cls}
-        if effective_cls == "CODE ISSUE":
-            updates["product_bug_report"] = False  # Clear stale product bug data
-        elif effective_cls == "PRODUCT BUG":
-            updates["code_fix"] = False  # Clear stale code fix data
-        failure = failure.model_copy(
-            update={"analysis": failure.analysis.model_copy(update=updates)}
-        )
 
     # AI config is best-effort for preview — fallback content is generated if not configured
     ai_provider = body.ai_provider or AI_PROVIDER
@@ -1446,14 +1454,24 @@ async def create_github_issue_endpoint(
         )
 
     # Verify classification matches tracker
-    effective_cls = await get_effective_classification(
-        job_id, body.test_name, body.child_job_name, body.child_build_number
+    stored = await storage.get_result(job_id)
+    if not stored or not stored.get("result"):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    failure_dict = _find_failure_in_result(
+        stored["result"], body.test_name, body.child_job_name, body.child_build_number
     )
-    if effective_cls == "PRODUCT BUG":
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot create GitHub issue for a PRODUCT BUG classification. Use Jira instead.",
+    if failure_dict:
+        failure = await _resolve_effective_failure(
+            job_id,
+            FailureAnalysis.model_validate(failure_dict),
+            body.child_job_name,
+            body.child_build_number,
         )
+        if failure.analysis.classification == "PRODUCT BUG":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot create GitHub issue for a PRODUCT BUG classification. Use Jira instead.",
+            )
 
     username = request.cookies.get("jji_username", "")
     issue_body = body.body
@@ -1471,17 +1489,22 @@ async def create_github_issue_endpoint(
         raise HTTPException(
             status_code=400,
             detail=f"Invalid TESTS_REPO_URL: {exc}",
-        )
+        ) from exc
     except httpx.HTTPStatusError as exc:
         raise HTTPException(
             status_code=502,
             detail=f"GitHub API error: {exc.response.status_code}",
-        )
+        ) from exc
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=502,
             detail=f"GitHub API unreachable: {exc}",
-        )
+        ) from exc
+    except (KeyError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"GitHub API returned unexpected response: {exc}",
+        ) from exc
 
     # Auto-add comment with issue link (best-effort: the remote issue is
     # already created, so a failure here must not lose the created URL).
@@ -1539,14 +1562,24 @@ async def create_jira_bug_endpoint(
         )
 
     # Verify classification matches tracker
-    effective_cls = await get_effective_classification(
-        job_id, body.test_name, body.child_job_name, body.child_build_number
+    stored = await storage.get_result(job_id)
+    if not stored or not stored.get("result"):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    failure_dict = _find_failure_in_result(
+        stored["result"], body.test_name, body.child_job_name, body.child_build_number
     )
-    if effective_cls == "CODE ISSUE":
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot create Jira bug for a CODE ISSUE classification. Use GitHub instead.",
+    if failure_dict:
+        failure = await _resolve_effective_failure(
+            job_id,
+            FailureAnalysis.model_validate(failure_dict),
+            body.child_job_name,
+            body.child_build_number,
         )
+        if failure.analysis.classification == "CODE ISSUE":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot create Jira bug for a CODE ISSUE classification. Use GitHub instead.",
+            )
 
     username = request.cookies.get("jji_username", "")
     bug_body = body.body
@@ -1563,12 +1596,17 @@ async def create_jira_bug_endpoint(
         raise HTTPException(
             status_code=502,
             detail=f"Jira API error: {exc.response.status_code}",
-        )
+        ) from exc
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=502,
             detail=f"Jira API unreachable: {exc}",
-        )
+        ) from exc
+    except (KeyError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Jira API returned unexpected response: {exc}",
+        ) from exc
 
     # Auto-add comment with issue link (best-effort: the remote bug is
     # already created, so a failure here must not lose the created URL).
