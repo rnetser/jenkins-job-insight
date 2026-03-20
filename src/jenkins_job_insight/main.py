@@ -842,6 +842,7 @@ async def get_job_report(
     refresh: bool = Query(
         default=False, description="Force regeneration of the HTML report"
     ),
+    settings: Settings = Depends(get_settings),
 ) -> HTMLResponse:
     """Serve an HTML report, generating it on-demand if needed.
 
@@ -874,8 +875,12 @@ async def get_job_report(
     result_data = result.get("result")
     if result_data and status == "completed":
         analysis_result = _build_analysis_result(job_id, result_data)
+        github_available = bool(settings.tests_repo_url and settings.github_token)
         html_content = format_result_as_html(
-            analysis_result, completed_at=result.get("created_at", "")
+            analysis_result,
+            completed_at=result.get("created_at", ""),
+            github_available=github_available,
+            jira_available=settings.jira_enabled,
         )
         try:
             await save_html_report(job_id, html_content)

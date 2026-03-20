@@ -50,10 +50,10 @@ def _build_failure_context(failure: FailureAnalysis) -> dict:
             "evidence": analysis.product_bug_report.evidence,
         }
     context: dict = {
-        "test_name": failure.test_name,
-        "error": failure.error,
-        "classification": analysis.classification,
-        "details": analysis.details,
+        "test_name": failure.test_name or "",
+        "error": failure.error or "",
+        "classification": analysis.classification or "",
+        "details": analysis.details or "",
         "code_fix": code_fix,
         "product_bug": product_bug,
     }
@@ -501,7 +501,7 @@ async def search_github_duplicates(
         headers["Authorization"] = f"Bearer {github_token}"
 
     # Use meaningful words from title as search query
-    query_words = title.split()[:8]
+    query_words = title.split()
     query = " ".join(query_words)
 
     try:
@@ -549,7 +549,7 @@ async def search_jira_duplicates(
         from jenkins_job_insight.jira import JiraClient
 
         # Extract meaningful keywords from title
-        query_words = title.split()[:8]
+        query_words = title.split()
         keywords = [w for w in query_words if len(w) > 2]
         if not keywords:
             return []

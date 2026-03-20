@@ -12,6 +12,8 @@ from jenkins_job_insight.models import (
     ProductBugReport,
 )
 
+_TEST_GITHUB_TOKEN = "ghp_test"  # noqa: S105
+
 
 @pytest.fixture
 def code_issue_failure() -> FailureAnalysis:
@@ -185,7 +187,7 @@ class TestSearchGithubDuplicates:
             results = await search_github_duplicates(
                 title="Login fails with valid credentials",
                 repo_url="https://github.com/org/repo",
-                github_token="ghp_test",
+                github_token=_TEST_GITHUB_TOKEN,
             )
             assert len(results) == 1
             assert results[0]["number"] == 42
@@ -203,7 +205,7 @@ class TestSearchGithubDuplicates:
             results = await search_github_duplicates(
                 title="Login fails",
                 repo_url="https://github.com/org/repo",
-                github_token="ghp_test",
+                github_token=_TEST_GITHUB_TOKEN,
             )
             assert results == []
 
@@ -213,7 +215,7 @@ class TestSearchGithubDuplicates:
         results = await search_github_duplicates(
             title="Login fails",
             repo_url="not-a-github-url",
-            github_token="ghp_test",
+            github_token=_TEST_GITHUB_TOKEN,
         )
         assert results == []
 
@@ -247,7 +249,7 @@ class TestCreateGithubIssue:
                 title="Bug: login fails",
                 body="## Details\nLogin returns 500",
                 repo_url="https://github.com/org/repo",
-                github_token="ghp_test",
+                github_token=_TEST_GITHUB_TOKEN,
             )
             assert result["url"] == "https://github.com/org/repo/issues/99"
             assert result["number"] == 99
@@ -275,7 +277,7 @@ class TestCreateGithubIssue:
                 title="Bug: login fails",
                 body="Details",
                 repo_url="https://github.com/org/repo",
-                github_token="ghp_test",
+                github_token=_TEST_GITHUB_TOKEN,
                 labels=["bug", "test-failure"],
             )
             assert result["number"] == 100

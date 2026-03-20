@@ -1947,23 +1947,44 @@ async def override_classification(
                     (classification, job_id, test_name),
                 )
 
-        # Also store in test_classifications so the AI learns from overrides
-        await db.execute(
-            "INSERT INTO test_classifications "
-            "(test_name, job_name, parent_job_name, job_id, classification, "
-            "reason, created_by, visible, child_build_number) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
-            (
-                test_name,
-                child_job_name,
-                parent_job_name,
-                job_id,
-                classification,
-                "User override",
-                username,
-                child_build_number,
-            ),
-        )
+        # Find all test_names in this signature group
+        if error_signature:
+            if child_job_name:
+                group_cursor = await db.execute(
+                    "SELECT DISTINCT test_name FROM failure_history "
+                    "WHERE job_id = ? AND error_signature = ? "
+                    "AND child_job_name = ? AND child_build_number = ?",
+                    (job_id, error_signature, child_job_name, child_build_number),
+                )
+            else:
+                group_cursor = await db.execute(
+                    "SELECT DISTINCT test_name FROM failure_history "
+                    "WHERE job_id = ? AND error_signature = ? "
+                    "AND child_job_name = '' AND child_build_number = 0",
+                    (job_id, error_signature),
+                )
+            group_tests = [row[0] for row in await group_cursor.fetchall()]
+        else:
+            group_tests = [test_name]
+
+        # Persist override for ALL tests in the group
+        for t in group_tests:
+            await db.execute(
+                "INSERT INTO test_classifications "
+                "(test_name, job_name, parent_job_name, job_id, classification, "
+                "reason, created_by, visible, child_build_number) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
+                (
+                    t,
+                    child_job_name,
+                    parent_job_name,
+                    job_id,
+                    classification,
+                    "User override",
+                    username,
+                    child_build_number,
+                ),
+            )
 
         await db.commit()
     logger.info(

@@ -397,7 +397,13 @@ function getClassificationStyle(cls) {
 }"""
 
 
-def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str:
+def format_result_as_html(
+    result: AnalysisResult,
+    completed_at: str = "",
+    *,
+    github_available: bool = False,
+    jira_available: bool = False,
+) -> str:
     """Generate a self-contained HTML report for an analysis result.
 
     Produces a complete HTML document with inline CSS using a dark
@@ -407,6 +413,10 @@ def format_result_as_html(result: AnalysisResult, completed_at: str = "") -> str
     Args:
         result: The analysis result to render.
         completed_at: Optional timestamp string for when the analysis completed.
+        github_available: Whether GitHub issue creation is available
+            (tests_repo_url and github_token both configured).
+        jira_available: Whether Jira bug creation is available
+            (Jira integration enabled and configured).
 
     Returns:
         A complete HTML document as a string.
@@ -1232,6 +1242,8 @@ const JOB_ID = "{e(result.job_id)}";
 const BASE_PATH = window.location.pathname.replace(/\\/results\\/.*$/, '');
 const CURRENT_AI_PROVIDER = "{e(result.ai_provider or "")}";
 const CURRENT_AI_MODEL = "{e(result.ai_model or "")}";
+var GITHUB_AVAILABLE = {"true" if github_available else "false"};
+var JIRA_AVAILABLE = {"true" if jira_available else "false"};
 
 var _aiConfigs = [];
 (function loadAiConfigs() {{
@@ -1998,6 +2010,8 @@ async function submitIssue(type, title, body, testName, childJob, childBuild, in
         var data = await resp.json();
         overlay.remove();
         showIssueCreatedModal(type, data);
+        // Clear existing comments before reload to avoid duplicates
+        document.querySelectorAll('.comment-list').forEach(function(cl) {{ cl.innerHTML = ''; }});
         // Reload comments to show the auto-added link
         await loadCommentsAndReviews();
         updateCommentBadges();
@@ -2149,8 +2163,8 @@ function overrideClassification(select) {{
 function showCorrectBugButton(card, classification) {{
     var ghBtn = card.querySelector('.github-issue-btn');
     var jiraBtn = card.querySelector('.jira-bug-btn');
-    if (ghBtn) ghBtn.style.display = classification === 'CODE ISSUE' ? '' : 'none';
-    if (jiraBtn) jiraBtn.style.display = classification === 'PRODUCT BUG' ? '' : 'none';
+    if (ghBtn) ghBtn.style.display = (GITHUB_AVAILABLE && classification === 'CODE ISSUE') ? '' : 'none';
+    if (jiraBtn) jiraBtn.style.display = (JIRA_AVAILABLE && classification === 'PRODUCT BUG') ? '' : 'none';
 }}
 
 function initBugCreationButtons() {{
@@ -2486,6 +2500,7 @@ def _render_group_card(
 {indent}    <span class="bug-title">{e(card_title)}</span>
 {indent}    <span class="bug-count">{e(test_label)}</span>
 {indent}    <select class="classification-select {e(cls_class)}" data-test-name="{e(failures[0].test_name)}" data-child-job="{e(child_job_name)}" data-child-build="{child_build_number}" onclick="event.stopPropagation()" onchange="overrideClassification(this)">
+{indent}      {'<option value="" disabled selected>' + e(cls) + "</option>" if cls not in ("CODE ISSUE", "PRODUCT BUG") else ""}
 {indent}      <option value="CODE ISSUE" {"selected" if cls == "CODE ISSUE" else ""}>CODE ISSUE</option>
 {indent}      <option value="PRODUCT BUG" {"selected" if cls == "PRODUCT BUG" else ""}>PRODUCT BUG</option>
 {indent}    </select>
