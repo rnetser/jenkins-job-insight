@@ -654,7 +654,7 @@ async def analyze_failures(
         try:
             test_failures = extract_test_failures(raw_xml)
         except ParseError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid XML: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid XML: {e}") from e
 
         if not test_failures:
             job_id = str(uuid.uuid4())
@@ -1132,7 +1132,7 @@ async def add_comment(job_id: str, body: AddCommentRequest, request: Request) ->
             username=username,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _invalidate_cached_html(job_id)
     return {"id": comment_id}
 
@@ -1181,7 +1181,7 @@ async def set_reviewed(job_id: str, body: SetReviewedRequest, request: Request) 
             username=username,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _invalidate_cached_html(job_id)
     return {"status": "ok"}
 
@@ -1900,7 +1900,7 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
             visible=visible,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if classify_job_id:
         await _invalidate_cached_html(classify_job_id)
     return {"id": classification_id}
