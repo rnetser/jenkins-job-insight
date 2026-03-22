@@ -491,3 +491,60 @@ class TestOverrideClassification:
                 assert row[3] == 1  # visible
                 assert row[4] == "job-tc"
                 assert row[5] == 5
+
+
+class TestSetTestClassification:
+    """Tests for set_test_classification."""
+
+    async def test_classification_with_job_name_and_no_child_build(
+        self, setup_test_db: Path
+    ) -> None:
+        """Regression test: job_name + child_build_number=0 must not raise.
+
+        This combination previously triggered a false ValueError from
+        _validate_child_identifier_pairing which treated job_name as
+        child_job_name.
+        """
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            classification_id = await storage.set_test_classification(
+                test_name="tests.TestSuite.test_example",
+                classification="INFRASTRUCTURE",
+                job_id="test-job-id-123",
+                job_name="child-job-name",
+                child_build_number=0,
+            )
+            assert classification_id > 0
+
+    async def test_classification_with_all_defaults(self, setup_test_db: Path) -> None:
+        """Test classification with only required parameters."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            classification_id = await storage.set_test_classification(
+                test_name="tests.TestSuite.test_basic",
+                classification="FLAKY",
+                job_id="test-job-id-456",
+            )
+            assert classification_id > 0
+
+    async def test_classification_invalid_classification_raises(
+        self, setup_test_db: Path
+    ) -> None:
+        """Test that invalid classification values raise ValueError."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            with pytest.raises(ValueError, match="Invalid classification"):
+                await storage.set_test_classification(
+                    test_name="tests.TestSuite.test_bad",
+                    classification="INVALID",
+                    job_id="test-job-id-789",
+                )
+
+    async def test_classification_empty_job_id_raises(
+        self, setup_test_db: Path
+    ) -> None:
+        """Test that empty job_id raises ValueError."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            with pytest.raises(ValueError, match="job_id is required"):
+                await storage.set_test_classification(
+                    test_name="tests.TestSuite.test_no_job",
+                    classification="FLAKY",
+                    job_id="",
+                )

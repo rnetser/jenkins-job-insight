@@ -2509,3 +2509,42 @@ class TestHistoryEndpoints:
         data = response.json()
         assert data["period"] == "daily"
         assert isinstance(data["data"], list)
+
+
+class TestClassifyEndpoint:
+    """Tests for POST /history/classify."""
+
+    def test_classify_with_job_name_and_no_child_build(self, test_client) -> None:
+        """Regression test: job_name + child_build_number=0 returns 201."""
+        response = test_client.post(
+            "/history/classify",
+            json={
+                "test_name": "tests.TestSuite.test_example",
+                "classification": "INFRASTRUCTURE",
+                "job_id": "test-classify-job-1",
+                "job_name": "child-job-name",
+                "child_build_number": 0,
+            },
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert "id" in data
+        assert data["id"] > 0
+
+    def test_classify_valueerror_returns_400(self, test_client) -> None:
+        """Test that ValueError from storage returns 400, not 500."""
+        with patch(
+            "jenkins_job_insight.main.storage.set_test_classification",
+            new_callable=AsyncMock,
+            side_effect=ValueError("visible must be 0 or 1, got 99"),
+        ):
+            response = test_client.post(
+                "/history/classify",
+                json={
+                    "test_name": "tests.TestSuite.test_bad",
+                    "classification": "FLAKY",
+                    "job_id": "test-classify-job-2",
+                },
+            )
+            assert response.status_code == 400
+            assert "visible must be 0 or 1" in response.json()["detail"]

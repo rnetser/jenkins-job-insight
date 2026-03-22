@@ -1886,18 +1886,21 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
         if result and result.get("result"):
             parent_job_name = result["result"].get("job_name", "")
 
-    classification_id = await storage.set_test_classification(
-        test_name=test_name,
-        classification=classification,
-        reason=reason,
-        job_name=job_name,
-        parent_job_name=parent_job_name,
-        created_by=created_by,
-        references=references,
-        job_id=classify_job_id,
-        child_build_number=body.child_build_number,
-        visible=visible,
-    )
+    try:
+        classification_id = await storage.set_test_classification(
+            test_name=test_name,
+            classification=classification,
+            reason=reason,
+            job_name=job_name,
+            parent_job_name=parent_job_name,
+            created_by=created_by,
+            references=references,
+            job_id=classify_job_id,
+            child_build_number=body.child_build_number,
+            visible=visible,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if classify_job_id:
         await _invalidate_cached_html(classify_job_id)
     return {"id": classification_id}

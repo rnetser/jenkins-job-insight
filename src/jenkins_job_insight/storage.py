@@ -1594,7 +1594,6 @@ async def set_test_classification(
         raise ValueError(f"visible must be 0 or 1, got {visible}")
     if not job_id or not job_id.strip():
         raise ValueError("job_id is required for test classification")
-    _validate_child_identifier_pairing(job_name, child_build_number)
     logger.debug(
         f"set_test_classification: test_name={test_name}, classification={classification}, "
         f"parent_job_name={parent_job_name}, job_id={job_id}, visible={visible}"
