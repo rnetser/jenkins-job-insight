@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { isCommentInScope } from '@/lib/grouping'
 import { getUsername } from '@/lib/cookies'
@@ -46,30 +46,29 @@ interface LinkSegment {
   href?: string
 }
 
+function collectMatches(
+  raw: string,
+  pattern: RegExp,
+  matches: Array<{ start: number; end: number; text: string; href: string }>,
+  textFn: (m: RegExpMatchArray) => string,
+) {
+  for (const m of raw.matchAll(pattern)) {
+    if (matches.some((e) => e.start === m.index)) continue
+    const href = trimTrailingPunctuation(m[0])
+    const end = m.index! + href.length
+    const text = textFn(m)
+    matches.push({ start: m.index!, end, text, href })
+  }
+}
+
 function autoLinkComment(raw: string): LinkSegment[] {
   // Collect all link matches with their positions
   const matches: { start: number; end: number; text: string; href: string }[] = []
 
-  for (const m of raw.matchAll(GITHUB_PR_RE)) {
-    const href = trimTrailingPunctuation(m[0])
-    matches.push({ start: m.index, end: m.index + href.length, text: `${m[1]}#${m[2]}`, href })
-  }
-  for (const m of raw.matchAll(GITHUB_ISSUE_RE)) {
-    if (matches.some((e) => e.start === m.index)) continue
-    const href = trimTrailingPunctuation(m[0])
-    matches.push({ start: m.index, end: m.index + href.length, text: `${m[1]}#${m[2]}`, href })
-  }
-  for (const m of raw.matchAll(JIRA_BROWSE_RE)) {
-    // Skip if already captured by a longer match at the same position
-    if (matches.some((e) => e.start === m.index)) continue
-    const href = trimTrailingPunctuation(m[0])
-    matches.push({ start: m.index, end: m.index + href.length, text: m[1], href })
-  }
-  for (const m of raw.matchAll(GENERIC_URL_RE)) {
-    if (matches.some((e) => e.start === m.index)) continue
-    const href = trimTrailingPunctuation(m[0])
-    matches.push({ start: m.index, end: m.index + href.length, text: href, href })
-  }
+  collectMatches(raw, GITHUB_PR_RE, matches, (m) => `${m[1]}#${m[2]}`)
+  collectMatches(raw, GITHUB_ISSUE_RE, matches, (m) => `${m[1]}#${m[2]}`)
+  collectMatches(raw, JIRA_BROWSE_RE, matches, (m) => m[1])
+  collectMatches(raw, GENERIC_URL_RE, matches, (m) => trimTrailingPunctuation(m[0]))
 
   matches.sort((a, b) => a.start - b.start)
 
@@ -114,6 +113,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
   const [text, setText] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const latestEnrichmentRequest = useRef(0)
   const username = getUsername()
 
   const testComments = comments.filter((c) => isCommentInScope(c, testNames, childJobName, childBuildNumber))
@@ -142,8 +142,13 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
       }
       dispatch({ type: 'ADD_COMMENT', payload: fresh })
       // Refresh enrichments to pick up any tracker links in the new comment
-      api.post<{ enrichments: Record<string, CommentEnrichment[]> }>(`/results/${jobId}/enrich-comments`)
-        .then((res) => dispatch({ type: 'SET_ENRICHMENTS', payload: res.enrichments ?? {} }))
+      const requestId = ++latestEnrichmentRequest.current
+      void api.post<{ enrichments: Record<string, CommentEnrichment[]> }>(`/results/${jobId}/enrich-comments`)
+        .then((res) => {
+          if (requestId === latestEnrichmentRequest.current) {
+            dispatch({ type: 'SET_ENRICHMENTS', payload: res.enrichments ?? {} })
+          }
+        })
         .catch(() => {})
       setText('')
     } catch (err) {

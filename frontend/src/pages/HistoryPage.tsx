@@ -21,17 +21,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SearchInput } from '@/components/shared/SearchInput'
 import { Pagination } from '@/components/shared/Pagination'
 import { ClassificationBadge } from '@/components/shared/ClassificationBadge'
+import { CLASSIFICATIONS } from '@/constants/classifications'
 
-const CLASSIFICATIONS = [
-  'ALL',
-  'CODE ISSUE',
-  'PRODUCT BUG',
-  'FLAKY',
-  'REGRESSION',
-  'INFRASTRUCTURE',
-  'KNOWN_BUG',
-  'INTERMITTENT',
-]
+const CLASSIFICATION_FILTER_OPTIONS = ['ALL', ...CLASSIFICATIONS] as const
 
 const LIMIT = 50
 
@@ -151,7 +143,7 @@ function FailureHistoryTab() {
             <SelectValue placeholder="Classification" />
           </SelectTrigger>
           <SelectContent>
-            {CLASSIFICATIONS.map((c) => (
+            {CLASSIFICATION_FILTER_OPTIONS.map((c) => (
               <SelectItem key={c} value={c}>
                 {c}
               </SelectItem>

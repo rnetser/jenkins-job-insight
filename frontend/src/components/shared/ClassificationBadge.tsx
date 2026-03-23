@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge'
+import type { Classification } from '@/constants/classifications'
 
-const CLASSIFICATION_STYLES: Record<string, { variant: 'default' | 'destructive' | 'success' | 'warning' | 'purple' | 'outline'; label: string }> = {
+const CLASSIFICATION_STYLES: Record<Classification, { variant: 'default' | 'destructive' | 'success' | 'warning' | 'purple' | 'outline'; label: string }> = {
   'CODE ISSUE': { variant: 'default', label: 'CODE ISSUE' },
   'PRODUCT BUG': { variant: 'warning', label: 'PRODUCT BUG' },
   'FLAKY': { variant: 'purple', label: 'FLAKY' },

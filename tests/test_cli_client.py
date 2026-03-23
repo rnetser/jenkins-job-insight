@@ -445,7 +445,7 @@ class TestJJIClientBugCreation:
 class TestJJIClientCapabilities:
     def test_capabilities(self):
         def handler(request):
-            assert request.url.path == "/api/capabilities"
+            assert request.url.path == "/capabilities"
             return httpx.Response(200, json={"github_issues": True, "jira_bugs": False})
 
         client = _make_client(handler)

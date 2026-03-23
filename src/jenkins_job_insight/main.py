@@ -1692,7 +1692,7 @@ async def api_dashboard(
     return await list_results_for_dashboard(limit=limit)
 
 
-@app.get("/api/capabilities")
+@app.get("/capabilities")
 async def get_capabilities(settings: Settings = Depends(get_settings)) -> dict:
     """Report which optional features are configured on this server."""
     tests_repo_url = str(settings.tests_repo_url or "")

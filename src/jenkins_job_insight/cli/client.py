@@ -431,8 +431,8 @@ class JJIClient:
     # -- Capabilities ---------------------------------------------------------
 
     def capabilities(self) -> dict:
-        """Get server capabilities. GET /api/capabilities"""
-        return self._request("GET", "/api/capabilities")
+        """Get server capabilities. GET /capabilities"""
+        return self._request("GET", "/capabilities")
 
     # -- AI Configs -----------------------------------------------------------
 

@@ -37,8 +37,9 @@ function countAllFailures(failures: { test_name: string }[], children: ChildJobA
 }
 
 export function ReportPage() {
+  const { jobId } = useParams<{ jobId: string }>()
   return (
-    <ReportProvider>
+    <ReportProvider key={jobId ?? 'unknown'}>
       <ReportContent />
     </ReportProvider>
   )
@@ -86,7 +87,7 @@ function ReportContent() {
           api.get<{ classifications: Array<{ test_name: string; classification: string; job_name: string; parent_job_name: string; reason: string; references_info: string; created_by: string; job_id: string; child_build_number: number; created_at: string }> }>(
             `/history/classifications?job_id=${jobId}`,
           ),
-          api.get<{ github_issues: boolean; jira_bugs: boolean }>('/api/capabilities'),
+          api.get<{ github_issues: boolean; jira_bugs: boolean }>('/capabilities'),
         ])
         if (cancelled) return
 
@@ -110,9 +111,7 @@ function ReportContent() {
           const classMap: Record<string, string> = {}
           for (const c of classificationsResult.value.classifications ?? []) {
             // Use composite key to handle same test_name across different child jobs
-            const key = c.job_name && c.child_build_number
-              ? `${c.job_name}#${c.child_build_number}::${c.test_name}`
-              : c.test_name
+            const key = reviewKey(c.test_name, c.job_name, c.child_build_number)
             classMap[key] = c.classification
           }
           dispatch({ type: 'SET_CLASSIFICATIONS', payload: classMap })
