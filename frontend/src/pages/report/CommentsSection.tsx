@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '@/lib/api'
+import { isCommentInScope } from '@/lib/grouping'
 import { getUsername } from '@/lib/cookies'
 import { useReportState, useReportDispatch } from './ReportContext'
 import { Textarea } from '@/components/ui/textarea'
@@ -18,7 +19,25 @@ const JIRA_BROWSE_RE = /https?:\/\/[^/]+\/browse\/([A-Z][A-Z0-9]+-\d+)\S*/g
 const GENERIC_URL_RE = /https?:\/\/\S+/g
 
 function trimTrailingPunctuation(url: string): string {
-  return url.replace(/[.,;:!?)]+$/, '')
+  let result = url
+  while (result.length > 0) {
+    const last = result[result.length - 1]
+    if (last === ')') {
+      const opens = (result.match(/\(/g) || []).length
+      const closes = (result.match(/\)/g) || []).length
+      if (closes > opens) {
+        result = result.slice(0, -1)
+        continue
+      }
+      break
+    }
+    if (/[.,;:!?]/.test(last)) {
+      result = result.slice(0, -1)
+      continue
+    }
+    break
+  }
+  return result
 }
 
 interface LinkSegment {
@@ -94,17 +113,16 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
   const dispatch = useReportDispatch()
   const [text, setText] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const username = getUsername()
 
-  const testComments = comments.filter((c) => {
-    if (!testNames.includes(c.test_name)) return false
-    if (childJobName) return c.child_job_name === childJobName && c.child_build_number === childBuildNumber
-    return !c.child_job_name
-  })
+  const testComments = comments.filter((c) => isCommentInScope(c, testNames, childJobName, childBuildNumber))
 
   async function handleSubmit() {
+    if (submitting) return
     if (!text.trim()) return
     setSubmitting(true)
+    setSubmitError(null)
     try {
       const res = await api.post<{ id: number }>(`/results/${jobId}/comments`, {
         test_name: testNames[0],
@@ -128,6 +146,8 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
         .then((res) => dispatch({ type: 'SET_ENRICHMENTS', payload: res.enrichments ?? {} }))
         .catch(() => {})
       setText('')
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Failed to post comment')
     } finally {
       setSubmitting(false)
     }
@@ -206,23 +226,26 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
         </div>
       )}
 
-      <div className="flex gap-2">
-        <Textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Add a comment..."
-          className="min-h-[36px] resize-none text-sm"
-          rows={1}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              handleSubmit()
-            }
-          }}
-        />
-        <Button size="sm" onClick={handleSubmit} disabled={!text.trim() || submitting} className="shrink-0">
-          Post
-        </Button>
+      <div className="space-y-1">
+        <div className="flex gap-2">
+          <Textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Add a comment..."
+            className="min-h-[36px] resize-none text-sm"
+            rows={1}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                handleSubmit()
+              }
+            }}
+          />
+          <Button size="sm" onClick={handleSubmit} disabled={!text.trim() || submitting} className="shrink-0">
+            Post
+          </Button>
+        </div>
+        {submitError && <span className="text-signal-red text-xs">{submitError}</span>}
       </div>
     </div>
   )

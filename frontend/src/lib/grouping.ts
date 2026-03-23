@@ -1,5 +1,18 @@
 import type { FailureAnalysis, GroupedFailure } from '@/types'
 
+/** Check whether a comment belongs to the given test-group scope. */
+export function isCommentInScope(
+  comment: { test_name: string; child_job_name?: string; child_build_number?: number },
+  groupTestNames: string[] | Set<string>,
+  childJobName?: string,
+  childBuildNumber?: number,
+): boolean {
+  const names = groupTestNames instanceof Set ? groupTestNames : new Set(groupTestNames)
+  if (!names.has(comment.test_name)) return false
+  if (childJobName) return comment.child_job_name === childJobName && comment.child_build_number === childBuildNumber
+  return !comment.child_job_name
+}
+
 /** Compute grouping key — matches Python _grouping_key(). */
 export function groupingKey(failure: FailureAnalysis): string {
   return failure.error_signature || `unique-${failure.test_name}`

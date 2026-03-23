@@ -162,12 +162,12 @@ export function BugCreationDialog({
               </div>
             )}
             <div className="space-y-2">
-              <label className="text-xs font-display uppercase tracking-widest text-text-tertiary">Title</label>
-              <Input value={title} onChange={(e) => setTitle(e.target.value)} />
+              <label htmlFor="bug-title" className="text-xs font-display uppercase tracking-widest text-text-tertiary">Title</label>
+              <Input id="bug-title" value={title} onChange={(e) => setTitle(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <label className="text-xs font-display uppercase tracking-widest text-text-tertiary">Body</label>
-              <Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={12} className="font-mono text-xs" />
+              <label htmlFor="bug-body" className="text-xs font-display uppercase tracking-widest text-text-tertiary">Body</label>
+              <Textarea id="bug-body" value={body} onChange={(e) => setBody(e.target.value)} rows={12} className="font-mono text-xs" />
             </div>
           </div>
         )}

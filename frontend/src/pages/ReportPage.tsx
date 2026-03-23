@@ -53,11 +53,14 @@ function ReportContent() {
   useEffect(() => {
     if (!jobId) return
 
+    let cancelled = false
+
     async function load() {
       dispatch({ type: 'SET_LOADING', payload: true })
       try {
         // Result is required
         const resultRes = await api.get<ResultResponse>(`/results/${jobId}`)
+        if (cancelled) return
 
         if (!resultRes.result) {
           if (resultRes.status === 'pending' || resultRes.status === 'running') {
@@ -85,6 +88,8 @@ function ReportContent() {
           ),
           api.get<{ github_issues: boolean; jira_bugs: boolean }>('/api/capabilities'),
         ])
+        if (cancelled) return
+
         if (capabilitiesResult.status === 'fulfilled') {
           dispatch({ type: 'SET_GITHUB_AVAILABLE', payload: capabilitiesResult.value.github_issues })
           dispatch({ type: 'SET_JIRA_AVAILABLE', payload: capabilitiesResult.value.jira_bugs })
@@ -93,7 +98,9 @@ function ReportContent() {
           dispatch({ type: 'SET_COMMENTS_AND_REVIEWS', payload: commentsResult.value })
           // Fetch enrichments once at report level
           api.post<{ enrichments: Record<string, CommentEnrichment[]> }>(`/results/${jobId}/enrich-comments`)
-            .then((res) => dispatch({ type: 'SET_ENRICHMENTS', payload: res.enrichments ?? {} }))
+            .then((res) => {
+              if (!cancelled) dispatch({ type: 'SET_ENRICHMENTS', payload: res.enrichments ?? {} })
+            })
             .catch(() => {}) // best-effort
         }
         if (aiConfigsResult.status === 'fulfilled') {
@@ -111,11 +118,14 @@ function ReportContent() {
           dispatch({ type: 'SET_CLASSIFICATIONS', payload: classMap })
         }
       } catch (err) {
-        dispatch({ type: 'SET_ERROR', payload: err instanceof Error ? err.message : 'Failed to load report' })
+        if (!cancelled) {
+          dispatch({ type: 'SET_ERROR', payload: err instanceof Error ? err.message : 'Failed to load report' })
+        }
       }
     }
 
     load()
+    return () => { cancelled = true }
   }, [jobId, navigate, dispatch])
 
   // Preserve scroll position across F5 refreshes

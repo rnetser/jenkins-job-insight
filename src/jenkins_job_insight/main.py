@@ -1547,9 +1547,9 @@ def _apply_classification_override(
     if child_job_name:
         # Override in child job failures
         for child in result_data.get("child_job_analyses", []):
-            if (
-                child.get("job_name") == child_job_name
-                and child.get("build_number") == child_build_number
+            if child.get("job_name") == child_job_name and (
+                child_build_number == 0
+                or child.get("build_number") == child_build_number
             ):
                 _patch_failures(child.get("failures", []))
             # Also check nested failed_children recursively
@@ -1574,9 +1574,8 @@ def _patch_children(
 ) -> None:
     """Recursively patch classification in nested children."""
     for child in children:
-        if (
-            child.get("job_name") == child_job_name
-            and child.get("build_number") == child_build_number
+        if child.get("job_name") == child_job_name and (
+            child_build_number == 0 or child.get("build_number") == child_build_number
         ):
             for f in child.get("failures", []):
                 if f.get("test_name") == test_name:

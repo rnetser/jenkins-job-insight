@@ -61,6 +61,7 @@ function FailureHistoryTab() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [inputValue, setInputValue] = useState('')
   const [search, setSearch] = useState('')
   const [classification, setClassification] = useState('ALL')
   const [page, setPage] = useState(1)
@@ -92,17 +93,24 @@ function FailureHistoryTab() {
     [],
   )
 
-  // Fetch on page change immediately
+  // Fetch on page/search/classification change
   useEffect(() => {
     fetchData(search, classification, page)
-  }, [page, classification, fetchData]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [page, classification, fetchData, search])
 
-  // Debounce search
+  // Cleanup debounce on unmount
+  useEffect(() => {
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [])
+
+  // Debounce search — only updates state after delay
   function handleSearch(v: string) {
-    setSearch(v)
-    setPage(1)
+    setInputValue(v)
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => fetchData(v, classification, 1), 300)
+    debounceRef.current = setTimeout(() => {
+      setSearch(v)
+      setPage(1)
+    }, 300)
   }
 
   function handleClassification(v: string) {
@@ -118,7 +126,7 @@ function FailureHistoryTab() {
       {/* Filters */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <SearchInput
-          value={search}
+          value={inputValue}
           onChange={handleSearch}
           placeholder="Search test names..."
           className="w-full sm:w-72"

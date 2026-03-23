@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { GroupedFailure } from '@/types'
+import { isCommentInScope } from '@/lib/grouping'
 import { api } from '@/lib/api'
 import { useSessionState } from '@/lib/useSessionState'
 import { useReportState, useReportDispatch, reviewKey } from './ReportContext'
@@ -35,6 +36,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
   const [expanded, setExpanded] = useSessionState(expandKey, false)
   const [bugTarget, setBugTarget] = useState<'github' | 'jira' | null>(null)
   const [reviewingAll, setReviewingAll] = useState(false)
+  const [reviewAllError, setReviewAllError] = useState<string | null>(null)
   const [selectedProvider, setSelectedProvider] = useState(result?.ai_provider ?? '')
   const [selectedModel, setSelectedModel] = useState(result?.ai_model ?? '')
   const [includeLinks, setIncludeLinks] = useState(false)
@@ -54,16 +56,13 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
 
   const rep = group.tests[0]
   const analysis = rep.analysis
-  const classification = analysis.classification
+  const repKey = reviewKey(rep.test_name, childJobName, childBuildNumber)
+  const classification = classifications[repKey] ?? analysis.classification
   const borderColor = classification === 'PRODUCT BUG' ? 'border-l-signal-orange' : 'border-l-signal-blue'
 
   // Comment count for ALL tests in the group
   const groupTestNames = group.tests.map((t) => t.test_name)
-  const commentCount = comments.filter((c) => {
-    if (!groupTestNames.includes(c.test_name)) return false
-    if (childJobName) return c.child_job_name === childJobName && c.child_build_number === childBuildNumber
-    return !c.child_job_name
-  }).length
+  const commentCount = comments.filter((c) => isCommentInScope(c, groupTestNames, childJobName, childBuildNumber)).length
 
   // Review-all: check how many tests in group are reviewed
   const reviewedCount = group.tests.filter((t) => {
@@ -74,6 +73,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
 
   async function handleReviewAll() {
     setReviewingAll(true)
+    setReviewAllError(null)
     const newState = !allReviewed
     try {
       const results = await Promise.allSettled(
@@ -86,6 +86,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
           }).then(() => t),
         ),
       )
+      let failedCount = 0
       for (const result of results) {
         if (result.status === 'fulfilled') {
           const t = result.value
@@ -95,8 +96,11 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             payload: { key, state: { reviewed: newState, updated_at: new Date().toISOString() } },
           })
         } else {
-          console.error('Failed to toggle review for a test:', result.reason)
+          failedCount++
         }
+      }
+      if (failedCount > 0) {
+        setReviewAllError(`Failed to update ${failedCount} of ${results.length} tests`)
       }
     } finally {
       setReviewingAll(false)
@@ -150,18 +154,21 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
           <CardContent className="space-y-4 border-t border-border-muted pt-4">
             {/* Review-all toggle for groups */}
             {group.count > 1 && (
-              <button
-                onClick={handleReviewAll}
-                disabled={reviewingAll}
-                className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-bold transition-colors ${
-                  allReviewed
-                    ? 'bg-signal-green/15 text-signal-green'
-                    : 'bg-surface-elevated text-text-tertiary hover:text-text-secondary'
-                }`}
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                {allReviewed ? 'All Reviewed' : `Review All (${reviewedCount}/${group.count})`}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleReviewAll}
+                  disabled={reviewingAll}
+                  className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-bold transition-colors ${
+                    allReviewed
+                      ? 'bg-signal-green/15 text-signal-green'
+                      : 'bg-surface-elevated text-text-tertiary hover:text-text-secondary'
+                  }`}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  {allReviewed ? 'All Reviewed' : `Review All (${reviewedCount}/${group.count})`}
+                </button>
+                {reviewAllError && <span className="text-signal-red text-xs">{reviewAllError}</span>}
+              </div>
             )}
 
             {/* Affected tests list */}

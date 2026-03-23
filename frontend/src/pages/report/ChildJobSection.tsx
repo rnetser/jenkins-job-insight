@@ -23,16 +23,20 @@ export function ChildJobSection({ child, jobId, depth = 0 }: ChildJobSectionProp
   return (
     <div className={depth > 0 ? 'ml-4 border-l-2 border-border-muted pl-4' : ''}>
       {/* Header */}
-      <button
-        className="flex w-full items-center gap-3 rounded-md bg-surface-elevated/50 px-4 py-3 text-left mb-4"
-        onClick={() => setExpanded(!expanded)}
-      >
-        {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-text-tertiary" /> : <ChevronRight className="h-4 w-4 shrink-0 text-text-tertiary" />}
-        <GitFork className="h-4 w-4 text-signal-blue shrink-0" />
-        <div className="min-w-0 flex-1">
-          <span className="font-display text-sm font-semibold text-text-primary">{child.job_name}</span>
-          <span className="ml-2 font-mono text-xs text-text-tertiary">#{child.build_number}</span>
-        </div>
+      <div className="flex w-full items-center gap-3 rounded-md bg-surface-elevated/50 px-4 py-3 text-left mb-4">
+        <button
+          type="button"
+          className="flex items-center gap-3 min-w-0 flex-1 bg-transparent border-none p-0 text-left cursor-pointer"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-text-tertiary" /> : <ChevronRight className="h-4 w-4 shrink-0 text-text-tertiary" />}
+          <GitFork className="h-4 w-4 text-signal-blue shrink-0" />
+          <div className="min-w-0 flex-1">
+            <span className="font-display text-sm font-semibold text-text-primary">{child.job_name}</span>
+            <span className="ml-2 font-mono text-xs text-text-tertiary">#{child.build_number}</span>
+          </div>
+        </button>
         <Badge variant="outline" className="shrink-0">
           {child.failures.length} {child.failures.length === 1 ? 'failure' : 'failures'}
         </Badge>
@@ -42,12 +46,11 @@ export function ChildJobSection({ child, jobId, depth = 0 }: ChildJobSectionProp
             target="_blank"
             rel="noopener noreferrer"
             className="shrink-0 text-text-tertiary hover:text-text-link"
-            onClick={(e) => e.stopPropagation()}
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </a>
         )}
-      </button>
+      </div>
 
       {expanded && (
         <>
