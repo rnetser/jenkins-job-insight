@@ -18,6 +18,8 @@ export function UserBadge() {
       <div className="h-2 w-2 rounded-full bg-signal-green" />
       <span className="font-mono text-xs">{username}</span>
       <button
+        type="button"
+        aria-label="Logout"
         onClick={handleLogout}
         className="ml-1 rounded-sm p-0.5 text-text-tertiary transition-colors hover:text-signal-red"
         title="Logout"

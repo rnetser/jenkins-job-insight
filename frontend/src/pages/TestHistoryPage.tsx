@@ -16,11 +16,14 @@ export function TestHistoryPage() {
 
   useEffect(() => {
     if (!decoded) return
+    let active = true
     setLoading(true)
+    setError('')
     api.get<TestHistory>(`/history/test/${encodeURIComponent(decoded)}`)
-      .then(setData)
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load'))
-      .finally(() => setLoading(false))
+      .then((data) => { if (active) setData(data) })
+      .catch((err) => { if (active) setError(err instanceof Error ? err.message : 'Failed to load') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
   }, [decoded])
 
   if (loading) return <div className="space-y-4"><Skeleton className="h-8 w-96" /><Skeleton className="h-48 w-full" /></div>

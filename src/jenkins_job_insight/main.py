@@ -630,6 +630,7 @@ async def analyze_failures(
             result_data = analysis_result.model_dump(mode="json")
             result_data["base_url"] = base_url
             result_data["result_url"] = f"{base_url}/results/{job_id}"
+            result_data["html_report_url"] = result_data["result_url"]
             return JSONResponse(content=result_data)
     else:
         if not body.failures:
@@ -727,6 +728,7 @@ async def analyze_failures(
         result_data = analysis_result.model_dump(mode="json")
         result_data["base_url"] = base_url
         result_data["result_url"] = f"{base_url}/results/{job_id}"
+        result_data["html_report_url"] = result_data["result_url"]
 
         await update_status(job_id, "completed", result_data)
 
@@ -758,6 +760,7 @@ async def analyze_failures(
         content = analysis_result.model_dump(mode="json")
         content["base_url"] = base_url
         content["result_url"] = f"{base_url}/results/{job_id}"
+        content["html_report_url"] = content["result_url"]
         return JSONResponse(content=content)
 
     finally:
@@ -1893,8 +1896,11 @@ async def serve_spa_known_routes() -> HTMLResponse:
 
 
 @app.get("/{path:path}", include_in_schema=False)
-async def serve_frontend_catchall(path: str) -> HTMLResponse:
+async def serve_frontend_catchall(request: Request, path: str) -> HTMLResponse:
     """Catch-all: serve the React SPA for any unmatched route."""
+    accept = request.headers.get("accept", "")
+    if "text/html" not in accept or "application/json" in accept:
+        raise HTTPException(status_code=404, detail="Not found")
     return _serve_spa()
 
 

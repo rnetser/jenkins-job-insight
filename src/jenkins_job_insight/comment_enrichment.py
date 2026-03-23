@@ -15,34 +15,31 @@ _GITHUB_ISSUE_PATTERN = re.compile(r"https?://github\.com/([^/]+)/([^/]+)/issues
 _JIRA_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
 
 
-def detect_github_prs(text: str) -> list[dict]:
-    """Detect GitHub PR URLs in text.
+def _detect_github_links(text: str, pattern: re.Pattern, label: str) -> list[dict]:
+    """Detect GitHub links matching a pattern.
 
     Args:
         text: The comment text to scan.
+        pattern: Compiled regex with (owner, repo, number) groups.
+        label: Label for debug logging.
 
     Returns:
         List of dicts with 'owner', 'repo', and 'number' keys.
     """
-    matches = _GITHUB_PR_PATTERN.findall(text)
+    matches = pattern.findall(text)
     result = [{"owner": m[0], "repo": m[1], "number": int(m[2])} for m in matches]
-    logger.debug(f"detect_github_prs: found={len(result)}")
+    logger.debug(f"{label}: found={len(result)}")
     return result
+
+
+def detect_github_prs(text: str) -> list[dict]:
+    """Detect GitHub PR URLs in text."""
+    return _detect_github_links(text, _GITHUB_PR_PATTERN, "detect_github_prs")
 
 
 def detect_github_issues(text: str) -> list[dict]:
-    """Detect GitHub issue URLs in text.
-
-    Args:
-        text: The comment text to scan.
-
-    Returns:
-        List of dicts with 'owner', 'repo', and 'number' keys.
-    """
-    matches = _GITHUB_ISSUE_PATTERN.findall(text)
-    result = [{"owner": m[0], "repo": m[1], "number": int(m[2])} for m in matches]
-    logger.debug(f"detect_github_issues: found={len(result)}")
-    return result
+    """Detect GitHub issue URLs in text."""
+    return _detect_github_links(text, _GITHUB_ISSUE_PATTERN, "detect_github_issues")
 
 
 def detect_jira_keys(text: str) -> list[str]:
@@ -126,7 +123,7 @@ async def fetch_github_issue_status(
         token: Optional GitHub personal access token for authentication.
 
     Returns:
-        Capitalized state string (e.g. 'Open', 'Closed') or None if fetch fails.
+        Lowercase state string (e.g. 'open', 'closed') or None if fetch fails.
     """
     logger.debug(
         f"fetch_github_issue_status: owner={owner}, repo={repo}, number={number}"
@@ -144,7 +141,7 @@ async def fetch_github_issue_status(
                 )
                 return None
             data = resp.json()
-            status = data.get("state", "unknown").capitalize()
+            status = data.get("state", "unknown")
             logger.debug(
                 f"fetch_github_issue_status: {owner}/{repo}#{number} status={status}"
             )

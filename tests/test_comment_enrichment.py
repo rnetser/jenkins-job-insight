@@ -142,7 +142,7 @@ class TestFetchGitHubIssueStatus:
             mock_client.return_value = mock_instance
 
             status = await fetch_github_issue_status("org", "repo", 42)
-            assert status == "Open"
+            assert status == "open"
 
     @pytest.mark.asyncio
     async def test_fetch_closed_issue(self):
@@ -160,7 +160,7 @@ class TestFetchGitHubIssueStatus:
             mock_client.return_value = mock_instance
 
             status = await fetch_github_issue_status("org", "repo", 42)
-            assert status == "Closed"
+            assert status == "closed"
 
     @pytest.mark.asyncio
     async def test_fetch_issue_not_found(self):
@@ -197,7 +197,7 @@ class TestFetchGitHubIssueStatus:
             status = await fetch_github_issue_status(
                 "org", "repo", 42, token="ghp_test123"
             )
-            assert status == "Open"
+            assert status == "open"
             call_args = mock_instance.get.call_args
             headers = call_args.kwargs.get("headers", call_args[1].get("headers", {}))
             assert headers.get("Authorization") == "Bearer ghp_test123"

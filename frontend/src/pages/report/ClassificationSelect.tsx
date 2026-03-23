@@ -20,9 +20,11 @@ export function ClassificationSelect({
 }: ClassificationSelectProps) {
   const dispatch = useReportDispatch()
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   async function handleChange(value: string) {
     if (value === currentClassification) return
+    setError(null)
     setLoading(true)
     try {
       await api.put(`/results/${jobId}/override-classification`, {
@@ -35,20 +37,26 @@ export function ClassificationSelect({
         type: 'OVERRIDE_CLASSIFICATION',
         payload: { testName, classification: value, childJobName, childBuildNumber },
       })
+    } catch (err) {
+      console.error('Failed to save classification:', err)
+      setError('Failed to save')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <Select value={currentClassification} onValueChange={handleChange} disabled={loading}>
-      <SelectTrigger className="h-8 w-40 text-xs">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="CODE ISSUE">CODE ISSUE</SelectItem>
-        <SelectItem value="PRODUCT BUG">PRODUCT BUG</SelectItem>
-      </SelectContent>
-    </Select>
+    <div className="flex items-center gap-1">
+      <Select value={currentClassification} onValueChange={handleChange} disabled={loading}>
+        <SelectTrigger className="h-8 w-40 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="CODE ISSUE">CODE ISSUE</SelectItem>
+          <SelectItem value="PRODUCT BUG">PRODUCT BUG</SelectItem>
+        </SelectContent>
+      </Select>
+      {error && <span className="text-signal-red text-xs">{error}</span>}
+    </div>
   )
 }

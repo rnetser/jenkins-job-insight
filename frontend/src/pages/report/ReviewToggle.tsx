@@ -32,6 +32,8 @@ export function ReviewToggle({ jobId, testName, childJobName, childBuildNumber }
         type: 'SET_REVIEW',
         payload: { key, state: { reviewed: !reviewed, updated_at: new Date().toISOString() } },
       })
+    } catch (err) {
+      console.error('Failed to toggle review status:', err)
     } finally {
       setLoading(false)
     }

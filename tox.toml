@@ -28,4 +28,3 @@ description = "Run frontend build and tests"
 skip_install = true
 allowlist_externals = ["npm", "npx"]
 change_dir = "frontend"
-extras = ["dev"]

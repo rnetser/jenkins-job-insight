@@ -98,6 +98,9 @@ class TestDashboardCommand:
         mock_client.dashboard.return_value = []
         result = runner.invoke(app, ["results", "dashboard", "--json"])
         assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed == []
+        mock_client.dashboard.assert_called_once()
 
     def test_dashboard_custom_limit(self, mock_client):
         mock_client.dashboard.return_value = []
@@ -496,6 +499,9 @@ class TestCapabilitiesCommand:
         }
         result = runner.invoke(app, ["capabilities"])
         assert result.exit_code == 0
+        assert "github" in result.output.lower()
+        assert "jira" in result.output.lower()
+        mock_client.capabilities.assert_called_once()
 
 
 class TestAiConfigsCommand:

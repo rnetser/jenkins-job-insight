@@ -2,8 +2,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 
 import { Layout } from '@/components/layout/Layout'
 
-// Lazy-loaded pages (will be created in Phase 2)
-// For now, create placeholder pages
 import { RegisterPage } from '@/pages/RegisterPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { StatusPage } from '@/pages/StatusPage'

@@ -17,12 +17,11 @@ import type { ChildJobAnalysis } from '@/types'
 function collectAllTestKeys(
   failures: { test_name: string }[],
   children: ChildJobAnalysis[],
-  keys: string[] = [],
 ): string[] {
-  for (const f of failures) keys.push(reviewKey(f.test_name))
+  const keys: string[] = failures.map((f) => reviewKey(f.test_name))
   for (const child of children) {
-    for (const f of child.failures) keys.push(reviewKey(f.test_name, child.job_name, child.build_number))
-    collectAllTestKeys([], child.failed_children, keys)
+    keys.push(...child.failures.map((f) => reviewKey(f.test_name, child.job_name, child.build_number)))
+    keys.push(...collectAllTestKeys([], child.failed_children))
   }
   return keys
 }

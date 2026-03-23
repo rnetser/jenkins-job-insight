@@ -17,6 +17,10 @@ const GITHUB_ISSUE_RE = /https?:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)\S
 const JIRA_BROWSE_RE = /https?:\/\/[^/]+\/browse\/([A-Z][A-Z0-9]+-\d+)\S*/g
 const GENERIC_URL_RE = /https?:\/\/\S+/g
 
+function trimTrailingPunctuation(url: string): string {
+  return url.replace(/[.,;:!?)]+$/, '')
+}
+
 interface LinkSegment {
   type: 'text' | 'link'
   text: string
@@ -28,20 +32,24 @@ function autoLinkComment(raw: string): LinkSegment[] {
   const matches: { start: number; end: number; text: string; href: string }[] = []
 
   for (const m of raw.matchAll(GITHUB_PR_RE)) {
-    matches.push({ start: m.index, end: m.index + m[0].length, text: `${m[1]}#${m[2]}`, href: m[0] })
+    const href = trimTrailingPunctuation(m[0])
+    matches.push({ start: m.index, end: m.index + href.length, text: `${m[1]}#${m[2]}`, href })
   }
   for (const m of raw.matchAll(GITHUB_ISSUE_RE)) {
     if (matches.some((e) => e.start === m.index)) continue
-    matches.push({ start: m.index, end: m.index + m[0].length, text: `${m[1]}#${m[2]}`, href: m[0] })
+    const href = trimTrailingPunctuation(m[0])
+    matches.push({ start: m.index, end: m.index + href.length, text: `${m[1]}#${m[2]}`, href })
   }
   for (const m of raw.matchAll(JIRA_BROWSE_RE)) {
     // Skip if already captured by a longer match at the same position
     if (matches.some((e) => e.start === m.index)) continue
-    matches.push({ start: m.index, end: m.index + m[0].length, text: m[1], href: m[0] })
+    const href = trimTrailingPunctuation(m[0])
+    matches.push({ start: m.index, end: m.index + href.length, text: m[1], href })
   }
   for (const m of raw.matchAll(GENERIC_URL_RE)) {
     if (matches.some((e) => e.start === m.index)) continue
-    matches.push({ start: m.index, end: m.index + m[0].length, text: m[0], href: m[0] })
+    const href = trimTrailingPunctuation(m[0])
+    matches.push({ start: m.index, end: m.index + href.length, text: href, href })
   }
 
   matches.sort((a, b) => a.start - b.start)
@@ -183,8 +191,10 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
                 </div>
                 {c.username === username && (
                   <button
+                    type="button"
+                    aria-label="Delete comment"
                     onClick={() => handleDelete(c.id)}
-                    className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                    className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal-blue"
                     title="Delete comment"
                   >
                     <Trash2 className="h-3.5 w-3.5 text-text-tertiary hover:text-signal-red" />

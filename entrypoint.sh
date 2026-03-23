@@ -18,13 +18,13 @@ export PORT="${PORT:-8000}"
 # Dev mode: start Vite dev server in background for frontend HMR
 if [ "${DEV_MODE:-}" = "true" ] && [ -f /app/frontend/package.json ]; then
     echo "[DEV] Frontend source detected, starting Vite dev server..."
-    cd /app/frontend
+    cd /app/frontend || { echo "[DEV] Failed to change to frontend directory"; exit 1; }
     if [ ! -d node_modules ]; then
         echo "[DEV] Installing frontend dependencies..."
-        npm install --no-audit --no-fund 2>&1 | tail -1
+        npm install --no-audit --no-fund
     fi
     npm run dev -- --host 0.0.0.0 --port 5173 &
-    cd /app
+    cd /app || { echo "[DEV] Failed to return to app directory"; exit 1; }
 fi
 
 # Check if any argument contains "uvicorn" to detect all uvicorn invocations

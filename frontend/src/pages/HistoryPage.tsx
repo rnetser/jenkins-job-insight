@@ -60,6 +60,7 @@ function FailureHistoryTab() {
   const [data, setData] = useState<FailureHistoryEntry[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [classification, setClassification] = useState('ALL')
   const [page, setPage] = useState(1)
@@ -68,6 +69,7 @@ function FailureHistoryTab() {
   const fetchData = useCallback(
     async (s: string, cls: string, p: number) => {
       setLoading(true)
+      setError(null)
       try {
         const params = new URLSearchParams({
           limit: String(LIMIT),
@@ -81,6 +83,8 @@ function FailureHistoryTab() {
         )
         setData(res.failures)
         setTotal(res.total)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load history')
       } finally {
         setLoading(false)
       }
@@ -135,6 +139,9 @@ function FailureHistoryTab() {
           {total} result{total !== 1 ? 's' : ''}
         </span>
       </div>
+
+      {/* Error */}
+      {error && <p className="text-center text-signal-red py-8">{error}</p>}
 
       {/* Table */}
       {loading ? (

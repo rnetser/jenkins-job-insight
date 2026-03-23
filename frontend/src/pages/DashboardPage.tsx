@@ -58,11 +58,15 @@ export function DashboardPage() {
   const [perPage, setPerPage] = useState(20)
   const [deleteTarget, setDeleteTarget] = useState<DashboardJob | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const fetchJobs = useCallback(async () => {
+    setError(null)
     try {
       const data = await api.get<DashboardJob[]>('/api/dashboard?limit=500')
       setJobs(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard')
     } finally {
       setLoading(false)
     }
@@ -90,9 +94,11 @@ export function DashboardPage() {
     try {
       await api.delete(`/results/${deleteTarget.job_id}`)
       setJobs((prev) => prev.filter((j) => j.job_id !== deleteTarget.job_id))
+      setDeleteTarget(null)
+    } catch (err) {
+      console.error('Failed to delete job:', err)
     } finally {
       setDeleting(false)
-      setDeleteTarget(null)
     }
   }
 
@@ -128,6 +134,9 @@ export function DashboardPage() {
             </Select>
           </div>
         </div>
+
+        {/* Error */}
+        {error && <p className="text-center text-signal-red py-8">{error}</p>}
 
         {/* Table */}
         {loading ? (

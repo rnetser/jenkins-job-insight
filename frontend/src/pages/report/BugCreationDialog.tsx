@@ -80,7 +80,7 @@ export function BugCreationDialog({
         setErrorMsg(err instanceof Error ? err.message : 'Preview failed')
         setPhase('error')
       })
-  }, [open, phase]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, phase, jobId, previewPath, testName, includeLinks, aiProvider, aiModel, childJobName, childBuildNumber])
 
   async function handleCreate() {
     setPhase('creating')

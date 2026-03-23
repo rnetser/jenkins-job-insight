@@ -26,14 +26,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (!res.ok) {
     let body: unknown
     try {
-      body = await res.json()
+      const text = await res.text()
+      try {
+        body = JSON.parse(text)
+      } catch {
+        body = text
+      }
     } catch {
-      body = await res.text()
+      body = null
     }
     throw new ApiError(res.status, res.statusText, body)
   }
 
-  // 204 No Content
+  // 204 No Content — intentional cast; callers (e.g. api.delete) do not use the return value.
   if (res.status === 204) return undefined as T
 
   return res.json()

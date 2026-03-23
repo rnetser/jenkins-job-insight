@@ -13,12 +13,16 @@ export function StatusPage() {
   const [data, setData] = useState<ResultResponse | null>(null)
   const [error, setError] = useState('')
   const intervalRef = useRef<ReturnType<typeof setInterval>>(null)
+  const inFlightRef = useRef(false)
 
   useEffect(() => {
     if (!jobId) return
 
     async function poll() {
+      if (inFlightRef.current) return
+      inFlightRef.current = true
       try {
+        setError('')
         const res = await api.get<ResultResponse>(`/results/${jobId}`)
         setData(res)
         if (res.status === 'completed') {
@@ -26,11 +30,12 @@ export function StatusPage() {
           navigate(`/results/${jobId}`, { replace: true })
         } else if (res.status === 'failed') {
           if (intervalRef.current) clearInterval(intervalRef.current)
-          setData(res)
           setError(res.result ? String((res.result as any).error || 'Analysis failed') : 'Analysis failed')
         }
       } catch {
         setError('Failed to reach the server. Retrying...')
+      } finally {
+        inFlightRef.current = false
       }
     }
 

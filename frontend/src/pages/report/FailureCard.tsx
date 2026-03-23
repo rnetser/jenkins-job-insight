@@ -40,8 +40,17 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
   const [includeLinks, setIncludeLinks] = useState(false)
 
   const providers = [...new Set(aiConfigs.map((c) => c.ai_provider))]
-  const models = [...new Set(aiConfigs.map((c) => c.ai_model))]
+  const filteredModels = aiConfigs.filter((c) => c.ai_provider === selectedProvider)
+  const models = [...new Set(filteredModels.map((c) => c.ai_model))]
   const showAiSelector = providers.length > 0 || models.length > 0
+
+  function handleProviderChange(provider: string) {
+    setSelectedProvider(provider)
+    const providerModels = [...new Set(aiConfigs.filter((c) => c.ai_provider === provider).map((c) => c.ai_model))]
+    if (providerModels.length > 0 && !providerModels.includes(selectedModel)) {
+      setSelectedModel(providerModels[0])
+    }
+  }
 
   const rep = group.tests[0]
   const analysis = rep.analysis
@@ -67,22 +76,28 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
     setReviewingAll(true)
     const newState = !allReviewed
     try {
-      await Promise.all(
+      const results = await Promise.allSettled(
         group.tests.map((t) =>
           api.put(`/results/${jobId}/reviewed`, {
             test_name: t.test_name,
             reviewed: newState,
             child_job_name: childJobName ?? '',
             child_build_number: childBuildNumber ?? 0,
-          }).then(() => {
-            const key = reviewKey(t.test_name, childJobName, childBuildNumber)
-            dispatch({
-              type: 'SET_REVIEW',
-              payload: { key, state: { reviewed: newState, updated_at: new Date().toISOString() } },
-            })
-          }),
+          }).then(() => t),
         ),
       )
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          const t = result.value
+          const key = reviewKey(t.test_name, childJobName, childBuildNumber)
+          dispatch({
+            type: 'SET_REVIEW',
+            payload: { key, state: { reviewed: newState, updated_at: new Date().toISOString() } },
+          })
+        } else {
+          console.error('Failed to toggle review for a test:', result.reason)
+        }
+      }
     } finally {
       setReviewingAll(false)
     }
@@ -95,21 +110,24 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
         style={{ animationDelay: `${index * 50}ms`, animationFillMode: 'backwards' }}
       >
         {/* Header */}
-        <button className="flex w-full items-center gap-3 p-4 text-left" onClick={() => setExpanded(!expanded)}>
-          {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-text-tertiary" /> : <ChevronRight className="h-4 w-4 shrink-0 text-text-tertiary" />}
-          <div className="min-w-0 flex-1">
-            <p className="truncate font-display text-sm font-medium text-text-primary">{rep.test_name}</p>
-            {group.count > 1 && <span className="text-xs text-text-tertiary">+{group.count - 1} more with same error</span>}
-          </div>
+        <div className="flex w-full items-center gap-3 p-4">
+          <button
+            className="flex min-w-0 flex-1 items-center gap-3 text-left"
+            onClick={() => setExpanded(!expanded)}
+            aria-expanded={expanded}
+          >
+            {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-text-tertiary" /> : <ChevronRight className="h-4 w-4 shrink-0 text-text-tertiary" />}
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-display text-sm font-medium text-text-primary">{rep.test_name}</p>
+              {group.count > 1 && <span className="text-xs text-text-tertiary">+{group.count - 1} more with same error</span>}
+            </div>
+          </button>
           <div className="flex items-center gap-2 shrink-0">
             <ClassificationBadge classification={classification} />
             {(() => {
               const secondaryBadges = new Set<string>()
               for (const t of group.tests) {
-                // Use scoped key for child jobs, plain test_name for root — no cross-scope fallback
-                const key = childJobName && childBuildNumber
-                  ? `${childJobName}#${childBuildNumber}::${t.test_name}`
-                  : t.test_name
+                const key = reviewKey(t.test_name, childJobName, childBuildNumber)
                 const cls = classifications[key]
                 if (cls) secondaryBadges.add(cls)
               }
@@ -125,7 +143,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
               </span>
             )}
           </div>
-        </button>
+        </div>
 
         {/* Expanded body */}
         {expanded && (
@@ -242,7 +260,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
               {showAiSelector && (
                 <>
                   {providers.length > 0 && (
-                    <Select value={selectedProvider} onValueChange={setSelectedProvider}>
+                    <Select value={selectedProvider} onValueChange={handleProviderChange}>
                       <SelectTrigger className="h-8 w-24 text-xs">
                         <SelectValue placeholder="Provider" />
                       </SelectTrigger>

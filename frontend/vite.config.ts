@@ -3,6 +3,11 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath } from 'url'
 
+// SPA-friendly bypass: return index.html for browser navigation
+const spaBypass = (req: { headers: { accept?: string } }) => {
+  if (req.headers.accept?.includes('text/html')) return '/index.html'
+}
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: '/',
@@ -22,16 +27,11 @@ export default defineConfig({
       '/api': 'http://localhost:8000',
       '/results': {
         target: 'http://localhost:8000',
-        bypass(req) {
-          // Browser page loads get Vite's index.html for client-side routing
-          if (req.headers.accept?.includes('text/html')) return '/index.html'
-        },
+        bypass: spaBypass,
       },
       '/history': {
         target: 'http://localhost:8000',
-        bypass(req) {
-          if (req.headers.accept?.includes('text/html')) return '/index.html'
-        },
+        bypass: spaBypass,
       },
       '/health': 'http://localhost:8000',
       '/ai-configs': 'http://localhost:8000',

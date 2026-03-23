@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import type { ChildJobAnalysis } from '@/types'
 import { useSessionState } from '@/lib/useSessionState'
 import { groupFailures } from '@/lib/grouping'
@@ -14,7 +15,10 @@ interface ChildJobSectionProps {
 export function ChildJobSection({ child, jobId, depth = 0 }: ChildJobSectionProps) {
   const expandKey = `jji-expand-${jobId}-child-${child.job_name}-${child.build_number}`
   const [expanded, setExpanded] = useSessionState(expandKey, false)
-  const groups = groupFailures(child.failures, `child-${child.job_name}-${child.build_number}`)
+  const groups = useMemo(
+    () => groupFailures(child.failures, `child-${child.job_name}-${child.build_number}`),
+    [child.failures, child.job_name, child.build_number]
+  )
 
   return (
     <div className={depth > 0 ? 'ml-4 border-l-2 border-border-muted pl-4' : ''}>
