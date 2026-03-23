@@ -209,7 +209,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
                     })}
                   </p>
                 </div>
-                {c.username === username && (
+                {username && c.username === username && (
                   <button
                     type="button"
                     aria-label="Delete comment"

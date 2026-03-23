@@ -133,7 +133,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
               for (const t of group.tests) {
                 const key = reviewKey(t.test_name, childJobName, childBuildNumber)
                 const cls = classifications[key]
-                if (cls) secondaryBadges.add(cls)
+                if (cls && cls !== classification) secondaryBadges.add(cls)
               }
               return [...secondaryBadges].map((cls) => (
                 <ClassificationBadge key={cls} classification={cls} />

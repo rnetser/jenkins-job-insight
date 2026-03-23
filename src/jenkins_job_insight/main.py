@@ -1528,6 +1528,17 @@ async def create_jira_bug_endpoint(
     }
 
 
+def _patch_failure_classification(
+    failures: list[dict], test_name: str, classification: str
+) -> None:
+    """Patch classification for matching failures in a list."""
+    for f in failures:
+        if f.get("test_name") == test_name:
+            analysis = f.get("analysis", {})
+            if isinstance(analysis, dict):
+                analysis["classification"] = classification
+
+
 def _apply_classification_override(
     result_data: dict,
     test_name: str,
@@ -1536,14 +1547,6 @@ def _apply_classification_override(
     child_build_number: int,
 ) -> None:
     """Mutate result_data to apply a classification override to matching failures."""
-
-    def _patch_failures(failures: list[dict]) -> None:
-        for f in failures:
-            if f.get("test_name") == test_name:
-                analysis = f.get("analysis", {})
-                if isinstance(analysis, dict):
-                    analysis["classification"] = classification
-
     if child_job_name:
         # Override in child job failures
         for child in result_data.get("child_job_analyses", []):
@@ -1551,7 +1554,9 @@ def _apply_classification_override(
                 child_build_number == 0
                 or child.get("build_number") == child_build_number
             ):
-                _patch_failures(child.get("failures", []))
+                _patch_failure_classification(
+                    child.get("failures", []), test_name, classification
+                )
             # Also check nested failed_children recursively
             _patch_children(
                 child.get("failed_children", []),
@@ -1562,7 +1567,9 @@ def _apply_classification_override(
             )
     else:
         # Override in top-level failures
-        _patch_failures(result_data.get("failures", []))
+        _patch_failure_classification(
+            result_data.get("failures", []), test_name, classification
+        )
 
 
 def _patch_children(
@@ -1577,11 +1584,9 @@ def _patch_children(
         if child.get("job_name") == child_job_name and (
             child_build_number == 0 or child.get("build_number") == child_build_number
         ):
-            for f in child.get("failures", []):
-                if f.get("test_name") == test_name:
-                    analysis = f.get("analysis", {})
-                    if isinstance(analysis, dict):
-                        analysis["classification"] = classification
+            _patch_failure_classification(
+                child.get("failures", []), test_name, classification
+            )
         _patch_children(
             child.get("failed_children", []),
             test_name,

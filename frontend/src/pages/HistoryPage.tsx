@@ -66,9 +66,11 @@ function FailureHistoryTab() {
   const [classification, setClassification] = useState('ALL')
   const [page, setPage] = useState(1)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null)
+  const requestSeqRef = useRef(0)
 
   const fetchData = useCallback(
     async (s: string, cls: string, p: number) => {
+      const seq = ++requestSeqRef.current
       setLoading(true)
       setError(null)
       try {
@@ -82,11 +84,14 @@ function FailureHistoryTab() {
         const res = await api.get<{ failures: FailureHistoryEntry[]; total: number }>(
           `/history/failures?${params}`,
         )
+        if (seq !== requestSeqRef.current) return
         setData(res.failures)
         setTotal(res.total)
       } catch (err) {
+        if (seq !== requestSeqRef.current) return
         setError(err instanceof Error ? err.message : 'Failed to load history')
       } finally {
+        if (seq !== requestSeqRef.current) return
         setLoading(false)
       }
     },
@@ -100,7 +105,10 @@ function FailureHistoryTab() {
 
   // Cleanup debounce on unmount
   useEffect(() => {
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      requestSeqRef.current += 1
+    }
   }, [])
 
   // Debounce search — only updates state after delay
@@ -114,7 +122,11 @@ function FailureHistoryTab() {
   }
 
   function handleClassification(v: string) {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
+    setSearch(inputValue)
     setClassification(v)
     setPage(1)
   }
