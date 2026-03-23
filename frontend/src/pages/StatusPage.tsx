@@ -60,7 +60,7 @@ export function StatusPage() {
         }}
       />
 
-      <div className="relative z-10 w-full max-w-md px-4">
+      <div className="relative z-10 w-full max-w-xl px-4">
         <Card className="animate-slide-up border-border-muted">
           <CardContent className="flex flex-col items-center gap-6 p-8">
             {/* Pulsing / spinning indicator */}
@@ -128,6 +128,9 @@ export function StatusPage() {
               {data?.result?.job_name && (
                 <Row label="JOB" value={data.result.job_name} mono />
               )}
+              {data?.result?.build_number != null && (
+                <Row label="BUILD" value={`#${data.result.build_number}`} mono />
+              )}
               <Row
                 label="STATUS"
                 value={
@@ -165,11 +168,11 @@ function Row({
 }) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <span className="font-display text-[10px] font-medium uppercase tracking-widest text-text-tertiary">
+      <span className="whitespace-nowrap font-display text-[10px] font-medium uppercase tracking-widest text-text-tertiary">
         {label}
       </span>
       <span
-        className={`truncate text-right text-text-secondary ${mono ? 'font-mono text-xs' : ''}`}
+        className={`text-right text-text-secondary break-all ${mono ? 'font-mono text-xs' : ''}`}
       >
         {value}
       </span>
