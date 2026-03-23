@@ -191,7 +191,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
                     {segments.map((seg, i) => {
                       if (seg.type === 'link') {
                         // Find matching enrichment for this link
-                        const match = badges.find((b) => seg.text.includes(b.key) || b.key.includes(seg.text))
+                        const match = badges.find((b) => seg.text === b.key || seg.href === b.key)
                         return (
                           <span key={i} className="inline-flex items-center gap-1">
                             <a href={seg.href} target="_blank" rel="noopener noreferrer" className="text-text-link hover:underline">

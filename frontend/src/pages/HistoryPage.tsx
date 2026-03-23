@@ -84,15 +84,18 @@ function FailureHistoryTab() {
         const res = await api.get<{ failures: FailureHistoryEntry[]; total: number }>(
           `/history/failures?${params}`,
         )
-        if (seq !== requestSeqRef.current) return
-        setData(res.failures)
-        setTotal(res.total)
+        if (seq === requestSeqRef.current) {
+          setData(res.failures)
+          setTotal(res.total)
+        }
       } catch (err) {
-        if (seq !== requestSeqRef.current) return
-        setError(err instanceof Error ? err.message : 'Failed to load history')
+        if (seq === requestSeqRef.current) {
+          setError(err instanceof Error ? err.message : 'Failed to load history')
+        }
       } finally {
-        if (seq !== requestSeqRef.current) return
-        setLoading(false)
+        if (seq === requestSeqRef.current) {
+          setLoading(false)
+        }
       }
     },
     [],

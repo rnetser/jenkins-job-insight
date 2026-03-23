@@ -83,7 +83,7 @@ function ReportContent() {
         const [commentsResult, aiConfigsResult, classificationsResult, capabilitiesResult] = await Promise.allSettled([
           api.get<CommentsAndReviews>(`/results/${jobId}/comments`),
           api.get<AiConfig[]>('/ai-configs'),
-          api.get<{ classifications: Array<{ test_name: string; classification: string }> }>(
+          api.get<{ classifications: Array<{ test_name: string; classification: string; job_name: string; parent_job_name: string; reason: string; references_info: string; created_by: string; job_id: string; child_build_number: number; created_at: string }> }>(
             `/history/classifications?job_id=${jobId}`,
           ),
           api.get<{ github_issues: boolean; jira_bugs: boolean }>('/api/capabilities'),
@@ -108,7 +108,7 @@ function ReportContent() {
         }
         if (classificationsResult.status === 'fulfilled') {
           const classMap: Record<string, string> = {}
-          for (const c of (classificationsResult.value as any).classifications ?? []) {
+          for (const c of classificationsResult.value.classifications ?? []) {
             // Use composite key to handle same test_name across different child jobs
             const key = c.job_name && c.child_build_number
               ? `${c.job_name}#${c.child_build_number}::${c.test_name}`
