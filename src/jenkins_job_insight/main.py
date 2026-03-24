@@ -222,10 +222,26 @@ if _FRONTEND_DIR.is_dir():
 
 
 class UsernameMiddleware(BaseHTTPMiddleware):
-    """Middleware that reads jji_username cookie and sets request.state.username."""
+    """Middleware that checks for jji_username cookie and redirects to /register if missing."""
 
     async def dispatch(self, request: Request, call_next):
-        request.state.username = request.cookies.get("jji_username", "")
+        path = request.url.path
+        # Allow register page, health check, static assets, and API paths without auth
+        if (
+            path in ("/register", "/health", "/favicon.ico")
+            or path.startswith("/register")
+            or path.startswith("/assets/")
+        ):
+            return await call_next(request)
+
+        username = request.cookies.get("jji_username", "")
+        if not username:
+            # Only redirect browser requests, not API calls
+            accept = request.headers.get("accept", "")
+            if "text/html" in accept:
+                return RedirectResponse(url="/register", status_code=303)
+
+        request.state.username = username
         return await call_next(request)
 
 

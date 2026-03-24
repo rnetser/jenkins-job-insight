@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 
 import { Layout } from '@/components/layout/Layout'
+import { ProtectedRoute } from '@/components/shared/ProtectedRoute'
 
 import { RegisterPage } from '@/pages/RegisterPage'
 import { DashboardPage } from '@/pages/DashboardPage'
@@ -15,12 +16,12 @@ export default function App() {
       <Routes>
         <Route path="/register" element={<RegisterPage />} />
         <Route element={<Layout />}>
-          <Route index element={<DashboardPage />} />
+          <Route index element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/dashboard" element={<Navigate to="/" replace />} />
-          <Route path="/history" element={<HistoryPage />} />
-          <Route path="/history/test/:testName" element={<TestHistoryPage />} />
-          <Route path="/results/:jobId" element={<ReportPage />} />
-          <Route path="/status/:jobId" element={<StatusPage />} />
+          <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />
+          <Route path="/history/test/:testName" element={<ProtectedRoute><TestHistoryPage /></ProtectedRoute>} />
+          <Route path="/results/:jobId" element={<ProtectedRoute><ReportPage /></ProtectedRoute>} />
+          <Route path="/status/:jobId" element={<ProtectedRoute><StatusPage /></ProtectedRoute>} />
         </Route>
       </Routes>
     </BrowserRouter>
