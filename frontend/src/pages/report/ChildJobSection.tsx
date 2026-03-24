@@ -1,9 +1,11 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import type { ChildJobAnalysis } from '@/types'
 import { useSessionState } from '@/lib/useSessionState'
 import { groupFailures } from '@/lib/grouping'
+import { useExpandCollapseAll } from '@/lib/useExpandCollapseAll'
 import { FailureCard } from './FailureCard'
 import { Badge } from '@/components/ui/badge'
+import { ExpandCollapseButtons } from '@/components/shared/ExpandCollapseButtons'
 import { ChevronDown, ChevronRight, ExternalLink, GitFork } from 'lucide-react'
 
 interface ChildJobSectionProps {
@@ -19,6 +21,14 @@ export function ChildJobSection({ child, jobId, depth = 0 }: ChildJobSectionProp
     () => groupFailures(child.failures, `child-${child.job_name}-${child.build_number}`),
     [child.failures, child.job_name, child.build_number]
   )
+
+  // Expand/collapse all failure cards within this child job
+  const getFailureKeys = useCallback(
+    () => groups.map((g) => `jji-expand-${jobId}-${g.id}`),
+    [groups, jobId],
+  )
+  const { remountKey: failureRemountKey, expandAll: expandAllFailures, collapseAll: collapseAllFailures } =
+    useExpandCollapseAll(getFailureKeys)
 
   return (
     <div className={depth > 0 ? 'ml-4 border-l-2 border-border-muted pl-4' : ''}>
@@ -53,16 +63,22 @@ export function ChildJobSection({ child, jobId, depth = 0 }: ChildJobSectionProp
       </div>
 
       {expanded && (
-        <>
+        <div className="ml-6 border-l-2 border-border-default/30 pl-4 mt-2 space-y-3">
           {child.summary && (
-            <div className="mb-4 rounded-md bg-glow-blue border border-signal-blue/20 p-3 text-sm text-text-secondary">
+            <div className="rounded-md bg-glow-blue border border-signal-blue/20 p-3 text-sm text-text-secondary">
               {child.summary}
             </div>
           )}
 
-          {child.note && <div className="mb-4 text-xs text-signal-orange">{child.note}</div>}
+          {child.note && <div className="text-xs text-signal-orange">{child.note}</div>}
 
-          <div className="space-y-3">
+          {groups.length >= 2 && (
+            <div className="flex justify-end">
+              <ExpandCollapseButtons onExpandAll={expandAllFailures} onCollapseAll={collapseAllFailures} />
+            </div>
+          )}
+
+          <div className="space-y-3" key={failureRemountKey}>
             {groups.map((g, i) => (
               <FailureCard
                 key={g.id}
@@ -76,7 +92,7 @@ export function ChildJobSection({ child, jobId, depth = 0 }: ChildJobSectionProp
           </div>
 
           {child.failed_children.length > 0 && (
-            <div className="mt-4 space-y-4">
+            <div className="mt-1 space-y-3">
               {child.failed_children.map((nested) => (
                 <ChildJobSection
                   key={`${nested.job_name}-${nested.build_number}`}
@@ -87,7 +103,7 @@ export function ChildJobSection({ child, jobId, depth = 0 }: ChildJobSectionProp
               ))}
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   )

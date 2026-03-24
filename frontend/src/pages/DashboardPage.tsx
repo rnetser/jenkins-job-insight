@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import type { DashboardJob } from '@/types'
@@ -25,6 +25,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { Skeleton } from '@/components/ui/skeleton'
+import { parseApiTimestamp, isAnalysisTimeout } from '@/lib/utils'
 import { StatusChip } from '@/components/shared/StatusChip'
 import { SearchInput } from '@/components/shared/SearchInput'
 import { Pagination } from '@/components/shared/Pagination'
@@ -36,10 +37,22 @@ const STATUS_BORDER: Record<string, string> = {
   running: 'border-l-signal-blue',
   pending: 'border-l-border-default',
   failed: 'border-l-signal-red',
+  timeout: 'border-l-signal-orange',
+}
+
+function formatDuration(start: Date, end: Date): string {
+  const diffMs = end.getTime() - start.getTime()
+  if (diffMs < 0) return '—'
+  const totalSeconds = Math.floor(diffMs / 1000)
+  const mins = Math.floor(totalSeconds / 60)
+  const secs = totalSeconds % 60
+  if (mins === 0) return `${secs}s`
+  return `${mins}m ${secs}s`
 }
 
 function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime()
+  // SQLite timestamps are UTC but lack timezone marker — normalize to ISO 8601
+  const diff = Date.now() - parseApiTimestamp(iso).getTime()
   const mins = Math.floor(diff / 60_000)
   if (mins < 1) return 'just now'
   if (mins < 60) return `${mins}m ago`
@@ -60,15 +73,24 @@ export function DashboardPage() {
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const fetchSeqRef = useRef(0)
+
   const fetchJobs = useCallback(async () => {
+    const thisSeq = ++fetchSeqRef.current
     setError(null)
     try {
       const data = await api.get<DashboardJob[]>('/api/dashboard?limit=500')
-      setJobs(data)
+      if (thisSeq === fetchSeqRef.current) {
+        setJobs(data)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load dashboard')
+      if (thisSeq === fetchSeqRef.current) {
+        setError(err instanceof Error ? err.message : 'Failed to load dashboard')
+      }
     } finally {
-      setLoading(false)
+      if (thisSeq === fetchSeqRef.current) {
+        setLoading(false)
+      }
     }
   }, [])
 
@@ -167,7 +189,8 @@ export function DashboardPage() {
             </TableHeader>
             <TableBody>
               {pageJobs.map((job, i) => {
-                const borderColor = STATUS_BORDER[job.status] ?? 'border-l-border-default'
+                const displayStatus = isAnalysisTimeout(job.status, job.error) ? 'timeout' : job.status
+                const borderColor = STATUS_BORDER[displayStatus] ?? 'border-l-border-default'
                 const failureCount = job.failure_count ?? 0
 
                 return (
@@ -176,6 +199,15 @@ export function DashboardPage() {
                     className={`group cursor-pointer animate-slide-up ${i % 2 === 0 ? 'bg-surface-card' : 'bg-surface-elevated/40'}`}
                     style={{ animationDelay: `${i * 30}ms`, animationFillMode: 'backwards' }}
                     onClick={() => handleRowClick(job)}
+                    tabIndex={0}
+                    role="link"
+                    aria-label={`Open ${job.job_name || job.job_id}${job.build_number !== undefined ? ` #${job.build_number}` : ''}`}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        handleRowClick(job)
+                      }
+                    }}
                   >
                     {/* Job name + build (with left accent border) */}
                     <TableCell className={`border-l-4 ${borderColor}`}>
@@ -191,9 +223,9 @@ export function DashboardPage() {
                     <TableCell>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <span><StatusChip status={job.status} /></span>
+                          <span><StatusChip status={displayStatus} /></span>
                         </TooltipTrigger>
-                        <TooltipContent>Analysis status: {job.status}</TooltipContent>
+                        <TooltipContent>{displayStatus === 'timeout' ? 'AI analysis timed out' : `Analysis status: ${job.status}`}</TooltipContent>
                       </Tooltip>
                     </TableCell>
 
@@ -279,7 +311,15 @@ export function DashboardPage() {
                         <TooltipTrigger asChild>
                           <span className="font-mono text-xs text-text-tertiary">{relativeTime(job.created_at)}</span>
                         </TooltipTrigger>
-                        <TooltipContent>{new Date(job.created_at).toLocaleString()}</TooltipContent>
+                        <TooltipContent>
+                          <span>Created: {parseApiTimestamp(job.created_at).toLocaleString()}</span>
+                          {job.completed_at && (
+                            <>
+                              <br />
+                              <span>Analysis took: {formatDuration(parseApiTimestamp(job.created_at), parseApiTimestamp(job.completed_at))}</span>
+                            </>
+                          )}
+                        </TooltipContent>
                       </Tooltip>
                     </TableCell>
 

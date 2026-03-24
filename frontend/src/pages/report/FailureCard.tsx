@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import type { GroupedFailure } from '@/types'
 import { isCommentInScope } from '@/lib/grouping'
 import { api } from '@/lib/api'
+import { getUsername } from '@/lib/cookies'
 import { useSessionState } from '@/lib/useSessionState'
 import { useReportState, useReportDispatch, reviewKey } from './ReportContext'
 import { Card, CardContent } from '@/components/ui/card'
@@ -12,14 +13,7 @@ import { ReviewToggle } from './ReviewToggle'
 import { CommentsSection } from './CommentsSection'
 import { ClassificationSelect } from './ClassificationSelect'
 import { BugCreationDialog } from './BugCreationDialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { ChevronDown, ChevronRight, Bug, MessageSquare, CheckCircle2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Bug, MessageSquare, CheckCircle2, Copy, Check, Clock } from 'lucide-react'
 
 interface FailureCardProps {
   group: GroupedFailure
@@ -40,6 +34,22 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
   const [selectedProvider, setSelectedProvider] = useState(result?.ai_provider ?? '')
   const [selectedModel, setSelectedModel] = useState(result?.ai_model ?? '')
   const [includeLinks, setIncludeLinks] = useState(false)
+  const [copiedSection, setCopiedSection] = useState<string | null>(null)
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current)
+    }
+  }, [])
+
+  function copyToClipboard(text: string, section: string) {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopiedSection(section)
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current)
+      copyTimeoutRef.current = setTimeout(() => setCopiedSection(null), 2000)
+    }).catch(() => {})
+  }
 
   function getModelsForProvider(provider: string) {
     return [...new Set(aiConfigs.filter((c) => c.ai_provider === provider).map((c) => c.ai_model))]
@@ -81,22 +91,22 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
     try {
       const results = await Promise.allSettled(
         group.tests.map((t) =>
-          api.put(`/results/${jobId}/reviewed`, {
+          api.put<{ status: string; reviewed_by: string }>(`/results/${jobId}/reviewed`, {
             test_name: t.test_name,
             reviewed: newState,
             child_job_name: childJobName ?? '',
             child_build_number: childBuildNumber ?? 0,
-          }).then(() => t),
+          }).then((res) => ({ test: t, reviewed_by: res.reviewed_by })),
         ),
       )
       let failedCount = 0
       for (const result of results) {
         if (result.status === 'fulfilled') {
-          const t = result.value
+          const { test: t, reviewed_by } = result.value
           const key = reviewKey(t.test_name, childJobName, childBuildNumber)
           dispatch({
             type: 'SET_REVIEW',
-            payload: { key, state: { reviewed: newState, updated_at: new Date().toISOString() } },
+            payload: { key, state: { reviewed: newState, updated_at: new Date().toISOString(), username: reviewed_by || getUsername() } },
           })
         } else {
           failedCount++
@@ -191,7 +201,17 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
 
             {/* Error */}
             <div>
-              <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary mb-2">Error</h4>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary">Error</h4>
+                <button
+                  type="button"
+                  className="text-text-tertiary hover:text-text-primary transition-colors"
+                  onClick={() => copyToClipboard(rep.error, 'error')}
+                  title="Copy to clipboard"
+                >
+                  {copiedSection === 'error' ? <Check className="h-3 w-3 text-signal-green" /> : <Copy className="h-3 w-3" />}
+                </button>
+              </div>
               <pre className="overflow-x-auto rounded-md bg-signal-red/5 border border-signal-red/20 p-3 text-xs text-signal-red font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                 {rep.error}
               </pre>
@@ -200,7 +220,25 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             {/* Analysis */}
             {analysis.details && (
               <div>
-                <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary mb-2">Analysis</h4>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary">Analysis</h4>
+                    {analysis.details.toLowerCase().includes('timed out') && (
+                      <Badge variant="warning" className="text-[10px] gap-1">
+                        <Clock className="h-3 w-3" />
+                        Timed Out
+                      </Badge>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="text-text-tertiary hover:text-text-primary transition-colors"
+                    onClick={() => copyToClipboard(analysis.details, 'analysis')}
+                    title="Copy to clipboard"
+                  >
+                    {copiedSection === 'analysis' ? <Check className="h-3 w-3 text-signal-green" /> : <Copy className="h-3 w-3" />}
+                  </button>
+                </div>
                 <div className="rounded-md bg-glow-blue p-3 text-sm text-text-secondary whitespace-pre-wrap">{analysis.details}</div>
               </div>
             )}
@@ -208,7 +246,17 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             {/* Artifacts evidence */}
             {analysis.artifacts_evidence && (
               <div>
-                <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary mb-2">Artifacts Evidence</h4>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary">Artifacts Evidence</h4>
+                  <button
+                    type="button"
+                    className="text-text-tertiary hover:text-text-primary transition-colors"
+                    onClick={() => copyToClipboard(analysis.artifacts_evidence, 'artifacts_evidence')}
+                    title="Copy to clipboard"
+                  >
+                    {copiedSection === 'artifacts_evidence' ? <Check className="h-3 w-3 text-signal-green" /> : <Copy className="h-3 w-3" />}
+                  </button>
+                </div>
                 <pre className="overflow-x-auto rounded-md bg-surface-elevated p-3 text-xs text-text-secondary font-mono whitespace-pre-wrap max-h-64 overflow-y-auto">
                   {analysis.artifacts_evidence}
                 </pre>
@@ -216,9 +264,24 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             )}
 
             {/* Code fix */}
-            {analysis.code_fix && typeof analysis.code_fix === 'object' && (
+            {classification !== 'PRODUCT BUG' && analysis.code_fix && typeof analysis.code_fix === 'object' && (
               <div>
-                <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary mb-2">Suggested Fix</h4>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary">Suggested Fix</h4>
+                  <button
+                    type="button"
+                    className="text-text-tertiary hover:text-text-primary transition-colors"
+                    onClick={() => {
+                      const parts: string[] = []
+                      if (analysis.code_fix.file) parts.push(`${analysis.code_fix.file}${analysis.code_fix.line ? `:${analysis.code_fix.line}` : ''}`)
+                      if (analysis.code_fix.change) parts.push(analysis.code_fix.change)
+                      copyToClipboard(parts.join('\n'), 'suggested_fix')
+                    }}
+                    title="Copy to clipboard"
+                  >
+                    {copiedSection === 'suggested_fix' ? <Check className="h-3 w-3 text-signal-green" /> : <Copy className="h-3 w-3" />}
+                  </button>
+                </div>
                 <div className="rounded-md bg-glow-green border border-signal-green/20 p-3 text-sm">
                   {analysis.code_fix.file && (
                     <p className="font-mono text-xs text-signal-green">
@@ -232,7 +295,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             )}
 
             {/* Product bug report */}
-            {analysis.product_bug_report && typeof analysis.product_bug_report === 'object' && (
+            {classification === 'PRODUCT BUG' && analysis.product_bug_report && typeof analysis.product_bug_report === 'object' && (
               <div>
                 <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary mb-2">Bug Report</h4>
                 <div className="rounded-md bg-glow-orange border border-signal-orange/20 p-3 text-sm space-y-2">
@@ -269,30 +332,34 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
               />
               {showAiSelector && (
                 <>
-                  {providers.length > 0 && (
-                    <Select value={selectedProvider} onValueChange={handleProviderChange}>
-                      <SelectTrigger className="h-8 w-24 text-xs">
-                        <SelectValue placeholder="Provider" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {providers.map((p) => (
-                          <SelectItem key={p} value={p}>{p}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                  {models.length > 0 && (
-                    <Select value={selectedModel} onValueChange={setSelectedModel}>
-                      <SelectTrigger className="h-8 w-44 text-xs">
-                        <SelectValue placeholder="Model" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {models.map((m) => (
-                          <SelectItem key={m} value={m}>{m}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
+                  <span className="text-xs text-text-tertiary whitespace-nowrap">AI for issue generation:</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      list={`provider-options-${group.id}`}
+                      value={selectedProvider}
+                      onChange={(e) => handleProviderChange(e.target.value)}
+                      placeholder="provider"
+                      className="h-7 rounded-md border border-border-default bg-surface-card px-2 text-xs text-text-primary w-24"
+                    />
+                    <datalist id={`provider-options-${group.id}`}>
+                      {providers.map((p) => (
+                        <option key={p} value={p} />
+                      ))}
+                    </datalist>
+
+                    <input
+                      list={`model-options-${group.id}`}
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                      placeholder="model"
+                      className="h-7 rounded-md border border-border-default bg-surface-card px-2 text-xs text-text-primary w-44"
+                    />
+                    <datalist id={`model-options-${group.id}`}>
+                      {models.map((m) => (
+                        <option key={m} value={m} />
+                      ))}
+                    </datalist>
+                  </div>
                 </>
               )}
               <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer">

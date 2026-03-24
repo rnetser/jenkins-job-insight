@@ -130,28 +130,24 @@ class JJIClient:
         self,
         job_name: str,
         build_number: int,
-        sync: bool = False,
         **kwargs,
     ) -> dict:
-        """Submit a Jenkins job for analysis. POST /analyze?sync=
+        """Submit a Jenkins job for analysis. POST /analyze
 
         Args:
             job_name: Jenkins job name.
             build_number: Build number to analyze.
-            sync: If True, wait for result. If False, return immediately.
             **kwargs: Additional fields for the AnalyzeRequest body.
 
         Returns:
-            Queued status (async) or full result (sync).
+            Queued status with job_id for polling.
         """
         body = {"job_name": job_name, "build_number": build_number, **kwargs}
-        accept = (200,) if sync else (202,)
         return self._request(
             "POST",
             "/analyze",
-            params={"sync": str(sync).lower()},
             json=body,
-            accept_statuses=accept,
+            accept_statuses=(202,),
         )
 
     # -- History --------------------------------------------------------------

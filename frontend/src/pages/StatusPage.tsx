@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '@/lib/api'
+import { parseApiTimestamp, isAnalysisTimeout } from '@/lib/utils'
 import type { ResultResponse } from '@/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Clock } from 'lucide-react'
 
 const POLL_MS = 10_000
 
@@ -15,7 +17,10 @@ export function StatusPage() {
   const intervalRef = useRef<ReturnType<typeof setInterval>>(null)
   const inFlightRef = useRef(false)
 
+  const mountedRef = useRef(true)
+
   useEffect(() => {
+    mountedRef.current = true
     if (!jobId) return
 
     async function poll() {
@@ -24,6 +29,7 @@ export function StatusPage() {
       try {
         setError('')
         const res = await api.get<ResultResponse>(`/results/${jobId}`)
+        if (!mountedRef.current) return
         setData(res)
         if (res.status === 'completed') {
           if (intervalRef.current) clearInterval(intervalRef.current)
@@ -33,7 +39,9 @@ export function StatusPage() {
           setError(res.result?.error ?? 'Analysis failed')
         }
       } catch {
-        setError('Failed to reach the server. Retrying...')
+        if (mountedRef.current) {
+          setError('Failed to reach the server. Retrying...')
+        }
       } finally {
         inFlightRef.current = false
       }
@@ -42,6 +50,7 @@ export function StatusPage() {
     poll()
     intervalRef.current = setInterval(poll, POLL_MS)
     return () => {
+      mountedRef.current = false
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
   }, [jobId, navigate])
@@ -100,14 +109,28 @@ export function StatusPage() {
             {/* Status label */}
             <div className="text-center">
               {error && status === 'failed' ? (
-                <>
-                  <h2 className="font-display text-lg font-semibold text-signal-red">
-                    Analysis failed
-                  </h2>
-                  <p className="mt-2 text-sm text-signal-red/80 bg-signal-red/10 rounded-md px-3 py-2">
-                    {error}
-                  </p>
-                </>
+                isAnalysisTimeout(status, error) ? (
+                  <>
+                    <div className="flex items-center justify-center gap-2">
+                      <Clock className="h-5 w-5 text-signal-orange" />
+                      <h2 className="font-display text-lg font-semibold text-signal-orange">
+                        AI Analysis Timed Out
+                      </h2>
+                    </div>
+                    <p className="mt-2 text-sm text-signal-orange/80 bg-signal-orange/10 rounded-md px-3 py-2">
+                      {error}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="font-display text-lg font-semibold text-signal-red">
+                      Analysis failed
+                    </h2>
+                    <p className="mt-2 text-sm text-signal-red/80 bg-signal-red/10 rounded-md px-3 py-2">
+                      {error}
+                    </p>
+                  </>
+                )
               ) : (
                 <>
                   <h2 className="font-display text-lg font-semibold text-text-primary">
@@ -142,7 +165,7 @@ export function StatusPage() {
               {data?.created_at && (
                 <Row
                   label="QUEUED"
-                  value={new Date(data.created_at).toLocaleString()}
+                  value={parseApiTimestamp(data.created_at).toLocaleString()}
                 />
               )}
             </div>

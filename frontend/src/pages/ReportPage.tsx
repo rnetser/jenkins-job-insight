@@ -1,7 +1,9 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
+import { parseApiTimestamp, isAnalysisTimeout } from '@/lib/utils'
 import { groupFailures } from '@/lib/grouping'
+import { useExpandCollapseAll } from '@/lib/useExpandCollapseAll'
 import type { ResultResponse, CommentsAndReviews, AiConfig } from '@/types'
 import { ReportProvider, useReportState, useReportDispatch, useRefreshEnrichments } from './report/ReportContext'
 import { FailureCard } from './report/FailureCard'
@@ -9,6 +11,7 @@ import { ChildJobSection } from './report/ChildJobSection'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusChip } from '@/components/shared/StatusChip'
+import { ExpandCollapseButtons } from '@/components/shared/ExpandCollapseButtons'
 import { ExternalLink, CheckCircle2 } from 'lucide-react'
 import { reviewKey } from './report/ReportContext'
 import type { ChildJobAnalysis } from '@/types'
@@ -124,6 +127,30 @@ function ReportContent() {
     return () => { cancelled = true }
   }, [jobId, navigate, dispatch])
 
+  // Poll for new comments every 30 seconds (serialized with sequence counter)
+  useEffect(() => {
+    if (!jobId) return
+
+    let cancelled = false
+    let seq = 0
+    const interval = setInterval(async () => {
+      const thisSeq = ++seq
+      try {
+        const res = await api.get<CommentsAndReviews>(`/results/${jobId}/comments`)
+        if (!cancelled && thisSeq === seq) {
+          dispatch({ type: 'SET_COMMENTS_AND_REVIEWS', payload: res })
+        }
+      } catch {
+        /* polling failure is non-critical */
+      }
+    }, 30000)
+
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [jobId, dispatch])
+
   // Preserve scroll position across F5 refreshes
   const scrollKey = `jji-scroll-${jobId}`
 
@@ -163,6 +190,41 @@ function ReportContent() {
     }
   }, [scrollKey])
 
+  // Derived values (safe to compute even when result is null)
+  const result = state.result
+  const groups = result ? groupFailures(result.failures) : []
+  const totalFailures = result ? countAllFailures(result.failures, result.child_job_analyses) : 0
+  const allTestKeys = result ? collectAllTestKeys(result.failures, result.child_job_analyses) : []
+  const reviewedCount = allTestKeys.filter((k) => state.reviews[k]?.reviewed).length
+
+  // Expand/collapse all for top-level failure cards
+  const getFailureKeys = useCallback(
+    () => (result ? groups.map((g) => `jji-expand-${result.job_id}-${g.id}`) : []),
+    [groups, result],
+  )
+  const { remountKey: failureRemountKey, expandAll: expandAllFailures, collapseAll: collapseAllFailures } =
+    useExpandCollapseAll(getFailureKeys)
+
+  // Expand/collapse all for child job sections (and their nested failure cards)
+  const getChildKeys = useCallback(() => {
+    if (!result) return []
+    const keys: string[] = []
+    function walk(children: ChildJobAnalysis[]) {
+      for (const child of children) {
+        keys.push(`jji-expand-${result.job_id}-child-${child.job_name}-${child.build_number}`)
+        const childGroups = groupFailures(child.failures, `child-${child.job_name}-${child.build_number}`)
+        for (const g of childGroups) {
+          keys.push(`jji-expand-${result.job_id}-${g.id}`)
+        }
+        walk(child.failed_children)
+      }
+    }
+    walk(result.child_job_analyses)
+    return keys
+  }, [result])
+  const { remountKey: childRemountKey, expandAll: expandAllChildren, collapseAll: collapseAllChildren } =
+    useExpandCollapseAll(getChildKeys)
+
   /* ---- Loading skeleton ---- */
   if (state.loading) {
     return (
@@ -185,11 +247,8 @@ function ReportContent() {
     )
   }
 
-  const result = state.result!
-  const groups = groupFailures(result.failures)
-  const totalFailures = countAllFailures(result.failures, result.child_job_analyses)
-  const allTestKeys = collectAllTestKeys(result.failures, result.child_job_analyses)
-  const reviewedCount = allTestKeys.filter((k) => state.reviews[k]?.reviewed).length
+  // After early returns, result is guaranteed to be non-null
+  if (!result) return null
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -202,7 +261,7 @@ function ReportContent() {
           {result.build_number > 0 && (
             <span className="font-mono text-sm text-text-tertiary">#{result.build_number}</span>
           )}
-          <StatusChip status={result.status} />
+          <StatusChip status={isAnalysisTimeout(result.status, result.error, result.summary) ? 'timeout' : result.status} />
           <Badge variant="destructive" className="font-mono">
             {totalFailures} {totalFailures === 1 ? 'failure' : 'failures'}
           </Badge>
@@ -256,10 +315,15 @@ function ReportContent() {
       {/* ---- Top-level failures ---- */}
       {groups.length > 0 && (
         <section>
-          <h2 className="text-xs font-display uppercase tracking-widest text-text-tertiary mb-3">
-            Failures ({result.failures.length})
-          </h2>
-          <div className="space-y-3">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xs font-display uppercase tracking-widest text-text-tertiary">
+              Failures ({result.failures.length})
+            </h2>
+            {groups.length >= 2 && (
+              <ExpandCollapseButtons onExpandAll={expandAllFailures} onCollapseAll={collapseAllFailures} />
+            )}
+          </div>
+          <div className="space-y-3" key={failureRemountKey}>
             {groups.map((g, i) => (
               <FailureCard key={g.id} group={g} jobId={result.job_id} index={i} />
             ))}
@@ -270,10 +334,13 @@ function ReportContent() {
       {/* ---- Child jobs ---- */}
       {result.child_job_analyses.length > 0 && (
         <section>
-          <h2 className="text-xs font-display uppercase tracking-widest text-text-tertiary mb-3">
-            Child Jobs ({result.child_job_analyses.length})
-          </h2>
-          <div className="space-y-6">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xs font-display uppercase tracking-widest text-text-tertiary">
+              Child Jobs ({result.child_job_analyses.length})
+            </h2>
+            <ExpandCollapseButtons onExpandAll={expandAllChildren} onCollapseAll={collapseAllChildren} />
+          </div>
+          <div className="space-y-6" key={childRemountKey}>
             {result.child_job_analyses.map((child) => (
               <ChildJobSection key={`${child.job_name}-${child.build_number}`} child={child} jobId={result.job_id} />
             ))}
@@ -286,7 +353,7 @@ function ReportContent() {
         <p>
           Job ID: <span className="font-mono">{result.job_id}</span>
         </p>
-        {state.completedAt && <p>Completed: {new Date(state.completedAt).toLocaleString()}</p>}
+        {state.completedAt && <p>Completed: {parseApiTimestamp(state.completedAt).toLocaleString()}</p>}
         {result.ai_provider && (
           <p>
             AI: {result.ai_provider}

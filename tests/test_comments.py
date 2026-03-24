@@ -76,17 +76,33 @@ class TestCommentCRUD:
 class TestReviewedToggle:
     async def test_set_reviewed(self, setup_test_db):
         with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.set_reviewed(
+                "job-1", "test_a", reviewed=True, username="alice"
+            )
+            reviews = await storage.get_reviews_for_job("job-1")
+            assert "test_a" in reviews
+            assert reviews["test_a"]["reviewed"] is True
+            assert reviews["test_a"]["username"] == "alice"
+
+    async def test_set_reviewed_without_username(self, setup_test_db):
+        with patch.object(storage, "DB_PATH", setup_test_db):
             await storage.set_reviewed("job-1", "test_a", reviewed=True)
             reviews = await storage.get_reviews_for_job("job-1")
             assert "test_a" in reviews
             assert reviews["test_a"]["reviewed"] is True
+            assert reviews["test_a"]["username"] == ""
 
     async def test_unset_reviewed(self, setup_test_db):
         with patch.object(storage, "DB_PATH", setup_test_db):
-            await storage.set_reviewed("job-1", "test_a", reviewed=True)
-            await storage.set_reviewed("job-1", "test_a", reviewed=False)
+            await storage.set_reviewed(
+                "job-1", "test_a", reviewed=True, username="alice"
+            )
+            await storage.set_reviewed(
+                "job-1", "test_a", reviewed=False, username="bob"
+            )
             reviews = await storage.get_reviews_for_job("job-1")
             assert reviews["test_a"]["reviewed"] is False
+            assert reviews["test_a"]["username"] == "bob"
 
     async def test_set_reviewed_with_child_job(self, setup_test_db):
         with patch.object(storage, "DB_PATH", setup_test_db):
@@ -96,11 +112,13 @@ class TestReviewedToggle:
                 reviewed=True,
                 child_job_name="child-1",
                 child_build_number=42,
+                username="carol",
             )
             reviews = await storage.get_reviews_for_job("job-1")
             key = "child-1#42::test_a"
             assert key in reviews
             assert reviews[key]["reviewed"] is True
+            assert reviews[key]["username"] == "carol"
 
     async def test_get_reviews_empty(self, setup_test_db):
         with patch.object(storage, "DB_PATH", setup_test_db):

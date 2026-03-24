@@ -21,6 +21,7 @@ from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
     analyze_failure_group,
     analyze_job,
+    format_exception_with_type,
     get_failure_signature,
 )
 from jenkins_job_insight.config import Settings, get_settings
@@ -529,7 +530,16 @@ async def process_analysis_with_id(
 
     except Exception as e:
         logger.exception(f"Analysis failed for job {job_id}")
-        await update_status(job_id, "failed", {"error": str(e)})
+        error_detail = format_exception_with_type(e)
+        await update_status(
+            job_id,
+            "failed",
+            {
+                "job_name": body.job_name,
+                "build_number": body.build_number,
+                "error": error_detail,
+            },
+        )
 
 
 @app.post("/analyze", status_code=202, response_model=None)
@@ -538,81 +548,15 @@ async def analyze(
     body: AnalyzeRequest,
     background_tasks: BackgroundTasks,
     *,
-    sync: bool = Query(
-        default=False, description="If true, wait for result and return it"
-    ),
     settings: Settings = Depends(get_settings),
-) -> dict | JSONResponse:
+) -> dict:
     """Submit a Jenkins job for analysis.
 
-    By default (async mode), returns immediately with a job_id.
-    With ?sync=true, blocks until analysis is complete and returns the full result.
+    Returns immediately with a job_id. Poll /results/{job_id} for status.
     """
     logger.debug(f"Starting analysis for {body.job_name} #{body.build_number}")
     base_url = _extract_base_url(request)
 
-    if sync:
-        logger.info(
-            f"Sync analysis request received for {body.job_name} #{body.build_number}"
-        )
-
-        merged = _merge_settings(body, settings)
-        ai_provider, ai_model = _resolve_ai_config(body)
-
-        server_url = _build_internal_server_url()
-
-        result = await analyze_job(
-            body,
-            merged,
-            ai_provider=ai_provider,
-            ai_model=ai_model,
-            server_url=server_url,
-        )
-
-        # Enrich PRODUCT BUG failures with Jira matches
-        if _resolve_enable_jira(body, merged):
-            await _enrich_result_with_jira(
-                result.failures + list(result.child_job_analyses),
-                merged,
-                ai_provider,
-                ai_model,
-            )
-
-        jenkins_url = build_jenkins_url(
-            merged.jenkins_url, body.job_name, body.build_number
-        )
-        await save_result(
-            result.job_id, jenkins_url, result.status, result.model_dump(mode="json")
-        )
-        logger.info(
-            f"Sync analysis completed for {body.job_name} #{body.build_number} "
-            f"(job_id: {result.job_id})"
-        )
-
-        # Populate failure history
-        try:
-            await populate_failure_history(
-                result.job_id, result.model_dump(mode="json")
-            )
-        except Exception:
-            logger.warning(
-                "Failed to populate failure_history for job_id=%s",
-                result.job_id,
-                exc_info=True,
-            )
-
-        # Reveal classifications created during analysis
-        await storage.make_classifications_visible(result.job_id)
-
-        await deliver_results(result, body, merged)
-
-        content = result.model_dump(mode="json")
-        content["base_url"] = base_url
-        content["result_url"] = f"{base_url}/results/{result.job_id}"
-
-        return JSONResponse(content=content, status_code=200)
-
-    # Async mode - queue background task
     # Generate job_id here so we can return it to the client for polling
     job_id = str(uuid.uuid4())
     merged = _merge_settings(body, settings)
@@ -801,10 +745,11 @@ async def analyze_failures(
 
     except Exception as e:
         logger.exception(f"Direct failure analysis failed for job {job_id}")
+        error_detail = format_exception_with_type(e)
         analysis_result = FailureAnalysisResult(
             job_id=job_id,
             status="failed",
-            summary=f"Analysis failed: {e}",
+            summary=f"Analysis failed: {error_detail}",
             ai_provider=ai_provider,
             ai_model=ai_model,
         )
@@ -1081,7 +1026,7 @@ async def set_reviewed(job_id: str, body: SetReviewedRequest, request: Request) 
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "ok"}
+    return {"status": "ok", "reviewed_by": username}
 
 
 @app.post("/results/{job_id}/enrich-comments")

@@ -4,13 +4,23 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import get_args
 
 import aiosqlite
 from simple_logger.logger import get_logger
 
+from jenkins_job_insight.models import OverrideClassificationLiteral
+
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 DB_PATH = Path(os.getenv("DB_PATH", "/data/results.db"))
+
+# Primary (override) classifications — derived from the OverrideClassificationLiteral
+# type so the SQL filter stays in sync with the model definition.
+PRIMARY_CLASSIFICATIONS: tuple[str, ...] = get_args(OverrideClassificationLiteral)
+_PRIMARY_CLASSIFICATIONS_SQL = (
+    "(" + ", ".join(f"'{c}'" for c in PRIMARY_CLASSIFICATIONS) + ")"
+)
 
 
 async def init_db() -> None:
@@ -229,6 +239,15 @@ async def init_db() -> None:
             logger.debug(
                 "Migration: test_classifications already has child_build_number column"
             )
+
+        # Migration: add completed_at column to results table
+        cursor = await db.execute("PRAGMA table_info(results)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "completed_at" not in columns:
+            await db.execute("ALTER TABLE results ADD COLUMN completed_at TIMESTAMP")
+            logger.info("Migration: added completed_at column to results")
+        else:
+            logger.debug("Migration: results already has completed_at column")
 
         # failure_history: denormalized table for fast history queries
         await db.execute("""
@@ -523,18 +542,32 @@ async def save_result(
     """
     logger.debug(f"Saving result for job_id: {job_id} (status: {status})")
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """
-            INSERT OR REPLACE INTO results (job_id, jenkins_url, status, result_json)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                job_id,
-                jenkins_url,
-                status,
-                json.dumps(result) if result is not None else None,
-            ),
-        )
+        if status == "completed":
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO results (job_id, jenkins_url, status, result_json, completed_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    job_id,
+                    jenkins_url,
+                    status,
+                    json.dumps(result) if result is not None else None,
+                ),
+            )
+        else:
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO results (job_id, jenkins_url, status, result_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    jenkins_url,
+                    status,
+                    json.dumps(result) if result is not None else None,
+                ),
+            )
         await db.commit()
 
 
@@ -555,7 +588,24 @@ async def update_status(
     """
     logger.debug(f"Updating status for job_id: {job_id} (status: {status})")
     async with aiosqlite.connect(DB_PATH) as db:
-        if result is not None:
+        if status == "completed":
+            if result is not None:
+                cursor = await db.execute(
+                    """
+                    UPDATE results SET status = ?, result_json = ?, completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
+                    WHERE job_id = ?
+                    """,
+                    (status, json.dumps(result), job_id),
+                )
+            else:
+                cursor = await db.execute(
+                    """
+                    UPDATE results SET status = ?, completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
+                    WHERE job_id = ?
+                    """,
+                    (status, job_id),
+                )
+        elif result is not None:
             cursor = await db.execute(
                 """
                 UPDATE results SET status = ?, result_json = ?
@@ -605,6 +655,9 @@ async def get_result(job_id: str) -> dict | None:
                 if row["result_json"]
                 else None,
                 "created_at": row["created_at"],
+                "completed_at": row["completed_at"]
+                if "completed_at" in row.keys()
+                else None,
             }
         logger.debug(f"get_result: job_id={job_id}, found=False")
         return None
@@ -1469,7 +1522,7 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """
-            SELECT r.job_id, r.jenkins_url, r.status, r.result_json, r.created_at,
+            SELECT r.job_id, r.jenkins_url, r.status, r.result_json, r.created_at, r.completed_at,
                 (SELECT COUNT(*) FROM failure_reviews fr
                  WHERE fr.job_id = r.job_id AND fr.reviewed = 1) AS reviewed_count,
                 (SELECT COUNT(*) FROM comments c
@@ -1488,6 +1541,9 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
                 "jenkins_url": row["jenkins_url"],
                 "status": row["status"],
                 "created_at": row["created_at"],
+                "completed_at": row["completed_at"]
+                if "completed_at" in row.keys()
+                else None,
                 "reviewed_count": row["reviewed_count"],
                 "comment_count": row["comment_count"],
             }
@@ -1500,6 +1556,8 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
                     child_jobs = result_data.get("child_job_analyses", [])
                     if child_jobs:
                         entry["child_job_count"] = len(child_jobs)
+                    if result_data.get("error"):
+                        entry["error"] = result_data["error"]
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     logger.debug(f"Failed to parse result_json for job {row['job_id']}")
             results.append(entry)
@@ -1532,6 +1590,36 @@ async def get_parent_job_name_for_test(test_name: str, job_id: str = "") -> str:
         cursor = await db.execute(query, params)
         row = await cursor.fetchone()
         return row[0] if row else ""
+
+
+async def _mirror_classification_to_failure_history(
+    db: aiosqlite.Connection,
+    *,
+    classification: str,
+    test_name: str,
+    job_name: str,
+    child_build_number: int,
+    job_id: str,
+) -> None:
+    """Mirror a classification into the failure_history table.
+
+    When child_build_number is 0 and job_name is set, it acts as a wildcard:
+    all builds (child_build_number > 0) for that job_name are updated.
+    Otherwise, only the exact (test_name, job_name, child_build_number, job_id)
+    row is updated.
+    """
+    if child_build_number == 0 and job_name:
+        await db.execute(
+            "UPDATE failure_history SET classification = ? "
+            "WHERE test_name = ? AND child_job_name = ? AND child_build_number > 0 AND job_id = ?",
+            [classification, test_name, job_name, job_id],
+        )
+    else:
+        await db.execute(
+            "UPDATE failure_history SET classification = ? "
+            "WHERE test_name = ? AND child_job_name = ? AND child_build_number = ? AND job_id = ?",
+            [classification, test_name, job_name, child_build_number, job_id],
+        )
 
 
 async def set_test_classification(
@@ -1601,19 +1689,14 @@ async def set_test_classification(
         # leaking into failure_history before analysis completes.
         # When visible=0, make_classifications_visible() handles the mirror.
         if visible:
-            if child_build_number == 0 and job_name:
-                # child_build_number=0 is a wildcard: match all builds for the job_name
-                await db.execute(
-                    "UPDATE failure_history SET classification = ? "
-                    "WHERE test_name = ? AND child_job_name = ? AND child_build_number > 0 AND job_id = ?",
-                    [classification, test_name, job_name, job_id],
-                )
-            else:
-                await db.execute(
-                    "UPDATE failure_history SET classification = ? "
-                    "WHERE test_name = ? AND child_job_name = ? AND child_build_number = ? AND job_id = ?",
-                    [classification, test_name, job_name, child_build_number, job_id],
-                )
+            await _mirror_classification_to_failure_history(
+                db,
+                classification=classification,
+                test_name=test_name,
+                job_name=job_name,
+                child_build_number=child_build_number,
+                job_id=job_id,
+            )
 
         await db.commit()
         return cursor.lastrowid
@@ -1636,7 +1719,10 @@ async def get_test_classifications(
         f"get_test_classifications: test_name={test_name!r}, classification={classification!r}, "
         f"job_name={job_name!r}, parent_job_name={parent_job_name!r}, job_id={job_id!r}"
     )
-    conditions = ["tc.visible = 1"]
+    conditions = [
+        "tc.visible = 1",
+        f"tc.classification IN {_PRIMARY_CLASSIFICATIONS_SQL}",
+    ]
     params: list[str] = []
 
     if test_name:
@@ -1710,30 +1796,14 @@ async def make_classifications_visible(job_id: str) -> None:
 
         # Mirror each newly-visible classification into failure_history
         for row in rows:
-            if row["child_build_number"] == 0 and row["job_name"]:
-                # child_build_number=0 is a wildcard: match all builds for the job_name
-                await db.execute(
-                    "UPDATE failure_history SET classification = ? "
-                    "WHERE test_name = ? AND child_job_name = ? AND child_build_number > 0 AND job_id = ?",
-                    [
-                        row["classification"],
-                        row["test_name"],
-                        row["job_name"],
-                        job_id,
-                    ],
-                )
-            else:
-                await db.execute(
-                    "UPDATE failure_history SET classification = ? "
-                    "WHERE test_name = ? AND child_job_name = ? AND child_build_number = ? AND job_id = ?",
-                    [
-                        row["classification"],
-                        row["test_name"],
-                        row["job_name"],
-                        row["child_build_number"],
-                        job_id,
-                    ],
-                )
+            await _mirror_classification_to_failure_history(
+                db,
+                classification=row["classification"],
+                test_name=row["test_name"],
+                job_name=row["job_name"],
+                child_build_number=row["child_build_number"],
+                job_id=job_id,
+            )
 
         await db.commit()
     logger.debug(
@@ -1999,7 +2069,7 @@ async def get_effective_classification(
                 "SELECT classification FROM test_classifications"
                 " WHERE test_name = ? AND job_id = ? AND job_name = ?"
                 " AND child_build_number = ? AND visible = 1"
-                " AND classification IN ('CODE ISSUE', 'PRODUCT BUG')"
+                f" AND classification IN {_PRIMARY_CLASSIFICATIONS_SQL}"
                 " ORDER BY id DESC LIMIT 1",
                 [test_name, job_id, _child_job_name, _child_build_number],
             )
@@ -2012,7 +2082,7 @@ async def get_effective_classification(
         fh_query = (
             "SELECT classification FROM failure_history"
             " WHERE job_id = ? AND test_name = ?"
-            " AND classification IN ('CODE ISSUE', 'PRODUCT BUG')"
+            f" AND classification IN {_PRIMARY_CLASSIFICATIONS_SQL}"
         )
         fh_params: list = [job_id, test_name]
         if child_job_name:

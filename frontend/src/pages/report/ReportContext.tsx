@@ -142,6 +142,6 @@ export const useRefreshEnrichments = () => useContext(RefreshEnrichmentsCtx)
 
 /** Build the review lookup key matching the backend format. */
 export function reviewKey(testName: string, childJobName?: string, childBuildNumber?: number): string {
-  if (childJobName && childBuildNumber) return `${childJobName}#${childBuildNumber}::${testName}`
+  if (childJobName && childBuildNumber != null) return `${childJobName}#${childBuildNumber}::${testName}`
   return testName
 }

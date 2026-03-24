@@ -252,7 +252,6 @@ def results_delete(
 def analyze(
     job_name: str = typer.Argument(help="Jenkins job name."),
     build_number: int = typer.Argument(help="Build number to analyze."),
-    sync: bool = typer.Option(False, "--sync", help="Wait for analysis to complete."),
     provider: str = typer.Option(
         "", "--provider", help="AI provider (e.g. claude, gemini, cursor)."
     ),
@@ -273,18 +272,12 @@ def analyze(
         extras["enable_jira"] = True
     try:
         client = _get_client()
-        data = client.analyze(job_name, build_number, sync=sync, **extras)
+        data = client.analyze(job_name, build_number, **extras)
     except JJIError as err:
         _handle_error(err)
 
     if _state.get("json", False):
         print_output(data, columns=[], as_json=True)
-    elif sync:
-        print_output(
-            data,
-            columns=["job_id", "status", "summary"],
-            as_json=False,
-        )
     else:
         typer.echo(f"Job queued: {data.get('job_id', '')}")
         typer.echo(f"Status: {data.get('status', '')}")

@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '@/lib/api'
+import { parseApiTimestamp } from '@/lib/utils'
 import type { TestHistory } from '@/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ClassificationBadge } from '@/components/shared/ClassificationBadge'
 import { Skeleton } from '@/components/ui/skeleton'
 
+function safeDecode(s: string): string {
+  try { return decodeURIComponent(s) } catch { return s }
+}
+
 export function TestHistoryPage() {
   const { testName } = useParams<{ testName: string }>()
-  const decoded = testName ? decodeURIComponent(testName) : ''
+  const decoded = testName ? safeDecode(testName) : ''
   const [data, setData] = useState<TestHistory | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -83,7 +88,7 @@ export function TestHistoryPage() {
                     {run.classification && <ClassificationBadge classification={run.classification} />}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs text-text-tertiary">
-                    {new Date(run.analyzed_at).toLocaleDateString()}
+                    {parseApiTimestamp(run.analyzed_at).toLocaleDateString()}
                   </TableCell>
                 </TableRow>
               ))}
@@ -103,7 +108,7 @@ export function TestHistoryPage() {
               <div key={`${c.created_at}-${i}`} className="rounded-md bg-surface-elevated/50 px-3 py-2 text-sm">
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-xs text-signal-blue">{c.username || 'anon'}</span>
-                  <span className="text-[10px] text-text-tertiary">{new Date(c.created_at).toLocaleString()}</span>
+                  <span className="text-[10px] text-text-tertiary">{parseApiTimestamp(c.created_at).toLocaleString()}</span>
                 </div>
                 <p className="mt-1 whitespace-pre-wrap text-text-secondary">{c.comment}</p>
               </div>
@@ -114,8 +119,8 @@ export function TestHistoryPage() {
 
       {/* Times */}
       <div className="text-xs text-text-tertiary space-y-1">
-        {data.first_seen && <p>First seen: {new Date(data.first_seen).toLocaleString()}</p>}
-        {data.last_seen && <p>Last seen: {new Date(data.last_seen).toLocaleString()}</p>}
+        {data.first_seen && <p>First seen: {parseApiTimestamp(data.first_seen).toLocaleString()}</p>}
+        {data.last_seen && <p>Last seen: {parseApiTimestamp(data.last_seen).toLocaleString()}</p>}
       </div>
     </div>
   )

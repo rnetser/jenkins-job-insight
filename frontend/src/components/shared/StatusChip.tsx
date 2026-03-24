@@ -5,6 +5,7 @@ const STATUS_MAP: Record<string, { variant: 'default' | 'destructive' | 'success
   running: { variant: 'default', label: 'Running' },
   pending: { variant: 'outline', label: 'Pending' },
   failed: { variant: 'destructive', label: 'Failed' },
+  timeout: { variant: 'warning', label: 'Timed Out' },
 }
 
 interface StatusChipProps {

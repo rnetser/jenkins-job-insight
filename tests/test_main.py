@@ -9,7 +9,6 @@ import pytest
 from jenkins_job_insight import storage
 from jenkins_job_insight.models import (
     AnalysisDetail,
-    AnalysisResult,
     FailureAnalysis,
 )
 
@@ -77,77 +76,6 @@ class TestAnalyzeEndpoint:
             assert data["base_url"] == "http://testserver"
             assert data["result_url"].startswith("http://testserver/results/")
 
-    def test_analyze_sync_accepts_sync_param(self, test_client) -> None:
-        """Test that sync parameter is accepted (validation test only).
-
-        Note: Full sync test requires extensive mocking of analyze_job,
-        Jenkins client, and AI client. This test verifies the endpoint
-        accepts the sync parameter without validation errors.
-        """
-        # Mock the analyze_job at the module level before the request
-        with patch(
-            "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
-        ) as mock_analyze:
-            with patch(
-                "jenkins_job_insight.main.save_result", new_callable=AsyncMock
-            ) as mock_save:
-                mock_result = AnalysisResult(
-                    job_id="test-123",
-                    jenkins_url="https://jenkins.example.com/job/test/123/",
-                    status="completed",
-                    summary="Analysis complete",
-                    failures=[],
-                )
-                mock_analyze.return_value = mock_result
-
-                response = test_client.post(
-                    "/analyze?sync=true",
-                    json={
-                        "job_name": "test",
-                        "build_number": 123,
-                        "tests_repo_url": "https://github.com/example/repo",
-                        "ai_provider": "claude",
-                        "ai_model": "test-model",
-                    },
-                )
-                assert response.status_code == 200
-                data = response.json()
-                assert data["status"] == "completed"
-                assert data["job_id"] == "test-123"
-                assert data["base_url"] == "http://testserver"
-                assert data["result_url"] == "http://testserver/results/test-123"
-
-                # Verify result was persisted
-                mock_save.assert_called_once()
-
-    def test_analyze_sync_missing_ai_provider_returns_400(self, test_client) -> None:
-        """Test that sync analyze without AI provider returns 400."""
-        response = test_client.post(
-            "/analyze?sync=true",
-            json={
-                "job_name": "test",
-                "build_number": 123,
-                "tests_repo_url": "https://github.com/example/repo",
-                "ai_model": "test-model",
-            },
-        )
-        assert response.status_code == 400
-        assert "AI provider" in response.json()["detail"]
-
-    def test_analyze_sync_missing_ai_model_returns_400(self, test_client) -> None:
-        """Test that sync analyze without AI model returns 400."""
-        response = test_client.post(
-            "/analyze?sync=true",
-            json={
-                "job_name": "test",
-                "build_number": 123,
-                "tests_repo_url": "https://github.com/example/repo",
-                "ai_provider": "claude",
-            },
-        )
-        assert response.status_code == 400
-        assert "AI model" in response.json()["detail"]
-
     def test_analyze_invalid_build_number(self, test_client) -> None:
         """Test that invalid build number returns 422."""
         response = test_client.post(
@@ -196,39 +124,6 @@ class TestAnalyzeEndpoint:
                 },
             )
             assert response.status_code == 202
-
-    def test_analyze_sync_sends_callback(self, test_client) -> None:
-        """Test that sync analyze sends callback when URL provided."""
-        mock_result = AnalysisResult(
-            job_id="test-123",
-            jenkins_url="https://jenkins.example.com/job/test/123/",
-            status="completed",
-            summary="Analysis complete",
-            failures=[],
-        )
-
-        with patch(
-            "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
-        ) as mock_analyze:
-            with patch("jenkins_job_insight.main.save_result", new_callable=AsyncMock):
-                with patch(
-                    "jenkins_job_insight.main.send_callback", new_callable=AsyncMock
-                ) as mock_callback:
-                    mock_analyze.return_value = mock_result
-
-                    response = test_client.post(
-                        "/analyze?sync=true",
-                        json={
-                            "job_name": "test",
-                            "build_number": 123,
-                            "tests_repo_url": "https://github.com/example/repo",
-                            "callback_url": "https://callback.example.com/webhook",
-                            "ai_provider": "claude",
-                            "ai_model": "test-model",
-                        },
-                    )
-                    assert response.status_code == 200
-                    mock_callback.assert_called_once()
 
 
 class TestBaseUrlDetection:
@@ -1238,10 +1133,14 @@ class TestReviewedEndpoint:
             json={"test_name": "test_foo", "reviewed": True},
         )
         assert response.status_code == 200
+        put_data = response.json()
+        assert put_data["status"] == "ok"
+        assert "reviewed_by" in put_data
         response = test_client.get("/results/job-rev-1/comments")
         data = response.json()
         assert "test_foo" in data["reviews"]
         assert data["reviews"]["test_foo"]["reviewed"] is True
+        assert "username" in data["reviews"]["test_foo"]
 
     @pytest.mark.asyncio
     async def test_set_reviewed_nonexistent_job(self, test_client):

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
+import { parseApiTimestamp } from '@/lib/utils'
 import type { FailureHistoryEntry } from '@/types'
 import {
   Table,
@@ -226,7 +227,7 @@ function FailureHistoryTab() {
                   )}
                 </TableCell>
                 <TableCell className="text-right font-mono text-xs text-text-tertiary whitespace-nowrap">
-                  {new Date(entry.analyzed_at).toLocaleDateString()}
+                  {parseApiTimestamp(entry.analyzed_at).toLocaleDateString()}
                 </TableCell>
               </TableRow>
             ))}

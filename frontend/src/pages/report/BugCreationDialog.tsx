@@ -14,8 +14,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { CheckCircle2, ExternalLink, AlertTriangle } from 'lucide-react'
-import type { PreviewIssueResponse, CreateIssueResponse, SimilarIssue, CommentsAndReviews, CommentEnrichment } from '@/types'
-import { useReportDispatch } from './ReportContext'
+import type { PreviewIssueResponse, CreateIssueResponse, SimilarIssue, CommentsAndReviews } from '@/types'
+import { useReportDispatch, useRefreshEnrichments } from './ReportContext'
 
 type BugTarget = 'github' | 'jira'
 type Phase = 'idle' | 'loading' | 'preview' | 'creating' | 'success' | 'error'
@@ -46,6 +46,7 @@ export function BugCreationDialog({
   aiModel,
 }: BugCreationDialogProps) {
   const dispatch = useReportDispatch()
+  const refreshEnrichments = useRefreshEnrichments()
   const [phase, setPhase] = useState<Phase>('idle')
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
@@ -95,13 +96,13 @@ export function BugCreationDialog({
       setCreatedUrl(res.url)
       setPhase('success')
 
-      // Refresh comments + enrichments — backend auto-added a comment with the issue link
+      // After successful creation, refresh comments to get the server-added comment
       api.get<CommentsAndReviews>(`/results/${jobId}/comments`)
-        .then((r) => dispatch({ type: 'SET_COMMENTS_AND_REVIEWS', payload: r }))
+        .then((commentsRes) => dispatch({ type: 'SET_COMMENTS_AND_REVIEWS', payload: commentsRes }))
         .catch(() => {})
-      api.post<{ enrichments: Record<string, CommentEnrichment[]> }>(`/results/${jobId}/enrich-comments`)
-        .then((r) => dispatch({ type: 'SET_ENRICHMENTS', payload: r.enrichments ?? {} }))
-        .catch(() => {})
+
+      // Also refresh enrichments for the link badges
+      refreshEnrichments(jobId)
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Creation failed')
       setPhase('error')

@@ -43,6 +43,23 @@ from jenkins_job_insight.repository import RepositoryManager
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 
+def format_exception_with_type(exc: Exception) -> str:
+    """Format an exception to always include its type name.
+
+    Bare exceptions like ``FileNotFoundError("[Errno 2] No such file or
+    directory")`` are ambiguous without the type.  This helper prefixes the
+    message with the class name so log entries and stored error messages
+    always identify *what kind* of error occurred.
+
+    Args:
+        exc: The exception to format.
+
+    Returns:
+        String in the form ``"ExceptionType: message"``.
+    """
+    return f"{type(exc).__name__}: {exc}"
+
+
 FALLBACK_TAIL_LINES = 200
 
 # Path to FAILURE_HISTORY_ANALYSIS.md — the AI reads it at runtime instead of injecting content into the prompt
@@ -101,6 +118,13 @@ jira_search_keywords rules:
 - AVOID generic/broad terms alone like "timeout", "failure", "error"
 - Each keyword should be specific enough to narrow Jira search results to relevant bugs
 - Think: "what would someone title a Jira bug for this exact issue?\""""
+
+
+def _format_timeout_log(timeout_value: int | None) -> str:
+    """Format AI CLI timeout for log messages."""
+    if timeout_value is not None:
+        return f"timeout={timeout_value} minutes ({timeout_value * 60}s)"
+    return "timeout=default"
 
 
 def _build_artifacts_section(artifacts_context: str) -> str:
@@ -836,6 +860,7 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
     logger.info(
         f"Calling {ai_provider.upper()} CLI for failure group ({len(failures)} tests with same error)"
     )
+    logger.info(f"Calling AI CLI with {_format_timeout_log(ai_cli_timeout)}")
     success, analysis_output = await call_ai_cli(
         prompt,
         cwd=repo_path,
@@ -981,7 +1006,7 @@ async def analyze_child_job(
                         job_name=child_name,
                         build_number=child_num,
                         jenkins_url="",
-                        note=f"Analysis failed: {result}",
+                        note=f"Analysis failed: {format_exception_with_type(result)}",
                     )
                 )
             else:
@@ -1060,7 +1085,7 @@ async def analyze_child_job(
                             test_name=tf.test_name,
                             error=tf.error_message,
                             analysis=AnalysisDetail(
-                                details=f"Analysis failed: {result}"
+                                details=f"Analysis failed: {format_exception_with_type(result)}"
                             ),
                             error_signature=get_failure_signature(tf),
                         )
@@ -1110,6 +1135,7 @@ You have access to the repository if one was cloned. Explore to understand the f
 {_JSON_RESPONSE_SCHEMA}
 """
     logger.debug(f"AI prompt length: {len(prompt)} chars")
+    logger.info(f"Calling AI CLI with {_format_timeout_log(ai_cli_timeout)}")
     success, analysis_output = await call_ai_cli(
         prompt,
         cwd=repo_path,
@@ -1325,7 +1351,7 @@ async def analyze_job(
                                 job_name=child_name,
                                 build_number=child_num,
                                 jenkins_url="",
-                                note=f"Analysis failed: {result}",
+                                note=f"Analysis failed: {format_exception_with_type(result)}",
                             )
                         )
                     else:
@@ -1415,7 +1441,7 @@ async def analyze_job(
                                     error=tf.error_message,
                                     error_signature=get_failure_signature(tf),
                                     analysis=AnalysisDetail(
-                                        details=f"Analysis failed: {result}"
+                                        details=f"Analysis failed: {format_exception_with_type(result)}"
                                     ),
                                 )
                             )
@@ -1447,6 +1473,9 @@ You have access to the repository if one was cloned. Explore to understand the f
 {_JSON_RESPONSE_SCHEMA}
 """
                 logger.debug(f"AI prompt length: {len(prompt)} chars")
+                logger.info(
+                    f"Calling AI CLI with {_format_timeout_log(settings.ai_cli_timeout)}"
+                )
                 success, analysis_output = await call_ai_cli(
                     prompt,
                     cwd=repo_path,

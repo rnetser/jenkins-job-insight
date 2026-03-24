@@ -120,16 +120,6 @@ class TestAnalyzeCommand:
         assert result.exit_code == 0
         assert "queued" in result.output.lower() or "new-1" in result.output
 
-    def test_analyze_sync(self, mock_client):
-        mock_client.analyze.return_value = {
-            "job_id": "sync-1",
-            "status": "completed",
-            "summary": "Done",
-        }
-        result = runner.invoke(app, ["analyze", "my-job", "42", "--sync"])
-        assert result.exit_code == 0
-        assert "completed" in result.output.lower() or "sync-1" in result.output
-
 
 class TestStatusCommand:
     def test_status(self, mock_client):

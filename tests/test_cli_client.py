@@ -138,7 +138,7 @@ class TestJJIClientDashboard:
 
 
 class TestJJIClientAnalyze:
-    def test_analyze_async(self):
+    def test_analyze(self):
         response_data = {
             "status": "queued",
             "job_id": "new-job-1",
@@ -146,24 +146,13 @@ class TestJJIClientAnalyze:
         }
 
         def handler(request):
-            assert "sync=false" in str(request.url) or "sync" not in str(request.url)
+            assert "sync" not in str(request.url)
             return httpx.Response(202, json=response_data)
 
         client = _make_client(handler)
-        result = client.analyze("my-job", 42, sync=False)
+        result = client.analyze("my-job", 42)
         assert result["status"] == "queued"
         assert result["job_id"] == "new-job-1"
-
-    def test_analyze_sync(self):
-        response_data = {"job_id": "sync-1", "status": "completed", "summary": "Done"}
-
-        def handler(request):
-            assert "sync=true" in str(request.url)
-            return httpx.Response(200, json=response_data)
-
-        client = _make_client(handler)
-        result = client.analyze("my-job", 42, sync=True)
-        assert result["status"] == "completed"
 
 
 class TestJJIClientHistory:
@@ -548,7 +537,6 @@ class TestJJIClientAnalyzeExtras:
         result = client.analyze(
             "my-job",
             1,
-            sync=False,
             ai_provider="claude",
             ai_model="opus",
         )

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '@/lib/api'
+import { parseApiTimestamp } from '@/lib/utils'
 import { isCommentInScope } from '@/lib/grouping'
 import { getUsername } from '@/lib/cookies'
 import { useReportState, useReportDispatch, useRefreshEnrichments } from './ReportContext'
@@ -120,6 +121,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
 
   async function handleSubmit() {
     if (submitting) return
+    if (!testNames.length) return
     const submittedText = text.trim()
     if (!submittedText) return
     setSubmitting(true)
@@ -183,7 +185,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-xs text-signal-blue">{c.username || 'anon'}</span>
                     <span className="text-[10px] text-text-tertiary">
-                      {new Date(c.created_at).toLocaleString()}
+                      {parseApiTimestamp(c.created_at).toLocaleString()}
                     </span>
                   </div>
                   <p className="mt-1 whitespace-pre-wrap text-text-secondary">

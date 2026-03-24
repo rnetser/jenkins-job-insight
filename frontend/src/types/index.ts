@@ -76,12 +76,14 @@ export interface DashboardJob {
   jenkins_url: string | null
   status: string
   created_at: string
+  completed_at?: string | null
   reviewed_count: number
   comment_count: number
   job_name?: string
   build_number?: number
   failure_count?: number
   child_job_count?: number
+  error?: string
 }
 
 // -- Comments & Reviews ---------------------------------------------
@@ -99,6 +101,7 @@ export interface Comment {
 
 export interface ReviewState {
   reviewed: boolean
+  username: string
   updated_at: string
 }
 
