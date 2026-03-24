@@ -30,7 +30,7 @@ export function StatusPage() {
           navigate(`/results/${jobId}`, { replace: true })
         } else if (res.status === 'failed') {
           if (intervalRef.current) clearInterval(intervalRef.current)
-          setError(res.result ? String((res.result as any).error || 'Analysis failed') : 'Analysis failed')
+          setError(res.result?.error ?? 'Analysis failed')
         }
       } catch {
         setError('Failed to reach the server. Retrying...')
@@ -147,7 +147,7 @@ export function StatusPage() {
               )}
             </div>
 
-            {error && (
+            {error && status !== 'failed' && (
               <p className="text-xs text-signal-orange animate-fade-in">{error}</p>
             )}
           </CardContent>

@@ -198,9 +198,44 @@ def _extract_base_url(request: Request) -> str:
     return base_url
 
 
+def _build_report_context(
+    include_links: bool,
+    base_url: str,
+    job_id: str,
+    result_data: dict,
+) -> tuple[str, str]:
+    """Build report URL and Jenkins URL for bug preview endpoints.
+
+    When ``include_links`` is *True* the returned URLs are fully-qualified
+    hyperlinks.  Otherwise plain-text identifiers are returned so that
+    previews remain useful without clickable links.
+
+    Args:
+        include_links: Whether to produce full hyperlinks.
+        base_url: The external base URL of the service.
+        job_id: The stored job identifier.
+        result_data: Raw result dict from storage (contains jenkins_url, job_name, etc.).
+
+    Returns:
+        A ``(report_url, jenkins_url)`` tuple.
+    """
+    jenkins_url = result_data.get("jenkins_url", "")
+
+    if include_links:
+        report_url = f"{base_url}/results/{job_id}"
+    else:
+        report_url = f"results/{job_id}"
+        job_name = result_data.get("job_name", "")
+        build_number = result_data.get("build_number", 0)
+        jenkins_url = f"{job_name} #{build_number}" if job_name else ""
+
+    return report_url, jenkins_url
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await storage.mark_stale_results_failed()
     yield
 
 
@@ -235,13 +270,14 @@ class UsernameMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         username = request.cookies.get("jji_username", "")
+        request.state.username = username
+
+        # Only redirect browser (HTML) requests without auth
         if not username:
-            # Only redirect browser requests, not API calls
             accept = request.headers.get("accept", "")
             if "text/html" in accept:
                 return RedirectResponse(url="/register", status_code=303)
 
-        request.state.username = username
         return await call_next(request)
 
 
@@ -633,7 +669,7 @@ async def analyze_failures(
         try:
             test_failures = extract_test_failures(raw_xml)
         except ParseError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid XML: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid XML: {e}") from e
 
         if not test_failures:
             job_id = str(uuid.uuid4())
@@ -997,7 +1033,7 @@ async def add_comment(job_id: str, body: AddCommentRequest, request: Request) ->
             username=username,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"id": comment_id}
 
 
@@ -1044,7 +1080,7 @@ async def set_reviewed(job_id: str, body: SetReviewedRequest, request: Request) 
             username=username,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok"}
 
 
@@ -1210,15 +1246,12 @@ async def preview_github_issue(
     ai_provider = body.ai_provider or AI_PROVIDER
     ai_model = body.ai_model or AI_MODEL
     base_url = _extract_base_url(request)
-    jenkins_url = result_data.get("jenkins_url", "")
-
-    if body.include_links:
-        report_url = f"{base_url}/results/{job_id}"
-    else:
-        report_url = f"results/{job_id}"
-        job_name = result_data.get("job_name", "")
-        build_number = result_data.get("build_number", 0)
-        jenkins_url = f"{job_name} #{build_number}" if job_name else ""
+    report_url, jenkins_url = _build_report_context(
+        include_links=body.include_links,
+        base_url=base_url,
+        job_id=job_id,
+        result_data=result_data,
+    )
 
     content = await generate_github_issue_content(
         failure=failure,
@@ -1291,15 +1324,12 @@ async def preview_jira_bug(
     ai_provider = body.ai_provider or AI_PROVIDER
     ai_model = body.ai_model or AI_MODEL
     base_url = _extract_base_url(request)
-    jenkins_url = result_data.get("jenkins_url", "")
-
-    if body.include_links:
-        report_url = f"{base_url}/results/{job_id}"
-    else:
-        report_url = f"results/{job_id}"
-        job_name = result_data.get("job_name", "")
-        build_number = result_data.get("build_number", 0)
-        jenkins_url = f"{job_name} #{build_number}" if job_name else ""
+    report_url, jenkins_url = _build_report_context(
+        include_links=body.include_links,
+        base_url=base_url,
+        job_id=job_id,
+        result_data=result_data,
+    )
 
     content = await generate_jira_bug_content(
         failure=failure,
@@ -1839,18 +1869,21 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
         if result and result.get("result"):
             parent_job_name = result["result"].get("job_name", "")
 
-    classification_id = await storage.set_test_classification(
-        test_name=test_name,
-        classification=classification,
-        reason=reason,
-        job_name=job_name,
-        parent_job_name=parent_job_name,
-        created_by=created_by,
-        references=references,
-        job_id=classify_job_id,
-        child_build_number=body.child_build_number,
-        visible=visible,
-    )
+    try:
+        classification_id = await storage.set_test_classification(
+            test_name=test_name,
+            classification=classification,
+            reason=reason,
+            job_name=job_name,
+            parent_job_name=parent_job_name,
+            created_by=created_by,
+            references=references,
+            job_id=classify_job_id,
+            child_build_number=body.child_build_number,
+            visible=visible,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"id": classification_id}
 
 

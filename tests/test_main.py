@@ -1295,16 +1295,24 @@ class TestReviewStatusEndpoint:
 
 class TestChildScopeValidation:
     @pytest.mark.asyncio
-    async def test_comment_child_job_without_build_number_rejected(self, test_client):
-        """child_job_name without child_build_number should be rejected (422)."""
+    async def test_comment_child_job_without_build_number_accepted(self, test_client):
+        """child_job_name with child_build_number=0 should be accepted (match any build)."""
         result_data = {
             "status": "completed",
             "summary": "",
-            "failures": [
+            "failures": [],
+            "child_job_analyses": [
                 {
-                    "test_name": "test_foo",
-                    "error": "err",
-                    "analysis": {"classification": "CODE ISSUE"},
+                    "job_name": "child-1",
+                    "build_number": 5,
+                    "failures": [
+                        {
+                            "test_name": "test_foo",
+                            "error": "err",
+                            "analysis": {"classification": "CODE ISSUE"},
+                        }
+                    ],
+                    "failed_children": [],
                 }
             ],
         }
@@ -1319,7 +1327,7 @@ class TestChildScopeValidation:
                 "comment": "test",
             },
         )
-        assert response.status_code == 422
+        assert response.status_code == 201
 
     @pytest.mark.asyncio
     async def test_comment_build_number_without_child_job_rejected(self, test_client):
@@ -2051,3 +2059,41 @@ class TestHistoryEndpoints:
         data = response.json()
         assert data["period"] == "daily"
         assert isinstance(data["data"], list)
+
+
+class TestClassifyEndpoint:
+    """Regression tests for POST /history/classify."""
+
+    def test_classify_child_job_with_zero_build_number(self, test_client):
+        """Regression: job_name + child_build_number=0 must not raise."""
+        resp = test_client.post(
+            "/history/classify",
+            json={
+                "test_name": "some_test",
+                "classification": "FLAKY",
+                "job_name": "parent-job",
+                "child_build_number": 0,
+                "job_id": "job-classify-zero",
+            },
+        )
+        assert resp.status_code == 201
+
+    def test_classify_storage_value_error_returns_400(self, test_client, monkeypatch):
+        """ValueError from storage layer surfaces as 400."""
+
+        async def _boom(*args, **kwargs):
+            raise ValueError("bad value")
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.storage.set_test_classification", _boom
+        )
+        resp = test_client.post(
+            "/history/classify",
+            json={
+                "test_name": "t",
+                "classification": "FLAKY",
+                "job_id": "job-classify-err",
+            },
+        )
+        assert resp.status_code == 400
+        assert "bad value" in resp.json()["detail"]

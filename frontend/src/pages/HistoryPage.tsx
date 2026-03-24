@@ -60,6 +60,13 @@ function FailureHistoryTab() {
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null)
   const requestSeqRef = useRef(0)
 
+  const clearDebounce = useCallback(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
+  }, [])
+
   const fetchData = useCallback(
     async (s: string, cls: string, p: number) => {
       const seq = ++requestSeqRef.current
@@ -101,15 +108,15 @@ function FailureHistoryTab() {
   // Cleanup debounce on unmount
   useEffect(() => {
     return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
+      clearDebounce()
       requestSeqRef.current += 1
     }
-  }, [])
+  }, [clearDebounce])
 
   // Debounce search — only updates state after delay
   function handleSearch(v: string) {
     setInputValue(v)
-    if (debounceRef.current) clearTimeout(debounceRef.current)
+    clearDebounce()
     debounceRef.current = setTimeout(() => {
       setSearch(v)
       setPage(1)
@@ -117,10 +124,7 @@ function FailureHistoryTab() {
   }
 
   function handleClassification(v: string) {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current)
-      debounceRef.current = null
-    }
+    clearDebounce()
     setSearch(inputValue)
     setClassification(v)
     setPage(1)
@@ -189,6 +193,15 @@ function FailureHistoryTab() {
                   animationFillMode: 'backwards',
                 }}
                 onClick={() => navigate(`/results/${entry.job_id}`)}
+                tabIndex={0}
+                role="link"
+                aria-label={`Open results for ${entry.job_name} #${entry.build_number}`}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    navigate(`/results/${entry.job_id}`)
+                  }
+                }}
               >
                 <TableCell className="font-mono text-xs text-text-primary max-w-[400px]">
                   <Link

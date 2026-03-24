@@ -35,6 +35,7 @@ export default defineConfig({
       },
       '/health': 'http://localhost:8000',
       '/ai-configs': 'http://localhost:8000',
+      '/capabilities': 'http://localhost:8000',
     },
   },
 })

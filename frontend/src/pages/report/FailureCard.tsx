@@ -301,7 +301,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                 />
                 Include links
               </label>
-              {classification === 'CODE ISSUE' && githubAvailable && (
+              {classification !== 'PRODUCT BUG' && githubAvailable && (
                 <Button variant="outline" size="sm" onClick={() => setBugTarget('github')}>
                   <Bug className="h-3.5 w-3.5 mr-1" /> GitHub Issue
                 </Button>

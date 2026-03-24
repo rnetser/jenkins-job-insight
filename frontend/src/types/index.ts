@@ -66,6 +66,7 @@ export interface AnalysisResult {
   ai_model: string
   failures: FailureAnalysis[]
   child_job_analyses: ChildJobAnalysis[]
+  error?: string
 }
 
 // -- Dashboard ------------------------------------------------------

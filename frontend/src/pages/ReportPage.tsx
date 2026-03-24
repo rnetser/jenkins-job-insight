@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { groupFailures } from '@/lib/grouping'
@@ -50,6 +50,7 @@ function ReportContent() {
   const navigate = useNavigate()
   const state = useReportState()
   const dispatch = useReportDispatch()
+  const enrichmentSeqRef = useRef(0)
 
   useEffect(() => {
     if (!jobId) return
@@ -73,7 +74,7 @@ function ReportContent() {
         }
 
         if (resultRes.result && resultRes.status === 'failed') {
-          const errorMsg = (resultRes.result as any).error || 'Analysis failed'
+          const errorMsg = resultRes.result.error ?? 'Analysis failed'
           dispatch({ type: 'SET_ERROR', payload: String(errorMsg) })
           return
         }
@@ -98,9 +99,12 @@ function ReportContent() {
         if (commentsResult.status === 'fulfilled') {
           dispatch({ type: 'SET_COMMENTS_AND_REVIEWS', payload: commentsResult.value })
           // Fetch enrichments once at report level
+          const seq = ++enrichmentSeqRef.current
           api.post<{ enrichments: Record<string, CommentEnrichment[]> }>(`/results/${jobId}/enrich-comments`)
             .then((res) => {
-              if (!cancelled) dispatch({ type: 'SET_ENRICHMENTS', payload: res.enrichments ?? {} })
+              if (seq === enrichmentSeqRef.current) {
+                dispatch({ type: 'SET_ENRICHMENTS', payload: res.enrichments ?? {} })
+              }
             })
             .catch(() => {}) // best-effort
         }
@@ -134,13 +138,19 @@ function ReportContent() {
   useEffect(() => {
     if (state.loading || state.error) return
     const saved = sessionStorage.getItem(scrollKey)
+    let raf1 = 0
+    let raf2 = 0
     if (saved) {
       // Double rAF: first lets React commit DOM, second lets browser layout
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
+      raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => {
           window.scrollTo(0, parseInt(saved, 10))
         })
       })
+    }
+    return () => {
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
     }
   }, [state.loading, state.error, scrollKey])
 

@@ -389,14 +389,15 @@ class TestPreviewIssueRequest:
         assert req.child_job_name == ""
         assert req.child_build_number == 0
 
-    def test_child_job_fields_validation(self) -> None:
-        """Test that child_job_name requires child_build_number."""
-        with pytest.raises(ValueError, match="child_build_number must be positive"):
-            PreviewIssueRequest(
-                test_name="tests.TestFoo.test_bar",
-                child_job_name="child-job",
-                child_build_number=0,
-            )
+    def test_child_job_name_with_zero_build_number_allowed(self) -> None:
+        """Test that child_job_name with build_number=0 is allowed (match any build)."""
+        req = PreviewIssueRequest(
+            test_name="tests.TestFoo.test_bar",
+            child_job_name="child-job",
+            child_build_number=0,
+        )
+        assert req.child_job_name == "child-job"
+        assert req.child_build_number == 0
 
 
 class TestCreateIssueRequest:

@@ -339,10 +339,6 @@ class _ChildJobFieldsValidator(BaseModel):
 
     @model_validator(mode="after")
     def validate_child_fields(self):
-        if self.child_job_name and self.child_build_number <= 0:
-            raise ValueError(
-                "child_build_number must be positive when child_job_name is set"
-            )
         if not self.child_job_name and self.child_build_number > 0:
             raise ValueError(
                 "child_job_name is required when child_build_number is set"
@@ -433,11 +429,17 @@ class CreateIssueRequest(_ChildJobFieldsValidator):
         return v
 
 
+OverrideClassificationLiteral = Literal["CODE ISSUE", "PRODUCT BUG"]
+HistoryClassificationLiteral = Literal[
+    "FLAKY", "REGRESSION", "INFRASTRUCTURE", "KNOWN_BUG", "INTERMITTENT"
+]
+
+
 class OverrideClassificationRequest(_ChildJobFieldsValidator):
     """Request body for overriding a failure's classification."""
 
     test_name: str
-    classification: Literal["CODE ISSUE", "PRODUCT BUG"]
+    classification: OverrideClassificationLiteral
 
 
 class SimilarIssue(BaseModel):
@@ -478,9 +480,7 @@ class ClassifyTestRequest(BaseModel):
     """Request body for classifying a test (e.g., FLAKY, REGRESSION)."""
 
     test_name: str
-    classification: Literal[
-        "FLAKY", "REGRESSION", "INFRASTRUCTURE", "KNOWN_BUG", "INTERMITTENT"
-    ]
+    classification: HistoryClassificationLiteral
     reason: str = ""
     job_name: str = ""
     references: str = ""

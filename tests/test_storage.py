@@ -491,3 +491,55 @@ class TestOverrideClassification:
                 assert row[3] == 1  # visible
                 assert row[4] == "job-tc"
                 assert row[5] == 5
+
+
+class TestSetTestClassification:
+    """Tests for the set_test_classification function."""
+
+    async def test_child_job_with_zero_build_number_succeeds(
+        self, setup_test_db: Path
+    ) -> None:
+        """Regression: job_name + child_build_number=0 must not raise."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            classification_id = await storage.set_test_classification(
+                test_name="tests.TestA.test_one",
+                classification="FLAKY",
+                job_name="parent-job",
+                child_build_number=0,
+                job_id="job-cls-zero",
+            )
+            assert classification_id > 0
+
+    async def test_defaults_only_classification_succeeds(
+        self, setup_test_db: Path
+    ) -> None:
+        """Classification with only required fields succeeds."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            classification_id = await storage.set_test_classification(
+                test_name="tests.TestA.test_one",
+                classification="REGRESSION",
+                job_id="job-cls-defaults",
+            )
+            assert classification_id > 0
+
+    async def test_invalid_classification_raises_value_error(
+        self, setup_test_db: Path
+    ) -> None:
+        """Invalid classification raises ValueError."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            with pytest.raises(ValueError, match="Invalid classification"):
+                await storage.set_test_classification(
+                    test_name="tests.TestA.test_one",
+                    classification="INVALID",
+                    job_id="job-cls-invalid",
+                )
+
+    async def test_empty_job_id_raises_value_error(self, setup_test_db: Path) -> None:
+        """Empty job_id raises ValueError."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            with pytest.raises(ValueError, match="job_id is required"):
+                await storage.set_test_classification(
+                    test_name="tests.TestA.test_one",
+                    classification="FLAKY",
+                    job_id="",
+                )

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api } from '@/lib/api'
 import { useReportDispatch } from './ReportContext'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { CLASSIFICATIONS } from '@/constants/classifications'
+import { OVERRIDE_CLASSIFICATIONS } from '@/constants/classifications'
 
 interface ClassificationSelectProps {
   jobId: string
@@ -53,7 +53,10 @@ export function ClassificationSelect({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {CLASSIFICATIONS.map((c) => (
+          {(OVERRIDE_CLASSIFICATIONS.includes(currentClassification as any)
+            ? [...OVERRIDE_CLASSIFICATIONS]
+            : [currentClassification, ...OVERRIDE_CLASSIFICATIONS]
+          ).map((c) => (
             <SelectItem key={c} value={c}>
               {c}
             </SelectItem>

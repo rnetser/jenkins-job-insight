@@ -296,10 +296,6 @@ def _validate_child_identifier_pairing(
     """Validate that child_job_name and child_build_number are either both set or both empty."""
     if child_build_number < 0:
         raise ValueError("child_build_number must not be negative")
-    if child_job_name and child_build_number <= 0:
-        raise ValueError(
-            "child_build_number must be positive when child_job_name is set"
-        )
     if not child_job_name and child_build_number > 0:
         raise ValueError("child_job_name is required when child_build_number is set")
 
@@ -2007,6 +2003,20 @@ async def get_effective_classification(
 
         fh_row = await (await db.execute(fh_query, fh_params)).fetchone()
         return fh_row[0] if fh_row and fh_row[0] else ""
+
+
+async def mark_stale_results_failed() -> None:
+    """Mark orphaned running/pending jobs as failed on startup."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE results SET status = 'failed' "
+            "WHERE status IN ('running', 'pending')"
+        )
+        if cursor.rowcount > 0:
+            logger.warning(
+                f"Marked {cursor.rowcount} stale job(s) as failed on startup"
+            )
+        await db.commit()
 
 
 async def get_ai_configs() -> list[dict]:

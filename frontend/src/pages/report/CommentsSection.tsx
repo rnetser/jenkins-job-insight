@@ -120,13 +120,14 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
 
   async function handleSubmit() {
     if (submitting) return
-    if (!text.trim()) return
+    const submittedText = text.trim()
+    if (!submittedText) return
     setSubmitting(true)
     setSubmitError(null)
     try {
       const res = await api.post<{ id: number }>(`/results/${jobId}/comments`, {
         test_name: testNames[0],
-        comment: text.trim(),
+        comment: submittedText,
         child_job_name: childJobName ?? '',
         child_build_number: childBuildNumber ?? 0,
       })
@@ -136,7 +137,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
         test_name: testNames[0],
         child_job_name: childJobName ?? '',
         child_build_number: childBuildNumber ?? 0,
-        comment: text.trim(),
+        comment: submittedText,
         username,
         created_at: new Date().toISOString(),
       }
@@ -150,7 +151,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
           }
         })
         .catch(() => {})
-      setText('')
+      setText((current) => (current === submittedText ? '' : current))
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Failed to post comment')
     } finally {
@@ -240,6 +241,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
             className="min-h-[36px] resize-none text-sm"
             rows={1}
             onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 handleSubmit()
