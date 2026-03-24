@@ -1,4 +1,5 @@
-import { createContext, useContext, useReducer, type Dispatch, type ReactNode } from 'react'
+import { createContext, useContext, useReducer, useRef, useCallback, type Dispatch, type ReactNode } from 'react'
+import { api } from '@/lib/api'
 import type { AnalysisResult, Comment, ReviewState, CommentsAndReviews, AiConfig, CommentEnrichment } from '@/types'
 
 interface ReportState {
@@ -109,18 +110,35 @@ function reportReducer(state: ReportState, action: ReportAction): ReportState {
 
 const StateCtx = createContext<ReportState>(initialState)
 const DispatchCtx = createContext<Dispatch<ReportAction>>(() => {})
+const RefreshEnrichmentsCtx = createContext<(jobId: string) => void>(() => {})
 
 export function ReportProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reportReducer, initialState)
+  const enrichmentSeqRef = useRef(0)
+
+  const refreshEnrichments = useCallback((jobId: string) => {
+    const seq = ++enrichmentSeqRef.current
+    void api.post<{ enrichments: Record<string, CommentEnrichment[]> }>(`/results/${jobId}/enrich-comments`)
+      .then((res) => {
+        if (seq === enrichmentSeqRef.current) {
+          dispatch({ type: 'SET_ENRICHMENTS', payload: res.enrichments ?? {} })
+        }
+      })
+      .catch(() => {})
+  }, [])
+
   return (
     <StateCtx.Provider value={state}>
-      <DispatchCtx.Provider value={dispatch}>{children}</DispatchCtx.Provider>
+      <DispatchCtx.Provider value={dispatch}>
+        <RefreshEnrichmentsCtx.Provider value={refreshEnrichments}>{children}</RefreshEnrichmentsCtx.Provider>
+      </DispatchCtx.Provider>
     </StateCtx.Provider>
   )
 }
 
 export const useReportState = () => useContext(StateCtx)
 export const useReportDispatch = () => useContext(DispatchCtx)
+export const useRefreshEnrichments = () => useContext(RefreshEnrichmentsCtx)
 
 /** Build the review lookup key matching the backend format. */
 export function reviewKey(testName: string, childJobName?: string, childBuildNumber?: number): string {

@@ -1601,11 +1601,19 @@ async def set_test_classification(
         # leaking into failure_history before analysis completes.
         # When visible=0, make_classifications_visible() handles the mirror.
         if visible:
-            await db.execute(
-                "UPDATE failure_history SET classification = ? "
-                "WHERE test_name = ? AND child_job_name = ? AND child_build_number = ? AND job_id = ?",
-                [classification, test_name, job_name, child_build_number, job_id],
-            )
+            if child_build_number == 0 and job_name:
+                # child_build_number=0 is a wildcard: match all builds for the job_name
+                await db.execute(
+                    "UPDATE failure_history SET classification = ? "
+                    "WHERE test_name = ? AND child_job_name = ? AND child_build_number > 0 AND job_id = ?",
+                    [classification, test_name, job_name, job_id],
+                )
+            else:
+                await db.execute(
+                    "UPDATE failure_history SET classification = ? "
+                    "WHERE test_name = ? AND child_job_name = ? AND child_build_number = ? AND job_id = ?",
+                    [classification, test_name, job_name, child_build_number, job_id],
+                )
 
         await db.commit()
         return cursor.lastrowid
@@ -1702,17 +1710,30 @@ async def make_classifications_visible(job_id: str) -> None:
 
         # Mirror each newly-visible classification into failure_history
         for row in rows:
-            await db.execute(
-                "UPDATE failure_history SET classification = ? "
-                "WHERE test_name = ? AND child_job_name = ? AND child_build_number = ? AND job_id = ?",
-                [
-                    row["classification"],
-                    row["test_name"],
-                    row["job_name"],
-                    row["child_build_number"],
-                    job_id,
-                ],
-            )
+            if row["child_build_number"] == 0 and row["job_name"]:
+                # child_build_number=0 is a wildcard: match all builds for the job_name
+                await db.execute(
+                    "UPDATE failure_history SET classification = ? "
+                    "WHERE test_name = ? AND child_job_name = ? AND child_build_number > 0 AND job_id = ?",
+                    [
+                        row["classification"],
+                        row["test_name"],
+                        row["job_name"],
+                        job_id,
+                    ],
+                )
+            else:
+                await db.execute(
+                    "UPDATE failure_history SET classification = ? "
+                    "WHERE test_name = ? AND child_job_name = ? AND child_build_number = ? AND job_id = ?",
+                    [
+                        row["classification"],
+                        row["test_name"],
+                        row["job_name"],
+                        row["child_build_number"],
+                        job_id,
+                    ],
+                )
 
         await db.commit()
     logger.debug(

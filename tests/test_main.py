@@ -987,26 +987,19 @@ class TestOpenAPISchema:
 class TestSpaRoutes:
     """Tests for the React SPA route handlers."""
 
-    def test_dashboard_serves_spa(self, test_client) -> None:
-        """Test that GET /dashboard serves the SPA (or 404 if not built)."""
-        response = test_client.get("/dashboard")
-        # Without the frontend built, expect 404 from _serve_spa()
-        assert response.status_code in (200, 404)
-
-    def test_register_serves_spa(self, test_client) -> None:
-        """Test that GET /register serves the SPA (or 404 if not built)."""
-        response = test_client.get("/register")
-        assert response.status_code in (200, 404)
-
-    def test_root_serves_spa(self, test_client) -> None:
-        """Test that GET / serves the SPA (or 404 if not built)."""
-        response = test_client.get("/", follow_redirects=False)
-        # Root now serves SPA directly, not a redirect
-        assert response.status_code in (200, 404)
-
-    def test_catchall_serves_spa(self, test_client) -> None:
-        """Test that unmatched routes serve the SPA (or 404 if not built)."""
-        response = test_client.get("/some/unknown/route")
+    @pytest.mark.parametrize(
+        ("path", "follow_redirects"),
+        [
+            ("/dashboard", True),
+            ("/register", True),
+            ("/", False),
+            ("/some/unknown/route", True),
+        ],
+    )
+    def test_spa_route_serves_spa_or_404(
+        self, test_client, path: str, follow_redirects: bool
+    ) -> None:
+        response = test_client.get(path, follow_redirects=follow_redirects)
         assert response.status_code in (200, 404)
 
 

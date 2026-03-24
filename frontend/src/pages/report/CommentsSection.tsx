@@ -1,13 +1,13 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { api } from '@/lib/api'
 import { isCommentInScope } from '@/lib/grouping'
 import { getUsername } from '@/lib/cookies'
-import { useReportState, useReportDispatch } from './ReportContext'
+import { useReportState, useReportDispatch, useRefreshEnrichments } from './ReportContext'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Trash2, MessageSquare } from 'lucide-react'
-import type { Comment, CommentEnrichment } from '@/types'
+import type { Comment } from '@/types'
 
 /* ------------------------------------------------------------------ */
 /*  Auto-link: convert URLs in comment text to named clickable links   */
@@ -110,10 +110,10 @@ interface CommentsSectionProps {
 export function CommentsSection({ jobId, testNames, childJobName, childBuildNumber }: CommentsSectionProps) {
   const { comments, enrichments } = useReportState()
   const dispatch = useReportDispatch()
+  const refreshEnrichments = useRefreshEnrichments()
   const [text, setText] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const latestEnrichmentRequest = useRef(0)
   const username = getUsername()
 
   const testComments = comments.filter((c) => isCommentInScope(c, testNames, childJobName, childBuildNumber))
@@ -143,14 +143,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
       }
       dispatch({ type: 'ADD_COMMENT', payload: fresh })
       // Refresh enrichments to pick up any tracker links in the new comment
-      const requestId = ++latestEnrichmentRequest.current
-      void api.post<{ enrichments: Record<string, CommentEnrichment[]> }>(`/results/${jobId}/enrich-comments`)
-        .then((res) => {
-          if (requestId === latestEnrichmentRequest.current) {
-            dispatch({ type: 'SET_ENRICHMENTS', payload: res.enrichments ?? {} })
-          }
-        })
-        .catch(() => {})
+      refreshEnrichments(jobId)
       setText((current) => (current === submittedText ? '' : current))
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Failed to post comment')

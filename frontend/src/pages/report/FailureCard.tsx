@@ -41,14 +41,17 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
   const [selectedModel, setSelectedModel] = useState(result?.ai_model ?? '')
   const [includeLinks, setIncludeLinks] = useState(false)
 
+  function getModelsForProvider(provider: string) {
+    return [...new Set(aiConfigs.filter((c) => c.ai_provider === provider).map((c) => c.ai_model))]
+  }
+
   const providers = [...new Set(aiConfigs.map((c) => c.ai_provider))]
-  const filteredModels = aiConfigs.filter((c) => c.ai_provider === selectedProvider)
-  const models = [...new Set(filteredModels.map((c) => c.ai_model))]
+  const models = getModelsForProvider(selectedProvider)
   const showAiSelector = providers.length > 0 || models.length > 0
 
   function handleProviderChange(provider: string) {
     setSelectedProvider(provider)
-    const providerModels = [...new Set(aiConfigs.filter((c) => c.ai_provider === provider).map((c) => c.ai_model))]
+    const providerModels = getModelsForProvider(provider)
     if (providerModels.length > 0 && !providerModels.includes(selectedModel)) {
       setSelectedModel(providerModels[0])
     }

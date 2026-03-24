@@ -1,9 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { groupFailures } from '@/lib/grouping'
-import type { ResultResponse, CommentsAndReviews, AiConfig, CommentEnrichment } from '@/types'
-import { ReportProvider, useReportState, useReportDispatch } from './report/ReportContext'
+import type { ResultResponse, CommentsAndReviews, AiConfig } from '@/types'
+import { ReportProvider, useReportState, useReportDispatch, useRefreshEnrichments } from './report/ReportContext'
 import { FailureCard } from './report/FailureCard'
 import { ChildJobSection } from './report/ChildJobSection'
 import { Badge } from '@/components/ui/badge'
@@ -50,7 +50,7 @@ function ReportContent() {
   const navigate = useNavigate()
   const state = useReportState()
   const dispatch = useReportDispatch()
-  const enrichmentSeqRef = useRef(0)
+  const refreshEnrichments = useRefreshEnrichments()
 
   useEffect(() => {
     if (!jobId) return
@@ -99,14 +99,7 @@ function ReportContent() {
         if (commentsResult.status === 'fulfilled') {
           dispatch({ type: 'SET_COMMENTS_AND_REVIEWS', payload: commentsResult.value })
           // Fetch enrichments once at report level
-          const seq = ++enrichmentSeqRef.current
-          api.post<{ enrichments: Record<string, CommentEnrichment[]> }>(`/results/${jobId}/enrich-comments`)
-            .then((res) => {
-              if (seq === enrichmentSeqRef.current) {
-                dispatch({ type: 'SET_ENRICHMENTS', payload: res.enrichments ?? {} })
-              }
-            })
-            .catch(() => {}) // best-effort
+          refreshEnrichments(jobId)
         }
         if (aiConfigsResult.status === 'fulfilled') {
           dispatch({ type: 'SET_AI_CONFIGS', payload: aiConfigsResult.value })
