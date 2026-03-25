@@ -133,7 +133,7 @@ class TestCallAiCliWithRetry:
             patch("jenkins_job_insight.analyzer.asyncio.sleep", new_callable=AsyncMock),
         ):
             mock.return_value = (False, "ENOENT: no such file or directory")
-            success, output = await _call_ai_cli_with_retry(
+            success, _ = await _call_ai_cli_with_retry(
                 "prompt", ai_provider="test", max_retries=2
             )
             assert success is False

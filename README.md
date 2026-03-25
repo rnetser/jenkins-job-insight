@@ -105,6 +105,15 @@ jji results list --json
 
 Run `jji --help` for all commands.
 
+### Claude Code Integration
+
+A Claude Code skill is included for AI-assisted Jenkins job analysis. When using Claude Code in this repository, you can ask it to analyze Jenkins jobs and it will use the `jji` CLI automatically.
+
+Install the skill:
+```bash
+claude skill install jji-analyze
+```
+
 ## Frontend
 
 The web UI is built with React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui. It's served by the same FastAPI container -- no separate frontend service needed.
@@ -167,7 +176,7 @@ Configure the service using environment variables. Jenkins settings are optional
 | `JENKINS_SSL_VERIFY` | No | `true` | Enable SSL certificate verification (set to `false` for self-signed certs) |
 | `WAIT_FOR_COMPLETION` | No | `true` | Wait for running Jenkins builds to finish before analyzing |
 | `POLL_INTERVAL_MINUTES` | No | `2` | Minutes between polls when waiting for a build to finish |
-| `MAX_WAIT_MINUTES` | No | `120` | Maximum minutes to wait for a build before timing out |
+| `MAX_WAIT_MINUTES` | No | `0` | Maximum minutes to wait for a build (0 = no limit, wait forever) |
 | **AI Provider** | | | |
 | `AI_PROVIDER` | Yes | - | AI provider to use (`claude`, `gemini`, or `cursor`) |
 | `AI_MODEL` | Yes | - | Model for the AI provider |
@@ -347,7 +356,7 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `JENKINS_SSL_VERIFY` | `jenkins_ssl_verify` | No       | `/analyze`             | Jenkins SSL certificate verification (default: true)           |
 | `WAIT_FOR_COMPLETION` | `wait_for_completion` | No      | `/analyze`             | Wait for running builds to finish before analyzing (default: true) |
 | `POLL_INTERVAL_MINUTES` | `poll_interval_minutes` | No  | `/analyze`             | Minutes between polls when waiting for a build (default: 2)    |
-| `MAX_WAIT_MINUTES`   | `max_wait_minutes`   | No       | `/analyze`             | Maximum minutes to wait for a build (default: 120)             |
+| `MAX_WAIT_MINUTES`   | `max_wait_minutes`   | No       | `/analyze`             | Maximum minutes to wait for a build (default: 0 = no limit)    |
 | **Jira**             |                      |          |                        |                                                                |
 | `ENABLE_JIRA`        | `enable_jira`        | No       | Both                   | Enable/disable Jira bug search (default: auto-detect)          |
 | `JIRA_URL`           | `jira_url`           | No       | Both                   | Jira instance URL                                              |
@@ -703,7 +712,7 @@ When you submit an analysis request, the server automatically checks if the Jenk
 
 - **Always on by default** — no configuration needed
 - **Polls every 2 minutes** (configurable via `poll_interval_minutes`)
-- **Times out after 2 hours** (configurable via `max_wait_minutes`)
+- **No timeout by default** — waits until the job finishes (configurable via `max_wait_minutes`; set to a positive number to impose a limit)
 - **Any terminal state triggers analysis** — success, failure, error, aborted
 - **Status shows "Waiting"** in the dashboard and status page while monitoring
 - **Opt out with `--no-wait`** via CLI or `"wait_for_completion": false` in the payload
@@ -726,7 +735,7 @@ jji --server dev analyze --job-name my-job --build-number 42 --no-wait
   "build_number": 42,
   "wait_for_completion": true,
   "poll_interval_minutes": 2,
-  "max_wait_minutes": 120
+  "max_wait_minutes": 0
 }
 ```
 

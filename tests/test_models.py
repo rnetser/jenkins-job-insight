@@ -61,7 +61,7 @@ class TestAnalyzeRequest:
         request = AnalyzeRequest(job_name="test", build_number=1)
         assert request.wait_for_completion is True
         assert request.poll_interval_minutes == 2
-        assert request.max_wait_minutes == 120
+        assert request.max_wait_minutes == 0
 
     def test_wait_for_completion_custom_values(self) -> None:
         """Test overriding wait_for_completion fields."""
@@ -76,17 +76,21 @@ class TestAnalyzeRequest:
         assert request.poll_interval_minutes == 5
         assert request.max_wait_minutes == 60
 
-    @pytest.mark.parametrize("field", ["poll_interval_minutes", "max_wait_minutes"])
-    def test_wait_fields_reject_zero(self, field: str) -> None:
-        """Test that poll_interval_minutes and max_wait_minutes reject zero."""
+    def test_poll_interval_rejects_zero(self) -> None:
+        """Test that poll_interval_minutes rejects zero."""
         with pytest.raises(ValidationError):
-            AnalyzeRequest(job_name="test", build_number=1, **{field: 0})
+            AnalyzeRequest(job_name="test", build_number=1, poll_interval_minutes=0)
 
     @pytest.mark.parametrize("field", ["poll_interval_minutes", "max_wait_minutes"])
     def test_wait_fields_reject_negative(self, field: str) -> None:
         """Test that poll_interval_minutes and max_wait_minutes reject negative values."""
         with pytest.raises(ValidationError):
             AnalyzeRequest(job_name="test", build_number=1, **{field: -1})
+
+    def test_max_wait_minutes_accepts_zero(self) -> None:
+        """Test that max_wait_minutes=0 is valid (means no limit)."""
+        request = AnalyzeRequest(job_name="test", build_number=1, max_wait_minutes=0)
+        assert request.max_wait_minutes == 0
 
 
 class TestAnalysisResultWaitingStatus:

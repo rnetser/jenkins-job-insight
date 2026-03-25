@@ -92,9 +92,9 @@ class AnalyzeRequest(BaseAnalysisRequest):
         default=2,
         description="Minutes between Jenkins status polls when waiting",
     )
-    max_wait_minutes: Annotated[int, Field(gt=0)] = Field(
-        default=120,
-        description="Maximum minutes to wait for job completion",
+    max_wait_minutes: Annotated[int, Field(ge=0)] = Field(
+        default=0,
+        description="Maximum minutes to wait for job completion (0 = no limit)",
     )
     jenkins_url: str | None = Field(
         default=None,
@@ -336,10 +336,14 @@ class FailureAnalysisResult(BaseModel):
 
 
 class _ChildJobFieldsValidator(BaseModel):
-    """Mixin providing child_job_name + child_build_number cross-validation."""
+    """Mixin providing child_job_name + child_build_number cross-validation.
+
+    child_build_number uses 0 as a wildcard meaning "not specified".
+    Negative values are rejected.
+    """
 
     child_job_name: str = ""
-    child_build_number: int = 0
+    child_build_number: Annotated[int, Field(ge=0)] = 0
 
     @model_validator(mode="after")
     def validate_child_fields(self):
@@ -489,7 +493,7 @@ class ClassifyTestRequest(BaseModel):
     job_name: str = ""
     references: str = ""
     job_id: str
-    child_build_number: int = 0
+    child_build_number: Annotated[int, Field(ge=0)] = 0
 
     @field_validator("job_id")
     @classmethod

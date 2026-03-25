@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, type ReactNode } from 'react'
 import type { GroupedFailure } from '@/types'
 import { isCommentInScope } from '@/lib/grouping'
 import { api } from '@/lib/api'
@@ -14,6 +14,32 @@ import { CommentsSection } from './CommentsSection'
 import { ClassificationSelect } from './ClassificationSelect'
 import { BugCreationDialog } from './BugCreationDialog'
 import { ChevronDown, ChevronRight, Bug, MessageSquare, CheckCircle2, Copy, Check, Clock } from 'lucide-react'
+
+function CopyableSectionHeader({ title, content, sectionId, copiedSection, onCopy, extra }: {
+  title: string
+  content: string
+  sectionId: string
+  copiedSection: string | null
+  onCopy: (text: string, section: string) => void
+  extra?: ReactNode
+}) {
+  return (
+    <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center gap-2">
+        <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary">{title}</h4>
+        {extra}
+      </div>
+      <button
+        type="button"
+        className="text-text-tertiary hover:text-text-primary transition-colors"
+        onClick={() => onCopy(content, sectionId)}
+        title="Copy to clipboard"
+      >
+        {copiedSection === sectionId ? <Check className="h-3 w-3 text-signal-green" /> : <Copy className="h-3 w-3" />}
+      </button>
+    </div>
+  )
+}
 
 interface FailureCardProps {
   group: GroupedFailure
@@ -203,17 +229,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
 
             {/* Error */}
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary">Error</h4>
-                <button
-                  type="button"
-                  className="text-text-tertiary hover:text-text-primary transition-colors"
-                  onClick={() => copyToClipboard(rep.error, 'error')}
-                  title="Copy to clipboard"
-                >
-                  {copiedSection === 'error' ? <Check className="h-3 w-3 text-signal-green" /> : <Copy className="h-3 w-3" />}
-                </button>
-              </div>
+              <CopyableSectionHeader title="Error" content={rep.error} sectionId="error" copiedSection={copiedSection} onCopy={copyToClipboard} />
               <pre className="overflow-x-auto rounded-md bg-signal-red/5 border border-signal-red/20 p-3 text-xs text-signal-red font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                 {rep.error}
               </pre>
@@ -222,25 +238,19 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             {/* Analysis */}
             {analysis.details && (
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary">Analysis</h4>
-                    {analysis.details.toLowerCase().includes('timed out') && (
-                      <Badge variant="warning" className="text-[10px] gap-1">
-                        <Clock className="h-3 w-3" />
-                        Timed Out
-                      </Badge>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className="text-text-tertiary hover:text-text-primary transition-colors"
-                    onClick={() => copyToClipboard(analysis.details, 'analysis')}
-                    title="Copy to clipboard"
-                  >
-                    {copiedSection === 'analysis' ? <Check className="h-3 w-3 text-signal-green" /> : <Copy className="h-3 w-3" />}
-                  </button>
-                </div>
+                <CopyableSectionHeader
+                  title="Analysis"
+                  content={analysis.details}
+                  sectionId="analysis"
+                  copiedSection={copiedSection}
+                  onCopy={copyToClipboard}
+                  extra={analysis.details.toLowerCase().includes('timed out') ? (
+                    <Badge variant="warning" className="text-[10px] gap-1">
+                      <Clock className="h-3 w-3" />
+                      Timed Out
+                    </Badge>
+                  ) : undefined}
+                />
                 <div className="rounded-md bg-glow-blue p-3 text-sm text-text-secondary whitespace-pre-wrap">{analysis.details}</div>
               </div>
             )}
@@ -248,17 +258,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             {/* Artifacts evidence */}
             {analysis.artifacts_evidence && (
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary">Artifacts Evidence</h4>
-                  <button
-                    type="button"
-                    className="text-text-tertiary hover:text-text-primary transition-colors"
-                    onClick={() => copyToClipboard(analysis.artifacts_evidence, 'artifacts_evidence')}
-                    title="Copy to clipboard"
-                  >
-                    {copiedSection === 'artifacts_evidence' ? <Check className="h-3 w-3 text-signal-green" /> : <Copy className="h-3 w-3" />}
-                  </button>
-                </div>
+                <CopyableSectionHeader title="Artifacts Evidence" content={analysis.artifacts_evidence} sectionId="artifacts_evidence" copiedSection={copiedSection} onCopy={copyToClipboard} />
                 <pre className="overflow-x-auto rounded-md bg-surface-elevated p-3 text-xs text-text-secondary font-mono whitespace-pre-wrap max-h-64 overflow-y-auto">
                   {analysis.artifacts_evidence}
                 </pre>
@@ -268,22 +268,16 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             {/* Code fix */}
             {classification !== 'PRODUCT BUG' && analysis.code_fix && typeof analysis.code_fix === 'object' && (
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-xs font-display uppercase tracking-widest text-text-tertiary">Suggested Fix</h4>
-                  <button
-                    type="button"
-                    className="text-text-tertiary hover:text-text-primary transition-colors"
-                    onClick={() => {
-                      const parts: string[] = []
-                      if (analysis.code_fix?.file) parts.push(`${analysis.code_fix.file}${analysis.code_fix.line ? `:${analysis.code_fix.line}` : ''}`)
-                      if (analysis.code_fix?.change) parts.push(analysis.code_fix.change)
-                      copyToClipboard(parts.join('\n'), 'suggested_fix')
-                    }}
-                    title="Copy to clipboard"
-                  >
-                    {copiedSection === 'suggested_fix' ? <Check className="h-3 w-3 text-signal-green" /> : <Copy className="h-3 w-3" />}
-                  </button>
-                </div>
+                <CopyableSectionHeader
+                  title="Suggested Fix"
+                  content={[
+                    analysis.code_fix?.file ? `${analysis.code_fix.file}${analysis.code_fix.line ? `:${analysis.code_fix.line}` : ''}` : '',
+                    analysis.code_fix?.change ?? '',
+                  ].filter(Boolean).join('\n')}
+                  sectionId="suggested_fix"
+                  copiedSection={copiedSection}
+                  onCopy={copyToClipboard}
+                />
                 <div className="rounded-md bg-glow-green border border-signal-green/20 p-3 text-sm">
                   {analysis.code_fix.file && (
                     <p className="font-mono text-xs text-signal-green">

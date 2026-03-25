@@ -26,7 +26,7 @@ export function groupFailures(
   const orderMap = new Map<string, number>()
   const groupMap = new Map<string, FailureAnalysis[]>()
 
-  for (const f of failures) {
+  for (const f of failures ?? []) {
     const key = groupingKey(f)
     if (!groupMap.has(key)) {
       orderMap.set(key, orderMap.size)

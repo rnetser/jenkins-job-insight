@@ -77,6 +77,7 @@ export interface DashboardJob {
   status: string
   created_at: string
   completed_at?: string | null
+  analysis_started_at?: string | null
   reviewed_count: number
   comment_count: number
   job_name?: string
@@ -198,6 +199,7 @@ export interface ResultResponse {
   result: AnalysisResult | null
   created_at: string
   completed_at?: string
+  analysis_started_at?: string | null
 }
 
 // -- Comment enrichment ---------------------------------------------

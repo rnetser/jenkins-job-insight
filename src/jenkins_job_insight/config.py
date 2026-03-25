@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     # - CLOUD_ML_REGION=<region>
     # - ANTHROPIC_VERTEX_PROJECT_ID=<project>
 
-    # Jenkins configuration (optional; can be provided per-request via API body)
+    # Jenkins configuration (optional; can be provided per-request via API body).
+    # Empty string means "not configured"; checked with `if not self.jenkins_url`.
     jenkins_url: str = ""
     jenkins_user: str = ""
     jenkins_password: str = ""
@@ -58,7 +59,7 @@ class Settings(BaseSettings):
     # Jenkins job monitoring (wait for completion before analysis)
     wait_for_completion: bool = True
     poll_interval_minutes: int = Field(default=2, gt=0)
-    max_wait_minutes: int = Field(default=120, gt=0)
+    max_wait_minutes: int = Field(default=0, ge=0)
 
     # GitHub (optional) -- for comment enrichment (PR status)
     github_token: SecretStr | None = None

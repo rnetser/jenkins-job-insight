@@ -102,7 +102,8 @@ export function DashboardPage() {
   }, [jobs, search])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / perPage))
-  const pageJobs = filtered.slice((page - 1) * perPage, page * perPage)
+  const safePage = Math.min(page, totalPages)
+  const pageJobs = filtered.slice((safePage - 1) * perPage, safePage * perPage)
 
   async function handleDelete() {
     if (!deleteTarget) return
@@ -197,6 +198,7 @@ export function DashboardPage() {
                     role="link"
                     aria-label={`Open ${job.job_name || job.job_id}${job.build_number !== undefined ? ` #${job.build_number}` : ''}`}
                     onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget) return
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
                         handleRowClick(job)
@@ -307,12 +309,18 @@ export function DashboardPage() {
                         </TooltipTrigger>
                         <TooltipContent>
                           <span>Created: {parseApiTimestamp(job.created_at).toLocaleString()}</span>
-                          {job.completed_at && (
-                            <>
-                              <br />
-                              <span>Analysis took: {formatDuration(parseApiTimestamp(job.created_at), parseApiTimestamp(job.completed_at))}</span>
-                            </>
-                          )}
+                          {(() => {
+                            const startTime = job.analysis_started_at || job.created_at
+                            const duration = job.completed_at && startTime
+                              ? formatDuration(parseApiTimestamp(startTime), parseApiTimestamp(job.completed_at))
+                              : null
+                            return duration ? (
+                              <>
+                                <br />
+                                <span>Analysis took: {duration}</span>
+                              </>
+                            ) : null
+                          })()}
                         </TooltipContent>
                       </Tooltip>
                     </TableCell>
@@ -340,7 +348,7 @@ export function DashboardPage() {
           </Table>
         )}
 
-        <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+        <Pagination page={safePage} totalPages={totalPages} onPageChange={setPage} />
 
         <ConfirmDialog
           open={deleteTarget !== null}

@@ -21,20 +21,20 @@ function collectAllTestKeys(
   failures: { test_name: string }[],
   children: ChildJobAnalysis[],
 ): string[] {
-  const keys: string[] = failures.map((f) => reviewKey(f.test_name))
-  for (const child of children) {
-    keys.push(...child.failures.map((f) => reviewKey(f.test_name, child.job_name, child.build_number)))
-    keys.push(...collectAllTestKeys([], child.failed_children))
+  const keys: string[] = (failures ?? []).map((f) => reviewKey(f.test_name))
+  for (const child of children ?? []) {
+    keys.push(...(child.failures ?? []).map((f) => reviewKey(f.test_name, child.job_name, child.build_number)))
+    keys.push(...collectAllTestKeys([], child.failed_children ?? []))
   }
   return keys
 }
 
 /** Recursively count all failures including nested children. */
 function countAllFailures(failures: { test_name: string }[], children: ChildJobAnalysis[]): number {
-  let count = failures.length
-  for (const child of children) {
-    count += child.failures.length
-    count += countAllFailures([], child.failed_children)
+  let count = (failures ?? []).length
+  for (const child of children ?? []) {
+    count += (child.failures ?? []).length
+    count += countAllFailures([], child.failed_children ?? [])
   }
   return count
 }
@@ -77,7 +77,7 @@ function ReportContent() {
         if (cancelled) return
 
         // Check status first to avoid flash of wrong state
-        if (resultRes.status === 'pending' || resultRes.status === 'running') {
+        if (resultRes.status === 'pending' || resultRes.status === 'running' || resultRes.status === 'waiting') {
           navigate(`/status/${jobId}`, { replace: true })
           return
         }
@@ -93,7 +93,7 @@ function ReportContent() {
           return
         }
 
-        dispatch({ type: 'SET_RESULT', payload: { result: resultRes.result, createdAt: resultRes.created_at, completedAt: resultRes.completed_at ?? '' } })
+        dispatch({ type: 'SET_RESULT', payload: { result: resultRes.result, createdAt: resultRes.created_at, completedAt: resultRes.completed_at ?? '', analysisStartedAt: resultRes.analysis_started_at ?? '' } })
 
         // Comments, AI configs, classifications, and capabilities are best-effort
         const [commentsResult, aiConfigsResult, classificationsResult, capabilitiesResult] = await Promise.allSettled([
@@ -205,9 +205,9 @@ function ReportContent() {
 
   // Derived values (safe to compute even when result is null)
   const result = state.result
-  const groups = result ? groupFailures(result.failures) : []
-  const totalFailures = result ? countAllFailures(result.failures, result.child_job_analyses) : 0
-  const allTestKeys = result ? collectAllTestKeys(result.failures, result.child_job_analyses) : []
+  const groups = result ? groupFailures(result.failures ?? []) : []
+  const totalFailures = result ? countAllFailures(result.failures ?? [], result.child_job_analyses ?? []) : 0
+  const allTestKeys = result ? collectAllTestKeys(result.failures ?? [], result.child_job_analyses ?? []) : []
   const reviewedCount = allTestKeys.filter((k) => state.reviews[k]?.reviewed).length
 
   // Expand/collapse all for top-level failure cards
@@ -224,16 +224,16 @@ function ReportContent() {
     const keys: string[] = []
     const resultJobId = result.job_id
     function walk(children: ChildJobAnalysis[]) {
-      for (const child of children) {
+      for (const child of children ?? []) {
         keys.push(`jji-expand-${resultJobId}-child-${child.job_name}-${child.build_number}`)
-        const childGroups = groupFailures(child.failures, `child-${child.job_name}-${child.build_number}`)
+        const childGroups = groupFailures(child.failures ?? [], `child-${child.job_name}-${child.build_number}`)
         for (const g of childGroups) {
           keys.push(`jji-expand-${resultJobId}-${g.id}`)
         }
-        walk(child.failed_children)
+        walk(child.failed_children ?? [])
       }
     }
-    walk(result.child_job_analyses)
+    walk(result.child_job_analyses ?? [])
     return keys
   }, [result])
   const { remountKey: childRemountKey, expandAll: expandAllChildren, collapseAll: collapseAllChildren } =
@@ -273,7 +273,13 @@ function ReportContent() {
             {result.job_name || result.job_id}
           </h1>
           {result.build_number > 0 && (
-            <span className="font-mono text-sm text-text-tertiary">#{result.build_number}</span>
+            result.jenkins_url ? (
+              <a href={String(result.jenkins_url)} target="_blank" rel="noopener noreferrer" className="font-mono text-sm text-text-link hover:underline">
+                #{result.build_number}
+              </a>
+            ) : (
+              <span className="font-mono text-sm text-text-tertiary">#{result.build_number}</span>
+            )
           )}
           <StatusChip status={isAnalysisTimeout(result.status, result.error, result.summary) ? 'timeout' : result.status} />
           <Badge variant="destructive" className="font-mono">
@@ -326,10 +332,10 @@ function ReportContent() {
             {parseApiTimestamp(state.createdAt).toLocaleString()}
           </span>
         )}
-        {state.createdAt && state.completedAt && (
+        {state.completedAt && (state.analysisStartedAt || state.createdAt) && (
           <span className="inline-flex items-center gap-1">
             <Timer className="h-3 w-3" />
-            {formatDuration(parseApiTimestamp(state.createdAt), parseApiTimestamp(state.completedAt))}
+            {formatDuration(parseApiTimestamp(state.analysisStartedAt || state.createdAt), parseApiTimestamp(state.completedAt))}
           </span>
         )}
         {result.ai_provider && (
@@ -359,7 +365,7 @@ function ReportContent() {
         <section>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xs font-display uppercase tracking-widest text-text-tertiary">
-              Failures ({result.failures.length})
+              Failures ({(result.failures ?? []).length})
             </h2>
             {groups.length >= 2 && (
               <ExpandCollapseButtons onExpandAll={expandAllFailures} onCollapseAll={collapseAllFailures} />
@@ -374,16 +380,16 @@ function ReportContent() {
       )}
 
       {/* ---- Child jobs ---- */}
-      {result.child_job_analyses.length > 0 && (
+      {(result.child_job_analyses ?? []).length > 0 && (
         <section>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xs font-display uppercase tracking-widest text-text-tertiary">
-              Child Jobs ({result.child_job_analyses.length})
+              Child Jobs ({(result.child_job_analyses ?? []).length})
             </h2>
             <ExpandCollapseButtons onExpandAll={expandAllChildren} onCollapseAll={collapseAllChildren} />
           </div>
           <div className="space-y-6" key={childRemountKey}>
-            {result.child_job_analyses.map((child) => (
+            {(result.child_job_analyses ?? []).map((child) => (
               <ChildJobSection key={`${child.job_name}-${child.build_number}`} child={child} jobId={result.job_id} activeHash={activeHash} />
             ))}
           </div>

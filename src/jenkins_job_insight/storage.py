@@ -37,7 +37,8 @@ async def init_db() -> None:
                 jenkins_url TEXT,
                 status TEXT,
                 result_json TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                analysis_started_at TIMESTAMP
             )
         """)
         await db.execute("""
@@ -248,6 +249,17 @@ async def init_db() -> None:
             logger.info("Migration: added completed_at column to results")
         else:
             logger.debug("Migration: results already has completed_at column")
+
+        # Migration: add analysis_started_at column to results table
+        cursor = await db.execute("PRAGMA table_info(results)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "analysis_started_at" not in columns:
+            await db.execute(
+                "ALTER TABLE results ADD COLUMN analysis_started_at TIMESTAMP"
+            )
+            logger.info("Migration: added analysis_started_at column to results")
+        else:
+            logger.debug("Migration: results already has analysis_started_at column")
 
         # failure_history: denormalized table for fast history queries
         await db.execute("""
@@ -598,39 +610,27 @@ async def update_status(
     """
     logger.debug(f"Updating status for job_id: {job_id} (status: {status})")
     async with aiosqlite.connect(DB_PATH) as db:
+        # Build SET clauses dynamically based on status and result presence
+        set_parts = ["status = ?"]
+        params: list = [status]
+
+        if result is not None:
+            set_parts.append("result_json = ?")
+            params.append(json.dumps(result))
+
         if status == "completed":
-            if result is not None:
-                cursor = await db.execute(
-                    """
-                    UPDATE results SET status = ?, result_json = ?, completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
-                    WHERE job_id = ?
-                    """,
-                    (status, json.dumps(result), job_id),
-                )
-            else:
-                cursor = await db.execute(
-                    """
-                    UPDATE results SET status = ?, completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
-                    WHERE job_id = ?
-                    """,
-                    (status, job_id),
-                )
-        elif result is not None:
-            cursor = await db.execute(
-                """
-                UPDATE results SET status = ?, result_json = ?
-                WHERE job_id = ?
-                """,
-                (status, json.dumps(result), job_id),
+            set_parts.append("completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)")
+
+        if status == "running":
+            # Set analysis_started_at only on first transition to running
+            set_parts.append(
+                "analysis_started_at = COALESCE(analysis_started_at, CURRENT_TIMESTAMP)"
             )
-        else:
-            cursor = await db.execute(
-                """
-                UPDATE results SET status = ?
-                WHERE job_id = ?
-                """,
-                (status, job_id),
-            )
+
+        params.append(job_id)
+        sql = f"UPDATE results SET {', '.join(set_parts)} WHERE job_id = ?"
+        cursor = await db.execute(sql, params)
+
         if cursor.rowcount == 0:
             logger.warning(f"update_status: no row found for job_id={job_id}")
         await db.commit()
@@ -667,6 +667,9 @@ async def get_result(job_id: str) -> dict | None:
                 "created_at": row["created_at"],
                 "completed_at": row["completed_at"]
                 if "completed_at" in row.keys()
+                else None,
+                "analysis_started_at": row["analysis_started_at"]
+                if "analysis_started_at" in row.keys()
                 else None,
             }
         logger.debug(f"get_result: job_id={job_id}, found=False")
@@ -1532,7 +1535,8 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """
-            SELECT r.job_id, r.jenkins_url, r.status, r.result_json, r.created_at, r.completed_at,
+            SELECT r.job_id, r.jenkins_url, r.status, r.result_json,
+                r.created_at, r.completed_at, r.analysis_started_at,
                 (SELECT COUNT(*) FROM failure_reviews fr
                  WHERE fr.job_id = r.job_id AND fr.reviewed = 1) AS reviewed_count,
                 (SELECT COUNT(*) FROM comments c
@@ -1553,6 +1557,9 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
                 "created_at": row["created_at"],
                 "completed_at": row["completed_at"]
                 if "completed_at" in row.keys()
+                else None,
+                "analysis_started_at": row["analysis_started_at"]
+                if "analysis_started_at" in row.keys()
                 else None,
                 "reviewed_count": row["reviewed_count"],
                 "comment_count": row["comment_count"],

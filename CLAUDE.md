@@ -160,15 +160,21 @@ Uses `python-simple-logger`:
 
 ## API Design
 
-### Environment Variable / Payload Parity
+### Configuration Parity
 
-Every environment variable that configures the service must also be available as a per-request field in the API payload. This allows callers to override any configuration on a per-request basis without changing the server environment.
+Every configurable parameter must be available through ALL interfaces:
+1. Environment variable (server-level default)
+2. API payload field (per-request override)
+3. CLI option (command-line flag)
+4. Config file (`~/.config/jji/config.toml` per-server setting)
 
-When adding a new environment variable:
+When adding a new configurable parameter:
 1. Add the field to `Settings` in `config.py`
-2. Add the corresponding request field to `BaseAnalysisRequest` (or `AnalyzeRequest` if endpoint-specific) in `models.py`
+2. Add the corresponding request field to `BaseAnalysisRequest` (or `AnalyzeRequest`) in `models.py`
 3. Add the field to `_merge_settings()` in `main.py` so request values override env defaults
-4. Update the Request Override Priority table in `README.md`
+4. Add the CLI option to the relevant command in `cli/main.py`
+5. Add the field to `ServerConfig` in `cli/config.py`
+6. Update the Request Override Priority table in `README.md`
 
 Exceptions (server-level only, no payload equivalent):
 - `DEBUG` — server reload toggle

@@ -343,7 +343,7 @@ def review_status(
     else:
         print_output(
             data,
-            columns=["total", "reviewed", "pending"],
+            columns=["total_failures", "reviewed_count", "comment_count"],
             as_json=False,
         )
 

@@ -2022,11 +2022,21 @@ class TestWaitForJenkinsCompletion:
     @pytest.mark.asyncio
     async def test_running_then_completed(self) -> None:
         """Job that is running then completes returns True after polls."""
+        # Simulate monotonic clock: starts at 0, advances 120s after each sleep
+        clock = [0.0]
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        async def fake_sleep(seconds: float) -> None:
+            clock[0] += seconds
+
         with (
             patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls,
+            patch("jenkins_job_insight.main.asyncio.sleep", side_effect=fake_sleep),
             patch(
-                "jenkins_job_insight.main.asyncio.sleep", new_callable=AsyncMock
-            ) as mock_sleep,
+                "jenkins_job_insight.main._time.monotonic", side_effect=fake_monotonic
+            ),
         ):
             mock_client = mock_cls.return_value
             mock_client.get_build_info_safe.side_effect = [
@@ -2049,15 +2059,25 @@ class TestWaitForJenkinsCompletion:
             )
             assert result is True
             assert mock_client.get_build_info_safe.call_count == 3
-            assert mock_sleep.call_count == 2
-            mock_sleep.assert_called_with(120)  # 2 * 60
 
     @pytest.mark.asyncio
     async def test_timeout_returns_false(self) -> None:
-        """Job that never completes returns False after max polls."""
+        """Job that never completes returns False after deadline."""
+        # Simulate monotonic clock: starts at 0, advances 120s after each sleep
+        clock = [0.0]
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        async def fake_sleep(seconds: float) -> None:
+            clock[0] += seconds
+
         with (
             patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls,
-            patch("jenkins_job_insight.main.asyncio.sleep", new_callable=AsyncMock),
+            patch("jenkins_job_insight.main.asyncio.sleep", side_effect=fake_sleep),
+            patch(
+                "jenkins_job_insight.main._time.monotonic", side_effect=fake_monotonic
+            ),
         ):
             mock_client = mock_cls.return_value
             mock_client.get_build_info_safe.return_value = {"building": True}
@@ -2075,15 +2095,27 @@ class TestWaitForJenkinsCompletion:
                 max_wait_minutes=6,
             )
             assert result is False
-            # max_polls = 6 // 2 = 3
-            assert mock_client.get_build_info_safe.call_count == 3
+            # 6 min deadline with 2 min intervals: polls at t=0, 120, 240, 360
+            # then remaining=0 breaks the loop
+            assert mock_client.get_build_info_safe.call_count == 4
 
     @pytest.mark.asyncio
     async def test_jenkins_error_continues_polling(self) -> None:
         """Transient Jenkins errors do not stop polling."""
+        clock = [0.0]
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        async def fake_sleep(seconds: float) -> None:
+            clock[0] += seconds
+
         with (
             patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls,
-            patch("jenkins_job_insight.main.asyncio.sleep", new_callable=AsyncMock),
+            patch("jenkins_job_insight.main.asyncio.sleep", side_effect=fake_sleep),
+            patch(
+                "jenkins_job_insight.main._time.monotonic", side_effect=fake_monotonic
+            ),
         ):
             mock_client = mock_cls.return_value
             mock_client.get_build_info_safe.side_effect = [
@@ -2104,6 +2136,40 @@ class TestWaitForJenkinsCompletion:
                 max_wait_minutes=5,
             )
             assert result is True
+
+    @pytest.mark.asyncio
+    async def test_unlimited_wait_polls_until_complete(self) -> None:
+        """max_wait_minutes=0 polls indefinitely until job completes."""
+        with (
+            patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls,
+            patch(
+                "jenkins_job_insight.main.asyncio.sleep", new_callable=AsyncMock
+            ) as mock_sleep,
+        ):
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.side_effect = [
+                {"building": True},
+                {"building": True},
+                {"building": True},
+                {"building": False, "result": "SUCCESS"},
+            ]
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=1,
+                jenkins_user="user",
+                jenkins_password="pass",  # pragma: allowlist secret
+                jenkins_ssl_verify=True,
+                poll_interval_minutes=2,
+                max_wait_minutes=0,
+            )
+            assert result is True
+            assert mock_client.get_build_info_safe.call_count == 4
+            assert mock_sleep.call_count == 3
+            mock_sleep.assert_called_with(120)  # 2 * 60
 
 
 class TestProcessAnalysisWaiting:
@@ -2239,6 +2305,7 @@ class TestProcessAnalysisWaiting:
         settings_dict["jenkins_url"] = "https://jenkins.example.com"
         settings_dict["jenkins_user"] = "user"
         settings_dict["jenkins_password"] = "pass"  # pragma: allowlist secret
+        settings_dict["max_wait_minutes"] = 10
         merged = Settings.model_validate(settings_dict)
 
         stored: list[tuple[str, dict | None]] = []

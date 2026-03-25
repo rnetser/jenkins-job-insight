@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import time as _time
 import urllib.parse
 import uuid
 from collections import defaultdict
@@ -451,22 +452,27 @@ async def _wait_for_jenkins_completion(
         jenkins_ssl_verify: Whether to verify SSL certificates.
         poll_interval_minutes: Minutes between polls.
         max_wait_minutes: Maximum minutes to wait before timing out.
+            0 means no limit (poll forever until job finishes).
 
     Returns:
         True if the build completed, False if timed out.
     """
     from jenkins_job_insight.jenkins import JenkinsClient
 
-    max_polls = max_wait_minutes // poll_interval_minutes
+    client = JenkinsClient(
+        url=jenkins_url,
+        username=jenkins_user,
+        password=jenkins_password,
+        ssl_verify=jenkins_ssl_verify,
+    )
 
-    for attempt in range(max_polls):
+    if max_wait_minutes > 0:
+        deadline: float | None = _time.monotonic() + max_wait_minutes * 60
+    else:
+        deadline = None  # No limit
+
+    while True:
         try:
-            client = JenkinsClient(
-                url=jenkins_url,
-                username=jenkins_user,
-                password=jenkins_password,
-                ssl_verify=jenkins_ssl_verify,
-            )
             build_info = client.get_build_info_safe(job_name, build_number)
 
             if build_info and not build_info.get("building", True):
@@ -476,15 +482,18 @@ async def _wait_for_jenkins_completion(
                 )
                 return True
 
-            logger.info(
-                f"Jenkins job {job_name} #{build_number} still running "
-                f"(poll {attempt + 1}/{max_polls})"
-            )
+            logger.info(f"Jenkins job {job_name} #{build_number} still running")
 
         except Exception as e:
             logger.warning(f"Error checking Jenkins status: {e}")
 
-        await asyncio.sleep(poll_interval_minutes * 60)
+        if deadline is not None:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(poll_interval_minutes * 60, remaining))
+        else:
+            await asyncio.sleep(poll_interval_minutes * 60)
 
     logger.warning(
         f"Timed out waiting for Jenkins job {job_name} #{build_number} "
@@ -838,7 +847,7 @@ async def get_job_result(request: Request, job_id: str):
     accept = request.headers.get("accept", "")
     if "text/html" in accept and "application/json" not in accept:
         result = await get_result(job_id)
-        if result and result.get("status") in ("pending", "running"):
+        if result and result.get("status") in ("pending", "running", "waiting"):
             return RedirectResponse(url=f"/status/{job_id}", status_code=302)
         return _serve_spa()
 
@@ -1415,7 +1424,7 @@ async def create_github_issue_endpoint(
         )
         if failure.analysis.classification == "PRODUCT BUG":
             raise HTTPException(
-                status_code=400,
+                status_code=422,
                 detail="Cannot create GitHub issue for a PRODUCT BUG classification. Use Jira instead.",
             )
 
@@ -1456,7 +1465,7 @@ async def create_github_issue_endpoint(
     # already created, so a failure here must not lose the created URL).
     comment_id = 0
     try:
-        comment_text = f"GitHub Issue: {result['url']}"
+        comment_text = f"GitHub Issue: [{body.title}]({result['url']})"
         error_signature = await _get_error_signature(
             job_id, body.test_name, body.child_job_name, body.child_build_number
         )
@@ -1522,7 +1531,7 @@ async def create_jira_bug_endpoint(
         )
         if failure.analysis.classification == "CODE ISSUE":
             raise HTTPException(
-                status_code=400,
+                status_code=422,
                 detail="Cannot create Jira bug for a CODE ISSUE classification. Use GitHub instead.",
             )
 
@@ -1557,7 +1566,7 @@ async def create_jira_bug_endpoint(
     # already created, so a failure here must not lose the created URL).
     comment_id = 0
     try:
-        comment_text = f"Jira Bug: {result['url']}"
+        comment_text = f"Jira Bug: [{body.title}]({result['url']})"
         error_signature = await _get_error_signature(
             job_id, body.test_name, body.child_job_name, body.child_build_number
         )

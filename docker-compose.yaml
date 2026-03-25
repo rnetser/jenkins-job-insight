@@ -4,7 +4,7 @@
 # Access methods:
 #   - Web UI:  http://localhost:8000 (dashboard, reports, history)
 #   - API:     http://localhost:8000/analyze, /results, /history, etc.
-#   - CLI:     jji health, jji results list, jji analyze my-job 42
+#   - CLI:     jji health, jji results list, jji analyze --job-name my-job --build-number 42
 #
 # Usage:
 #   1. Copy .env.example to .env and configure your values

@@ -44,10 +44,17 @@ def setup_ai_analysis(session) -> None:
         session.config.option.analyze_with_ai = False
     else:
         if not os.environ.get("JJI_AI_PROVIDER"):
-            os.environ["JJI_AI_PROVIDER"] = "claude"
+            logger.warning(
+                "JJI_AI_PROVIDER is not set. Set it explicitly (e.g., 'claude', 'gemini', 'cursor')."
+            )
+            session.config.option.analyze_with_ai = False
+            return
 
         if not os.environ.get("JJI_AI_MODEL"):
-            os.environ["JJI_AI_MODEL"] = "claude-opus-4-6[1m]"
+            logger.warning(
+                "JJI_AI_MODEL is not set. Set it explicitly to the desired model name."
+            )
+            session.config.option.analyze_with_ai = False
 
 
 def enrich_junit_xml(session) -> None:
@@ -75,15 +82,15 @@ def enrich_junit_xml(session) -> None:
         )
         return
 
-    ai_provider = os.environ.get("JJI_AI_PROVIDER")
-    ai_model = os.environ.get("JJI_AI_MODEL")
+    ai_provider = os.environ.get("JJI_AI_PROVIDER", "")
+    ai_model = os.environ.get("JJI_AI_MODEL", "")
     if not ai_provider or not ai_model:
         logger.warning(
             "JJI_AI_PROVIDER and JJI_AI_MODEL must be set, skipping AI analysis enrichment"
         )
         return
 
-    server_url = os.environ["JJI_SERVER"]
+    server_url = os.environ.get("JJI_SERVER", "")
     raw_xml = xml_path.read_text()
 
     try:

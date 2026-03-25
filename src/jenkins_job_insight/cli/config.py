@@ -9,7 +9,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-_XDG_CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+_xdg = os.environ.get("XDG_CONFIG_HOME", "")
+_XDG_CONFIG_HOME = Path(_xdg) if _xdg else Path.home() / ".config"
 CONFIG_DIR = _XDG_CONFIG_HOME / "jji"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 

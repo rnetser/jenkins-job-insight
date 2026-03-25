@@ -6,6 +6,7 @@ interface ReportState {
   result: AnalysisResult | null
   createdAt: string
   completedAt: string
+  analysisStartedAt: string
   comments: Comment[]
   reviews: Record<string, ReviewState>
   enrichments: Record<string, CommentEnrichment[]>
@@ -18,7 +19,7 @@ interface ReportState {
 }
 
 type ReportAction =
-  | { type: 'SET_RESULT'; payload: { result: AnalysisResult; createdAt: string; completedAt: string } }
+  | { type: 'SET_RESULT'; payload: { result: AnalysisResult; createdAt: string; completedAt: string; analysisStartedAt: string } }
   | { type: 'SET_COMMENTS_AND_REVIEWS'; payload: CommentsAndReviews }
   | { type: 'ADD_COMMENT'; payload: Comment }
   | { type: 'REMOVE_COMMENT'; payload: number }
@@ -44,6 +45,7 @@ const initialState: ReportState = {
   result: null,
   createdAt: '',
   completedAt: '',
+  analysisStartedAt: '',
   comments: [],
   reviews: {},
   enrichments: {},
@@ -58,7 +60,7 @@ const initialState: ReportState = {
 function reportReducer(state: ReportState, action: ReportAction): ReportState {
   switch (action.type) {
     case 'SET_RESULT':
-      return { ...state, result: action.payload.result, createdAt: action.payload.createdAt, completedAt: action.payload.completedAt, loading: false }
+      return { ...state, result: action.payload.result, createdAt: action.payload.createdAt, completedAt: action.payload.completedAt, analysisStartedAt: action.payload.analysisStartedAt, loading: false }
     case 'SET_COMMENTS_AND_REVIEWS':
       return { ...state, comments: action.payload.comments, reviews: action.payload.reviews }
     case 'ADD_COMMENT':
@@ -85,17 +87,18 @@ function reportReducer(state: ReportState, action: ReportAction): ReportState {
       if (!state.result) return state
       const { testName, classification, childJobName, childBuildNumber } = action.payload
       const patchFailures = (fs: typeof state.result.failures) =>
-        fs.map((f) =>
+        (fs ?? []).map((f) =>
           f.test_name === testName ? { ...f, analysis: { ...f.analysis, classification } } : f,
         )
       const patchChildren = (
         cs: typeof state.result.child_job_analyses,
       ): typeof state.result.child_job_analyses =>
-        cs.map((c) =>
+        (cs ?? []).map((c) =>
           childJobName && c.job_name === childJobName && c.build_number === childBuildNumber
             ? { ...c, failures: patchFailures(c.failures), failed_children: patchChildren(c.failed_children) }
             : { ...c, failed_children: patchChildren(c.failed_children) },
         )
+      const key = reviewKey(testName, childJobName, childBuildNumber)
       return {
         ...state,
         result: {
@@ -103,6 +106,7 @@ function reportReducer(state: ReportState, action: ReportAction): ReportState {
           failures: childJobName ? state.result.failures : patchFailures(state.result.failures),
           child_job_analyses: patchChildren(state.result.child_job_analyses),
         },
+        classifications: { ...state.classifications, [key]: classification },
       }
     }
     default:

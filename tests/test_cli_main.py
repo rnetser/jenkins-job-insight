@@ -81,9 +81,9 @@ class TestResultsCommands:
 class TestReviewStatusCommand:
     def test_review_status(self, mock_client):
         mock_client.get_review_status.return_value = {
-            "total": 5,
-            "reviewed": 3,
-            "pending": 2,
+            "total_failures": 5,
+            "reviewed_count": 3,
+            "comment_count": 2,
         }
         result = runner.invoke(app, ["results", "review-status", "job-1"])
         assert result.exit_code == 0
@@ -91,14 +91,14 @@ class TestReviewStatusCommand:
 
     def test_review_status_json(self, mock_client):
         mock_client.get_review_status.return_value = {
-            "total": 5,
-            "reviewed": 3,
-            "pending": 2,
+            "total_failures": 5,
+            "reviewed_count": 3,
+            "comment_count": 2,
         }
         result = runner.invoke(app, ["--json", "results", "review-status", "job-1"])
         assert result.exit_code == 0
         parsed = json.loads(result.output)
-        assert parsed["total"] == 5
+        assert parsed["total_failures"] == 5
 
 
 class TestSetReviewedCommand:
@@ -427,7 +427,10 @@ class TestServerFlag:
     def test_missing_server(self):
         """CLI exits with error when no server is configured."""
         env = {k: v for k, v in os.environ.items() if k != "JJI_SERVER"}
-        with patch.dict(os.environ, env, clear=True):
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("jenkins_job_insight.cli.main.get_server_config", return_value=None),
+        ):
             result = runner.invoke(app, ["health"])
             assert result.exit_code == 1
             assert "No server specified" in result.output

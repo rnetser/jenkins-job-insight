@@ -198,6 +198,7 @@ function FailureHistoryTab() {
                 role="link"
                 aria-label={`Open results for ${entry.job_name} #${entry.build_number}`}
                 onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault()
                     navigate(`/results/${entry.job_id}`)

@@ -73,6 +73,7 @@ export function StatusPage() {
   const status = data?.status ?? 'pending'
   const isRunning = status === 'running'
   const isWaiting = status === 'waiting'
+  const isActive = isRunning || isWaiting
   const msg = statusMessages[status] ?? statusMessages.running
 
   return (
@@ -108,8 +109,8 @@ export function StatusPage() {
                   stroke="currentColor"
                   strokeWidth="2"
                   strokeLinecap="round"
-                  strokeDasharray={isRunning ? '80 184' : '264 0'}
-                  className={`text-signal-blue ${isRunning ? 'animate-spin-slow' : 'animate-pulse-ring'}`}
+                  strokeDasharray={isActive ? '80 184' : '264 0'}
+                  className={`text-signal-blue ${isActive ? 'animate-spin-slow' : 'animate-pulse-ring'}`}
                   style={{ transformOrigin: 'center' }}
                 />
               </svg>
@@ -171,7 +172,19 @@ export function StatusPage() {
                 <Row label="JOB" value={data.result.job_name} mono />
               )}
               {data?.result?.build_number != null && (
-                <Row label="BUILD" value={`#${data.result.build_number}`} mono />
+                <Row
+                  label="BUILD"
+                  value={
+                    data?.result?.jenkins_url ? (
+                      <a href={String(data.result.jenkins_url)} target="_blank" rel="noopener noreferrer" className="text-text-link hover:underline font-mono">
+                        #{data.result.build_number}
+                      </a>
+                    ) : (
+                      `#${data.result.build_number}`
+                    )
+                  }
+                  mono
+                />
               )}
               <Row
                 label="STATUS"
