@@ -84,14 +84,6 @@ class AnalyzeRequest(BaseAnalysisRequest):
         description="Jenkins job name (can include folders like 'folder/job-name')"
     )
     build_number: int = Field(description="Build number to analyze")
-    callback_url: HttpUrl | None = Field(
-        default=None,
-        description="Optional callback URL for async results (overrides env var default)",
-    )
-    callback_headers: dict[str, str] | None = Field(
-        default=None,
-        description="Optional headers to include in callback request (overrides env var default)",
-    )
     jenkins_url: str | None = Field(
         default=None,
         description="Jenkins server URL (overrides JENKINS_URL env var)",

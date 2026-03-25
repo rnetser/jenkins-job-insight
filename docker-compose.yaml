@@ -12,7 +12,7 @@
 #
 # CLI Tool (jji):
 #   Install: uv tool install jenkins-job-insight
-#   Configure: export JJI_SERVER_URL=http://localhost:8000
+#   Configure: export JJI_SERVER=http://localhost:8000
 #   Docs: jji --help
 #
 # Configuration:
@@ -113,9 +113,6 @@ services:
       # Optional Defaults (can be overridden per-request)
       # ===================
       - TESTS_REPO_URL=${TESTS_REPO_URL:-}
-      - CALLBACK_URL=${CALLBACK_URL:-}
-      - CALLBACK_HEADERS=${CALLBACK_HEADERS:-}
-
       # SSL verification for Jenkins (set to false for self-signed certs)
       - JENKINS_SSL_VERIFY=${JENKINS_SSL_VERIFY:-true}
 

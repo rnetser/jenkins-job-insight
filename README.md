@@ -18,7 +18,6 @@ For each failure, the service provides detailed explanations and either fix sugg
 - **Multiple AI providers**: Supports Claude CLI, Gemini CLI, and Cursor Agent CLI
 - **Optional Jira integration**: Searches Jira for matching bugs on PRODUCT BUG failures with AI-powered relevance filtering
 - **SQLite result storage**: Persists analysis results for later retrieval
-- **Callback webhooks**: Delivers results to your specified endpoint with custom headers
 - **React-based dashboard and report UI**: Browse analysis results, explore failures, and manage reviews in a modern web interface
 - **Direct failure analysis**: Analyze raw test failures without Jenkins via `POST /analyze-failures`
 - **pytest JUnit XML integration**: Enrich JUnit XML reports with AI analysis via a pytest plugin
@@ -66,7 +65,7 @@ uv tool install jenkins-job-insight
 #### Configuration
 
 ```bash
-export JJI_SERVER_URL=http://your-server:8700  # required
+export JJI_SERVER=http://your-server:8700  # required
 export JJI_USERNAME=myakove                  # for comments/reviews
 ```
 
@@ -82,7 +81,7 @@ jji health
 jji results list
 
 # Trigger a new analysis
-jji analyze mtv-2.11-ocp-4.20-test-release-non-gate 27 --provider claude --jira
+jji analyze --job-name mtv-2.11-ocp-4.20-test-release-non-gate --build-number 27 --provider claude --jira
 
 # Check status
 jji status <job_id>
@@ -154,24 +153,22 @@ docker run -d \
 
 ## Configuration
 
-Configure the service using environment variables. The service is tied to a single Jenkins instance via `JENKINS_URL`.
+Configure the service using environment variables. Jenkins settings are optional at the server level and can be provided (or overridden) per-request in the API payload or CLI options.
 
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | **Jenkins** | | | |
-| `JENKINS_URL` | Yes | - | Jenkins server URL (service is tied to this instance) |
-| `JENKINS_USER` | Yes | - | Jenkins username |
-| `JENKINS_PASSWORD` | Yes | - | Jenkins password or API token |
+| `JENKINS_URL` | No* | - | Jenkins server URL (can be provided per-request) |
+| `JENKINS_USER` | No* | - | Jenkins username (can be provided per-request) |
+| `JENKINS_PASSWORD` | No* | - | Jenkins password or API token (can be provided per-request) |
 | `JENKINS_SSL_VERIFY` | No | `true` | Enable SSL certificate verification (set to `false` for self-signed certs) |
 | **AI Provider** | | | |
 | `AI_PROVIDER` | Yes | - | AI provider to use (`claude`, `gemini`, or `cursor`) |
 | `AI_MODEL` | Yes | - | Model for the AI provider |
 | `AI_CLI_TIMEOUT` | No | `10` | Timeout for AI CLI calls in minutes (increase for slower models) |
 | `LOG_LEVEL` | No | `INFO` | Log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `CALLBACK_URL` | No | - | Default callback URL for results (can be overridden per-request) |
-| `CALLBACK_HEADERS` | No | - | Default callback headers as JSON (can be overridden per-request) |
 | **Other** | | | |
 | `TESTS_REPO_URL` | No | - | Default tests repository URL (can be overridden per-request) |
 | `DEBUG` | No | `false` | Enable debug mode with hot reload for development |
@@ -191,9 +188,11 @@ Configure the service using environment variables. The service is tied to a sing
 | **GitHub** | | | |
 | `GITHUB_TOKEN` | No | - | GitHub API token for private repo PR status in comments |
 
+> **\*** Can be provided per-request in the API payload or CLI options instead of as environment variables.
+
 ### Jenkins Configuration
 
-The `JENKINS_URL` environment variable defines which Jenkins instance the service connects to. API requests specify only the job name and build number; the service constructs the full URL internally.
+Jenkins settings (`JENKINS_URL`, `JENKINS_USER`, `JENKINS_PASSWORD`) are optional at the server level. They can be set as environment variables for a default Jenkins instance, or provided per-request in the API payload or CLI options. API requests specify only the job name and build number; the service constructs the full URL internally.
 
 ### AI CLI Configuration
 
@@ -337,8 +336,6 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | **General**          |                      |          |                        |                                                                |
 | `TESTS_REPO_URL`     | `tests_repo_url`     | No       | Both                   | Repository URL for test context                                |
 | --                   | `raw_prompt`         | No       | Both                   | Additional AI instructions (overrides repo-level prompt file)  |
-| `CALLBACK_URL`       | `callback_url`       | No       | `/analyze`             | Callback webhook URL for results                               |
-| `CALLBACK_HEADERS`   | `callback_headers`   | No       | `/analyze`             | Headers for callback requests                                  |
 | **Jenkins**          |                      |          |                        |                                                                |
 | `JENKINS_URL`        | `jenkins_url`        | Yes*     | `/analyze`             | Jenkins server URL                                             |
 | `JENKINS_USER`       | `jenkins_user`       | Yes*     | `/analyze`             | Jenkins username                                               |
@@ -725,7 +722,7 @@ This context helps the AI distinguish between test infrastructure issues (CODE I
 | `/health`                | GET    | Health check endpoint                             |
 | `/favicon.ico`           | GET    | Application favicon (SVG)                         |
 
-The service connects to the Jenkins instance configured via the `JENKINS_URL` environment variable. All analysis requests specify only the job name and build number.
+The service connects to the Jenkins instance configured via the `JENKINS_URL` environment variable or per-request payload. All analysis requests specify only the job name and build number.
 
 ## Request/Response Examples
 
@@ -742,8 +739,6 @@ curl -X POST http://localhost:8000/analyze \
     "ai_provider": "claude",
     "ai_model": "sonnet",
     "tests_repo_url": "https://github.com/org/my-project",
-    "callback_url": "https://my-service.example.com/webhook",
-    "callback_headers": {"Authorization": "Bearer my-token"},
     "enable_jira": true,
     "jira_project_key": "MYPROJ"
   }'
@@ -1029,7 +1024,7 @@ Enrich JUnit XML reports with AI-powered failure analysis. After tests complete,
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `JJI_SERVER_URL` | Yes | - | Jenkins Job Insight server URL |
+| `JJI_SERVER` | Yes | - | Jenkins Job Insight server URL |
 | `JJI_AI_PROVIDER` | No | `claude` | AI provider: claude, gemini, or cursor |
 | `JJI_AI_MODEL` | No | `claude-opus-4-6[1m]` | AI model to use |
 | `JJI_TIMEOUT` | No | `600` | Request timeout in seconds |
@@ -1139,14 +1134,8 @@ The `/data` volume mount ensures SQLite database persistence across container re
                         │  3. Optionally clone repo for context        │
                         │  4. Send to AI for classification            │
                         │  5. Store result in SQLite                   │
-                        │  6. Deliver via callback webhook             │
+                        │  6. Poll /results/{job_id} for status        │
                         └──────────────────────────────────────────────┘
-                                         │
-                                         ▼
-                                 ┌───────────────┐
-                                 │  Callback     │
-                                 │  Webhook      │
-                                 └───────────────┘
 ```
 
 ### Analysis Flow
@@ -1157,7 +1146,7 @@ The `/data` volume mount ensures SQLite database persistence across container re
 4. **AI analysis**: Send collected data to the configured AI provider (Claude, Gemini, or Cursor)
 5. **Classify failures**: AI determines if each failure is a code issue or product bug
 6. **Store result**: Save analysis to SQLite database for retrieval
-7. **Deliver result**: Send to callback URL
+7. **Retrieve result**: Poll `/results/{job_id}` for status
 
 ## License
 

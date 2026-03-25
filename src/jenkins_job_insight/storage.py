@@ -312,7 +312,17 @@ async def init_db() -> None:
 def _validate_child_identifier_pairing(
     child_job_name: str, child_build_number: int
 ) -> None:
-    """Validate that child_job_name and child_build_number are either both set or both empty."""
+    """Validate child_job_name / child_build_number pairing.
+
+    Valid combinations:
+    - Both empty  (``""``, ``0``) -- top-level (no child context).
+    - Name set, build ``0``       -- wildcard: targets *all* builds of that child job.
+    - Both set    (name, N>0)     -- specific child build.
+
+    Invalid:
+    - Name empty, build > 0       -- a build number without a job name is meaningless.
+    - Any negative build number.
+    """
     if child_build_number < 0:
         raise ValueError("child_build_number must not be negative")
     if not child_job_name and child_build_number > 0:
@@ -1709,11 +1719,16 @@ async def get_test_classifications(
     parent_job_name: str = "",
     job_id: str = "",
 ) -> list[dict]:
-    """Get visible test classifications.
+    """Get visible test classifications in the primary (override) domain.
 
-    Only returns classifications with visible=1. During AI analysis,
-    classifications are created with visible=0 and revealed after
-    analysis completes via make_classifications_visible().
+    Only returns classifications with visible=1 **and** a primary
+    classification (CODE ISSUE / PRODUCT BUG).  History-system labels
+    (FLAKY, REGRESSION, etc.) written by ``set_test_classification()``
+    are intentionally excluded because they belong to the history
+    domain and are consumed via ``failure_history`` queries, not here.
+
+    During AI analysis, classifications are created with visible=0 and
+    revealed after analysis completes via make_classifications_visible().
     """
     logger.debug(
         f"get_test_classifications: test_name={test_name!r}, classification={classification!r}, "

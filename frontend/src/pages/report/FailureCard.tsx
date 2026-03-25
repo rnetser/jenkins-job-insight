@@ -62,7 +62,9 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
   function handleProviderChange(provider: string) {
     setSelectedProvider(provider)
     const providerModels = getModelsForProvider(provider)
-    if (providerModels.length > 0 && !providerModels.includes(selectedModel)) {
+    if (providerModels.length === 0) {
+      setSelectedModel('')
+    } else if (!providerModels.includes(selectedModel)) {
       setSelectedModel(providerModels[0])
     }
   }
@@ -273,8 +275,8 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                     className="text-text-tertiary hover:text-text-primary transition-colors"
                     onClick={() => {
                       const parts: string[] = []
-                      if (analysis.code_fix.file) parts.push(`${analysis.code_fix.file}${analysis.code_fix.line ? `:${analysis.code_fix.line}` : ''}`)
-                      if (analysis.code_fix.change) parts.push(analysis.code_fix.change)
+                      if (analysis.code_fix?.file) parts.push(`${analysis.code_fix.file}${analysis.code_fix.line ? `:${analysis.code_fix.line}` : ''}`)
+                      if (analysis.code_fix?.change) parts.push(analysis.code_fix.change)
                       copyToClipboard(parts.join('\n'), 'suggested_fix')
                     }}
                     title="Copy to clipboard"

@@ -76,16 +76,18 @@ function ReportContent() {
         const resultRes = await api.get<ResultResponse>(`/results/${jobId}`)
         if (cancelled) return
 
+        // Check status first to avoid flash of wrong state
+        if (resultRes.status === 'pending' || resultRes.status === 'running') {
+          navigate(`/status/${jobId}`, { replace: true })
+          return
+        }
+
         if (!resultRes.result) {
-          if (resultRes.status === 'pending' || resultRes.status === 'running') {
-            navigate(`/status/${jobId}`, { replace: true })
-            return
-          }
           dispatch({ type: 'SET_ERROR', payload: 'No result data found.' })
           return
         }
 
-        if (resultRes.result && resultRes.status === 'failed') {
+        if (resultRes.status === 'failed') {
           const errorMsg = resultRes.result.error ?? 'Analysis failed'
           dispatch({ type: 'SET_ERROR', payload: String(errorMsg) })
           return
@@ -111,7 +113,7 @@ function ReportContent() {
         if (commentsResult.status === 'fulfilled') {
           dispatch({ type: 'SET_COMMENTS_AND_REVIEWS', payload: commentsResult.value })
           // Fetch enrichments once at report level
-          refreshEnrichments(jobId)
+          if (jobId) refreshEnrichments(jobId)
         }
         if (aiConfigsResult.status === 'fulfilled') {
           dispatch({ type: 'SET_AI_CONFIGS', payload: aiConfigsResult.value })
@@ -148,6 +150,8 @@ function ReportContent() {
         const res = await api.get<CommentsAndReviews>(`/results/${jobId}/comments`)
         if (!cancelled && thisSeq === seq) {
           dispatch({ type: 'SET_COMMENTS_AND_REVIEWS', payload: res })
+          // Refresh enrichments so link badges appear for new comments
+          refreshEnrichments(jobId)
         }
       } catch {
         /* polling failure is non-critical */
@@ -158,7 +162,7 @@ function ReportContent() {
       cancelled = true
       clearInterval(interval)
     }
-  }, [jobId, dispatch])
+  }, [jobId, dispatch, refreshEnrichments])
 
   // Preserve scroll position across F5 refreshes
   const scrollKey = `jji-scroll-${jobId}`
@@ -218,12 +222,13 @@ function ReportContent() {
   const getChildKeys = useCallback(() => {
     if (!result) return []
     const keys: string[] = []
+    const resultJobId = result.job_id
     function walk(children: ChildJobAnalysis[]) {
       for (const child of children) {
-        keys.push(`jji-expand-${result.job_id}-child-${child.job_name}-${child.build_number}`)
+        keys.push(`jji-expand-${resultJobId}-child-${child.job_name}-${child.build_number}`)
         const childGroups = groupFailures(child.failures, `child-${child.job_name}-${child.build_number}`)
         for (const g of childGroups) {
-          keys.push(`jji-expand-${result.job_id}-${g.id}`)
+          keys.push(`jji-expand-${resultJobId}-${g.id}`)
         }
         walk(child.failed_children)
       }

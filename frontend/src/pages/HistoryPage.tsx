@@ -170,7 +170,7 @@ function FailureHistoryTab() {
             <Skeleton key={i} className="h-10 w-full" />
           ))}
         </div>
-      ) : data.length === 0 ? (
+      ) : !error && data.length === 0 ? (
         <div className="flex items-center justify-center rounded-lg border border-border-muted bg-surface-card py-16 animate-fade-in">
           <p className="text-text-secondary">No failures found.</p>
         </div>

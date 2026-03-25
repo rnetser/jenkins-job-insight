@@ -25,17 +25,14 @@ class Settings(BaseSettings):
     # - CLOUD_ML_REGION=<region>
     # - ANTHROPIC_VERTEX_PROJECT_ID=<project>
 
-    # Jenkins configuration
-    jenkins_url: str
-    jenkins_user: str
-    jenkins_password: str
+    # Jenkins configuration (optional; can be provided per-request via API body)
+    jenkins_url: str = ""
+    jenkins_user: str = ""
+    jenkins_password: str = ""
     jenkins_ssl_verify: bool = True
 
     # Optional defaults (can be overridden per-request in webhook)
     tests_repo_url: str | None = None
-    callback_url: str | None = None
-    callback_headers: dict[str, str] | None = None
-
     # Jira integration (optional)
     jira_url: str | None = None
     jira_email: str | None = None

@@ -36,20 +36,6 @@ class TestAnalyzeRequest:
         assert request.job_name == "test"
         assert request.build_number == 123
         assert str(request.tests_repo_url) == "https://github.com/example/repo"
-        assert request.callback_url is None
-        assert request.callback_headers is None
-
-    def test_analyze_request_with_optional_fields(self) -> None:
-        """Test creating AnalyzeRequest with all optional fields."""
-        request = AnalyzeRequest(
-            job_name="test",
-            build_number=123,
-            tests_repo_url="https://github.com/example/repo",
-            callback_url="https://callback.example.com/webhook",
-            callback_headers={"Authorization": "Bearer token"},
-        )
-        assert request.callback_url is not None
-        assert request.callback_headers == {"Authorization": "Bearer token"}
 
     def test_analyze_request_without_tests_repo_url(self) -> None:
         """Test creating AnalyzeRequest without tests_repo_url (now optional)."""

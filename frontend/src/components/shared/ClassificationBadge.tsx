@@ -17,7 +17,9 @@ interface ClassificationBadgeProps {
 }
 
 export function ClassificationBadge({ classification, className }: ClassificationBadgeProps) {
-  const style = CLASSIFICATION_STYLES[classification] ?? { variant: 'outline' as const, label: classification }
+  const style = (classification in CLASSIFICATION_STYLES)
+    ? CLASSIFICATION_STYLES[classification as Classification]
+    : { variant: 'outline' as const, label: classification }
   return (
     <Badge variant={style.variant} className={className}>
       {style.label}

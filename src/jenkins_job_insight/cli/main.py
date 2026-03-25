@@ -3,6 +3,14 @@
 import typer
 
 from jenkins_job_insight.cli.client import JJIClient, JJIError
+from jenkins_job_insight.cli.config import (
+    CONFIG_FILE,
+    ServerConfig,
+    get_default_server_name,
+    get_server_config,
+    list_servers,
+    load_config,
+)
 from jenkins_job_insight.cli.output import print_output
 
 # -- App and sub-command groups -----------------------------------------------
@@ -21,13 +29,15 @@ comments_app = typer.Typer(
 classifications_app = typer.Typer(
     help="List test classifications.", no_args_is_help=True
 )
+config_app = typer.Typer(help="Manage JJI configuration.", no_args_is_help=True)
 
 app.add_typer(results_app, name="results")
 app.add_typer(history_app, name="history")
 app.add_typer(comments_app, name="comments")
 app.add_typer(classifications_app, name="classifications")
+app.add_typer(config_app, name="config")
 
-# -- Global state managed via callback ---------------------------------------
+# -- Global state managed via app callback ------------------------------------
 
 _state: dict = {}
 
@@ -46,7 +56,8 @@ def _get_client(server_url: str = "", username: str = "") -> JJIClient:
     """Build (or return cached) JJIClient from global state."""
     url = server_url or _state.get("server_url", "")
     uname = username or _state.get("username", "")
-    return JJIClient(server_url=url, username=uname)
+    verify_ssl = not _state.get("no_verify_ssl", False)
+    return JJIClient(server_url=url, username=uname, verify_ssl=verify_ssl)
 
 
 def _handle_error(err: JJIError) -> None:
@@ -60,21 +71,84 @@ def _handle_error(err: JJIError) -> None:
     raise typer.Exit(code=1)
 
 
+def _resolve_server(
+    server: str | None,
+    username: str,
+    no_verify_ssl: bool,
+) -> tuple[str, str, bool, ServerConfig | None]:
+    """Resolve server URL, username, and SSL setting from CLI/env/config.
+
+    Priority (highest to lowest):
+      1. CLI flags / environment variables
+      2. Config file ($XDG_CONFIG_HOME/jji/config.toml)
+
+    Args:
+        server: Value from --server / JJI_SERVER (may be a URL or
+            a config server name, or empty).
+        username: Value from --user / JJI_USERNAME.
+        no_verify_ssl: Value from --no-verify-ssl / JJI_NO_VERIFY_SSL.
+
+    Returns:
+        (server_url, username, no_verify_ssl, server_config) with config
+        defaults applied where CLI/env did not provide a value.
+        server_config is the resolved ServerConfig (or None).
+
+    Raises:
+        typer.Exit: If no server can be determined.
+    """
+    if server and (server.startswith("http://") or server.startswith("https://")):
+        # Explicit URL -- use config only as fallback for username / ssl.
+        cfg = get_server_config()
+        if cfg:
+            if not username:
+                username = cfg.username
+            if not no_verify_ssl:
+                no_verify_ssl = cfg.no_verify_ssl
+        return server, username, no_verify_ssl, cfg
+
+    if server:
+        # Treat as a config server name.
+        cfg = get_server_config(server)
+        if not cfg:
+            available = ", ".join(list_servers().keys()) or "(none)"
+            typer.echo(
+                f"Error: Server '{server}' not found in config. "
+                f"Available servers: {available}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        if not username:
+            username = cfg.username
+        if not no_verify_ssl:
+            no_verify_ssl = cfg.no_verify_ssl
+        return cfg.url, username, no_verify_ssl, cfg
+
+    # No --server / env -- try default from config.
+    cfg = get_server_config()
+    if cfg:
+        if not username:
+            username = cfg.username
+        if not no_verify_ssl:
+            no_verify_ssl = cfg.no_verify_ssl
+        return cfg.url, username, no_verify_ssl, cfg
+
+    typer.echo(
+        "Error: No server specified. Use --server, set JJI_SERVER, "
+        f"or configure {CONFIG_FILE}",
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
 @app.callback()
 def main_callback(
+    ctx: typer.Context,
     server: str = typer.Option(
         None,
         "--server",
         "-s",
-        envvar="JJI_SERVER_URL",
-        help="Server URL (required: set JJI_SERVER_URL or use --server).",
-    ),
-    port: int = typer.Option(
-        None,
-        "--port",
-        "-p",
-        envvar="JJI_PORT",
-        help="Server port (appended to --server URL if provided).",
+        envvar="JJI_SERVER",
+        help="Server name from config or URL (required unless configured in config).",
     ),
     json_output: bool = typer.Option(
         False,
@@ -85,26 +159,30 @@ def main_callback(
         "",
         "--user",
         envvar="JJI_USERNAME",
-        help="Username for authenticated actions.",
+        help="Username displayed in comments and reviews.",
+    ),
+    no_verify_ssl: bool = typer.Option(
+        False,
+        "--no-verify-ssl",
+        envvar="JJI_NO_VERIFY_SSL",
+        help="Disable SSL certificate verification for HTTPS connections.",
     ),
 ):
     """jji -- CLI for the jenkins-job-insight REST API."""
-    if not server:
-        typer.echo(
-            "Error: Server URL not configured. Set JJI_SERVER_URL or use --server.",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    if port:
-        from urllib.parse import urlparse, urlunparse
-
-        parsed = urlparse(server)
-        server = urlunparse(parsed._replace(netloc=f"{parsed.hostname}:{port}"))
-
-    _state["server_url"] = server
-    _state["username"] = username
     _state["json"] = json_output
+
+    # Config subcommands do not require a server connection.
+    if ctx.invoked_subcommand == "config":
+        return
+
+    server_url, username, no_verify_ssl, cfg = _resolve_server(
+        server, username, no_verify_ssl
+    )
+
+    _state["server_url"] = server_url
+    _state["username"] = username
+    _state["no_verify_ssl"] = no_verify_ssl
+    _state["server_config"] = cfg
 
 
 # -- Health -------------------------------------------------------------------
@@ -245,31 +323,262 @@ def results_delete(
         typer.echo(f"Deleted job {data.get('job_id', job_id)}")
 
 
+# -- Review -------------------------------------------------------------------
+
+
+@results_app.command("review-status")
+def review_status(
+    job_id: str = typer.Argument(help="Job ID."),
+    json_output: bool = _JSON_OPTION,
+):
+    """Show review status for an analysis."""
+    _set_json(json_output)
+    try:
+        client = _get_client()
+        data = client.get_review_status(job_id)
+    except JJIError as err:
+        _handle_error(err)
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        print_output(
+            data,
+            columns=["total", "reviewed", "pending"],
+            as_json=False,
+        )
+
+
+@results_app.command("set-reviewed")
+def set_reviewed_cmd(
+    job_id: str = typer.Argument(help="Job ID."),
+    test_name: str = typer.Option(..., "--test", "-t", help="Test name."),
+    reviewed: bool = typer.Option(
+        ..., "--reviewed/--not-reviewed", help="Mark as reviewed or not."
+    ),
+    child_job_name: str = typer.Option("", "--child-job"),
+    child_build_number: int = typer.Option(0, "--child-build"),
+    json_output: bool = _JSON_OPTION,
+):
+    """Set or clear the reviewed state for a test failure."""
+    _set_json(json_output)
+    try:
+        client = _get_client()
+        data = client.set_reviewed(
+            job_id=job_id,
+            test_name=test_name,
+            reviewed=reviewed,
+            child_job_name=child_job_name,
+            child_build_number=child_build_number,
+        )
+    except JJIError as err:
+        _handle_error(err)
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        state = "reviewed" if reviewed else "not reviewed"
+        typer.echo(f"Marked as {state} (by {data.get('reviewed_by', '')})")
+
+
+@results_app.command("enrich-comments")
+def enrich_comments_cmd(
+    job_id: str = typer.Argument(help="Job ID."),
+    json_output: bool = _JSON_OPTION,
+):
+    """Enrich comments with live PR/ticket statuses."""
+    _set_json(json_output)
+    try:
+        client = _get_client()
+        data = client.enrich_comments(job_id)
+    except JJIError as err:
+        _handle_error(err)
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        enriched = data.get("enriched", 0)
+        typer.echo(f"Enriched {enriched} comment(s).")
+
+
 # -- Analyze ------------------------------------------------------------------
 
 
 @app.command()
 def analyze(
-    job_name: str = typer.Argument(help="Jenkins job name."),
-    build_number: int = typer.Argument(help="Build number to analyze."),
+    job_name: str = typer.Option(..., "--job-name", "-j", help="Jenkins job name."),
+    build_number: int = typer.Option(
+        ..., "--build-number", "-b", help="Build number to analyze."
+    ),
     provider: str = typer.Option(
         "", "--provider", help="AI provider (e.g. claude, gemini, cursor)."
     ),
     model: str = typer.Option("", "--model", help="AI model to use."),
-    jira: bool = typer.Option(
-        False, "--jira", help="Enable Jira integration for this analysis."
+    jira: bool | None = typer.Option(
+        None, "--jira/--no-jira", help="Enable/disable Jira integration."
+    ),
+    jenkins_url: str = typer.Option(
+        "", "--jenkins-url", envvar="JENKINS_URL", help="Jenkins server URL."
+    ),
+    jenkins_user: str = typer.Option(
+        "", "--jenkins-user", envvar="JENKINS_USER", help="Jenkins username."
+    ),
+    jenkins_password: str = typer.Option(
+        "",
+        "--jenkins-password",
+        envvar="JENKINS_PASSWORD",
+        help="Jenkins password or API token.",
+    ),
+    jenkins_ssl_verify: bool | None = typer.Option(
+        None,
+        "--jenkins-ssl-verify/--no-jenkins-ssl-verify",
+        help="Jenkins SSL certificate verification.",
+    ),
+    jenkins_artifacts_max_size_mb: int = typer.Option(
+        None,
+        "--jenkins-artifacts-max-size-mb",
+        help="Maximum Jenkins artifacts size in MB.",
+    ),
+    jenkins_artifacts_context_lines: int = typer.Option(
+        None,
+        "--jenkins-artifacts-context-lines",
+        help="Maximum Jenkins artifacts context lines for AI prompt.",
+    ),
+    get_job_artifacts: bool | None = typer.Option(
+        None,
+        "--get-job-artifacts/--no-get-job-artifacts",
+        help="Download all build artifacts for AI context.",
+    ),
+    tests_repo_url: str = typer.Option(
+        "", "--tests-repo-url", envvar="TESTS_REPO_URL", help="Tests repository URL."
+    ),
+    jira_url: str = typer.Option(
+        "", "--jira-url", envvar="JIRA_URL", help="Jira instance URL."
+    ),
+    jira_email: str = typer.Option(
+        "", "--jira-email", envvar="JIRA_EMAIL", help="Jira Cloud email."
+    ),
+    jira_api_token: str = typer.Option(
+        "", "--jira-api-token", envvar="JIRA_API_TOKEN", help="Jira Cloud API token."
+    ),
+    jira_pat: str = typer.Option(
+        "",
+        "--jira-pat",
+        envvar="JIRA_PAT",
+        help="Jira Server/DC personal access token.",
+    ),
+    jira_project_key: str = typer.Option(
+        "",
+        "--jira-project-key",
+        envvar="JIRA_PROJECT_KEY",
+        help="Jira project key to scope searches.",
+    ),
+    jira_ssl_verify: bool | None = typer.Option(
+        None,
+        "--jira-ssl-verify/--no-jira-ssl-verify",
+        help="Jira SSL certificate verification.",
+    ),
+    jira_max_results: int = typer.Option(
+        None, "--jira-max-results", help="Max Jira search results."
+    ),
+    github_token: str = typer.Option(
+        "", "--github-token", envvar="GITHUB_TOKEN", help="GitHub API token."
+    ),
+    ai_cli_timeout: int = typer.Option(
+        None, "--ai-cli-timeout", help="AI CLI timeout in minutes."
+    ),
+    raw_prompt: str = typer.Option(
+        "", "--raw-prompt", help="Raw prompt to append as additional AI instructions."
     ),
     json_output: bool = _JSON_OPTION,
 ):
     """Submit a Jenkins job for analysis."""
     _set_json(json_output)
+
+    # Start from config defaults (lowest priority), then overlay CLI flags.
     extras: dict = {}
+    cfg = _state.get("server_config")
+    if cfg:
+        # String fields from config -- only set if non-empty.
+        _cfg_str_fields = {
+            "jenkins_url": cfg.jenkins_url,
+            "jenkins_user": cfg.jenkins_user,
+            "jenkins_password": cfg.jenkins_password,
+            "tests_repo_url": cfg.tests_repo_url,
+            "jira_url": cfg.jira_url,
+            "jira_email": cfg.jira_email,
+            "jira_api_token": cfg.jira_api_token,
+            "jira_pat": cfg.jira_pat,
+            "jira_project_key": cfg.jira_project_key,
+            "github_token": cfg.github_token,
+            "ai_provider": cfg.ai_provider,
+            "ai_model": cfg.ai_model,
+        }
+        for key, value in _cfg_str_fields.items():
+            if value:
+                extras[key] = value
+
+        # Integer fields from config -- only set if non-zero.
+        _cfg_int_fields = {
+            "ai_cli_timeout": cfg.ai_cli_timeout,
+            "jira_max_results": cfg.jira_max_results,
+        }
+        for key, value in _cfg_int_fields.items():
+            if value:
+                extras[key] = value
+
+        # Boolean fields from config.
+        if cfg.enable_jira:
+            extras["enable_jira"] = True
+        if not cfg.jenkins_ssl_verify:
+            extras["jenkins_ssl_verify"] = False
+        if not cfg.jira_ssl_verify:
+            extras["jira_ssl_verify"] = False
+
+    # CLI flags override config (highest priority).
     if provider:
         extras["ai_provider"] = provider
     if model:
         extras["ai_model"] = model
-    if jira:
-        extras["enable_jira"] = True
+    if jira is not None:
+        extras["enable_jira"] = jira
+
+    # String options: include only if non-empty.
+    _str_fields = {
+        "jenkins_url": jenkins_url,
+        "jenkins_user": jenkins_user,
+        "jenkins_password": jenkins_password,
+        "tests_repo_url": tests_repo_url,
+        "jira_url": jira_url,
+        "jira_email": jira_email,
+        "jira_api_token": jira_api_token,
+        "jira_pat": jira_pat,
+        "jira_project_key": jira_project_key,
+        "github_token": github_token,
+        "raw_prompt": raw_prompt,
+    }
+    for key, value in _str_fields.items():
+        if value:
+            extras[key] = value
+
+    # Integer options: include only if provided.
+    _int_fields = {
+        "jira_max_results": jira_max_results,
+        "ai_cli_timeout": ai_cli_timeout,
+        "jenkins_artifacts_max_size_mb": jenkins_artifacts_max_size_mb,
+        "jenkins_artifacts_context_lines": jenkins_artifacts_context_lines,
+    }
+    for key, value in _int_fields.items():
+        if value is not None:
+            extras[key] = value
+
+    # Boolean options: include only if explicitly set (not None).
+    _bool_fields = {
+        "jenkins_ssl_verify": jenkins_ssl_verify,
+        "jira_ssl_verify": jira_ssl_verify,
+        "get_job_artifacts": get_job_artifacts,
+    }
+    for key, value in _bool_fields.items():
+        if value is not None:
+            extras[key] = value
+
     try:
         client = _get_client()
         data = client.analyze(job_name, build_number, **extras)
@@ -317,13 +626,18 @@ def history_test(
     test_name: str = typer.Argument(help="Fully qualified test name."),
     limit: int = typer.Option(20, "--limit", "-l"),
     job_name: str = typer.Option("", "--job-name", "-j"),
+    exclude_job_id: str = typer.Option(
+        "", "--exclude-job-id", help="Exclude results from this job ID."
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Show failure history for a specific test."""
     _set_json(json_output)
     try:
         client = _get_client()
-        data = client.get_test_history(test_name, limit=limit, job_name=job_name)
+        data = client.get_test_history(
+            test_name, limit=limit, job_name=job_name, exclude_job_id=exclude_job_id
+        )
     except JJIError as err:
         _handle_error(err)
 
@@ -361,13 +675,16 @@ def history_search(
     signature: str = typer.Option(
         ..., "--signature", "-s", help="Error signature hash."
     ),
+    exclude_job_id: str = typer.Option(
+        "", "--exclude-job-id", help="Exclude results from this job ID."
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Find tests that failed with the same error signature."""
     _set_json(json_output)
     try:
         client = _get_client()
-        data = client.search_by_signature(signature)
+        data = client.search_by_signature(signature, exclude_job_id=exclude_job_id)
     except JJIError as err:
         _handle_error(err)
 
@@ -389,13 +706,16 @@ def history_search(
 @history_app.command("stats")
 def history_stats(
     job_name: str = typer.Argument(help="Jenkins job name."),
+    exclude_job_id: str = typer.Option(
+        "", "--exclude-job-id", help="Exclude results from this job ID."
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Show aggregate statistics for a job."""
     _set_json(json_output)
     try:
         client = _get_client()
-        data = client.get_job_stats(job_name)
+        data = client.get_job_stats(job_name, exclude_job_id=exclude_job_id)
     except JJIError as err:
         _handle_error(err)
 
@@ -425,13 +745,18 @@ def history_trends(
     ),
     days: int = typer.Option(30, "--days", "-d", help="Lookback window in days."),
     job_name: str = typer.Option("", "--job-name", "-j"),
+    exclude_job_id: str = typer.Option(
+        "", "--exclude-job-id", help="Exclude results from this job ID."
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Show failure rate trends over time."""
     _set_json(json_output)
     try:
         client = _get_client()
-        data = client.get_trends(period=period, days=days, job_name=job_name)
+        data = client.get_trends(
+            period=period, days=days, job_name=job_name, exclude_job_id=exclude_job_id
+        )
     except JJIError as err:
         _handle_error(err)
 
@@ -541,6 +866,9 @@ def classifications_list(
     test_name: str = typer.Option("", "--test-name", "-t"),
     classification: str = typer.Option("", "--type", "-c"),
     job_name: str = typer.Option("", "--job-name", "-j"),
+    parent_job_name: str = typer.Option(
+        "", "--parent-job-name", help="Filter by parent job name."
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """List test classifications."""
@@ -551,6 +879,7 @@ def classifications_list(
             test_name=test_name,
             classification=classification.upper() if classification else "",
             job_name=job_name,
+            parent_job_name=parent_job_name,
             job_id=job_id,
         )
     except JJIError as err:
@@ -662,7 +991,11 @@ def comments_delete(
 def capabilities(
     json_output: bool = _JSON_OPTION,
 ):
-    """Show which optional features are configured on the server."""
+    """Show which post-analysis automation features the server supports.
+
+    Reports whether the server is configured to create GitHub issues
+    and Jira bugs automatically. Requires server-level credentials.
+    """
     _set_json(json_output)
     try:
         client = _get_client()
@@ -852,3 +1185,104 @@ def override_classification_cmd(
         print_output(data, columns=[], as_json=True)
     else:
         typer.echo(f"Classification overridden to: {data.get('classification', '')}")
+
+
+# -- Config -------------------------------------------------------------------
+
+
+@config_app.callback(invoke_without_command=True)
+def config_callback(ctx: typer.Context):
+    """Manage JJI configuration."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(config_show)
+
+
+@config_app.command("show")
+def config_show():
+    """Show current configuration."""
+    config = load_config()
+    if not config:
+        typer.echo(f"No config file found at {CONFIG_FILE}")
+        typer.echo(
+            "\nCreate one with:\n"
+            f"  mkdir -p {CONFIG_FILE.parent}\n"
+            f"  cat > {CONFIG_FILE} << 'EOF'\n"
+            "  [default]\n"
+            '  server = "dev"\n\n'
+            "  [servers.dev]\n"
+            '  url = "http://localhost:8000"\n'
+            '  username = "myuser"\n'
+            "  EOF"
+        )
+        return
+
+    default_name = get_default_server_name(config)
+    typer.echo(f"Config file: {CONFIG_FILE}")
+    typer.echo(f"Default server: {default_name or '(not set)'}")
+    servers = list_servers(config)
+    if servers:
+        typer.echo(f"\nServers ({len(servers)}):")
+        for name, cfg in servers.items():
+            marker = " *" if name == default_name else ""
+            ssl_note = " (no-verify-ssl)" if cfg.no_verify_ssl else ""
+            user_note = f" user={cfg.username}" if cfg.username else ""
+            typer.echo(f"  {name}{marker}: {cfg.url}{user_note}{ssl_note}")
+
+
+@config_app.command("completion")
+def config_completion(
+    shell: str = typer.Argument("zsh", help="Shell type: bash or zsh"),
+):
+    """Show shell completion setup instructions."""
+    if shell not in ("zsh", "bash"):
+        typer.echo(f"Unsupported shell: {shell}. Use 'bash' or 'zsh'.")
+        raise typer.Exit(1)
+
+    rc_file = "~/.zshrc" if shell == "zsh" else "~/.bashrc"
+    typer.echo(f"# Add to {rc_file}:")
+    typer.echo("if command -v jji &> /dev/null; then")
+    typer.echo(f'  eval "$(jji --show-completion {shell})"')
+    typer.echo("fi")
+
+
+@config_app.command("servers")
+def config_servers(
+    json_output: bool = _JSON_OPTION,
+):
+    """List configured servers."""
+    _set_json(json_output)
+    config = load_config()
+    servers = list_servers(config)
+    default_name = get_default_server_name(config)
+
+    if _state.get("json", False):
+        out: dict = {}
+        for name, cfg in servers.items():
+            out[name] = {
+                "url": cfg.url,
+                "username": cfg.username,
+                "no_verify_ssl": cfg.no_verify_ssl,
+                "default": name == default_name,
+            }
+        print_output(out, columns=[], as_json=True)
+    else:
+        if not servers:
+            typer.echo("No servers configured.")
+            return
+        rows = []
+        for name, cfg in servers.items():
+            rows.append(
+                {
+                    "name": name,
+                    "url": cfg.url,
+                    "username": cfg.username or "",
+                    "no_verify_ssl": str(cfg.no_verify_ssl),
+                    "default": "*" if name == default_name else "",
+                }
+            )
+        print_output(
+            rows,
+            columns=["name", "url", "username", "no_verify_ssl", "default"],
+            labels={"no_verify_ssl": "NO VERIFY SSL"},
+            as_json=False,
+        )

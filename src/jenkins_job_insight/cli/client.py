@@ -3,6 +3,7 @@
 from typing import Any
 
 import httpx
+import urllib3
 
 
 class JJIError(Exception):
@@ -27,6 +28,7 @@ class JJIClient:
         server_url: Base URL of the JJI server (required).
         timeout: Request timeout in seconds.
         username: Username sent as a cookie for authenticated actions.
+        verify_ssl: Whether to verify SSL certificates (default True).
     """
 
     def __init__(
@@ -34,8 +36,11 @@ class JJIClient:
         server_url: str,
         timeout: float = 30.0,
         username: str = "",
+        verify_ssl: bool = True,
     ):
         self.server_url = server_url.rstrip("/")
+        if not verify_ssl:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         cookies = {}
         if username:
             cookies["jji_username"] = username
@@ -43,6 +48,7 @@ class JJIClient:
             base_url=self.server_url,
             timeout=timeout,
             cookies=cookies,
+            verify=verify_ssl,
         )
 
     def _request(
@@ -320,6 +326,23 @@ class JJIClient:
         """Get review summary for a job. GET /results/{job_id}/review-status"""
         return self._request("GET", f"/results/{job_id}/review-status")
 
+    def set_reviewed(
+        self,
+        job_id: str,
+        test_name: str,
+        reviewed: bool,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+    ) -> dict:
+        """Toggle the reviewed state for a test failure. PUT /results/{job_id}/reviewed"""
+        body: dict = {"test_name": test_name, "reviewed": reviewed}
+        body = self._with_child_scope(body, child_job_name, child_build_number)
+        return self._request("PUT", f"/results/{job_id}/reviewed", json=body)
+
+    def enrich_comments(self, job_id: str) -> dict:
+        """Enrich comments with live PR/ticket statuses. POST /results/{job_id}/enrich-comments"""
+        return self._request("POST", f"/results/{job_id}/enrich-comments")
+
     # -- Bug Creation ---------------------------------------------------------
 
     @staticmethod
@@ -427,7 +450,7 @@ class JJIClient:
     # -- Capabilities ---------------------------------------------------------
 
     def capabilities(self) -> dict:
-        """Get server capabilities. GET /capabilities"""
+        """Get server-level automation capabilities (GitHub issues, Jira bugs). GET /capabilities"""
         return self._request("GET", "/capabilities")
 
     # -- AI Configs -----------------------------------------------------------

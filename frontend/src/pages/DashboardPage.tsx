@@ -64,8 +64,11 @@ export function DashboardPage() {
   const [error, setError] = useState<string | null>(null)
 
   const fetchSeqRef = useRef(0)
+  const inFlightRef = useRef(false)
 
   const fetchJobs = useCallback(async () => {
+    if (inFlightRef.current) return
+    inFlightRef.current = true
     const thisSeq = ++fetchSeqRef.current
     setError(null)
     try {
@@ -78,6 +81,7 @@ export function DashboardPage() {
         setError(err instanceof Error ? err.message : 'Failed to load dashboard')
       }
     } finally {
+      inFlightRef.current = false
       if (thisSeq === fetchSeqRef.current) {
         setLoading(false)
       }
@@ -94,7 +98,7 @@ export function DashboardPage() {
   const filtered = useMemo(() => {
     if (!search) return jobs
     const q = search.toLowerCase()
-    return jobs.filter((j) => (j.job_name ?? j.job_id).toLowerCase().includes(q))
+    return jobs.filter((j) => (j.job_name || j.job_id).toLowerCase().includes(q))
   }, [jobs, search])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / perPage))
@@ -316,8 +320,10 @@ export function DashboardPage() {
                     {/* Delete */}
                     <TableCell>
                       <Button
+                        type="button"
                         variant="ghost"
                         size="icon"
+                        aria-label="Delete"
                         className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100"
                         onClick={(e) => {
                           e.stopPropagation()

@@ -36,7 +36,6 @@ from jenkins_job_insight.bug_creation import (
 )
 from jenkins_job_insight.models import (
     AddCommentRequest,
-    AnalysisResult,
     AnalyzeFailuresRequest,
     AnalyzeRequest,
     BaseAnalysisRequest,
@@ -53,7 +52,6 @@ from jenkins_job_insight.xml_enrichment import (
     build_enriched_xml,
     extract_test_failures,
 )
-from jenkins_job_insight.output import send_callback
 from jenkins_job_insight.repository import RepositoryManager
 from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
@@ -117,30 +115,6 @@ def _build_internal_server_url() -> str:
     url = f"http://localhost:{APP_PORT}"
     logger.debug(f"Built internal server_url={url} for AI tool access")
     return url
-
-
-async def deliver_results(
-    result: AnalysisResult,
-    body: AnalyzeRequest,
-    settings: Settings,
-) -> None:
-    """Deliver analysis results to callback webhook.
-
-    Uses request values if provided, otherwise falls back to settings.
-
-    Args:
-        result: The analysis result to deliver.
-        body: The original analyze request containing optional callback URL.
-        settings: Application settings with default callback URL.
-    """
-    logger.debug(f"deliver_results: job_id={result.job_id}, status={result.status}")
-    callback_url = body.callback_url or settings.callback_url
-    callback_headers = body.callback_headers or settings.callback_headers
-    if callback_url:
-        try:
-            await send_callback(str(callback_url), result, callback_headers)
-        except Exception:
-            logger.exception("Failed to send callback to %s", callback_url)
 
 
 def build_jenkins_url(base_url: str, job_name: str, build_number: int) -> str:
@@ -367,8 +341,6 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
     #   tests_repo_url   - HttpUrl vs str type mismatch; resolved in endpoint code
     #   ai_provider      - resolved + validated by _resolve_ai_config()
     #   ai_model         - resolved + validated by _resolve_ai_config()
-    #   callback_url     - resolved in deliver_results()
-    #   callback_headers - resolved in deliver_results()
     direct_fields = [
         "jira_url",
         "jira_email",
@@ -526,8 +498,6 @@ async def process_analysis_with_id(
         # Reveal classifications created during analysis
         await storage.make_classifications_visible(job_id)
 
-        await deliver_results(result, body, settings)
-
     except Exception as e:
         logger.exception(f"Analysis failed for job {job_id}")
         error_detail = format_exception_with_type(e)
@@ -572,12 +542,7 @@ async def analyze(
         {"job_name": body.job_name, "build_number": body.build_number},
     )
     background_tasks.add_task(process_analysis_with_id, job_id, body, merged, base_url)
-    callback_url = body.callback_url or merged.callback_url
-    message = "Analysis job queued."
-    if callback_url:
-        message += " Results will be delivered to callback."
-    else:
-        message += f" Poll /results/{job_id} for status."
+    message = f"Analysis job queued. Poll /results/{job_id} for status."
 
     response: dict = {
         "status": "queued",
@@ -1522,12 +1487,20 @@ async def create_jira_bug_endpoint(
 def _patch_failure_classification(
     failures: list[dict], test_name: str, classification: str
 ) -> None:
-    """Patch classification for matching failures in a list."""
+    """Patch classification for matching failures in a list.
+
+    Also clears stale subtype fields: when switching to CODE ISSUE the
+    old product_bug_report is removed, and vice-versa.
+    """
     for f in failures:
         if f.get("test_name") == test_name:
             analysis = f.get("analysis", {})
             if isinstance(analysis, dict):
                 analysis["classification"] = classification
+                if classification == "CODE ISSUE":
+                    analysis.pop("product_bug_report", None)
+                elif classification == "PRODUCT BUG":
+                    analysis.pop("code_fix", None)
 
 
 def _apply_classification_override(
@@ -1685,7 +1658,13 @@ async def api_dashboard(
 
 @app.get("/capabilities")
 async def get_capabilities(settings: Settings = Depends(get_settings)) -> dict:
-    """Report which optional features are configured on this server."""
+    """Report which post-analysis automation features are available.
+
+    These capabilities indicate whether the server is configured to
+    automatically create GitHub issues or Jira bugs from analysis results.
+    They require server-level credentials (GITHUB_TOKEN, JIRA_API_TOKEN, etc.)
+    and cannot be provided per-request.
+    """
     tests_repo_url = str(settings.tests_repo_url or "")
     github_token = (
         settings.github_token.get_secret_value() if settings.github_token else ""

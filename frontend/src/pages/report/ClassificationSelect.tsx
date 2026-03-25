@@ -55,7 +55,9 @@ export function ClassificationSelect({
         <SelectContent>
           {(OVERRIDE_CLASSIFICATIONS.includes(currentClassification as any)
             ? [...OVERRIDE_CLASSIFICATIONS]
-            : [currentClassification, ...OVERRIDE_CLASSIFICATIONS]
+            : currentClassification
+              ? [currentClassification, ...OVERRIDE_CLASSIFICATIONS]
+              : [...OVERRIDE_CLASSIFICATIONS]
           ).map((c) => (
             <SelectItem key={c} value={c}>
               {c}

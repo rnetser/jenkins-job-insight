@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from jenkins_job_insight.cli.client import JJIError
+from jenkins_job_insight.cli.config import ServerConfig
 from jenkins_job_insight.cli.main import app
 
 runner = CliRunner()
@@ -19,11 +20,11 @@ _TEST_SERVER = "http://test-server:8000"
 def mock_client():
     """Provide a mocked JJIClient for all CLI tests.
 
-    Sets JJI_SERVER_URL so the main_callback does not exit early,
+    Sets JJI_SERVER so the main_callback does not exit early,
     and patches _get_client so no real HTTP calls are made.
     """
     with (
-        patch.dict(os.environ, {"JJI_SERVER_URL": _TEST_SERVER}),
+        patch.dict(os.environ, {"JJI_SERVER": _TEST_SERVER}),
         patch("jenkins_job_insight.cli.main._get_client") as mock_get,
     ):
         client = MagicMock()
@@ -77,6 +78,140 @@ class TestResultsCommands:
         assert "deleted" in result.output.lower()
 
 
+class TestReviewStatusCommand:
+    def test_review_status(self, mock_client):
+        mock_client.get_review_status.return_value = {
+            "total": 5,
+            "reviewed": 3,
+            "pending": 2,
+        }
+        result = runner.invoke(app, ["results", "review-status", "job-1"])
+        assert result.exit_code == 0
+        mock_client.get_review_status.assert_called_once_with("job-1")
+
+    def test_review_status_json(self, mock_client):
+        mock_client.get_review_status.return_value = {
+            "total": 5,
+            "reviewed": 3,
+            "pending": 2,
+        }
+        result = runner.invoke(app, ["--json", "results", "review-status", "job-1"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["total"] == 5
+
+
+class TestSetReviewedCommand:
+    def test_set_reviewed(self, mock_client):
+        mock_client.set_reviewed.return_value = {
+            "status": "ok",
+            "reviewed_by": "alice",
+        }
+        result = runner.invoke(
+            app,
+            [
+                "results",
+                "set-reviewed",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--reviewed",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "reviewed" in result.output.lower()
+        mock_client.set_reviewed.assert_called_once_with(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            reviewed=True,
+            child_job_name="",
+            child_build_number=0,
+        )
+
+    def test_set_not_reviewed(self, mock_client):
+        mock_client.set_reviewed.return_value = {
+            "status": "ok",
+            "reviewed_by": "alice",
+        }
+        result = runner.invoke(
+            app,
+            [
+                "results",
+                "set-reviewed",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--not-reviewed",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "not reviewed" in result.output.lower()
+        kwargs = mock_client.set_reviewed.call_args[1]
+        assert kwargs["reviewed"] is False
+
+    def test_set_reviewed_json(self, mock_client):
+        mock_client.set_reviewed.return_value = {
+            "status": "ok",
+            "reviewed_by": "alice",
+        }
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "results",
+                "set-reviewed",
+                "job-1",
+                "--test",
+                "test_foo",
+                "--reviewed",
+            ],
+        )
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["status"] == "ok"
+
+    def test_set_reviewed_with_child(self, mock_client):
+        mock_client.set_reviewed.return_value = {
+            "status": "ok",
+            "reviewed_by": "bob",
+        }
+        result = runner.invoke(
+            app,
+            [
+                "results",
+                "set-reviewed",
+                "job-1",
+                "--test",
+                "test_foo",
+                "--reviewed",
+                "--child-job",
+                "child-runner",
+                "--child-build",
+                "5",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.set_reviewed.call_args[1]
+        assert kwargs["child_job_name"] == "child-runner"
+        assert kwargs["child_build_number"] == 5
+
+
+class TestEnrichCommentsCommand:
+    def test_enrich_comments(self, mock_client):
+        mock_client.enrich_comments.return_value = {"enriched": 3}
+        result = runner.invoke(app, ["results", "enrich-comments", "job-1"])
+        assert result.exit_code == 0
+        assert "3" in result.output
+        mock_client.enrich_comments.assert_called_once_with("job-1")
+
+    def test_enrich_comments_json(self, mock_client):
+        mock_client.enrich_comments.return_value = {"enriched": 3}
+        result = runner.invoke(app, ["--json", "results", "enrich-comments", "job-1"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["enriched"] == 3
+
+
 class TestDashboardCommand:
     def test_dashboard_default(self, mock_client):
         mock_client.dashboard.return_value = [
@@ -116,7 +251,9 @@ class TestAnalyzeCommand:
             "job_id": "new-1",
             "message": "Analysis job queued.",
         }
-        result = runner.invoke(app, ["analyze", "my-job", "42"])
+        result = runner.invoke(
+            app, ["analyze", "--job-name", "my-job", "--build-number", "42"]
+        )
         assert result.exit_code == 0
         assert "queued" in result.output.lower() or "new-1" in result.output
 
@@ -287,13 +424,13 @@ class TestServerFlag:
             # Verify the server URL was stored in state by the callback
             assert mock_state.get("server_url") == "http://custom:9000"
 
-    def test_missing_server_url(self):
-        """CLI exits with error when no server URL is configured."""
-        env = {k: v for k, v in os.environ.items() if k != "JJI_SERVER_URL"}
+    def test_missing_server(self):
+        """CLI exits with error when no server is configured."""
+        env = {k: v for k, v in os.environ.items() if k != "JJI_SERVER"}
         with patch.dict(os.environ, env, clear=True):
             result = runner.invoke(app, ["health"])
             assert result.exit_code == 1
-            assert "Server URL" in result.output
+            assert "No server specified" in result.output
 
 
 class TestErrorHandling:
@@ -431,7 +568,9 @@ class TestAnalyzeFlags:
             app,
             [
                 "analyze",
+                "--job-name",
                 "my-job",
+                "--build-number",
                 "27",
                 "--provider",
                 "claude",
@@ -474,11 +613,300 @@ class TestAnalyzeJiraField:
     def test_analyze_jira_flag_correct_field(self, mock_client):
         """--jira should send enable_jira=True, not jira_enabled=True."""
         mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
-        result = runner.invoke(app, ["analyze", "my-job", "27", "--jira"])
+        result = runner.invoke(
+            app, ["analyze", "--job-name", "my-job", "--build-number", "27", "--jira"]
+        )
         assert result.exit_code == 0
         kwargs = mock_client.analyze.call_args[1]
-        assert "enable_jira" in kwargs  # NOT jira_enabled
+        assert "enable_jira" in kwargs
         assert kwargs["enable_jira"] is True
+
+    def test_analyze_no_jira_flag_sends_false(self, mock_client):
+        """--no-jira should send enable_jira=False."""
+        mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
+        result = runner.invoke(
+            app,
+            ["analyze", "--job-name", "my-job", "--build-number", "27", "--no-jira"],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs["enable_jira"] is False
+
+    def test_analyze_jira_omitted_not_in_extras(self, mock_client):
+        """When neither --jira nor --no-jira is given, enable_jira is not sent."""
+        mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
+        env_vars_to_clear = [
+            "JENKINS_URL",
+            "JENKINS_USER",
+            "JENKINS_PASSWORD",
+            "TESTS_REPO_URL",
+            "JIRA_URL",
+            "JIRA_EMAIL",
+            "JIRA_API_TOKEN",
+            "JIRA_PAT",
+            "JIRA_PROJECT_KEY",
+            "GITHUB_TOKEN",
+        ]
+        clean_env = {k: v for k, v in os.environ.items() if k not in env_vars_to_clear}
+        with patch.dict(os.environ, clean_env, clear=True):
+            result = runner.invoke(
+                app,
+                ["analyze", "--job-name", "my-job", "--build-number", "27"],
+            )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert "enable_jira" not in kwargs
+
+
+class TestHistoryExcludeJobId:
+    def test_history_test_exclude_job_id(self, mock_client):
+        mock_client.get_test_history.return_value = {
+            "test_name": "t",
+            "failures": 0,
+            "failure_rate": None,
+            "last_classification": None,
+            "recent_runs": [],
+            "comments": [],
+        }
+        result = runner.invoke(
+            app,
+            ["history", "test", "t", "--exclude-job-id", "job-99"],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.get_test_history.call_args[1]
+        assert kwargs["exclude_job_id"] == "job-99"
+
+    def test_history_search_exclude_job_id(self, mock_client):
+        mock_client.search_by_signature.return_value = {
+            "signature": "s",
+            "total_occurrences": 0,
+            "unique_tests": 0,
+            "tests": [],
+        }
+        result = runner.invoke(
+            app,
+            ["history", "search", "--signature", "s", "--exclude-job-id", "job-99"],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.search_by_signature.call_args[1]
+        assert kwargs["exclude_job_id"] == "job-99"
+
+    def test_history_stats_exclude_job_id(self, mock_client):
+        mock_client.get_job_stats.return_value = {
+            "job_name": "j",
+            "total_builds_analyzed": 0,
+            "builds_with_failures": 0,
+        }
+        result = runner.invoke(
+            app,
+            ["history", "stats", "j", "--exclude-job-id", "job-99"],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.get_job_stats.call_args[1]
+        assert kwargs["exclude_job_id"] == "job-99"
+
+    def test_history_trends_exclude_job_id(self, mock_client):
+        mock_client.get_trends.return_value = {"period": "daily", "data": []}
+        result = runner.invoke(
+            app,
+            ["history", "trends", "--exclude-job-id", "job-99"],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.get_trends.call_args[1]
+        assert kwargs["exclude_job_id"] == "job-99"
+
+
+class TestClassificationsParentJobName:
+    def test_classifications_list_parent_job_name(self, mock_client):
+        mock_client.get_classifications.return_value = {"classifications": []}
+        result = runner.invoke(
+            app,
+            ["classifications", "list", "--parent-job-name", "parent-job"],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.get_classifications.call_args[1]
+        assert kwargs["parent_job_name"] == "parent-job"
+
+
+class TestAnalyzeAllOptions:
+    """Verify that all AnalyzeRequest fields are forwarded via CLI options."""
+
+    _ANALYZE_RESPONSE = {"status": "queued", "job_id": "j1"}
+
+    @pytest.mark.parametrize(
+        "cli_flag,cli_value,body_key,expected_value",
+        [
+            (
+                "--jenkins-url",
+                "https://jenkins.local",
+                "jenkins_url",
+                "https://jenkins.local",
+            ),
+            ("--jenkins-user", "admin", "jenkins_user", "admin"),
+            ("--jenkins-password", "s3cret", "jenkins_password", "s3cret"),
+            (
+                "--tests-repo-url",
+                "https://github.com/org/tests",
+                "tests_repo_url",
+                "https://github.com/org/tests",
+            ),
+            (
+                "--jira-url",
+                "https://jira.example.com",
+                "jira_url",
+                "https://jira.example.com",
+            ),
+            ("--jira-email", "user@example.com", "jira_email", "user@example.com"),
+            ("--jira-api-token", "tok-123", "jira_api_token", "tok-123"),
+            ("--jira-pat", "pat-abc", "jira_pat", "pat-abc"),
+            ("--jira-project-key", "PROJ", "jira_project_key", "PROJ"),
+            ("--github-token", "ghp_abc123", "github_token", "ghp_abc123"),
+            ("--raw-prompt", "extra instructions", "raw_prompt", "extra instructions"),
+        ],
+    )
+    def test_string_options(
+        self, mock_client, cli_flag, cli_value, body_key, expected_value
+    ):
+        """String options should be forwarded to client.analyze as kwargs."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                cli_flag,
+                cli_value,
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs[body_key] == expected_value
+
+    @pytest.mark.parametrize(
+        "cli_flag,cli_value,body_key,expected_value",
+        [
+            ("--jira-max-results", "25", "jira_max_results", 25),
+            ("--ai-cli-timeout", "10", "ai_cli_timeout", 10),
+            (
+                "--jenkins-artifacts-max-size-mb",
+                "50",
+                "jenkins_artifacts_max_size_mb",
+                50,
+            ),
+            (
+                "--jenkins-artifacts-context-lines",
+                "200",
+                "jenkins_artifacts_context_lines",
+                200,
+            ),
+        ],
+    )
+    def test_int_options(
+        self, mock_client, cli_flag, cli_value, body_key, expected_value
+    ):
+        """Integer options should be forwarded to client.analyze as kwargs."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                cli_flag,
+                cli_value,
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs[body_key] == expected_value
+
+    @pytest.mark.parametrize(
+        "cli_flags,body_key,expected_value",
+        [
+            (["--jenkins-ssl-verify"], "jenkins_ssl_verify", True),
+            (["--no-jenkins-ssl-verify"], "jenkins_ssl_verify", False),
+            (["--jira-ssl-verify"], "jira_ssl_verify", True),
+            (["--no-jira-ssl-verify"], "jira_ssl_verify", False),
+            (["--get-job-artifacts"], "get_job_artifacts", True),
+            (["--no-get-job-artifacts"], "get_job_artifacts", False),
+        ],
+    )
+    def test_bool_options(self, mock_client, cli_flags, body_key, expected_value):
+        """Boolean flag options should be forwarded to client.analyze as kwargs."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        result = runner.invoke(
+            app, ["analyze", "--job-name", "my-job", "--build-number", "1", *cli_flags]
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs[body_key] == expected_value
+
+    def test_no_optional_fields_when_not_provided(self, mock_client):
+        """When no optional flags are given and no env vars set, extras should be empty."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        # Clear environment variables that the CLI options bind to via envvar=.
+        env_vars_to_clear = [
+            "JENKINS_URL",
+            "JENKINS_USER",
+            "JENKINS_PASSWORD",
+            "TESTS_REPO_URL",
+            "JIRA_URL",
+            "JIRA_EMAIL",
+            "JIRA_API_TOKEN",
+            "JIRA_PAT",
+            "JIRA_PROJECT_KEY",
+            "GITHUB_TOKEN",
+        ]
+        clean_env = {k: v for k, v in os.environ.items() if k not in env_vars_to_clear}
+        with patch.dict(os.environ, clean_env, clear=True):
+            result = runner.invoke(
+                app, ["analyze", "--job-name", "my-job", "--build-number", "1"]
+            )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        # Only job_name and build_number should be present as required options.
+        assert "jenkins_url" not in kwargs
+        assert "jira_url" not in kwargs
+        assert "github_token" not in kwargs
+        assert "jenkins_ssl_verify" not in kwargs
+
+    def test_multiple_options_combined(self, mock_client):
+        """Multiple options should all be forwarded together."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--provider",
+                "gemini",
+                "--jenkins-url",
+                "https://jenkins.local",
+                "--jira-url",
+                "https://jira.local",
+                "--jira-max-results",
+                "50",
+                "--no-jenkins-ssl-verify",
+                "--github-token",
+                "ghp_tok",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs["ai_provider"] == "gemini"
+        assert kwargs["jenkins_url"] == "https://jenkins.local"
+        assert kwargs["jira_url"] == "https://jira.local"
+        assert kwargs["jira_max_results"] == 50
+        assert kwargs["jenkins_ssl_verify"] is False
+        assert kwargs["github_token"] == "ghp_tok"
 
 
 class TestCapabilitiesCommand:
@@ -760,6 +1188,87 @@ class TestStatusJsonFull:
         assert "jenkins_url" in output
 
 
+class TestNoVerifySSL:
+    def test_no_verify_ssl_flag_accepted(self, mock_client):
+        """--no-verify-ssl flag should be accepted without error."""
+        mock_client.health.return_value = {"status": "healthy"}
+        result = runner.invoke(app, ["--no-verify-ssl", "health"])
+        assert result.exit_code == 0
+        assert "healthy" in result.output
+
+    def test_no_verify_ssl_passes_to_client(self):
+        """--no-verify-ssl should cause _get_client to create client with verify_ssl=False."""
+        with (
+            patch.dict(os.environ, {"JJI_SERVER": _TEST_SERVER}),
+            patch("jenkins_job_insight.cli.main.JJIClient") as mock_cls,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.health.return_value = {"status": "healthy"}
+            mock_cls.return_value = mock_instance
+            result = runner.invoke(app, ["--no-verify-ssl", "health"])
+            assert result.exit_code == 0
+            mock_cls.assert_called_once_with(
+                server_url=_TEST_SERVER, username="", verify_ssl=False
+            )
+
+    def test_without_no_verify_ssl_flag(self):
+        """Without --no-verify-ssl, client should be created with verify_ssl=True."""
+        with (
+            patch.dict(os.environ, {"JJI_SERVER": _TEST_SERVER}),
+            patch("jenkins_job_insight.cli.main.JJIClient") as mock_cls,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.health.return_value = {"status": "healthy"}
+            mock_cls.return_value = mock_instance
+            result = runner.invoke(app, ["health"])
+            assert result.exit_code == 0
+            mock_cls.assert_called_once_with(
+                server_url=_TEST_SERVER, username="", verify_ssl=True
+            )
+
+    def test_no_verify_ssl_env_var(self):
+        """JJI_NO_VERIFY_SSL env var should enable SSL skip."""
+        with (
+            patch.dict(
+                os.environ,
+                {"JJI_SERVER": _TEST_SERVER, "JJI_NO_VERIFY_SSL": "true"},
+            ),
+            patch("jenkins_job_insight.cli.main.JJIClient") as mock_cls,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.health.return_value = {"status": "healthy"}
+            mock_cls.return_value = mock_instance
+            result = runner.invoke(app, ["health"])
+            assert result.exit_code == 0
+            mock_cls.assert_called_once_with(
+                server_url=_TEST_SERVER, username="", verify_ssl=False
+            )
+
+
+class TestConfigCompletion:
+    def test_completion_zsh(self):
+        result = runner.invoke(app, ["config", "completion", "zsh"])
+        assert result.exit_code == 0
+        assert "~/.zshrc" in result.output
+        assert "--show-completion" in result.output
+
+    def test_completion_bash(self):
+        result = runner.invoke(app, ["config", "completion", "bash"])
+        assert result.exit_code == 0
+        assert "~/.bashrc" in result.output
+        assert "--show-completion" in result.output
+
+    def test_completion_default_is_zsh(self):
+        result = runner.invoke(app, ["config", "completion"])
+        assert result.exit_code == 0
+        assert "~/.zshrc" in result.output
+
+    def test_completion_unsupported_shell(self):
+        result = runner.invoke(app, ["config", "completion", "fish"])
+        assert result.exit_code == 1
+        assert "Unsupported shell" in result.output
+
+
 class TestJsonPerCommand:
     def test_json_flag_after_subcommand(self, mock_client):
         """--json should work when placed after the subcommand."""
@@ -784,3 +1293,171 @@ class TestJsonPerCommand:
         parsed = json.loads(result.output)
         assert isinstance(parsed, list)
         assert parsed[0]["job_id"] == "abc-123"
+
+
+class TestAnalyzeConfigDefaults:
+    """Config file values are used as defaults when CLI flags are not provided."""
+
+    _ANALYZE_RESPONSE = {"status": "queued", "job_id": "j1"}
+
+    _FULL_CONFIG = ServerConfig(
+        url="http://localhost:8000",
+        username="dev-user",
+        no_verify_ssl=False,
+        jenkins_url="https://jenkins.cfg.local",
+        jenkins_user="cfg-jenkins-user",
+        jenkins_password="cfg-jenkins-pw",  # pragma: allowlist secret
+        jenkins_ssl_verify=False,
+        tests_repo_url="https://github.com/cfg/tests",
+        ai_provider="gemini",
+        ai_model="2.5-pro",
+        ai_cli_timeout=20,
+        jira_url="https://jira.cfg.local",
+        jira_email="cfg@example.com",
+        jira_api_token="cfg-jira-tok",
+        jira_pat="cfg-jira-pat",
+        jira_project_key="CFG",
+        jira_ssl_verify=False,
+        jira_max_results=40,
+        enable_jira=True,
+        github_token="ghp_cfg_token",
+    )
+
+    def _invoke_analyze(self, cli_args: list[str], cfg: ServerConfig | None = None):
+        """Invoke the analyze command with the given config and CLI args."""
+        config = cfg or self._FULL_CONFIG
+        with (
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=config,
+            ),
+            patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            client = MagicMock()
+            client.analyze.return_value = self._ANALYZE_RESPONSE
+            mock_client_fn.return_value = client
+            result = runner.invoke(app, cli_args)
+            return result, client
+
+    def test_config_string_fields_used_as_defaults(self):
+        """String config fields are sent when CLI flags are absent."""
+        result, client = self._invoke_analyze(
+            ["analyze", "--job-name", "my-job", "--build-number", "1"]
+        )
+        assert result.exit_code == 0
+        kwargs = client.analyze.call_args[1]
+        assert kwargs["jenkins_url"] == "https://jenkins.cfg.local"
+        assert kwargs["jenkins_user"] == "cfg-jenkins-user"
+        _pw = "cfg-jenkins-pw"  # pragma: allowlist secret
+        assert kwargs["jenkins_password"] == _pw
+        assert kwargs["tests_repo_url"] == "https://github.com/cfg/tests"
+        assert kwargs["ai_provider"] == "gemini"
+        assert kwargs["ai_model"] == "2.5-pro"
+        assert kwargs["jira_url"] == "https://jira.cfg.local"
+        assert kwargs["jira_email"] == "cfg@example.com"
+        assert kwargs["jira_api_token"] == "cfg-jira-tok"
+        assert kwargs["jira_pat"] == "cfg-jira-pat"
+        assert kwargs["jira_project_key"] == "CFG"
+        assert kwargs["github_token"] == "ghp_cfg_token"
+
+    def test_config_integer_fields_used_as_defaults(self):
+        """Integer config fields are sent when CLI flags are absent."""
+        result, client = self._invoke_analyze(
+            ["analyze", "--job-name", "my-job", "--build-number", "1"]
+        )
+        assert result.exit_code == 0
+        kwargs = client.analyze.call_args[1]
+        assert kwargs["ai_cli_timeout"] == 20
+        assert kwargs["jira_max_results"] == 40
+
+    def test_config_boolean_fields_used_as_defaults(self):
+        """Boolean config fields are sent when CLI flags are absent."""
+        result, client = self._invoke_analyze(
+            ["analyze", "--job-name", "my-job", "--build-number", "1"]
+        )
+        assert result.exit_code == 0
+        kwargs = client.analyze.call_args[1]
+        assert kwargs["enable_jira"] is True
+        assert kwargs["jenkins_ssl_verify"] is False
+        assert kwargs["jira_ssl_verify"] is False
+
+    def test_cli_flags_override_config_string_fields(self):
+        """CLI flags take precedence over config values."""
+        result, client = self._invoke_analyze(
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--provider",
+                "claude",
+                "--model",
+                "opus-4",
+                "--jenkins-url",
+                "https://jenkins.cli.local",
+                "--github-token",
+                "ghp_cli_override",
+            ]
+        )
+        assert result.exit_code == 0
+        kwargs = client.analyze.call_args[1]
+        assert kwargs["ai_provider"] == "claude"
+        assert kwargs["ai_model"] == "opus-4"
+        assert kwargs["jenkins_url"] == "https://jenkins.cli.local"
+        assert kwargs["github_token"] == "ghp_cli_override"
+        # Non-overridden fields still come from config.
+        assert kwargs["jenkins_user"] == "cfg-jenkins-user"
+        assert kwargs["jira_url"] == "https://jira.cfg.local"
+
+    def test_cli_flags_override_config_int_fields(self):
+        """CLI int flags override config int values."""
+        result, client = self._invoke_analyze(
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--ai-cli-timeout",
+                "99",
+                "--jira-max-results",
+                "5",
+            ]
+        )
+        assert result.exit_code == 0
+        kwargs = client.analyze.call_args[1]
+        assert kwargs["ai_cli_timeout"] == 99
+        assert kwargs["jira_max_results"] == 5
+
+    def test_cli_flags_override_config_bool_fields(self):
+        """CLI boolean flags override config boolean values."""
+        result, client = self._invoke_analyze(
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--jenkins-ssl-verify",
+                "--jira-ssl-verify",
+            ]
+        )
+        assert result.exit_code == 0
+        kwargs = client.analyze.call_args[1]
+        assert kwargs["jenkins_ssl_verify"] is True
+        assert kwargs["jira_ssl_verify"] is True
+
+    def test_no_config_means_no_defaults(self):
+        """When no config is available, analyze sends only CLI-provided fields."""
+        cfg = ServerConfig(url="http://localhost:8000")
+        result, client = self._invoke_analyze(
+            ["analyze", "--job-name", "my-job", "--build-number", "1"], cfg=cfg
+        )
+        assert result.exit_code == 0
+        kwargs = client.analyze.call_args[1]
+        assert "jenkins_url" not in kwargs
+        assert "ai_provider" not in kwargs
+        assert "enable_jira" not in kwargs
+        assert "github_token" not in kwargs

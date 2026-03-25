@@ -4,7 +4,6 @@ import os
 from unittest.mock import patch
 
 import pytest
-from pydantic import ValidationError
 
 from jenkins_job_insight.config import Settings, get_settings
 
@@ -30,44 +29,16 @@ class TestSettings:
         with patch.dict(os.environ, env, clear=True):
             settings = Settings()
             assert settings.tests_repo_url is None
-            assert settings.callback_url is None
-            assert settings.callback_headers is None
 
-    def test_settings_validation_error_missing_jenkins_url(self) -> None:
-        """Test that ValidationError is raised when JENKINS_URL is missing."""
-        env = {
-            "JENKINS_USER": "testuser",
-            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
-        }
-        with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(ValidationError) as exc_info:
-                Settings()
-            errors = exc_info.value.errors()
-            assert any(e["loc"] == ("jenkins_url",) for e in errors)
-
-    def test_settings_validation_error_missing_jenkins_user(self) -> None:
-        """Test that ValidationError is raised when JENKINS_USER is missing."""
-        env = {
-            "JENKINS_URL": "https://jenkins.example.com",
-            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
-        }
-        with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(ValidationError) as exc_info:
-                Settings()
-            errors = exc_info.value.errors()
-            assert any(e["loc"] == ("jenkins_user",) for e in errors)
-
-    def test_settings_validation_error_missing_jenkins_password(self) -> None:
-        """Test that ValidationError is raised when JENKINS_PASSWORD is missing."""
-        env = {
-            "JENKINS_URL": "https://jenkins.example.com",
-            "JENKINS_USER": "testuser",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(ValidationError) as exc_info:
-                Settings()
-            errors = exc_info.value.errors()
-            assert any(e["loc"] == ("jenkins_password",) for e in errors)
+    @pytest.mark.parametrize(
+        "field",
+        ["jenkins_url", "jenkins_user", "jenkins_password"],
+    )
+    def test_jenkins_fields_default_to_empty_string(self, field: str) -> None:
+        """Test that Jenkins fields default to empty string when env vars are missing."""
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings()
+            assert getattr(settings, field) == ""
 
     def test_settings_extra_fields_ignored(self, mock_env_vars: dict[str, str]) -> None:
         """Test that extra environment variables are ignored."""
@@ -86,30 +57,6 @@ class TestSettings:
         with patch.dict(os.environ, env, clear=True):
             settings = Settings()
             assert settings.tests_repo_url == "https://github.com/org/test-repo"
-
-    def test_settings_loads_callback_url(self) -> None:
-        """Test that callback_url is loaded from environment variable."""
-        env = {
-            "JENKINS_URL": "https://jenkins.example.com",
-            "JENKINS_USER": "testuser",
-            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
-            "CALLBACK_URL": "https://my-service.example.com/webhook",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            settings = Settings()
-            assert settings.callback_url == "https://my-service.example.com/webhook"
-
-    def test_settings_loads_callback_headers(self) -> None:
-        """Test that callback_headers is loaded from environment variable as JSON."""
-        env = {
-            "JENKINS_URL": "https://jenkins.example.com",
-            "JENKINS_USER": "testuser",
-            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
-            "CALLBACK_HEADERS": '{"Authorization": "Bearer token123"}',
-        }
-        with patch.dict(os.environ, env, clear=True):
-            settings = Settings()
-            assert settings.callback_headers == {"Authorization": "Bearer token123"}
 
 
 class TestGetSettings:

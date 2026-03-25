@@ -111,7 +111,7 @@ class TestAnalyzeEndpoint:
         assert response.status_code == 422
 
     def test_analyze_with_optional_fields(self, test_client) -> None:
-        """Test analyze with optional callback fields."""
+        """Test analyze with optional fields."""
         with patch("jenkins_job_insight.main.process_analysis_with_id"):
             response = test_client.post(
                 "/analyze",
@@ -119,8 +119,6 @@ class TestAnalyzeEndpoint:
                     "job_name": "test",
                     "build_number": 123,
                     "tests_repo_url": "https://github.com/example/repo",
-                    "callback_url": "https://callback.example.com/webhook",
-                    "callback_headers": {"Authorization": "Bearer token"},
                 },
             )
             assert response.status_code == 202

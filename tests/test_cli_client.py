@@ -146,7 +146,8 @@ class TestJJIClientAnalyze:
         }
 
         def handler(request):
-            assert "sync" not in str(request.url)
+            body = json.loads(request.content)
+            assert "sync" not in body
             return httpx.Response(202, json=response_data)
 
         client = _make_client(handler)
@@ -525,6 +526,132 @@ class TestJJIClientPreviewWithAiConfig:
         )
 
 
+class TestJJIClientReview:
+    def test_get_review_status(self):
+        sample = {"total": 5, "reviewed": 3, "pending": 2}
+
+        def handler(request):
+            assert request.method == "GET"
+            assert "/results/job-1/review-status" in str(request.url)
+            return httpx.Response(200, json=sample)
+
+        client = _make_client(handler)
+        result = client.get_review_status("job-1")
+        assert result["total"] == 5
+        assert result["reviewed"] == 3
+
+    def test_set_reviewed(self):
+        def handler(request):
+            assert request.method == "PUT"
+            assert "/results/job-1/reviewed" in str(request.url)
+            body = json.loads(request.content)
+            assert body["test_name"] == "tests.TestA.test_one"
+            assert body["reviewed"] is True
+            return httpx.Response(200, json={"status": "ok", "reviewed_by": "alice"})
+
+        client = _make_client(handler, username="alice")
+        result = client.set_reviewed(
+            job_id="job-1", test_name="tests.TestA.test_one", reviewed=True
+        )
+        assert result["status"] == "ok"
+        assert result["reviewed_by"] == "alice"
+
+    def test_set_reviewed_with_child_job(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert body["child_job_name"] == "child-runner"
+            assert body["child_build_number"] == 5
+            return httpx.Response(200, json={"status": "ok", "reviewed_by": "bob"})
+
+        client = _make_client(handler)
+        result = client.set_reviewed(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            reviewed=False,
+            child_job_name="child-runner",
+            child_build_number=5,
+        )
+        assert result["status"] == "ok"
+
+    def test_enrich_comments(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/results/job-1/enrich-comments" in str(request.url)
+            return httpx.Response(200, json={"enriched": 3})
+
+        client = _make_client(handler)
+        result = client.enrich_comments("job-1")
+        assert result["enriched"] == 3
+
+
+class TestJJIClientExcludeJobId:
+    def test_get_test_history_with_exclude(self):
+        def handler(request):
+            assert "exclude_job_id=job-99" in str(request.url)
+            return httpx.Response(
+                200, json={"test_name": "t", "failures": 0, "recent_runs": []}
+            )
+
+        client = _make_client(handler)
+        client.get_test_history("t", exclude_job_id="job-99")
+
+    def test_search_by_signature_with_exclude(self):
+        def handler(request):
+            assert "exclude_job_id=job-99" in str(request.url)
+            return httpx.Response(
+                200, json={"signature": "s", "total_occurrences": 0, "tests": []}
+            )
+
+        client = _make_client(handler)
+        client.search_by_signature("s", exclude_job_id="job-99")
+
+    def test_get_job_stats_with_exclude(self):
+        def handler(request):
+            assert "exclude_job_id=job-99" in str(request.url)
+            return httpx.Response(
+                200, json={"job_name": "j", "total_builds_analyzed": 0}
+            )
+
+        client = _make_client(handler)
+        client.get_job_stats("j", exclude_job_id="job-99")
+
+    def test_get_trends_with_exclude(self):
+        def handler(request):
+            assert "exclude_job_id=job-99" in str(request.url)
+            return httpx.Response(200, json={"period": "daily", "data": []})
+
+        client = _make_client(handler)
+        client.get_trends(exclude_job_id="job-99")
+
+
+class TestJJIClientClassificationsParentJobName:
+    def test_get_classifications_with_parent_job_name(self):
+        def handler(request):
+            assert "parent_job_name=parent-job" in str(request.url)
+            return httpx.Response(200, json={"classifications": []})
+
+        client = _make_client(handler)
+        client.get_classifications(parent_job_name="parent-job")
+
+
+class TestJJIClientVerifySSL:
+    def test_verify_ssl_default_true(self):
+        """Client should verify SSL by default."""
+        client = JJIClient(server_url=BASE_URL)
+        assert client._client._transport._pool._ssl_context.verify_mode != 0
+
+    def test_verify_ssl_false_passes_to_httpx(self):
+        """Client should pass verify=False to httpx when verify_ssl=False."""
+        client = JJIClient(server_url=BASE_URL, verify_ssl=False)
+        # httpx with verify=False uses an ssl context with CERT_NONE (value 0)
+        assert client._client._transport._pool._ssl_context.verify_mode == 0
+
+    def test_verify_ssl_true_passes_to_httpx(self):
+        """Client should pass verify=True to httpx when verify_ssl=True."""
+        client = JJIClient(server_url=BASE_URL, verify_ssl=True)
+        assert client._client._transport._pool._ssl_context.verify_mode != 0
+
+
 class TestJJIClientAnalyzeExtras:
     def test_analyze_with_ai_provider(self):
         def handler(request):
@@ -540,4 +667,54 @@ class TestJJIClientAnalyzeExtras:
             ai_provider="claude",
             ai_model="opus",
         )
+        assert result["status"] == "queued"
+
+    def test_analyze_with_all_optional_fields(self):
+        """All optional kwargs should be included in the POST body."""
+        extras = {
+            "jenkins_url": "https://jenkins.local",
+            "jenkins_user": "admin",
+            "jenkins_password": "s3cret",  # pragma: allowlist secret
+            "jenkins_ssl_verify": False,
+            "jenkins_artifacts_max_size_mb": 50,
+            "jenkins_artifacts_context_lines": 200,
+            "get_job_artifacts": True,
+            "tests_repo_url": "https://github.com/org/tests",
+            "jira_url": "https://jira.example.com",
+            "jira_email": "user@example.com",
+            "jira_api_token": "tok-123",
+            "jira_pat": "pat-abc",
+            "jira_project_key": "PROJ",
+            "jira_ssl_verify": True,
+            "jira_max_results": 25,
+            "github_token": "ghp_abc123",
+            "ai_cli_timeout": 10,
+            "enable_jira": True,
+            "raw_prompt": "extra instructions",
+        }
+
+        def handler(request):
+            body = json.loads(request.content)
+            assert body["job_name"] == "my-job"
+            assert body["build_number"] == 1
+            for key, value in extras.items():
+                assert body[key] == value, (
+                    f"Expected {key}={value}, got {body.get(key)}"
+                )
+            return httpx.Response(202, json={"status": "queued", "job_id": "x"})
+
+        client = _make_client(handler)
+        result = client.analyze("my-job", 1, **extras)
+        assert result["status"] == "queued"
+
+    def test_analyze_without_extras_sends_minimal_body(self):
+        """Without extras, only job_name and build_number should be in the body."""
+
+        def handler(request):
+            body = json.loads(request.content)
+            assert body == {"job_name": "my-job", "build_number": 1}
+            return httpx.Response(202, json={"status": "queued", "job_id": "x"})
+
+        client = _make_client(handler)
+        result = client.analyze("my-job", 1)
         assert result["status"] == "queued"
