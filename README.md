@@ -23,6 +23,7 @@ For each failure, the service provides detailed explanations and either fix sugg
 - **pytest JUnit XML integration**: Enrich JUnit XML reports with AI analysis via a pytest plugin
 - **Raw XML analysis**: Accept raw JUnit XML via API, extract failures, analyze, and return enriched XML
 - **One-click bug creation**: Create GitHub issues or Jira bugs directly from failure cards with AI-generated content, editable preview, and duplicate detection
+- **Jenkins job monitoring**: Submit analysis while a build is still running — the service waits for completion, then analyzes automatically (fire and forget)
 
 ### One-Click Bug Creation
 
@@ -164,6 +165,9 @@ Configure the service using environment variables. Jenkins settings are optional
 | `JENKINS_USER` | No* | - | Jenkins username (can be provided per-request) |
 | `JENKINS_PASSWORD` | No* | - | Jenkins password or API token (can be provided per-request) |
 | `JENKINS_SSL_VERIFY` | No | `true` | Enable SSL certificate verification (set to `false` for self-signed certs) |
+| `WAIT_FOR_COMPLETION` | No | `true` | Wait for running Jenkins builds to finish before analyzing |
+| `POLL_INTERVAL_MINUTES` | No | `2` | Minutes between polls when waiting for a build to finish |
+| `MAX_WAIT_MINUTES` | No | `120` | Maximum minutes to wait for a build before timing out |
 | **AI Provider** | | | |
 | `AI_PROVIDER` | Yes | - | AI provider to use (`claude`, `gemini`, or `cursor`) |
 | `AI_MODEL` | Yes | - | Model for the AI provider |
@@ -341,6 +345,9 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | `JENKINS_USER`       | `jenkins_user`       | Yes*     | `/analyze`             | Jenkins username                                               |
 | `JENKINS_PASSWORD`   | `jenkins_password`   | Yes*     | `/analyze`             | Jenkins password or API token                                  |
 | `JENKINS_SSL_VERIFY` | `jenkins_ssl_verify` | No       | `/analyze`             | Jenkins SSL certificate verification (default: true)           |
+| `WAIT_FOR_COMPLETION` | `wait_for_completion` | No      | `/analyze`             | Wait for running builds to finish before analyzing (default: true) |
+| `POLL_INTERVAL_MINUTES` | `poll_interval_minutes` | No  | `/analyze`             | Minutes between polls when waiting for a build (default: 2)    |
+| `MAX_WAIT_MINUTES`   | `max_wait_minutes`   | No       | `/analyze`             | Maximum minutes to wait for a build (default: 120)             |
 | **Jira**             |                      |          |                        |                                                                |
 | `ENABLE_JIRA`        | `enable_jira`        | No       | Both                   | Enable/disable Jira bug search (default: auto-detect)          |
 | `JIRA_URL`           | `jira_url`           | No       | Both                   | Jira instance URL                                              |
@@ -689,6 +696,39 @@ This context helps the AI distinguish between test infrastructure issues (CODE I
 | `GET_JOB_ARTIFACTS` | `true` | Download all build artifacts (set `false` to disable) |
 | `JENKINS_ARTIFACTS_MAX_SIZE_MB` | `500` | Maximum size per downloaded artifact in MB |
 | `JENKINS_ARTIFACTS_CONTEXT_LINES` | `200` | Maximum lines of artifacts context included in AI prompt |
+
+### Jenkins Job Monitoring
+
+When you submit an analysis request, the server automatically checks if the Jenkins build is still running. If it is, the system monitors the job until it completes, then starts the analysis automatically. This lets you trigger analysis right after starting a Jenkins job — fire and forget.
+
+- **Always on by default** — no configuration needed
+- **Polls every 2 minutes** (configurable via `poll_interval_minutes`)
+- **Times out after 2 hours** (configurable via `max_wait_minutes`)
+- **Any terminal state triggers analysis** — success, failure, error, aborted
+- **Status shows "Waiting"** in the dashboard and status page while monitoring
+- **Opt out with `--no-wait`** via CLI or `"wait_for_completion": false` in the payload
+
+#### CLI example
+
+```bash
+# Fire and forget — starts monitoring immediately
+jji --server dev analyze --job-name my-job --build-number 42
+
+# Skip monitoring (fail if job still running)
+jji --server dev analyze --job-name my-job --build-number 42 --no-wait
+```
+
+#### API example
+
+```json
+{
+  "job_name": "my-job",
+  "build_number": 42,
+  "wait_for_completion": true,
+  "poll_interval_minutes": 2,
+  "max_wait_minutes": 120
+}
+```
 
 ## API Endpoints
 

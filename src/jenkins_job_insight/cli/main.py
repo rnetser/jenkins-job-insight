@@ -487,6 +487,17 @@ def analyze(
     raw_prompt: str = typer.Option(
         "", "--raw-prompt", help="Raw prompt to append as additional AI instructions."
     ),
+    wait_for_completion: bool | None = typer.Option(
+        None,
+        "--wait/--no-wait",
+        help="Wait for Jenkins job to complete before analyzing.",
+    ),
+    poll_interval: int = typer.Option(
+        None, "--poll-interval", help="Minutes between Jenkins polls."
+    ),
+    max_wait: int = typer.Option(
+        None, "--max-wait", help="Maximum minutes to wait for completion."
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Submit a Jenkins job for analysis."""
@@ -519,6 +530,8 @@ def analyze(
         _cfg_int_fields = {
             "ai_cli_timeout": cfg.ai_cli_timeout,
             "jira_max_results": cfg.jira_max_results,
+            "poll_interval_minutes": cfg.poll_interval_minutes,
+            "max_wait_minutes": cfg.max_wait_minutes,
         }
         for key, value in _cfg_int_fields.items():
             if value:
@@ -531,6 +544,8 @@ def analyze(
             extras["jenkins_ssl_verify"] = False
         if not cfg.jira_ssl_verify:
             extras["jira_ssl_verify"] = False
+        if cfg.wait_for_completion is not None:
+            extras["wait_for_completion"] = cfg.wait_for_completion
 
     # CLI flags override config (highest priority).
     if provider:
@@ -564,6 +579,8 @@ def analyze(
         "ai_cli_timeout": ai_cli_timeout,
         "jenkins_artifacts_max_size_mb": jenkins_artifacts_max_size_mb,
         "jenkins_artifacts_context_lines": jenkins_artifacts_context_lines,
+        "poll_interval_minutes": poll_interval,
+        "max_wait_minutes": max_wait,
     }
     for key, value in _int_fields.items():
         if value is not None:
@@ -574,6 +591,7 @@ def analyze(
         "jenkins_ssl_verify": jenkins_ssl_verify,
         "jira_ssl_verify": jira_ssl_verify,
         "get_job_artifacts": get_job_artifacts,
+        "wait_for_completion": wait_for_completion,
     }
     for key, value in _bool_fields.items():
         if value is not None:

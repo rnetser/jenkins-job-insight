@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # Artifact download toggle
     get_job_artifacts: bool = True
 
+    # Jenkins job monitoring (wait for completion before analysis)
+    wait_for_completion: bool = True
+    poll_interval_minutes: int = Field(default=2, gt=0)
+    max_wait_minutes: int = Field(default=120, gt=0)
+
     # GitHub (optional) -- for comment enrichment (PR status)
     github_token: SecretStr | None = None
 

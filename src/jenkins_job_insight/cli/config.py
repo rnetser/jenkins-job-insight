@@ -43,6 +43,10 @@ class ServerConfig:
     enable_jira: bool = False
     # GitHub
     github_token: str = ""
+    # Jenkins job monitoring
+    wait_for_completion: bool | None = None
+    poll_interval_minutes: int = 0  # 0 means use server default
+    max_wait_minutes: int = 0  # 0 means use server default
 
 
 def load_config(path: Path | None = None) -> dict:
@@ -111,6 +115,10 @@ def _server_config_from_dict(data: dict) -> ServerConfig:
         enable_jira=data.get("enable_jira", False),
         # GitHub
         github_token=data.get("github_token", ""),
+        # Jenkins job monitoring
+        wait_for_completion=data.get("wait_for_completion"),
+        poll_interval_minutes=data.get("poll_interval_minutes", 0),
+        max_wait_minutes=data.get("max_wait_minutes", 0),
     )
 
 

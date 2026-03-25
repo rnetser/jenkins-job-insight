@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from jenkins_job_insight import storage
+from jenkins_job_insight.config import Settings
 from jenkins_job_insight.models import (
     AnalysisDetail,
+    AnalysisResult,
     FailureAnalysis,
 )
 
@@ -1987,3 +1989,332 @@ class TestClassifyEndpoint:
         )
         assert resp.status_code == 400
         assert "bad value" in resp.json()["detail"]
+
+
+class TestWaitForJenkinsCompletion:
+    """Tests for the _wait_for_jenkins_completion function."""
+
+    @pytest.mark.asyncio
+    async def test_already_completed_returns_true(self) -> None:
+        """Job that is already finished returns True on first poll."""
+        with patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.return_value = {
+                "building": False,
+                "result": "SUCCESS",
+            }
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=1,
+                jenkins_user="user",
+                jenkins_password="pass",  # pragma: allowlist secret
+                jenkins_ssl_verify=True,
+                poll_interval_minutes=1,
+                max_wait_minutes=5,
+            )
+            assert result is True
+            mock_client.get_build_info_safe.assert_called_once_with("my-job", 1)
+
+    @pytest.mark.asyncio
+    async def test_running_then_completed(self) -> None:
+        """Job that is running then completes returns True after polls."""
+        with (
+            patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls,
+            patch(
+                "jenkins_job_insight.main.asyncio.sleep", new_callable=AsyncMock
+            ) as mock_sleep,
+        ):
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.side_effect = [
+                {"building": True},
+                {"building": True},
+                {"building": False, "result": "FAILURE"},
+            ]
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=42,
+                jenkins_user="user",
+                jenkins_password="pass",  # pragma: allowlist secret
+                jenkins_ssl_verify=False,
+                poll_interval_minutes=2,
+                max_wait_minutes=10,
+            )
+            assert result is True
+            assert mock_client.get_build_info_safe.call_count == 3
+            assert mock_sleep.call_count == 2
+            mock_sleep.assert_called_with(120)  # 2 * 60
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_false(self) -> None:
+        """Job that never completes returns False after max polls."""
+        with (
+            patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls,
+            patch("jenkins_job_insight.main.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.return_value = {"building": True}
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=1,
+                jenkins_user="user",
+                jenkins_password="pass",  # pragma: allowlist secret
+                jenkins_ssl_verify=True,
+                poll_interval_minutes=2,
+                max_wait_minutes=6,
+            )
+            assert result is False
+            # max_polls = 6 // 2 = 3
+            assert mock_client.get_build_info_safe.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_jenkins_error_continues_polling(self) -> None:
+        """Transient Jenkins errors do not stop polling."""
+        with (
+            patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls,
+            patch("jenkins_job_insight.main.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.side_effect = [
+                Exception("connection refused"),
+                {"building": False, "result": "SUCCESS"},
+            ]
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=1,
+                jenkins_user="user",
+                jenkins_password="pass",  # pragma: allowlist secret
+                jenkins_ssl_verify=True,
+                poll_interval_minutes=1,
+                max_wait_minutes=5,
+            )
+            assert result is True
+
+
+class TestProcessAnalysisWaiting:
+    """Tests for the waiting logic in process_analysis_with_id."""
+
+    @pytest.mark.asyncio
+    async def test_wait_for_completion_true_waits(self) -> None:
+        """When wait_for_completion=True, sets status to 'waiting' and polls."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=True,
+            poll_interval_minutes=1,
+            max_wait_minutes=5,
+        )
+        settings = Settings()
+        settings_dict = settings.model_dump(mode="python")
+        settings_dict["jenkins_url"] = "https://jenkins.example.com"
+        settings_dict["jenkins_user"] = "user"
+        settings_dict["jenkins_password"] = "pass"  # pragma: allowlist secret
+        merged = Settings.model_validate(settings_dict)
+
+        statuses: list[str] = []
+
+        async def capture_status(job_id, status, result=None):
+            statuses.append(status)
+
+        with (
+            patch(
+                "jenkins_job_insight.main._wait_for_jenkins_completion",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_wait,
+            patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
+            patch(
+                "jenkins_job_insight.main._resolve_ai_config",
+                return_value=("claude", "test-model"),
+            ),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+            patch("jenkins_job_insight.main._resolve_enable_jira", return_value=False),
+            patch(
+                "jenkins_job_insight.main.populate_failure_history",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_analyze.return_value = AnalysisResult(
+                job_id="test-id",
+                status="completed",
+                summary="ok",
+            )
+            await process_analysis_with_id("test-id", body, merged, "http://localhost")
+            mock_wait.assert_called_once()
+            assert "waiting" in statuses
+            assert "running" in statuses
+
+    @pytest.mark.asyncio
+    async def test_wait_for_completion_false_skips_waiting(self) -> None:
+        """When wait_for_completion=False, skip waiting entirely."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=False,
+        )
+        settings = Settings()
+        settings_dict = settings.model_dump(mode="python")
+        settings_dict["jenkins_url"] = "https://jenkins.example.com"
+        merged = Settings.model_validate(settings_dict)
+
+        statuses: list[str] = []
+
+        async def capture_status(job_id, status, result=None):
+            statuses.append(status)
+
+        with (
+            patch(
+                "jenkins_job_insight.main._wait_for_jenkins_completion",
+                new_callable=AsyncMock,
+            ) as mock_wait,
+            patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
+            patch(
+                "jenkins_job_insight.main._resolve_ai_config",
+                return_value=("claude", "test-model"),
+            ),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+            patch("jenkins_job_insight.main._resolve_enable_jira", return_value=False),
+            patch(
+                "jenkins_job_insight.main.populate_failure_history",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_analyze.return_value = AnalysisResult(
+                job_id="test-id",
+                status="completed",
+                summary="ok",
+            )
+            await process_analysis_with_id("test-id", body, merged, "http://localhost")
+            mock_wait.assert_not_called()
+            assert "waiting" not in statuses
+            assert "running" in statuses
+
+    @pytest.mark.asyncio
+    async def test_wait_timeout_marks_failed(self) -> None:
+        """When waiting times out, the job is marked as failed."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=True,
+            max_wait_minutes=10,
+        )
+        settings = Settings()
+        settings_dict = settings.model_dump(mode="python")
+        settings_dict["jenkins_url"] = "https://jenkins.example.com"
+        settings_dict["jenkins_user"] = "user"
+        settings_dict["jenkins_password"] = "pass"  # pragma: allowlist secret
+        merged = Settings.model_validate(settings_dict)
+
+        stored: list[tuple[str, dict | None]] = []
+
+        async def capture_status(job_id, status, result=None):
+            stored.append((status, result))
+
+        with (
+            patch(
+                "jenkins_job_insight.main._wait_for_jenkins_completion",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+        ):
+            await process_analysis_with_id("test-id", body, merged, "http://localhost")
+            mock_analyze.assert_not_called()
+            # The last update should be a failed status with timeout error
+            last_status, last_result = stored[-1]
+            assert last_status == "failed"
+            assert last_result is not None
+            assert "Timed out" in last_result["error"]
+            assert "10 minutes" in last_result["error"]
+
+    @pytest.mark.asyncio
+    async def test_no_jenkins_url_skips_waiting(self) -> None:
+        """When jenkins_url is empty, skip waiting even if wait_for_completion=True."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=True,
+        )
+        settings = Settings()
+        # jenkins_url defaults to empty string
+
+        statuses: list[str] = []
+
+        async def capture_status(job_id, status, result=None):
+            statuses.append(status)
+
+        with (
+            patch(
+                "jenkins_job_insight.main._wait_for_jenkins_completion",
+                new_callable=AsyncMock,
+            ) as mock_wait,
+            patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
+            patch(
+                "jenkins_job_insight.main._resolve_ai_config",
+                return_value=("claude", "test-model"),
+            ),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+            patch("jenkins_job_insight.main._resolve_enable_jira", return_value=False),
+            patch(
+                "jenkins_job_insight.main.populate_failure_history",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_analyze.return_value = AnalysisResult(
+                job_id="test-id",
+                status="completed",
+                summary="ok",
+            )
+            await process_analysis_with_id(
+                "test-id", body, settings, "http://localhost"
+            )
+            mock_wait.assert_not_called()
+            assert "waiting" not in statuses

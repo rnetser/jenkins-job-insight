@@ -5,9 +5,24 @@ import { parseApiTimestamp, isAnalysisTimeout } from '@/lib/utils'
 import type { ResultResponse } from '@/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Clock } from 'lucide-react'
+import { Clock, Loader2 } from 'lucide-react'
 
 const POLL_MS = 10_000
+
+const statusMessages: Record<string, { title: string; subtitle: string }> = {
+  waiting: {
+    title: 'Waiting for Jenkins job',
+    subtitle: 'Monitoring build until it completes...',
+  },
+  pending: {
+    title: 'Analysis queued',
+    subtitle: 'Waiting in the analysis queue...',
+  },
+  running: {
+    title: 'Analysis in progress',
+    subtitle: 'Crunching test results with AI...',
+  },
+}
 
 export function StatusPage() {
   const { jobId } = useParams<{ jobId: string }>()
@@ -57,6 +72,8 @@ export function StatusPage() {
 
   const status = data?.status ?? 'pending'
   const isRunning = status === 'running'
+  const isWaiting = status === 'waiting'
+  const msg = statusMessages[status] ?? statusMessages.running
 
   return (
     <div className="relative flex min-h-screen items-center justify-center bg-surface-page overflow-hidden">
@@ -97,10 +114,14 @@ export function StatusPage() {
                 />
               </svg>
 
-              {/* Center dot */}
-              <div
-                className={`h-3 w-3 rounded-full bg-signal-blue ${isRunning ? '' : 'animate-pulse-ring'}`}
-              />
+              {/* Center icon: Clock for waiting, spinner for running, dot for pending */}
+              {isWaiting ? (
+                <Clock className="h-6 w-6 text-signal-blue animate-pulse-ring" />
+              ) : isRunning ? (
+                <Loader2 className="h-6 w-6 text-signal-blue animate-spin" />
+              ) : (
+                <div className="h-3 w-3 rounded-full bg-signal-blue animate-pulse-ring" />
+              )}
 
               {/* Ambient glow */}
               <div className="pointer-events-none absolute inset-0 rounded-full bg-signal-blue/[0.06] blur-xl" />
@@ -134,12 +155,10 @@ export function StatusPage() {
               ) : (
                 <>
                   <h2 className="font-display text-lg font-semibold text-text-primary">
-                    {isRunning ? 'Analysis in progress' : 'Waiting for analysis'}
+                    {msg.title}
                   </h2>
                   <p className="mt-1 text-sm text-text-tertiary">
-                    {isRunning
-                      ? 'Crunching test results with AI...'
-                      : 'Job is queued. This page refreshes automatically.'}
+                    {msg.subtitle}
                   </p>
                 </>
               )}
@@ -157,7 +176,7 @@ export function StatusPage() {
               <Row
                 label="STATUS"
                 value={
-                  <Badge variant={isRunning ? 'default' : 'outline'}>
+                  <Badge variant={isRunning || isWaiting ? 'default' : 'outline'}>
                     {status.toUpperCase()}
                   </Badge>
                 }

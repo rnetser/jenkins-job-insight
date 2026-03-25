@@ -2112,11 +2112,11 @@ async def get_effective_classification(
 
 
 async def mark_stale_results_failed() -> None:
-    """Mark orphaned running/pending jobs as failed on startup."""
+    """Mark orphaned running/pending/waiting jobs as failed on startup."""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "UPDATE results SET status = 'failed' "
-            "WHERE status IN ('running', 'pending')"
+            "WHERE status IN ('running', 'pending', 'waiting')"
         )
         if cursor.rowcount > 0:
             logger.warning(

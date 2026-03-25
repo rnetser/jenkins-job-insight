@@ -56,6 +56,60 @@ class TestAnalyzeRequest:
                 tests_repo_url="not-a-valid-url",
             )
 
+    def test_wait_for_completion_defaults(self) -> None:
+        """Test wait_for_completion fields have correct defaults."""
+        request = AnalyzeRequest(job_name="test", build_number=1)
+        assert request.wait_for_completion is True
+        assert request.poll_interval_minutes == 2
+        assert request.max_wait_minutes == 120
+
+    def test_wait_for_completion_custom_values(self) -> None:
+        """Test overriding wait_for_completion fields."""
+        request = AnalyzeRequest(
+            job_name="test",
+            build_number=1,
+            wait_for_completion=False,
+            poll_interval_minutes=5,
+            max_wait_minutes=60,
+        )
+        assert request.wait_for_completion is False
+        assert request.poll_interval_minutes == 5
+        assert request.max_wait_minutes == 60
+
+    @pytest.mark.parametrize("field", ["poll_interval_minutes", "max_wait_minutes"])
+    def test_wait_fields_reject_zero(self, field: str) -> None:
+        """Test that poll_interval_minutes and max_wait_minutes reject zero."""
+        with pytest.raises(ValidationError):
+            AnalyzeRequest(job_name="test", build_number=1, **{field: 0})
+
+    @pytest.mark.parametrize("field", ["poll_interval_minutes", "max_wait_minutes"])
+    def test_wait_fields_reject_negative(self, field: str) -> None:
+        """Test that poll_interval_minutes and max_wait_minutes reject negative values."""
+        with pytest.raises(ValidationError):
+            AnalyzeRequest(job_name="test", build_number=1, **{field: -1})
+
+
+class TestAnalysisResultWaitingStatus:
+    """Tests for 'waiting' status support in AnalysisResult and JobStatus."""
+
+    def test_analysis_result_accepts_waiting_status(self) -> None:
+        """Test that AnalysisResult accepts 'waiting' as a valid status."""
+        result = AnalysisResult(
+            job_id="test-id",
+            status="waiting",
+            summary="Waiting for Jenkins job to complete",
+        )
+        assert result.status == "waiting"
+
+    def test_job_status_accepts_waiting_status(self) -> None:
+        """Test that JobStatus accepts 'waiting' as a valid status."""
+        status = JobStatus(
+            job_id="test-id",
+            status="waiting",
+            created_at=datetime.now(),
+        )
+        assert status.status == "waiting"
+
 
 class TestProductBugReport:
     """Tests for the ProductBugReport model."""

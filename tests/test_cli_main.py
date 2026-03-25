@@ -1461,3 +1461,92 @@ class TestAnalyzeConfigDefaults:
         assert "ai_provider" not in kwargs
         assert "enable_jira" not in kwargs
         assert "github_token" not in kwargs
+
+
+class TestAnalyzeWaitFlags:
+    """Tests for --wait/--no-wait, --poll-interval, --max-wait CLI flags."""
+
+    def test_wait_flag(self, mock_client):
+        """--wait should send wait_for_completion=True."""
+        mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
+        result = runner.invoke(
+            app,
+            ["analyze", "--job-name", "my-job", "--build-number", "1", "--wait"],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs["wait_for_completion"] is True
+
+    def test_no_wait_flag(self, mock_client):
+        """--no-wait should send wait_for_completion=False."""
+        mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
+        result = runner.invoke(
+            app,
+            ["analyze", "--job-name", "my-job", "--build-number", "1", "--no-wait"],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs["wait_for_completion"] is False
+
+    def test_poll_interval_flag(self, mock_client):
+        """--poll-interval should send poll_interval_minutes."""
+        mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--poll-interval",
+                "5",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs["poll_interval_minutes"] == 5
+
+    def test_max_wait_flag(self, mock_client):
+        """--max-wait should send max_wait_minutes."""
+        mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--max-wait",
+                "30",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs["max_wait_minutes"] == 30
+
+    def test_wait_omitted_not_in_extras(self, mock_client):
+        """When --wait/--no-wait is not given, wait_for_completion is not sent."""
+        mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
+        env_vars_to_clear = [
+            "JENKINS_URL",
+            "JENKINS_USER",
+            "JENKINS_PASSWORD",
+            "TESTS_REPO_URL",
+            "JIRA_URL",
+            "JIRA_EMAIL",
+            "JIRA_API_TOKEN",
+            "JIRA_PAT",
+            "JIRA_PROJECT_KEY",
+            "GITHUB_TOKEN",
+        ]
+        clean_env = {k: v for k, v in os.environ.items() if k not in env_vars_to_clear}
+        with patch.dict(os.environ, clean_env, clear=True):
+            result = runner.invoke(
+                app,
+                ["analyze", "--job-name", "my-job", "--build-number", "1"],
+            )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert "wait_for_completion" not in kwargs

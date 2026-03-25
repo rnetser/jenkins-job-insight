@@ -366,7 +366,7 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
     if body.github_token is not None:
         overrides["github_token"] = SecretStr(body.github_token)
 
-    # AnalyzeRequest-specific fields (Jenkins overrides)
+    # AnalyzeRequest-specific fields (Jenkins overrides + monitoring)
     if isinstance(body, AnalyzeRequest):
         jenkins_fields = [
             "jenkins_url",
@@ -378,6 +378,15 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
             value = getattr(body, field, None)
             if value is not None:
                 overrides[field] = value
+
+        # Monitoring fields always have values (non-None defaults),
+        # so always copy them from the request.
+        for field in (
+            "wait_for_completion",
+            "poll_interval_minutes",
+            "max_wait_minutes",
+        ):
+            overrides[field] = getattr(body, field)
 
     if overrides:
         merged_data = settings.model_dump(mode="python") | overrides
@@ -421,6 +430,69 @@ async def _enrich_result_with_jira(
     await enrich_with_jira_matches(all_failures, settings, ai_provider, ai_model)
 
 
+async def _wait_for_jenkins_completion(
+    jenkins_url: str,
+    job_name: str,
+    build_number: int,
+    jenkins_user: str,
+    jenkins_password: str,
+    jenkins_ssl_verify: bool,
+    poll_interval_minutes: int,
+    max_wait_minutes: int,
+) -> bool:
+    """Poll Jenkins until the build finishes.
+
+    Args:
+        jenkins_url: Jenkins server base URL.
+        job_name: Name of the Jenkins job.
+        build_number: Build number to monitor.
+        jenkins_user: Jenkins username for authentication.
+        jenkins_password: Jenkins password or API token.
+        jenkins_ssl_verify: Whether to verify SSL certificates.
+        poll_interval_minutes: Minutes between polls.
+        max_wait_minutes: Maximum minutes to wait before timing out.
+
+    Returns:
+        True if the build completed, False if timed out.
+    """
+    from jenkins_job_insight.jenkins import JenkinsClient
+
+    max_polls = max_wait_minutes // poll_interval_minutes
+
+    for attempt in range(max_polls):
+        try:
+            client = JenkinsClient(
+                url=jenkins_url,
+                username=jenkins_user,
+                password=jenkins_password,
+                ssl_verify=jenkins_ssl_verify,
+            )
+            build_info = client.get_build_info_safe(job_name, build_number)
+
+            if build_info and not build_info.get("building", True):
+                logger.info(
+                    f"Jenkins job {job_name} #{build_number} completed "
+                    f"with result: {build_info.get('result')}"
+                )
+                return True
+
+            logger.info(
+                f"Jenkins job {job_name} #{build_number} still running "
+                f"(poll {attempt + 1}/{max_polls})"
+            )
+
+        except Exception as e:
+            logger.warning(f"Error checking Jenkins status: {e}")
+
+        await asyncio.sleep(poll_interval_minutes * 60)
+
+    logger.warning(
+        f"Timed out waiting for Jenkins job {job_name} #{build_number} "
+        f"after {max_wait_minutes} minutes"
+    )
+    return False
+
+
 async def process_analysis_with_id(
     job_id: str, body: AnalyzeRequest, settings: Settings, base_url: str = ""
 ) -> None:
@@ -437,6 +509,36 @@ async def process_analysis_with_id(
         f"(job_id: {job_id})"
     )
     try:
+        # Wait for Jenkins job to finish if requested and Jenkins is configured
+        if body.wait_for_completion and settings.jenkins_url:
+            await update_status(job_id, "waiting")
+
+            completed = await _wait_for_jenkins_completion(
+                jenkins_url=settings.jenkins_url,
+                job_name=body.job_name,
+                build_number=body.build_number,
+                jenkins_user=settings.jenkins_user,
+                jenkins_password=settings.jenkins_password,
+                jenkins_ssl_verify=settings.jenkins_ssl_verify,
+                poll_interval_minutes=body.poll_interval_minutes,
+                max_wait_minutes=body.max_wait_minutes,
+            )
+
+            if not completed:
+                await update_status(
+                    job_id,
+                    "failed",
+                    {
+                        "job_name": body.job_name,
+                        "build_number": body.build_number,
+                        "error": (
+                            f"Timed out waiting for Jenkins job to complete "
+                            f"after {body.max_wait_minutes} minutes"
+                        ),
+                    },
+                )
+                return
+
         logger.debug(
             f"process_analysis_with_id: updating status to running, job_id={job_id}"
         )

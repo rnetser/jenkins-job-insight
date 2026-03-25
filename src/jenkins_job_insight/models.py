@@ -84,6 +84,18 @@ class AnalyzeRequest(BaseAnalysisRequest):
         description="Jenkins job name (can include folders like 'folder/job-name')"
     )
     build_number: int = Field(description="Build number to analyze")
+    wait_for_completion: bool = Field(
+        default=True,
+        description="Wait for Jenkins job to complete before analyzing",
+    )
+    poll_interval_minutes: Annotated[int, Field(gt=0)] = Field(
+        default=2,
+        description="Minutes between Jenkins status polls when waiting",
+    )
+    max_wait_minutes: Annotated[int, Field(gt=0)] = Field(
+        default=120,
+        description="Maximum minutes to wait for job completion",
+    )
     jenkins_url: str | None = Field(
         default=None,
         description="Jenkins server URL (overrides JENKINS_URL env var)",
@@ -261,7 +273,7 @@ class AnalysisResult(BaseModel):
         default=None,
         description="URL of the analyzed Jenkins job (None for non-Jenkins analysis)",
     )
-    status: Literal["pending", "running", "completed", "failed"] = Field(
+    status: Literal["pending", "waiting", "running", "completed", "failed"] = Field(
         description="Current status of the analysis"
     )
     summary: str = Field(description="Summary of the analysis findings")
@@ -280,7 +292,7 @@ class JobStatus(BaseModel):
     """Status information for a queued analysis job."""
 
     job_id: str = Field(description="Unique identifier for the analysis job")
-    status: Literal["pending", "running", "completed", "failed"] = Field(
+    status: Literal["pending", "waiting", "running", "completed", "failed"] = Field(
         description="Current status of the analysis"
     )
     created_at: datetime = Field(description="Timestamp when the job was created")
