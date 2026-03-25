@@ -2248,6 +2248,7 @@ class TestProcessAnalysisWaiting:
         settings = Settings()
         settings_dict = settings.model_dump(mode="python")
         settings_dict["jenkins_url"] = "https://jenkins.example.com"
+        settings_dict["wait_for_completion"] = False
         merged = Settings.model_validate(settings_dict)
 
         statuses: list[str] = []
@@ -2385,3 +2386,287 @@ class TestProcessAnalysisWaiting:
             )
             mock_wait.assert_not_called()
             assert "waiting" not in statuses
+
+
+class TestBuildRequestParams:
+    """Tests for _build_request_params helper."""
+
+    def test_serializes_all_fields(self, mock_settings) -> None:
+        """All expected fields are present in the returned dict."""
+        from jenkins_job_insight.main import _build_request_params
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            ai_provider="gemini",
+            ai_model="gemini-pro",
+        )
+        settings = Settings()
+        params = _build_request_params(
+            body, settings, "gemini", "gemini-pro", "http://base"
+        )
+        assert params["ai_provider"] == "gemini"
+        assert params["ai_model"] == "gemini-pro"
+        assert params["base_url"] == "http://base"
+        assert params["jenkins_url"] == settings.jenkins_url
+        assert params["wait_for_completion"] == settings.wait_for_completion
+        # SecretStr fields should be plain strings
+        assert isinstance(params["jira_api_token"], str)
+        assert isinstance(params["github_token"], str)
+
+    def test_secrets_are_plain_strings(self, mock_settings) -> None:
+        """SecretStr values are serialized as plain strings."""
+        from pydantic import SecretStr
+
+        from jenkins_job_insight.main import _build_request_params
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(job_name="j", build_number=1, github_token="tok123")
+        settings = Settings()
+        merged_data = settings.model_dump(mode="python")
+        merged_data["github_token"] = SecretStr("tok123")
+        merged = Settings.model_validate(merged_data)
+        params = _build_request_params(body, merged, "", "", "")
+        assert params["github_token"] == "tok123"
+
+
+class TestReconstructFromParams:
+    """Tests for _reconstruct_from_params helper."""
+
+    def test_reconstructs_body_and_settings(self, mock_settings) -> None:
+        """AnalyzeRequest and Settings are reconstructed from stored params."""
+        from jenkins_job_insight.main import _reconstruct_from_params
+
+        result_data = {
+            "job_name": "my-job",
+            "build_number": 42,
+            "request_params": {
+                "ai_provider": "claude",
+                "ai_model": "opus",
+                "jenkins_url": "http://j",
+                "jenkins_user": "u",
+                "jenkins_password": "p",
+                "jenkins_ssl_verify": False,
+                "tests_repo_url": "",
+                "wait_for_completion": True,
+                "poll_interval_minutes": 5,
+                "max_wait_minutes": 60,
+                "enable_jira": False,
+                "jira_url": "",
+                "jira_email": "",
+                "jira_api_token": "",
+                "jira_pat": "",
+                "jira_project_key": "",
+                "jira_ssl_verify": True,
+                "jira_max_results": 5,
+                "github_token": "",
+                "ai_cli_timeout": 10,
+                "jenkins_artifacts_max_size_mb": 500,
+                "jenkins_artifacts_context_lines": 200,
+                "get_job_artifacts": True,
+                "raw_prompt": "",
+                "base_url": "http://base",
+            },
+        }
+        body, merged, base_url = _reconstruct_from_params(result_data)
+        assert body.job_name == "my-job"
+        assert body.build_number == 42
+        assert body.ai_provider == "claude"
+        assert body.ai_model == "opus"
+        assert body.poll_interval_minutes == 5
+        assert merged.jenkins_url == "http://j"
+        assert merged.jenkins_ssl_verify is False
+        assert base_url == "http://base"
+
+    def test_missing_optional_fields_use_defaults(self, mock_settings) -> None:
+        """Minimal request_params still produce valid objects."""
+        from jenkins_job_insight.main import _reconstruct_from_params
+
+        result_data = {
+            "job_name": "j",
+            "build_number": 1,
+            "request_params": {
+                "ai_provider": "gemini",
+                "ai_model": "m",
+                "base_url": "",
+            },
+        }
+        body, merged, base_url = _reconstruct_from_params(result_data)
+        assert body.job_name == "j"
+        assert merged.jenkins_url  # Falls back to env default
+
+
+class TestResumeWaitingJobs:
+    """Tests for _resume_waiting_jobs helper."""
+
+    async def test_resumes_valid_waiting_job(self, mock_settings) -> None:
+        """A waiting job with valid request_params spawns a background task."""
+        from jenkins_job_insight.main import _resume_waiting_jobs
+
+        waiting_jobs = [
+            {
+                "job_id": "w-1",
+                "result_data": {
+                    "job_name": "my-job",
+                    "build_number": 10,
+                    "request_params": {
+                        "ai_provider": "gemini",
+                        "ai_model": "m",
+                        "jenkins_url": "http://j",
+                        "jenkins_user": "u",
+                        "jenkins_password": "p",
+                        "jenkins_ssl_verify": True,
+                        "wait_for_completion": True,
+                        "poll_interval_minutes": 2,
+                        "max_wait_minutes": 0,
+                        "base_url": "http://b",
+                    },
+                },
+            }
+        ]
+        with patch(
+            "jenkins_job_insight.main.process_analysis_with_id",
+            new_callable=AsyncMock,
+        ) as mock_process:
+            await _resume_waiting_jobs(waiting_jobs)
+            # asyncio.create_task wraps the coroutine; give it a tick to start
+            import asyncio
+
+            await asyncio.sleep(0)
+            mock_process.assert_called_once()
+            call_args = mock_process.call_args
+            assert call_args[0][0] == "w-1"  # job_id
+
+    async def test_marks_failed_when_no_request_params(
+        self, mock_settings, temp_db_path: Path
+    ) -> None:
+        """Waiting job without request_params is marked as failed."""
+        from jenkins_job_insight.main import _resume_waiting_jobs
+
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            await storage.save_result(
+                "w-old", "http://j/1", "waiting", {"job_name": "j", "build_number": 1}
+            )
+
+            waiting_jobs = [
+                {
+                    "job_id": "w-old",
+                    "result_data": {"job_name": "j", "build_number": 1},
+                }
+            ]
+            await _resume_waiting_jobs(waiting_jobs)
+
+            result = await storage.get_result("w-old")
+            assert result["status"] == "failed"
+            assert "no request_params" in result["result"]["error"]
+
+
+class TestLifespanResumesWaitingJobs:
+    """Tests for waiting job resumption during lifespan startup."""
+
+    @staticmethod
+    def _prepopulate_db(
+        db_path: Path, rows: list[tuple[str, str, str, str | None]]
+    ) -> None:
+        """Pre-populate the DB synchronously before lifespan runs.
+
+        Args:
+            db_path: Path to the SQLite database file.
+            rows: List of (job_id, jenkins_url, status, result_json) tuples.
+        """
+        import sqlite3
+
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS results "
+            "(job_id TEXT PRIMARY KEY, jenkins_url TEXT, status TEXT, "
+            "result_json TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "analysis_started_at TIMESTAMP)"
+        )
+        for job_id, jenkins_url, status, result_json in rows:
+            conn.execute(
+                "INSERT INTO results (job_id, jenkins_url, status, result_json) VALUES (?, ?, ?, ?)",
+                (job_id, jenkins_url, status, result_json),
+            )
+        conn.commit()
+        conn.close()
+
+    def test_lifespan_resumes_waiting_jobs(
+        self, mock_settings, temp_db_path: Path
+    ) -> None:
+        """Waiting jobs are resumed (not failed) when the app starts."""
+        import json
+
+        result_data = json.dumps(
+            {
+                "job_name": "my-job",
+                "build_number": 5,
+                "request_params": {
+                    "ai_provider": "gemini",
+                    "ai_model": "m",
+                    "jenkins_url": "http://j",
+                    "jenkins_user": "u",
+                    "jenkins_password": "p",
+                    "jenkins_ssl_verify": True,
+                    "wait_for_completion": True,
+                    "poll_interval_minutes": 2,
+                    "max_wait_minutes": 0,
+                    "base_url": "",
+                },
+            }
+        )
+        self._prepopulate_db(
+            temp_db_path,
+            [
+                ("resume-1", "http://j/1", "waiting", result_data),
+            ],
+        )
+
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            with patch(
+                "jenkins_job_insight.main.process_analysis_with_id",
+                new_callable=AsyncMock,
+            ) as mock_process:
+                from starlette.testclient import TestClient
+                from jenkins_job_insight.main import app
+
+                with TestClient(app):
+                    pass  # lifespan runs during __enter__/__exit__
+                # The process_analysis_with_id should have been called via create_task
+                assert mock_process.called
+
+    def test_lifespan_marks_pending_running_as_failed(
+        self, mock_settings, temp_db_path: Path
+    ) -> None:
+        """Pending and running jobs are marked failed; waiting jobs are not."""
+        import sqlite3
+
+        self._prepopulate_db(
+            temp_db_path,
+            [
+                ("p1", "http://j/1", "pending", None),
+                ("r1", "http://j/2", "running", None),
+            ],
+        )
+
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            from starlette.testclient import TestClient
+            from jenkins_job_insight.main import app
+
+            with TestClient(app):
+                pass
+
+            # Pending and running should be failed
+            conn = sqlite3.connect(str(temp_db_path))
+            conn.row_factory = sqlite3.Row
+            p1 = conn.execute(
+                "SELECT status FROM results WHERE job_id = 'p1'"
+            ).fetchone()
+            r1 = conn.execute(
+                "SELECT status FROM results WHERE job_id = 'r1'"
+            ).fetchone()
+            conn.close()
+            assert p1["status"] == "failed"
+            assert r1["status"] == "failed"

@@ -42,6 +42,9 @@ jenkins_url = "https://jenkins.example.com"
 jenkins_user = "user"
 ai_provider = "claude"
 ai_model = "claude-opus-4-6[1m]"
+wait_for_completion = true
+poll_interval_minutes = 2
+max_wait_minutes = 0  # 0 = no limit (wait forever)
 
 [servers.dev]
 url = "http://localhost:8000"
@@ -88,7 +91,7 @@ The server will:
 jji --server <server> status <job_id>
 ```
 
-Or open the web UI: `http://<server>/results/<job_id>`
+Or open the web UI: `http://<server>/results/<job_id>` (waiting/running jobs redirect to `/status/<job_id>`)
 
 ### Phase 4: Review Results
 

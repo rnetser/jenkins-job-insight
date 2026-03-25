@@ -526,7 +526,7 @@ def analyze(
             if value:
                 extras[key] = value
 
-        # Integer fields from config -- only set if non-zero.
+        # Integer fields from config -- only set if not None.
         _cfg_int_fields = {
             "ai_cli_timeout": cfg.ai_cli_timeout,
             "jira_max_results": cfg.jira_max_results,
@@ -534,7 +534,7 @@ def analyze(
             "max_wait_minutes": cfg.max_wait_minutes,
         }
         for key, value in _cfg_int_fields.items():
-            if value:
+            if value is not None:
                 extras[key] = value
 
         # Boolean fields from config.

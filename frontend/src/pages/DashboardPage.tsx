@@ -35,6 +35,7 @@ import { Trash2, MessageSquare, CheckCircle2, GitFork, AlertTriangle } from 'luc
 const STATUS_BORDER: Record<string, string> = {
   completed: 'border-l-signal-green',
   running: 'border-l-signal-blue',
+  waiting: 'border-l-signal-blue',
   pending: 'border-l-border-default',
   failed: 'border-l-signal-red',
   timeout: 'border-l-signal-orange',
@@ -120,7 +121,7 @@ export function DashboardPage() {
   }
 
   function handleRowClick(job: DashboardJob) {
-    const dest = job.status === 'pending' || job.status === 'running'
+    const dest = ['waiting', 'pending', 'running'].includes(job.status)
       ? `/status/${job.job_id}`
       : `/results/${job.job_id}`
     navigate(dest)

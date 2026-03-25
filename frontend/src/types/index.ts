@@ -60,7 +60,7 @@ export interface AnalysisResult {
   job_name: string
   build_number: number
   jenkins_url: string | null
-  status: 'pending' | 'running' | 'completed' | 'failed'
+  status: 'waiting' | 'pending' | 'running' | 'completed' | 'failed'
   summary: string
   ai_provider: string
   ai_model: string

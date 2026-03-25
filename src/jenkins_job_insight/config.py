@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # Explicit Jira toggle (optional)
     enable_jira: bool | None = None
 
+    # Explicit GitHub issue creation toggle (optional)
+    enable_github_issues: bool | None = Field(
+        default=None,
+        description="Enable GitHub issue creation. When None, enabled if TESTS_REPO_URL and GITHUB_TOKEN are configured.",
+    )
+
     # AI CLI timeout in minutes
     ai_cli_timeout: int = Field(default=10, gt=0)
 
@@ -82,6 +88,15 @@ class Settings(BaseSettings):
                 )
             return False
         return True
+
+    @property
+    def github_issues_enabled(self) -> bool:
+        """Check if GitHub issue creation is enabled and configured."""
+        if self.enable_github_issues is False:
+            return False
+        tests_repo_url = str(self.tests_repo_url) if self.tests_repo_url else ""
+        github_token = self.github_token.get_secret_value() if self.github_token else ""
+        return bool(tests_repo_url and github_token)
 
 
 @lru_cache

@@ -208,10 +208,138 @@ def _build_report_context(
     return report_url, jenkins_url
 
 
+def _reconstruct_from_params(
+    result_data: dict,
+) -> tuple[AnalyzeRequest, Settings, str]:
+    """Reconstruct an AnalyzeRequest and Settings from stored request_params.
+
+    Args:
+        result_data: Stored result dict containing ``job_name``,
+            ``build_number``, and ``request_params``.
+
+    Returns:
+        Tuple of (AnalyzeRequest, Settings, base_url).
+    """
+    params = result_data["request_params"]
+    body = AnalyzeRequest(
+        job_name=result_data["job_name"],
+        build_number=result_data["build_number"],
+        ai_provider=params.get("ai_provider", ""),
+        ai_model=params.get("ai_model", ""),
+        wait_for_completion=params.get("wait_for_completion", True),
+        poll_interval_minutes=params.get("poll_interval_minutes", 2),
+        max_wait_minutes=params.get("max_wait_minutes", 0),
+        enable_jira=params.get("enable_jira"),
+        raw_prompt=params.get("raw_prompt") or None,
+    )
+    # Build Settings from env defaults, then layer stored overrides
+    base_settings = get_settings()
+    overrides: dict = {}
+    settings_fields = [
+        "jenkins_url",
+        "jenkins_user",
+        "jenkins_password",
+        "jenkins_ssl_verify",
+        "wait_for_completion",
+        "poll_interval_minutes",
+        "max_wait_minutes",
+        "jira_url",
+        "jira_email",
+        "jira_project_key",
+        "jira_ssl_verify",
+        "jira_max_results",
+        "ai_cli_timeout",
+        "jenkins_artifacts_max_size_mb",
+        "jenkins_artifacts_context_lines",
+        "get_job_artifacts",
+    ]
+    for field in settings_fields:
+        if field in params:
+            overrides[field] = params[field]
+
+    # Tests repo URL
+    if params.get("tests_repo_url"):
+        overrides["tests_repo_url"] = params["tests_repo_url"]
+
+    # SecretStr fields
+    if params.get("jira_api_token"):
+        overrides["jira_api_token"] = SecretStr(params["jira_api_token"])
+    if params.get("jira_pat"):
+        overrides["jira_pat"] = SecretStr(params["jira_pat"])
+    if params.get("github_token"):
+        overrides["github_token"] = SecretStr(params["github_token"])
+
+    # Enable jira
+    if params.get("enable_jira") is not None:
+        overrides["enable_jira"] = params["enable_jira"]
+
+    if overrides:
+        merged_data = base_settings.model_dump(mode="python") | overrides
+        merged = Settings.model_validate(merged_data)
+    else:
+        merged = base_settings
+
+    base_url = params.get("base_url", "")
+    return body, merged, base_url
+
+
+async def _resume_waiting_jobs(waiting_jobs: list[dict]) -> None:
+    """Resume waiting jobs by re-creating their background tasks.
+
+    Args:
+        waiting_jobs: List of dicts with ``job_id`` and ``result_data``
+            returned by ``mark_stale_results_failed``.
+    """
+    for job in waiting_jobs:
+        result_data = job["result_data"]
+        params = result_data.get("request_params")
+        if not params:
+            logger.warning(
+                f"Waiting job {job['job_id']} has no request_params, marking as failed"
+            )
+            await storage.update_status(
+                job["job_id"],
+                "failed",
+                {
+                    "job_name": result_data.get("job_name", ""),
+                    "build_number": result_data.get("build_number", 0),
+                    "error": "Cannot resume: no request_params stored (queued before resume support)",
+                },
+            )
+            continue
+
+        try:
+            body, merged, base_url = _reconstruct_from_params(result_data)
+        except Exception as exc:
+            logger.warning(
+                f"Failed to reconstruct params for waiting job {job['job_id']}: {exc}"
+            )
+            await storage.update_status(
+                job["job_id"],
+                "failed",
+                {
+                    "job_name": result_data.get("job_name", ""),
+                    "build_number": result_data.get("build_number", 0),
+                    "error": f"Cannot resume: failed to reconstruct request params: {exc}",
+                },
+            )
+            continue
+
+        asyncio.create_task(
+            process_analysis_with_id(job["job_id"], body, merged, base_url)
+        )
+        logger.info(
+            f"Resumed waiting job {job['job_id']} "
+            f"({result_data.get('job_name')} #{result_data.get('build_number')})"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    await storage.mark_stale_results_failed()
+    waiting_jobs = await storage.mark_stale_results_failed()
+    if waiting_jobs:
+        await _resume_waiting_jobs(waiting_jobs)
     yield
 
 
@@ -519,7 +647,12 @@ async def process_analysis_with_id(
     )
     try:
         # Wait for Jenkins job to finish if requested and Jenkins is configured
-        if body.wait_for_completion and settings.jenkins_url:
+        if settings.wait_for_completion and not settings.jenkins_url:
+            logger.info(
+                f"Wait requested for job {job_id} but jenkins_url not configured, skipping wait"
+            )
+
+        if settings.wait_for_completion and settings.jenkins_url:
             await update_status(job_id, "waiting")
 
             completed = await _wait_for_jenkins_completion(
@@ -623,6 +756,63 @@ async def process_analysis_with_id(
         )
 
 
+def _build_request_params(
+    body: AnalyzeRequest,
+    merged: Settings,
+    ai_provider: str,
+    ai_model: str,
+    base_url: str,
+) -> dict:
+    """Serialize the request parameters needed to resume a waiting job.
+
+    Captures everything ``process_analysis_with_id`` needs so that the
+    background task can be re-created after a server restart.
+
+    Args:
+        body: The original analysis request.
+        merged: Settings with per-request overrides applied.
+        ai_provider: Resolved AI provider name.
+        ai_model: Resolved AI model name.
+        base_url: External base URL for constructing result URLs.
+
+    Returns:
+        Dict of serializable request parameters.
+    """
+    return {
+        "ai_provider": ai_provider,
+        "ai_model": ai_model,
+        "jenkins_url": merged.jenkins_url,
+        "jenkins_user": merged.jenkins_user,
+        "jenkins_password": merged.jenkins_password,
+        "jenkins_ssl_verify": merged.jenkins_ssl_verify,
+        "tests_repo_url": str(merged.tests_repo_url) if merged.tests_repo_url else "",
+        "wait_for_completion": merged.wait_for_completion,
+        "poll_interval_minutes": merged.poll_interval_minutes,
+        "max_wait_minutes": merged.max_wait_minutes,
+        "enable_jira": body.enable_jira
+        if body.enable_jira is not None
+        else merged.enable_jira,
+        "jira_url": merged.jira_url or "",
+        "jira_email": merged.jira_email or "",
+        "jira_api_token": merged.jira_api_token.get_secret_value()
+        if merged.jira_api_token
+        else "",
+        "jira_pat": merged.jira_pat.get_secret_value() if merged.jira_pat else "",
+        "jira_project_key": merged.jira_project_key or "",
+        "jira_ssl_verify": merged.jira_ssl_verify,
+        "jira_max_results": merged.jira_max_results,
+        "github_token": merged.github_token.get_secret_value()
+        if merged.github_token
+        else "",
+        "ai_cli_timeout": merged.ai_cli_timeout,
+        "jenkins_artifacts_max_size_mb": merged.jenkins_artifacts_max_size_mb,
+        "jenkins_artifacts_context_lines": merged.jenkins_artifacts_context_lines,
+        "get_job_artifacts": merged.get_job_artifacts,
+        "raw_prompt": body.raw_prompt or "",
+        "base_url": base_url,
+    }
+
+
 @app.post("/analyze", status_code=202, response_model=None)
 async def analyze(
     request: Request,
@@ -644,13 +834,26 @@ async def analyze(
     jenkins_url = build_jenkins_url(
         merged.jenkins_url, body.job_name, body.build_number
     )
-    # Save initial pending state before queueing background task
-    # Include job_name and build_number so the status page can display them
+    # Save initial pending state before queueing background task.
+    # Include job_name, build_number, and full request_params so that
+    # waiting jobs can be resumed after a server restart.
+    # Use raw body values for ai_provider/ai_model (validation happens in the
+    # background task via _resolve_ai_config).
     await save_result(
         job_id,
         jenkins_url,
         "pending",
-        {"job_name": body.job_name, "build_number": body.build_number},
+        {
+            "job_name": body.job_name,
+            "build_number": body.build_number,
+            "request_params": _build_request_params(
+                body,
+                merged,
+                body.ai_provider or AI_PROVIDER,
+                body.ai_model or AI_MODEL,
+                base_url,
+            ),
+        },
     )
     background_tasks.add_task(process_analysis_with_id, job_id, body, merged, base_url)
     message = f"Analysis job queued. Poll /results/{job_id} for status."
@@ -1776,12 +1979,8 @@ async def get_capabilities(settings: Settings = Depends(get_settings)) -> dict:
     They require server-level credentials (GITHUB_TOKEN, JIRA_API_TOKEN, etc.)
     and cannot be provided per-request.
     """
-    tests_repo_url = str(settings.tests_repo_url or "")
-    github_token = (
-        settings.github_token.get_secret_value() if settings.github_token else ""
-    )
     return {
-        "github_issues": bool(tests_repo_url and github_token),
+        "github_issues": settings.github_issues_enabled,
         "jira_bugs": settings.jira_enabled,
     }
 

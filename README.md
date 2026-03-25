@@ -198,7 +198,8 @@ Configure the service using environment variables. Jenkins settings are optional
 | `GET_JOB_ARTIFACTS` | No | `true` | Download all build artifacts for AI artifacts context |
 | `JENKINS_ARTIFACTS_MAX_SIZE_MB` | No | `500` | Maximum size per downloaded artifact in MB |
 | `JENKINS_ARTIFACTS_CONTEXT_LINES` | No | `200` | Maximum artifacts context lines for AI prompt |
-| **GitHub** | | | |
+| **GitHub (Optional)** | | | |
+| `ENABLE_GITHUB_ISSUES` | No | *(auto-detect)* | Explicitly enable/disable GitHub issue creation (overrides auto-detection) |
 | `GITHUB_TOKEN` | No | - | GitHub API token for private repo PR status in comments |
 
 > **\*** Can be provided per-request in the API payload or CLI options instead of as environment variables.

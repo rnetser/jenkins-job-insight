@@ -2118,18 +2118,51 @@ async def get_effective_classification(
         return fh_row[0] if fh_row and fh_row[0] else ""
 
 
-async def mark_stale_results_failed() -> None:
-    """Mark orphaned running/pending/waiting jobs as failed on startup."""
+async def mark_stale_results_failed() -> list[dict]:
+    """Mark orphaned pending/running jobs as failed. Return waiting jobs for resumption.
+
+    Pending and running jobs have lost their background task and cannot recover,
+    so they are marked as failed.  Waiting jobs were polling Jenkins and can be
+    safely resumed by re-creating their background task.
+
+    Returns:
+        List of dicts with ``job_id`` and ``result_data`` for each waiting job.
+    """
+    waiting_jobs: list[dict] = []
     async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Mark pending/running as failed (background task is gone)
         cursor = await db.execute(
             "UPDATE results SET status = 'failed' "
-            "WHERE status IN ('running', 'pending', 'waiting')"
+            "WHERE status IN ('pending', 'running')"
         )
         if cursor.rowcount > 0:
             logger.warning(
-                f"Marked {cursor.rowcount} stale job(s) as failed on startup"
+                f"Marked {cursor.rowcount} stale pending/running job(s) as failed on startup"
             )
+
+        # Collect waiting jobs for resumption instead of failing them
+        cursor = await db.execute(
+            "SELECT job_id, result_json FROM results WHERE status = 'waiting'"
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            if row["result_json"]:
+                result_data = json.loads(row["result_json"])
+                waiting_jobs.append(
+                    {
+                        "job_id": row["job_id"],
+                        "result_data": result_data,
+                    }
+                )
+
         await db.commit()
+
+    if waiting_jobs:
+        logger.info(f"Found {len(waiting_jobs)} waiting job(s) to resume")
+
+    return waiting_jobs
 
 
 async def get_ai_configs() -> list[dict]:

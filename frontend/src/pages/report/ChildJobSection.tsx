@@ -46,9 +46,12 @@ export function ChildJobSection({ child, jobId, depth = 0, activeHash }: ChildJo
     }
   }, [expanded, setExpanded, hashId])
 
+  const failures = child.failures ?? []
+  const failedChildren = child.failed_children ?? []
+
   const groups = useMemo(
-    () => groupFailures(child.failures ?? [], `child-${child.job_name}-${child.build_number}`),
-    [child.failures, child.job_name, child.build_number]
+    () => groupFailures(failures, `child-${child.job_name}-${child.build_number}`),
+    [failures, child.job_name, child.build_number]
   )
 
   // Expand/collapse all failure cards within this child job
@@ -77,7 +80,7 @@ export function ChildJobSection({ child, jobId, depth = 0, activeHash }: ChildJo
           </div>
         </button>
         <Badge variant="outline" className="shrink-0">
-          {(child.failures ?? []).length} {(child.failures ?? []).length === 1 ? 'failure' : 'failures'}
+          {failures.length} {failures.length === 1 ? 'failure' : 'failures'}
         </Badge>
         {child.jenkins_url && (
           <a
@@ -120,9 +123,9 @@ export function ChildJobSection({ child, jobId, depth = 0, activeHash }: ChildJo
             ))}
           </div>
 
-          {(child.failed_children ?? []).length > 0 && (
+          {failedChildren.length > 0 && (
             <div className="mt-1 space-y-3">
-              {(child.failed_children ?? []).map((nested) => (
+              {failedChildren.map((nested) => (
                 <ChildJobSection
                   key={`${nested.job_name}-${nested.build_number}`}
                   child={nested}

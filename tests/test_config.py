@@ -159,6 +159,20 @@ class TestJiraSettings:
             assert settings.jira_max_results == 5
             assert settings.jira_project_key is None
 
+    def test_enable_jira_explicit_false_disables(self) -> None:
+        """Jira is disabled when ENABLE_JIRA is explicitly False."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+            "JIRA_URL": "https://jira.example.com",
+            "JIRA_PAT": "pat-token-456",
+            "ENABLE_JIRA": "false",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert not settings.jira_enabled
+
     def test_jira_custom_values(self) -> None:
         """Test custom values for Jira fields."""
         env = {
@@ -177,3 +191,81 @@ class TestJiraSettings:
             assert settings.jira_project_key == "MYPROJ"
             assert settings.jira_ssl_verify is False
             assert settings.jira_max_results == 10
+
+
+class TestGitHubIssuesSettings:
+    """Tests for GitHub issue creation configuration."""
+
+    def test_github_issues_disabled_by_default(self) -> None:
+        """GitHub issues disabled when no GitHub env vars are set."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert not settings.github_issues_enabled
+
+    def test_github_issues_enabled_with_token_and_repo(self) -> None:
+        """GitHub issues enabled when both GITHUB_TOKEN and TESTS_REPO_URL are set."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+            "GITHUB_TOKEN": "ghp_test123",
+            "TESTS_REPO_URL": "https://github.com/org/repo",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert settings.github_issues_enabled
+
+    def test_github_issues_disabled_without_token(self) -> None:
+        """GitHub issues disabled when GITHUB_TOKEN is missing."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+            "TESTS_REPO_URL": "https://github.com/org/repo",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert not settings.github_issues_enabled
+
+    def test_github_issues_disabled_without_repo_url(self) -> None:
+        """GitHub issues disabled when TESTS_REPO_URL is missing."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+            "GITHUB_TOKEN": "ghp_test123",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert not settings.github_issues_enabled
+
+    def test_github_issues_explicit_false_disables(self) -> None:
+        """GitHub issues disabled when ENABLE_GITHUB_ISSUES is explicitly False."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+            "GITHUB_TOKEN": "ghp_test123",
+            "TESTS_REPO_URL": "https://github.com/org/repo",
+            "ENABLE_GITHUB_ISSUES": "false",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert not settings.github_issues_enabled
+
+    def test_github_issues_explicit_true_without_config(self) -> None:
+        """GitHub issues disabled when ENABLE_GITHUB_ISSUES is True but config missing."""
+        env = {
+            "JENKINS_URL": "https://jenkins.example.com",
+            "JENKINS_USER": "testuser",
+            "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+            "ENABLE_GITHUB_ISSUES": "true",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings()
+            assert not settings.github_issues_enabled

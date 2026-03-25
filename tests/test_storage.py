@@ -543,3 +543,75 @@ class TestSetTestClassification:
                     classification="FLAKY",
                     job_id="",
                 )
+
+
+class TestMarkStaleResultsFailed:
+    """Tests for the mark_stale_results_failed function."""
+
+    async def test_marks_pending_as_failed(self, setup_test_db: Path) -> None:
+        """Pending jobs are marked failed on startup."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.save_result("pending-1", "http://j/1", "pending")
+            waiting = await storage.mark_stale_results_failed()
+            assert waiting == []
+            result = await storage.get_result("pending-1")
+            assert result["status"] == "failed"
+
+    async def test_marks_running_as_failed(self, setup_test_db: Path) -> None:
+        """Running jobs are marked failed on startup."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.save_result("running-1", "http://j/2", "running")
+            waiting = await storage.mark_stale_results_failed()
+            assert waiting == []
+            result = await storage.get_result("running-1")
+            assert result["status"] == "failed"
+
+    async def test_returns_waiting_jobs(self, setup_test_db: Path) -> None:
+        """Waiting jobs are returned for resumption, not marked failed."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            result_data = {
+                "job_name": "my-job",
+                "build_number": 42,
+                "request_params": {"ai_provider": "claude"},
+            }
+            await storage.save_result("waiting-1", "http://j/3", "waiting", result_data)
+            waiting = await storage.mark_stale_results_failed()
+            assert len(waiting) == 1
+            assert waiting[0]["job_id"] == "waiting-1"
+            assert waiting[0]["result_data"]["job_name"] == "my-job"
+            # Status should still be 'waiting' (not failed)
+            result = await storage.get_result("waiting-1")
+            assert result["status"] == "waiting"
+
+    async def test_mixed_statuses(self, setup_test_db: Path) -> None:
+        """Pending/running are failed; waiting is returned; completed is untouched."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.save_result("p1", "http://j/1", "pending")
+            await storage.save_result("r1", "http://j/2", "running")
+            await storage.save_result(
+                "w1",
+                "http://j/3",
+                "waiting",
+                {"job_name": "w", "build_number": 1, "request_params": {}},
+            )
+            await storage.save_result(
+                "c1", "http://j/4", "completed", {"summary": "ok"}
+            )
+
+            waiting = await storage.mark_stale_results_failed()
+            assert len(waiting) == 1
+            assert waiting[0]["job_id"] == "w1"
+
+            assert (await storage.get_result("p1"))["status"] == "failed"
+            assert (await storage.get_result("r1"))["status"] == "failed"
+            assert (await storage.get_result("w1"))["status"] == "waiting"
+            assert (await storage.get_result("c1"))["status"] == "completed"
+
+    async def test_waiting_without_result_json_skipped(
+        self, setup_test_db: Path
+    ) -> None:
+        """Waiting jobs with no result_json are skipped (not returned)."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.save_result("w-empty", "http://j/5", "waiting", None)
+            waiting = await storage.mark_stale_results_failed()
+            assert waiting == []

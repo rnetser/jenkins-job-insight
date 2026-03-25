@@ -22,6 +22,10 @@ tests_repo_url = "https://github.com/your-org/your-tests"
 ai_provider = "claude"
 ai_model = "claude-opus-4-6[1m]"
 ai_cli_timeout = 10
+# Monitoring
+wait_for_completion = true
+poll_interval_minutes = 2
+max_wait_minutes = 0  # 0 = no limit (wait forever)
 # Jira
 jira_url = "https://your-jira.atlassian.net"
 jira_email = "you@example.com"
