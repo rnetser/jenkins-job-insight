@@ -58,6 +58,6 @@ describe('groupFailures', () => {
   it('applies prefix to group IDs', () => {
     const failures = [makeFailure('test1', 'sig-a')]
     const groups = groupFailures(failures, 'child')
-    expect(groups[0].id).toBe('child-0')
+    expect(groups[0].id).toBe('child-sig-a')
   })
 })

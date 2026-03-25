@@ -7,6 +7,7 @@ import { OVERRIDE_CLASSIFICATIONS } from '@/constants/classifications'
 interface ClassificationSelectProps {
   jobId: string
   testName: string
+  testNames?: string[]
   currentClassification: string
   childJobName?: string
   childBuildNumber?: number
@@ -15,6 +16,7 @@ interface ClassificationSelectProps {
 export function ClassificationSelect({
   jobId,
   testName,
+  testNames,
   currentClassification,
   childJobName,
   childBuildNumber,
@@ -28,16 +30,30 @@ export function ClassificationSelect({
     setError(null)
     setLoading(true)
     try {
-      await api.put(`/results/${jobId}/override-classification`, {
-        test_name: testName,
-        classification: value,
-        child_job_name: childJobName ?? '',
-        child_build_number: childBuildNumber ?? 0,
-      })
-      dispatch({
-        type: 'OVERRIDE_CLASSIFICATION',
-        payload: { testName, classification: value, childJobName, childBuildNumber },
-      })
+      const namesForApi = testNames && testNames.length > 0 ? testNames : [testName]
+      const results = await Promise.allSettled(
+        namesForApi.map((name) =>
+          api.put(`/results/${jobId}/override-classification`, {
+            test_name: name,
+            classification: value,
+            child_job_name: childJobName ?? '',
+            child_build_number: childBuildNumber ?? 0,
+          }).then(() => name),
+        ),
+      )
+      const persisted = results.filter((r): r is PromiseSettledResult<string> & { status: 'fulfilled' } => r.status === 'fulfilled').map((r) => r.value)
+      const failedNames = results
+        .map((r, i) => (r.status === 'rejected' ? namesForApi[i] : null))
+        .filter((n): n is string => n !== null)
+      if (persisted.length > 0) {
+        dispatch({
+          type: 'OVERRIDE_CLASSIFICATION',
+          payload: { testName, testNames: persisted, classification: value, childJobName, childBuildNumber },
+        })
+      }
+      if (failedNames.length > 0) {
+        setError(`Failed to save ${failedNames.length} of ${results.length}: ${failedNames.join(', ')}`)
+      }
     } catch (err) {
       console.error('Failed to save classification:', err)
       setError('Failed to save')
@@ -49,11 +65,11 @@ export function ClassificationSelect({
   return (
     <div className="flex items-center gap-1">
       <Select value={currentClassification} onValueChange={handleChange} disabled={loading}>
-        <SelectTrigger className="h-8 w-40 text-xs">
+        <SelectTrigger aria-label="Override classification" className="h-8 w-40 text-xs">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {(OVERRIDE_CLASSIFICATIONS.includes(currentClassification as any)
+          {((OVERRIDE_CLASSIFICATIONS as readonly string[]).includes(currentClassification)
             ? [...OVERRIDE_CLASSIFICATIONS]
             : currentClassification
               ? [currentClassification, ...OVERRIDE_CLASSIFICATIONS]
@@ -65,7 +81,11 @@ export function ClassificationSelect({
           ))}
         </SelectContent>
       </Select>
-      {error && <span className="text-signal-red text-xs">{error}</span>}
+      {error && (
+        <span aria-live="polite" className="text-signal-red text-xs">
+          {error}
+        </span>
+      )}
     </div>
   )
 }

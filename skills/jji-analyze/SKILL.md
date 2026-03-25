@@ -41,7 +41,7 @@ server = "dev"
 jenkins_url = "https://jenkins.example.com"
 jenkins_user = "user"
 ai_provider = "claude"
-ai_model = "claude-opus-4-6[1m]"
+ai_model = "claude-sonnet-4-20250514"
 wait_for_completion = true
 poll_interval_minutes = 2
 max_wait_minutes = 0  # 0 = no limit (wait forever)
@@ -53,7 +53,7 @@ url = "http://localhost:8000"
 url = "https://jji.example.com"
 ```
 
-Priority: CLI flags > config file > environment variables.
+Priority: CLI flags / environment variables > config file.
 
 ## Workflow
 
@@ -96,7 +96,7 @@ Or open the web UI: `http://<server>/results/<job_id>` (waiting/running jobs red
 ### Phase 4: Review Results
 
 ```bash
-jji --server <server> results get <job_id>
+jji --server <server> results show <job_id>
 jji --server <server> results dashboard
 jji --server <server> results review-status <job_id>
 ```
@@ -108,7 +108,7 @@ jji --server <server> results review-status <job_id>
 | `jji analyze` | Submit a Jenkins job for analysis |
 | `jji status <job_id>` | Check analysis status |
 | `jji results dashboard` | List all analysis runs |
-| `jji results get <job_id>` | Get full analysis result |
+| `jji results show <job_id>` | Get full analysis result |
 | `jji results delete <job_id>` | Delete an analysis |
 | `jji results review-status <job_id>` | Show review progress |
 | `jji results set-reviewed <job_id>` | Mark test as reviewed |
@@ -119,7 +119,6 @@ jji --server <server> results review-status <job_id>
 | `jji history search` | Search failure history |
 | `jji history test <name>` | Get test failure history |
 | `jji history stats` | Get failure statistics |
-| `jji history trends` | Get failure trends |
 | `jji classify` | Classify a test failure |
 | `jji classifications list` | List test classifications |
 | `jji override-classification` | Override a failure classification |

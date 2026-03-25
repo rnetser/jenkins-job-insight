@@ -9,8 +9,17 @@ export function isCommentInScope(
 ): boolean {
   const names = groupTestNames instanceof Set ? groupTestNames : new Set(groupTestNames)
   if (!names.has(comment.test_name)) return false
-  if (childJobName) return comment.child_job_name === childJobName && comment.child_build_number === childBuildNumber
-  return !comment.child_job_name
+  const scopedChildJobName = childJobName ?? ''
+  const scopedChildBuildNumber = childBuildNumber ?? 0
+  const commentChildJobName = comment.child_job_name ?? ''
+  const commentChildBuildNumber = comment.child_build_number ?? 0
+  if (scopedChildJobName) {
+    return (
+      commentChildJobName === scopedChildJobName &&
+      (commentChildBuildNumber === 0 || commentChildBuildNumber === scopedChildBuildNumber)
+    )
+  }
+  return commentChildJobName === ''
 }
 
 /** Compute grouping key — matches Python _grouping_key(). */
@@ -23,13 +32,12 @@ export function groupFailures(
   failures: FailureAnalysis[],
   prefix = '',
 ): GroupedFailure[] {
-  const orderMap = new Map<string, number>()
   const groupMap = new Map<string, FailureAnalysis[]>()
+  const idPrefix = prefix || 'group'
 
   for (const f of failures ?? []) {
     const key = groupingKey(f)
     if (!groupMap.has(key)) {
-      orderMap.set(key, orderMap.size)
       groupMap.set(key, [])
     }
     groupMap.get(key)!.push(f)
@@ -41,7 +49,7 @@ export function groupFailures(
       signature,
       tests,
       count: tests.length,
-      id: prefix ? `${prefix}-${orderMap.get(signature)}` : `group-${orderMap.get(signature)}`,
+      id: `${idPrefix}-${encodeURIComponent(signature)}`,
     })
   }
   return groups

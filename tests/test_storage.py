@@ -499,8 +499,28 @@ class TestSetTestClassification:
     async def test_child_job_with_zero_build_number_succeeds(
         self, setup_test_db: Path
     ) -> None:
-        """Regression: job_name + child_build_number=0 must not raise."""
+        """Regression: job_name + child_build_number=0 must not raise and must mirror to history."""
         with patch.object(storage, "DB_PATH", setup_test_db):
+            # Seed a failure_history row that the wildcard mirror should update
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    """INSERT INTO failure_history
+                       (job_id, job_name, build_number, test_name, classification,
+                        error_message, child_job_name, child_build_number, analyzed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    (
+                        "job-cls-zero",
+                        "pipeline",
+                        1,
+                        "tests.TestA.test_one",
+                        "CODE ISSUE",
+                        "error",
+                        "parent-job",
+                        7,
+                    ),
+                )
+                await db.commit()
+
             classification_id = await storage.set_test_classification(
                 test_name="tests.TestA.test_one",
                 classification="FLAKY",
@@ -509,6 +529,17 @@ class TestSetTestClassification:
                 job_id="job-cls-zero",
             )
             assert classification_id > 0
+
+            # Verify the wildcard mirror updated the matching failure_history row
+            async with aiosqlite.connect(setup_test_db) as db:
+                cursor = await db.execute(
+                    "SELECT classification FROM failure_history "
+                    "WHERE job_id=? AND test_name=? AND child_job_name=? AND child_build_number=?",
+                    ("job-cls-zero", "tests.TestA.test_one", "parent-job", 7),
+                )
+                row = await cursor.fetchone()
+                assert row is not None, "failure_history row should exist"
+                assert row[0] == "FLAKY"
 
     async def test_defaults_only_classification_succeeds(
         self, setup_test_db: Path
@@ -572,13 +603,20 @@ class TestMarkStaleResultsFailed:
             result_data = {
                 "job_name": "my-job",
                 "build_number": 42,
-                "request_params": {"ai_provider": "claude"},
+                "request_params": {
+                    "ai_provider": "claude",
+                    "tests_repo_url": "https://example.invalid/tests",
+                },
             }
             await storage.save_result("waiting-1", "http://j/3", "waiting", result_data)
             waiting = await storage.mark_stale_results_failed()
             assert len(waiting) == 1
             assert waiting[0]["job_id"] == "waiting-1"
             assert waiting[0]["result_data"]["job_name"] == "my-job"
+            assert (
+                waiting[0]["result_data"]["request_params"]["tests_repo_url"]
+                == "https://example.invalid/tests"
+            )
             # Status should still be 'waiting' (not failed)
             result = await storage.get_result("waiting-1")
             assert result["status"] == "waiting"
@@ -592,7 +630,13 @@ class TestMarkStaleResultsFailed:
                 "w1",
                 "http://j/3",
                 "waiting",
-                {"job_name": "w", "build_number": 1, "request_params": {}},
+                {
+                    "job_name": "w",
+                    "build_number": 1,
+                    "request_params": {
+                        "tests_repo_url": "https://example.invalid/tests",
+                    },
+                },
             )
             await storage.save_result(
                 "c1", "http://j/4", "completed", {"summary": "ok"}
@@ -607,11 +651,65 @@ class TestMarkStaleResultsFailed:
             assert (await storage.get_result("w1"))["status"] == "waiting"
             assert (await storage.get_result("c1"))["status"] == "completed"
 
-    async def test_waiting_without_result_json_skipped(
+    async def test_waiting_without_result_json_marked_failed(
         self, setup_test_db: Path
     ) -> None:
-        """Waiting jobs with no result_json are skipped (not returned)."""
+        """Waiting rows without result_json are marked as failed (unrecoverable)."""
         with patch.object(storage, "DB_PATH", setup_test_db):
             await storage.save_result("w-empty", "http://j/5", "waiting", None)
             waiting = await storage.mark_stale_results_failed()
             assert waiting == []
+            # Verify it was marked as failed
+            result = await storage.get_result("w-empty")
+            assert result["status"] == "failed"
+
+    @pytest.mark.parametrize(
+        "result_data",
+        [
+            pytest.param(
+                {"job_name": "j"},
+                id="missing-build_number-and-request_params",
+            ),
+            pytest.param(
+                {"job_name": "j", "build_number": 1},
+                id="missing-request_params",
+            ),
+            pytest.param(
+                {"build_number": 1, "request_params": {}},
+                id="missing-job_name",
+            ),
+            pytest.param(
+                {"job_name": "j", "build_number": 1, "request_params": "bad"},
+                id="request_params-not-dict",
+            ),
+        ],
+    )
+    async def test_waiting_with_incomplete_payload_marked_failed(
+        self, setup_test_db: Path, result_data: dict
+    ) -> None:
+        """Waiting rows with valid JSON but missing required keys are failed."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.save_result(
+                "w-incomplete", "http://j/6", "waiting", result_data
+            )
+            waiting = await storage.mark_stale_results_failed()
+            assert waiting == []
+            result = await storage.get_result("w-incomplete")
+            assert result["status"] == "failed"
+
+    async def test_waiting_with_malformed_json_marked_failed(
+        self, setup_test_db: Path
+    ) -> None:
+        """Waiting rows with malformed JSON are marked as failed (unrecoverable)."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    "INSERT INTO results (job_id, jenkins_url, status, result_json) "
+                    "VALUES (?, ?, ?, ?)",
+                    ("w-bad-json", "http://j/7", "waiting", "{not-json"),
+                )
+                await db.commit()
+
+            waiting = await storage.mark_stale_results_failed()
+            assert waiting == []
+            assert (await storage.get_result("w-bad-json"))["status"] == "failed"

@@ -4,12 +4,17 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import get_args
 
 import aiosqlite
 from simple_logger.logger import get_logger
 
-from jenkins_job_insight.models import OverrideClassificationLiteral
+from jenkins_job_insight.encryption import strip_sensitive_from_response
+from jenkins_job_insight.models import (
+    HistoryClassificationLiteral,
+    OverrideClassificationLiteral,
+)
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
@@ -18,9 +23,63 @@ DB_PATH = Path(os.getenv("DB_PATH", "/data/results.db"))
 # Primary (override) classifications — derived from the OverrideClassificationLiteral
 # type so the SQL filter stays in sync with the model definition.
 PRIMARY_CLASSIFICATIONS: tuple[str, ...] = get_args(OverrideClassificationLiteral)
+
+# History classifications — derived from HistoryClassificationLiteral so the
+# write-side validation in set_test_classification stays in sync with the model.
+HISTORY_CLASSIFICATIONS: tuple[str, ...] = get_args(HistoryClassificationLiteral)
 _PRIMARY_CLASSIFICATIONS_SQL = (
     "(" + ", ".join(f"'{c}'" for c in PRIMARY_CLASSIFICATIONS) + ")"
 )
+
+
+def parse_result_json(raw: str | None, *, job_id: str = "") -> dict | None:
+    """Decode and validate a ``result_json`` blob.
+
+    Args:
+        raw: The raw JSON string from the database, or None.
+        job_id: Optional job_id for log messages.
+
+    Returns:
+        Parsed dict when valid, None when *raw* is empty/malformed.
+    """
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning(
+            f"parse_result_json: malformed JSON for job_id={job_id}, skipping"
+        )
+        return None
+    if not isinstance(data, dict):
+        logger.warning(
+            f"parse_result_json: result_json is not a dict for job_id={job_id}, skipping"
+        )
+        return None
+    return data
+
+
+async def _migrate_add_column(
+    db: aiosqlite.Connection,
+    table: str,
+    column: str,
+    column_def: str,
+) -> None:
+    """Add a column to a table if it does not already exist.
+
+    Args:
+        db: Active database connection.
+        table: Table name.
+        column: Column name to check/add.
+        column_def: Full column definition (e.g. "TEXT NOT NULL DEFAULT ''").
+    """
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    columns = {row[1] for row in await cursor.fetchall()}
+    if column not in columns:
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}")
+        logger.info(f"Migration: added {column} column to {table}")
+    else:
+        logger.debug(f"Migration: {table} already has {column} column")
 
 
 async def init_db() -> None:
@@ -80,38 +139,18 @@ async def init_db() -> None:
         # (needed when upgrading from versions without this column)
         logger.info("Running database migrations...")
         for table in ("comments", "failure_reviews"):
-            cursor = await db.execute(f"PRAGMA table_info({table})")
-            columns = {row[1] for row in await cursor.fetchall()}
-            if "child_build_number" not in columns:
-                await db.execute(
-                    f"ALTER TABLE {table} ADD COLUMN child_build_number INTEGER NOT NULL DEFAULT 0"
-                )
-                logger.info(f"Migration: added child_build_number column to {table}")
-            else:
-                logger.debug(
-                    f"Migration: {table} already has child_build_number column"
-                )
+            await _migrate_add_column(
+                db, table, "child_build_number", "INTEGER NOT NULL DEFAULT 0"
+            )
 
         # Migration: add username to comments and failure_reviews
         for table in ("comments", "failure_reviews"):
-            cursor = await db.execute(f"PRAGMA table_info({table})")
-            columns = {row[1] for row in await cursor.fetchall()}
-            if "username" not in columns:
-                await db.execute(
-                    f"ALTER TABLE {table} ADD COLUMN username TEXT NOT NULL DEFAULT ''"
-                )
-                logger.info(f"Migration: added username column to {table}")
+            await _migrate_add_column(db, table, "username", "TEXT NOT NULL DEFAULT ''")
 
         # Migration: add error_signature to comments table
-        cursor = await db.execute("PRAGMA table_info(comments)")
-        columns = {row[1] for row in await cursor.fetchall()}
-        if "error_signature" not in columns:
-            await db.execute(
-                "ALTER TABLE comments ADD COLUMN error_signature TEXT NOT NULL DEFAULT ''"
-            )
-            logger.info("Migration: added error_signature column to comments")
-        else:
-            logger.debug("Migration: comments already has error_signature column")
+        await _migrate_add_column(
+            db, "comments", "error_signature", "TEXT NOT NULL DEFAULT ''"
+        )
 
         # Migration: rebuild failure_reviews with correct 4-column PRIMARY KEY
         # ALTER TABLE cannot change PKs in SQLite, so we need a full rebuild
@@ -174,92 +213,29 @@ async def init_db() -> None:
             )
         """)
 
-        # Migration: add parent_job_name to test_classifications table
-        cursor = await db.execute("PRAGMA table_info(test_classifications)")
-        columns = {row[1] for row in await cursor.fetchall()}
-        if "parent_job_name" not in columns:
-            await db.execute(
-                "ALTER TABLE test_classifications ADD COLUMN parent_job_name TEXT NOT NULL DEFAULT ''"
-            )
-            logger.info(
-                "Migration: added parent_job_name column to test_classifications"
-            )
-        else:
-            logger.debug(
-                "Migration: test_classifications already has parent_job_name column"
-            )
+        # Migrations: add columns to test_classifications table
+        await _migrate_add_column(
+            db, "test_classifications", "parent_job_name", "TEXT NOT NULL DEFAULT ''"
+        )
+        await _migrate_add_column(
+            db, "test_classifications", "references_info", "TEXT NOT NULL DEFAULT ''"
+        )
+        await _migrate_add_column(
+            db, "test_classifications", "job_id", "TEXT NOT NULL DEFAULT ''"
+        )
+        await _migrate_add_column(
+            db, "test_classifications", "visible", "INTEGER NOT NULL DEFAULT 1"
+        )
+        await _migrate_add_column(
+            db,
+            "test_classifications",
+            "child_build_number",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
 
-        # Migration: add references_info to test_classifications table
-        cursor = await db.execute("PRAGMA table_info(test_classifications)")
-        columns = {row[1] for row in await cursor.fetchall()}
-        if "references_info" not in columns:
-            await db.execute(
-                "ALTER TABLE test_classifications ADD COLUMN references_info TEXT NOT NULL DEFAULT ''"
-            )
-            logger.info(
-                "Migration: added references_info column to test_classifications"
-            )
-        else:
-            logger.debug(
-                "Migration: test_classifications already has references_info column"
-            )
-
-        # Migration: add job_id to test_classifications table
-        cursor = await db.execute("PRAGMA table_info(test_classifications)")
-        columns = {row[1] for row in await cursor.fetchall()}
-        if "job_id" not in columns:
-            await db.execute(
-                "ALTER TABLE test_classifications ADD COLUMN job_id TEXT NOT NULL DEFAULT ''"
-            )
-            logger.info("Migration: added job_id column to test_classifications")
-        else:
-            logger.debug("Migration: test_classifications already has job_id column")
-
-        # Migration: add visible column to test_classifications table
-        cursor = await db.execute("PRAGMA table_info(test_classifications)")
-        columns = {row[1] for row in await cursor.fetchall()}
-        if "visible" not in columns:
-            await db.execute(
-                "ALTER TABLE test_classifications ADD COLUMN visible INTEGER NOT NULL DEFAULT 1"
-            )
-            logger.info("Migration: added visible column to test_classifications")
-        else:
-            logger.debug("Migration: test_classifications already has visible column")
-
-        # Migration: add child_build_number to test_classifications table
-        cursor = await db.execute("PRAGMA table_info(test_classifications)")
-        columns = {row[1] for row in await cursor.fetchall()}
-        if "child_build_number" not in columns:
-            await db.execute(
-                "ALTER TABLE test_classifications ADD COLUMN child_build_number INTEGER NOT NULL DEFAULT 0"
-            )
-            logger.info(
-                "Migration: added child_build_number column to test_classifications"
-            )
-        else:
-            logger.debug(
-                "Migration: test_classifications already has child_build_number column"
-            )
-
-        # Migration: add completed_at column to results table
-        cursor = await db.execute("PRAGMA table_info(results)")
-        columns = {row[1] for row in await cursor.fetchall()}
-        if "completed_at" not in columns:
-            await db.execute("ALTER TABLE results ADD COLUMN completed_at TIMESTAMP")
-            logger.info("Migration: added completed_at column to results")
-        else:
-            logger.debug("Migration: results already has completed_at column")
-
-        # Migration: add analysis_started_at column to results table
-        cursor = await db.execute("PRAGMA table_info(results)")
-        columns = {row[1] for row in await cursor.fetchall()}
-        if "analysis_started_at" not in columns:
-            await db.execute(
-                "ALTER TABLE results ADD COLUMN analysis_started_at TIMESTAMP"
-            )
-            logger.info("Migration: added analysis_started_at column to results")
-        else:
-            logger.debug("Migration: results already has analysis_started_at column")
+        # Migrations: add columns to results table
+        await _migrate_add_column(db, "results", "completed_at", "TIMESTAMP")
+        await _migrate_add_column(db, "results", "analysis_started_at", "TIMESTAMP")
 
         # failure_history: denormalized table for fast history queries
         await db.execute("""
@@ -326,9 +302,15 @@ def _validate_child_identifier_pairing(
 ) -> None:
     """Validate child_job_name / child_build_number pairing.
 
-    Valid combinations:
+    This validator only rejects *structurally invalid* combinations.
+    Callers are responsible for giving semantic meaning to the valid ones.
+
+    Valid combinations (structural):
     - Both empty  (``""``, ``0``) -- top-level (no child context).
-    - Name set, build ``0``       -- wildcard: targets *all* builds of that child job.
+    - Name set, build ``0``       -- accepted; callers decide the semantics
+      (e.g. ``_mirror_classification_to_failure_history`` treats this as a wildcard
+      targeting all builds of that child job, while ``add_comment`` and
+      ``set_reviewed`` store it literally).
     - Both set    (name, N>0)     -- specific child build.
 
     Invalid:
@@ -474,11 +456,9 @@ async def get_review_status(job_id: str) -> dict:
         row = await cursor.fetchone()
         total_failures = 0
         if row and row[0]:
-            try:
-                result_data = json.loads(row[0])
+            result_data = parse_result_json(row[0], job_id=job_id)
+            if result_data is not None:
                 total_failures = count_all_failures(result_data)
-            except (json.JSONDecodeError, TypeError, AttributeError):
-                total_failures = 0
 
         cursor = await db.execute(
             "SELECT COUNT(*) FROM failure_reviews WHERE job_id = ? AND reviewed = 1",
@@ -548,6 +528,40 @@ async def get_historical_comments(
         return result
 
 
+def _build_status_update_clause(
+    status: str,
+    result_json: str | None = None,
+) -> tuple[list[str], list]:
+    """Build the SET clause parts and params for a status update.
+
+    Returns the set-clause fragments and the corresponding parameter list.
+    The caller must append the trailing ``job_id`` parameter.
+
+    Args:
+        status: New status value.
+        result_json: Serialized result JSON. When not None, ``result_json``
+            is included in the update.
+
+    Returns:
+        Tuple of (set_parts, params).
+    """
+    set_parts = ["status = ?"]
+    params: list = [status]
+
+    if result_json is not None:
+        set_parts.append("result_json = ?")
+        params.append(result_json)
+
+    if status == "running":
+        set_parts.append(
+            "analysis_started_at = COALESCE(analysis_started_at, CURRENT_TIMESTAMP)"
+        )
+    if status == "completed":
+        set_parts.append("completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)")
+
+    return set_parts, params
+
+
 async def save_result(
     job_id: str,
     jenkins_url: str,
@@ -563,33 +577,23 @@ async def save_result(
         result: Optional result data to store.
     """
     logger.debug(f"Saving result for job_id: {job_id} (status: {status})")
+    result_json = json.dumps(result) if result is not None else None
     async with aiosqlite.connect(DB_PATH) as db:
-        if status == "completed":
-            await db.execute(
-                """
-                INSERT OR REPLACE INTO results (job_id, jenkins_url, status, result_json, completed_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """,
-                (
-                    job_id,
-                    jenkins_url,
-                    status,
-                    json.dumps(result) if result is not None else None,
-                ),
-            )
-        else:
-            await db.execute(
-                """
-                INSERT OR REPLACE INTO results (job_id, jenkins_url, status, result_json)
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    jenkins_url,
-                    status,
-                    json.dumps(result) if result is not None else None,
-                ),
-            )
+        # Insert the row if it doesn't exist yet (preserves created_at / analysis_started_at).
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO results (job_id, jenkins_url, status, result_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (job_id, jenkins_url, status, result_json),
+        )
+        # Update the row (handles both fresh inserts and existing rows).
+        set_parts, params = _build_status_update_clause(status, result_json)
+        set_parts.insert(0, "jenkins_url = COALESCE(NULLIF(?, ''), jenkins_url)")
+        params.insert(0, jenkins_url)
+        params.append(job_id)
+        sql = f"UPDATE results SET {', '.join(set_parts)} WHERE job_id = ?"
+        await db.execute(sql, params)
         await db.commit()
 
 
@@ -610,23 +614,8 @@ async def update_status(
     """
     logger.debug(f"Updating status for job_id: {job_id} (status: {status})")
     async with aiosqlite.connect(DB_PATH) as db:
-        # Build SET clauses dynamically based on status and result presence
-        set_parts = ["status = ?"]
-        params: list = [status]
-
-        if result is not None:
-            set_parts.append("result_json = ?")
-            params.append(json.dumps(result))
-
-        if status == "completed":
-            set_parts.append("completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)")
-
-        if status == "running":
-            # Set analysis_started_at only on first transition to running
-            set_parts.append(
-                "analysis_started_at = COALESCE(analysis_started_at, CURRENT_TIMESTAMP)"
-            )
-
+        result_json = json.dumps(result) if result is not None else None
+        set_parts, params = _build_status_update_clause(status, result_json)
         params.append(job_id)
         sql = f"UPDATE results SET {', '.join(set_parts)} WHERE job_id = ?"
         cursor = await db.execute(sql, params)
@@ -636,11 +625,53 @@ async def update_status(
         await db.commit()
 
 
-async def get_result(job_id: str) -> dict | None:
+async def patch_result_json(
+    job_id: str,
+    patch_fn: Callable[[dict], None],
+) -> None:
+    """Atomically read-modify-write the ``result_json`` blob for *job_id*.
+
+    The *patch_fn* is called with the parsed ``result`` dict and is expected
+    to mutate it in place.  The read and write happen inside a single
+    ``BEGIN IMMEDIATE`` transaction so concurrent patches are serialized
+    by SQLite's write lock.
+
+    If the row does not exist or ``result_json`` is empty, this is a no-op.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await db.execute(
+                "SELECT result_json FROM results WHERE job_id = ?", (job_id,)
+            )
+            row = await cursor.fetchone()
+            if not row or not row[0]:
+                await db.execute("ROLLBACK")
+                return
+            result_data = parse_result_json(row[0], job_id=job_id)
+            if result_data is None:
+                await db.execute("ROLLBACK")
+                return
+            patch_fn(result_data)
+            await db.execute(
+                "UPDATE results SET result_json = ? WHERE job_id = ?",
+                (json.dumps(result_data), job_id),
+            )
+            await db.commit()
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
+async def get_result(job_id: str, *, strip_sensitive: bool = True) -> dict | None:
     """Retrieve an analysis result by job ID.
 
     Args:
         job_id: Unique identifier for the analysis job.
+        strip_sensitive: When ``True`` (the default), credential fields
+            inside ``request_params`` are removed so they never reach API
+            consumers.  Pass ``False`` only when the caller needs to
+            read-modify-write the full ``result_json`` back to the database.
 
     Returns:
         Result dictionary if found, None otherwise.
@@ -657,13 +688,14 @@ async def get_result(job_id: str) -> dict | None:
             logger.debug(
                 f"get_result: job_id={job_id}, found=True, status={row['status']}"
             )
+            parsed = parse_result_json(row["result_json"], job_id=job_id)
+            if parsed and strip_sensitive:
+                parsed = strip_sensitive_from_response(parsed)
             return {
                 "job_id": row["job_id"],
                 "jenkins_url": row["jenkins_url"],
                 "status": row["status"],
-                "result": json.loads(row["result_json"])
-                if row["result_json"]
-                else None,
+                "result": parsed,
                 "created_at": row["created_at"],
                 "completed_at": row["completed_at"]
                 if "completed_at" in row.keys()
@@ -946,20 +978,19 @@ async def backfill_failure_history() -> None:
     logger.info(f"Backfilling failure_history from {len(rows)} missing results")
     backfilled = 0
     for job_id, result_json_str, created_at in rows:
-        try:
-            result_data = json.loads(result_json_str)
-            # Skip completed results with zero failures — they have nothing to
-            # insert into failure_history, so without this guard the LEFT JOIN
-            # would find them "missing" on every startup and reprocess them.
-            if count_all_failures(result_data) == 0:
-                continue
-            # Use the original created_at timestamp to preserve historical chronology
-            await populate_failure_history(
-                job_id, result_data, analyzed_at=created_at or ""
-            )
-            backfilled += 1
-        except (json.JSONDecodeError, TypeError, AttributeError) as exc:
-            logger.debug(f"Skipping backfill for job_id={job_id}: {exc}")
+        result_data = parse_result_json(result_json_str, job_id=job_id)
+        if result_data is None:
+            continue
+        # Skip completed results with zero failures — they have nothing to
+        # insert into failure_history, so without this guard the LEFT JOIN
+        # would find them "missing" on every startup and reprocess them.
+        if count_all_failures(result_data) == 0:
+            continue
+        # Use the original created_at timestamp to preserve historical chronology
+        await populate_failure_history(
+            job_id, result_data, analyzed_at=created_at or ""
+        )
+        backfilled += 1
 
     logger.info(f"Backfill complete: processed {backfilled}/{len(rows)} results")
 
@@ -1396,145 +1427,30 @@ async def get_job_stats(job_name: str, exclude_job_id: str = "") -> dict:
     }
 
 
-async def get_trends(
-    period: str = "daily",
-    days: int = 30,
-    job_name: str = "",
-    exclude_job_id: str = "",
-) -> dict:
-    """Get failure rate over time grouped by period.
-
-    Args:
-        period: Grouping period, either "daily" or "weekly".
-        days: Number of days to look back.
-        job_name: Optional filter by job name.
-        exclude_job_id: Exclude results from this job ID.
-
-    Returns:
-        Dict with period and data list, where each entry has date,
-        failures, unique_tests, total_tests, and failure_rate.
-    """
-    logger.debug(f"get_trends: period={period}, days={days}, job_name={job_name}")
-    cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=days)).strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
-
-    # Failures are bucketed by failure_history.analyzed_at; build totals are
-    # bucketed by results.created_at.  These two clocks can differ slightly
-    # (analysis completes after the result row is created), so a build near a
-    # bucket boundary may land in adjacent buckets for the two series.  The
-    # mismatch is small relative to daily/weekly bucket widths and is acceptable.
-    if period == "weekly":
-        fh_date_expr = "strftime('%Y-W%W', analyzed_at)"
-        results_date_expr = "strftime('%Y-W%W', created_at)"
-    else:
-        fh_date_expr = "DATE(analyzed_at)"
-        results_date_expr = "DATE(created_at)"
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-
-        # Build optional job_name filter
-        job_filter = ""
-        params: list = [cutoff]
-        if job_name:
-            job_filter = " AND job_name = ?"
-            params.append(job_name)
-        if exclude_job_id:
-            job_filter += " AND job_id != ?"
-            params.append(exclude_job_id)
-
-        cursor = await db.execute(
-            f"SELECT {fh_date_expr} as date, "
-            f"COUNT(DISTINCT job_id) as failures, "
-            f"COUNT(DISTINCT test_name) as unique_tests "
-            f"FROM failure_history "
-            f"WHERE analyzed_at >= ?{job_filter} "
-            f"GROUP BY {fh_date_expr} "
-            f"ORDER BY date ASC",
-            params,
-        )
-        rows = await cursor.fetchall()
-
-        # Get per-bucket build counts from completed results only.
-        # Count directly from results (no JOIN through failure_history)
-        # so that clean builds are included in the denominator.
-        if job_name:
-            bucket_query = (
-                f"SELECT {results_date_expr} as date, COUNT(DISTINCT r.job_id) as total "
-                f"FROM results r "
-                f"WHERE r.status = 'completed' AND r.created_at >= ? "
-                f"AND json_extract(r.result_json, '$.job_name') = ?"
-            )
-            bucket_params: list = [cutoff, job_name]
-        else:
-            bucket_query = (
-                f"SELECT {results_date_expr} as date, COUNT(DISTINCT r.job_id) as total "
-                f"FROM results r "
-                f"WHERE r.status = 'completed' AND r.created_at >= ?"
-            )
-            bucket_params = [cutoff]
-        if exclude_job_id:
-            bucket_query += " AND r.job_id != ?"
-            bucket_params.append(exclude_job_id)
-        bucket_query += f" GROUP BY {results_date_expr}"
-        cursor = await db.execute(bucket_query, bucket_params)
-        builds_per_bucket: dict[str, int] = {}
-        for brow in await cursor.fetchall():
-            builds_per_bucket[brow[0]] = brow[1]
-
-        # Build a lookup from the failure rows so zero-failure buckets
-        # (present in builds_per_bucket but absent from failure_history)
-        # are emitted with failures=0 and failure_rate=0.0.
-        failure_map: dict[str, dict] = {}
-        for row in rows:
-            failure_map[row["date"]] = {
-                "failures": row["failures"],
-                "unique_tests": row["unique_tests"],
-            }
-
-        # Iterate over all build buckets to include clean-build dates.
-        all_dates = sorted(failure_map.keys() | builds_per_bucket.keys())
-        data = []
-        for date in all_dates:
-            bucket_total = builds_per_bucket.get(date, 0)
-            finfo = failure_map.get(date, {"failures": 0, "unique_tests": 0})
-            failures_count = finfo["failures"]
-            data.append(
-                {
-                    "date": date,
-                    "failures": failures_count,
-                    "unique_tests": finfo["unique_tests"],
-                    "total_tests": bucket_total,
-                    "failure_rate": round(failures_count / bucket_total, 4)
-                    if bucket_total > 0
-                    else 0.0,
-                }
-            )
-
-    return {
-        "period": period,
-        "data": data,
-    }
+DEFAULT_DASHBOARD_LIMIT = 500
 
 
-async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
-    """List recent analysis results with summary data for dashboard display.
+async def list_results_for_dashboard(
+    limit: int = DEFAULT_DASHBOARD_LIMIT,
+) -> list[dict]:
+    """List analysis results with summary data for dashboard display.
 
     Unlike list_results, this function also extracts key fields from result_json
     for any row that has a stored result (job_name, build_number, failure_count).
-    Returns at most ``limit`` results; pagination is handled client-side.
 
     Args:
-        limit: Maximum number of results to return.
+        limit: Maximum number of results to return.  ``0`` means no limit —
+            all rows are returned.  Defaults to :data:`DEFAULT_DASHBOARD_LIMIT`.
 
     Returns:
         List of result dictionaries enriched with summary data from result_json.
     """
+    if limit < 0:
+        raise ValueError("limit must be >= 0")
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            """
+        sql = """
             SELECT r.job_id, r.jenkins_url, r.status, r.result_json,
                 r.created_at, r.completed_at, r.analysis_started_at,
                 (SELECT COUNT(*) FROM failure_reviews fr
@@ -1543,10 +1459,12 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
                  WHERE c.job_id = r.job_id) AS comment_count
             FROM results r
             ORDER BY r.created_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+        """
+        params: tuple = ()
+        if limit > 0:
+            sql += " LIMIT ?"
+            params = (limit,)
+        cursor = await db.execute(sql, params)
         rows = await cursor.fetchall()
         results = []
         for row in rows:
@@ -1564,19 +1482,19 @@ async def list_results_for_dashboard(limit: int = 500) -> list[dict]:
                 "reviewed_count": row["reviewed_count"],
                 "comment_count": row["comment_count"],
             }
-            if row["result_json"]:
-                try:
-                    result_data = json.loads(row["result_json"])
-                    entry["job_name"] = result_data.get("job_name", "")
-                    entry["build_number"] = result_data.get("build_number", "")
-                    entry["failure_count"] = count_all_failures(result_data)
-                    child_jobs = result_data.get("child_job_analyses", [])
-                    if child_jobs:
-                        entry["child_job_count"] = len(child_jobs)
-                    if result_data.get("error"):
-                        entry["error"] = result_data["error"]
-                except (json.JSONDecodeError, TypeError, AttributeError):
-                    logger.debug(f"Failed to parse result_json for job {row['job_id']}")
+            result_data = parse_result_json(row["result_json"], job_id=row["job_id"])
+            if result_data:
+                entry["job_name"] = result_data.get("job_name", "")
+                if "build_number" in result_data:
+                    entry["build_number"] = result_data["build_number"]
+                entry["failure_count"] = count_all_failures(result_data)
+                child_jobs = result_data.get("child_job_analyses", [])
+                if child_jobs:
+                    entry["child_job_count"] = len(child_jobs)
+                if result_data.get("summary"):
+                    entry["summary"] = result_data["summary"]
+                if result_data.get("error"):
+                    entry["error"] = result_data["error"]
             results.append(entry)
         return results
 
@@ -1661,22 +1579,16 @@ async def set_test_classification(
         visible: Whether the classification is immediately visible.
             Set to 0 during AI analysis; revealed after analysis completes.
     """
-    _valid_classifications = {
-        "FLAKY",
-        "REGRESSION",
-        "INFRASTRUCTURE",
-        "KNOWN_BUG",
-        "INTERMITTENT",
-    }
-    if classification not in _valid_classifications:
+    if classification not in HISTORY_CLASSIFICATIONS:
         raise ValueError(
             f"Invalid classification: {classification}. "
-            f"Valid: {', '.join(sorted(_valid_classifications))}"
+            f"Valid: {', '.join(sorted(HISTORY_CLASSIFICATIONS))}"
         )
     if visible not in (0, 1):
         raise ValueError(f"visible must be 0 or 1, got {visible}")
     if not job_id or not job_id.strip():
         raise ValueError("job_id is required for test classification")
+    _validate_child_identifier_pairing(job_name, child_build_number)
     logger.debug(
         f"set_test_classification: test_name={test_name}, classification={classification}, "
         f"parent_job_name={parent_job_name}, job_id={job_id}, visible={visible}"
@@ -1732,7 +1644,13 @@ async def get_test_classifications(
     classification (CODE ISSUE / PRODUCT BUG).  History-system labels
     (FLAKY, REGRESSION, etc.) written by ``set_test_classification()``
     are intentionally excluded because they belong to the history
-    domain and are consumed via ``failure_history`` queries, not here.
+    domain and are consumed via ``failure_history`` queries (e.g.
+    ``get_all_failures()``, ``get_test_history()``), not here.
+
+    The ``_PRIMARY_CLASSIFICATIONS_SQL`` filter is intentional: the
+    ``POST /history/classify`` endpoint writes history labels that are
+    never meant to appear in this reader.  History labels are consumed
+    via ``GET /history/failures`` instead.
 
     During AI analysis, classifications are created with visible=0 and
     revealed after analysis completes via make_classifications_visible().
@@ -1921,7 +1839,7 @@ async def override_classification(
     child_build_number: int = 0,
     username: str = "",
     parent_job_name: str = "",
-) -> None:
+) -> list[str]:
     """Override the classification of a failure in failure_history.
 
     Updates ALL failure_history rows sharing the same error_signature
@@ -1937,12 +1855,19 @@ async def override_classification(
         child_build_number: Child build number.
         username: User who made the override.
         parent_job_name: Parent pipeline job name (for test_classifications).
+
+    Returns:
+        List of all test names in the affected signature group.
     """
     logger.debug(
         f"override_classification: job_id={job_id}, test_name={test_name}, "
         f"classification={classification}, username={username}"
     )
     _validate_child_identifier_pairing(child_job_name, child_build_number)
+    if child_job_name and child_build_number == 0:
+        raise ValueError(
+            "override_classification requires child_build_number when child_job_name is set"
+        )
     async with aiosqlite.connect(DB_PATH) as db:
         # Look up the error_signature for this test so we can update
         # ALL tests in the same group (same signature, same job).
@@ -1956,6 +1881,8 @@ async def override_classification(
         if child_job_name:
             sig_query += " AND child_job_name = ? AND child_build_number = ?"
             sig_params.extend([child_job_name, child_build_number])
+        else:
+            sig_query += " AND child_job_name = '' AND child_build_number = 0"
         sig_query += " LIMIT 1"
 
         cursor = await db.execute(sig_query, sig_params)
@@ -2055,6 +1982,7 @@ async def override_classification(
         f"Classification overridden: job_id={job_id}, test_name={test_name}, "
         f"classification={classification}, by={username or 'unknown'}"
     )
+    return group_tests
 
 
 async def get_effective_classification(
@@ -2149,13 +2077,44 @@ async def mark_stale_results_failed() -> list[dict]:
         rows = await cursor.fetchall()
         for row in rows:
             if row["result_json"]:
-                result_data = json.loads(row["result_json"])
-                waiting_jobs.append(
-                    {
-                        "job_id": row["job_id"],
-                        "result_data": result_data,
-                    }
+                result_data = parse_result_json(
+                    row["result_json"], job_id=row["job_id"]
                 )
+                stored_params = (
+                    result_data.get("request_params") if result_data else None
+                )
+                is_resumable = (
+                    result_data is not None
+                    and isinstance(stored_params, dict)
+                    and bool(stored_params)
+                    and "job_name" in result_data
+                    and "build_number" in result_data
+                )
+                if is_resumable:
+                    waiting_jobs.append(
+                        {
+                            "job_id": row["job_id"],
+                            "result_data": result_data,
+                        }
+                    )
+                else:
+                    logger.warning(
+                        f"Marking unrecoverable waiting job {row['job_id']} as failed"
+                    )
+                    await db.execute(
+                        "UPDATE results SET status = 'failed' WHERE job_id = ?",
+                        (row["job_id"],),
+                    )
+
+        # Mark waiting jobs without result_json as failed (unrecoverable)
+        cursor = await db.execute(
+            "UPDATE results SET status = 'failed' "
+            "WHERE status = 'waiting' AND (result_json IS NULL OR result_json = '')"
+        )
+        if cursor.rowcount > 0:
+            logger.warning(
+                f"Marked {cursor.rowcount} unrecoverable waiting job(s) as failed (missing result data)"
+            )
 
         await db.commit()
 

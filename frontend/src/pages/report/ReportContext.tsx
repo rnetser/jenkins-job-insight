@@ -16,6 +16,11 @@ interface ReportState {
   aiConfigs: AiConfig[]
   loading: boolean
   error: string
+  /** Number of comment editors with non-empty text (pauses comment polling when > 0). */
+  commentDraftCount: number
+  /** Incremented on every optimistic local mutation (ADD_COMMENT, REMOVE_COMMENT, SET_REVIEW)
+   *  so that in-flight poll responses can detect stale data and skip overwriting. */
+  localMutationRev: number
 }
 
 type ReportAction =
@@ -31,10 +36,13 @@ type ReportAction =
   | { type: 'SET_CLASSIFICATIONS'; payload: Record<string, string> }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_ERROR'; payload: string }
+  | { type: 'INCREMENT_DRAFT_COUNT' }
+  | { type: 'DECREMENT_DRAFT_COUNT' }
   | {
       type: 'OVERRIDE_CLASSIFICATION'
       payload: {
         testName: string
+        testNames?: string[]
         classification: string
         childJobName?: string
         childBuildNumber?: number
@@ -55,20 +63,22 @@ const initialState: ReportState = {
   aiConfigs: [],
   loading: true,
   error: '',
+  commentDraftCount: 0,
+  localMutationRev: 0,
 }
 
 function reportReducer(state: ReportState, action: ReportAction): ReportState {
   switch (action.type) {
     case 'SET_RESULT':
-      return { ...state, result: action.payload.result, createdAt: action.payload.createdAt, completedAt: action.payload.completedAt, analysisStartedAt: action.payload.analysisStartedAt, loading: false }
+      return { ...state, result: action.payload.result, createdAt: action.payload.createdAt, completedAt: action.payload.completedAt, analysisStartedAt: action.payload.analysisStartedAt, loading: false, error: '' }
     case 'SET_COMMENTS_AND_REVIEWS':
       return { ...state, comments: action.payload.comments, reviews: action.payload.reviews }
     case 'ADD_COMMENT':
-      return { ...state, comments: [...state.comments, action.payload] }
+      return { ...state, comments: [...state.comments, action.payload], localMutationRev: state.localMutationRev + 1 }
     case 'REMOVE_COMMENT':
-      return { ...state, comments: state.comments.filter((c) => c.id !== action.payload) }
+      return { ...state, comments: state.comments.filter((c) => c.id !== action.payload), localMutationRev: state.localMutationRev + 1 }
     case 'SET_REVIEW':
-      return { ...state, reviews: { ...state.reviews, [action.payload.key]: action.payload.state } }
+      return { ...state, reviews: { ...state.reviews, [action.payload.key]: action.payload.state }, localMutationRev: state.localMutationRev + 1 }
     case 'SET_GITHUB_AVAILABLE':
       return { ...state, githubAvailable: action.payload }
     case 'SET_JIRA_AVAILABLE':
@@ -78,27 +88,64 @@ function reportReducer(state: ReportState, action: ReportAction): ReportState {
     case 'SET_ENRICHMENTS':
       return { ...state, enrichments: action.payload }
     case 'SET_CLASSIFICATIONS':
-      return { ...state, classifications: action.payload }
+      return { ...state, classifications: { ...action.payload, ...state.classifications } }
     case 'SET_LOADING':
       return { ...state, loading: action.payload }
     case 'SET_ERROR':
       return { ...state, error: action.payload, loading: false }
+    case 'INCREMENT_DRAFT_COUNT':
+      return { ...state, commentDraftCount: state.commentDraftCount + 1 }
+    case 'DECREMENT_DRAFT_COUNT':
+      return { ...state, commentDraftCount: Math.max(0, state.commentDraftCount - 1) }
     case 'OVERRIDE_CLASSIFICATION': {
       if (!state.result) return state
-      const { testName, classification, childJobName, childBuildNumber } = action.payload
+      const { testName, testNames: explicitNames, classification, childJobName, childBuildNumber } = action.payload
+      // Normalize: undefined childBuildNumber with a childJobName means wildcard (0),
+      // matching the API normalization in ClassificationSelect (child_build_number ?? 0).
+      const normalizedChildBuildNumber = childJobName ? (childBuildNumber ?? 0) : childBuildNumber
+      const names = explicitNames ?? [testName]
+      const nameSet = new Set(names)
       const patchFailures = (fs: typeof state.result.failures) =>
         (fs ?? []).map((f) =>
-          f.test_name === testName ? { ...f, analysis: { ...f.analysis, classification } } : f,
+          nameSet.has(f.test_name) ? { ...f, analysis: { ...f.analysis, classification } } : f,
         )
+      const isWildcard = normalizedChildBuildNumber === 0
+      /** Check whether a child node matches the target job name with wildcard/exact build semantics. */
+      const isChildMatch = (c: { job_name: string; build_number: number }) =>
+        !!childJobName && c.job_name === childJobName && (isWildcard || c.build_number === normalizedChildBuildNumber)
       const patchChildren = (
         cs: typeof state.result.child_job_analyses,
       ): typeof state.result.child_job_analyses =>
         (cs ?? []).map((c) =>
-          childJobName && c.job_name === childJobName && c.build_number === childBuildNumber
+          isChildMatch(c)
             ? { ...c, failures: patchFailures(c.failures), failed_children: patchChildren(c.failed_children) }
             : { ...c, failed_children: patchChildren(c.failed_children) },
         )
-      const key = reviewKey(testName, childJobName, childBuildNumber)
+      // When childBuildNumber === 0 (wildcard), materialize classification
+      // entries for every matching child build so the review state reflects
+      // each concrete build rather than only the wildcard key.
+      const classificationEntries: Record<string, string> = {}
+      if (isWildcard && childJobName) {
+        const walkChildren = (cs: typeof state.result.child_job_analyses) => {
+          for (const c of cs ?? []) {
+            if (isChildMatch(c)) {
+              for (const name of names) {
+                classificationEntries[reviewKey(name, childJobName, c.build_number)] = classification
+              }
+            }
+            walkChildren(c.failed_children)
+          }
+        }
+        walkChildren(state.result.child_job_analyses)
+        // Also store the wildcard key itself for lookup consistency
+        for (const name of names) {
+          classificationEntries[reviewKey(name, childJobName, 0)] = classification
+        }
+      } else {
+        for (const name of names) {
+          classificationEntries[reviewKey(name, childJobName, normalizedChildBuildNumber)] = classification
+        }
+      }
       return {
         ...state,
         result: {
@@ -106,7 +153,7 @@ function reportReducer(state: ReportState, action: ReportAction): ReportState {
           failures: childJobName ? state.result.failures : patchFailures(state.result.failures),
           child_job_analyses: patchChildren(state.result.child_job_analyses),
         },
-        classifications: { ...state.classifications, [key]: classification },
+        classifications: { ...state.classifications, ...classificationEntries },
       }
     }
     default:
@@ -121,8 +168,20 @@ const RefreshEnrichmentsCtx = createContext<(jobId: string) => void>(() => {})
 export function ReportProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reportReducer, initialState)
   const enrichmentSeqRef = useRef(0)
+  const enrichmentInFlightRef = useRef(false)
+  const pendingEnrichmentJobIdRef = useRef<string | null>(null)
 
   const refreshEnrichments = useCallback((jobId: string) => {
+    if (enrichmentInFlightRef.current) {
+      // Record the latest request so it runs when the current one finishes.
+      // Advance the sequence counter to invalidate the current in-flight response
+      // so stale data does not overwrite state.
+      pendingEnrichmentJobIdRef.current = jobId
+      enrichmentSeqRef.current += 1
+      return
+    }
+    enrichmentInFlightRef.current = true
+    pendingEnrichmentJobIdRef.current = null
     const seq = ++enrichmentSeqRef.current
     void api.post<{ enrichments: Record<string, CommentEnrichment[]> }>(`/results/${jobId}/enrich-comments`)
       .then((res) => {
@@ -131,6 +190,14 @@ export function ReportProvider({ children }: { children: ReactNode }) {
         }
       })
       .catch(() => {})
+      .finally(() => {
+        enrichmentInFlightRef.current = false
+        const pending = pendingEnrichmentJobIdRef.current
+        if (pending) {
+          pendingEnrichmentJobIdRef.current = null
+          refreshEnrichments(pending)
+        }
+      })
   }, [])
 
   return (
@@ -148,6 +215,6 @@ export const useRefreshEnrichments = () => useContext(RefreshEnrichmentsCtx)
 
 /** Build the review lookup key matching the backend format. */
 export function reviewKey(testName: string, childJobName?: string, childBuildNumber?: number): string {
-  if (childJobName && childBuildNumber != null) return `${childJobName}#${childBuildNumber}::${testName}`
+  if (childJobName) return `${childJobName}#${childBuildNumber ?? 0}::${testName}`
   return testName
 }

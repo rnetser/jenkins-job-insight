@@ -15,7 +15,7 @@ from simple_logger.logger import get_logger
 
 from ai_cli_runner import call_ai_cli
 from jenkins_job_insight.analyzer import PROVIDER_CLI_FLAGS
-from jenkins_job_insight.config import Settings
+from jenkins_job_insight.config import Settings, _resolve_jira_auth
 from jenkins_job_insight.models import (
     AnalysisDetail,
     FailureAnalysis,
@@ -44,15 +44,15 @@ def _sanitize_jql_keyword(keyword: str) -> str:
 class JiraClient:
     """HTTP client for Jira REST API.
 
-    Auto-detects Cloud (email + API token/PAT, REST API v3) vs
-    Server/DC (PAT only, REST API v2) based on provided credentials.
+    Auto-detects Cloud (email + API token, REST API v3) vs
+    Server/DC (PAT or API token, REST API v2) based on provided credentials.
 
-    Cloud detection: ``jira_email`` is set. Uses Basic auth with
-    ``email:token`` where the token is ``jira_api_token`` (preferred)
-    or ``jira_pat`` as fallback.
+    Cloud detection requires ``jira_email`` together with
+    ``jira_api_token``. ``jira_email`` + ``jira_pat`` stays in
+    Server/DC mode.
 
-    Server/DC detection: no ``jira_email``. Uses Bearer auth with
-    ``jira_pat``.
+    Server/DC detection: uses Bearer auth with ``jira_pat``
+    (preferred) or ``jira_api_token`` as fallback.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -60,23 +60,18 @@ class JiraClient:
         self._project_key = settings.jira_project_key
         self._max_results = settings.jira_max_results
 
-        # Resolve token: prefer jira_api_token (backward compat), fall back to jira_pat
-        token_value = ""
-        if settings.jira_api_token:
-            token_value = settings.jira_api_token.get_secret_value()
-        elif settings.jira_pat:
-            token_value = settings.jira_pat.get_secret_value()
+        is_cloud, token_value = _resolve_jira_auth(settings)
 
-        # Detect Cloud vs Server/DC
+        # Configure Cloud vs Server/DC auth
         self._auth: tuple[str, str] | None
-        if settings.jira_email and token_value:
-            # Cloud: email present = Cloud instance, Basic auth with email:pat
+        if is_cloud and settings.jira_email:
+            # Cloud: _resolve_jira_auth() selected email + jira_api_token.
             self._auth = (settings.jira_email, token_value)
             self._search_path = "/rest/api/3/search/jql"
             self._api_path = "/rest/api/3"
             self._headers: dict[str, str] = {}
         elif token_value:
-            # Server/DC: no email, Bearer PAT
+            # Server/DC: _resolve_jira_auth() already selected the credential.
             self._auth = None
             self._search_path = "/rest/api/2/search"
             self._api_path = "/rest/api/2"

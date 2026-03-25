@@ -7,7 +7,10 @@ const BACKEND_URL = 'http://localhost:8000'
 
 // SPA-friendly bypass: return index.html for browser navigation
 const spaBypass = (req: { headers: { accept?: string } }) => {
-  if (req.headers.accept?.includes('text/html')) return '/index.html'
+  const accept = req.headers.accept ?? ''
+  if (accept.includes('text/html') && !accept.includes('application/json')) {
+    return '/index.html'
+  }
 }
 
 const createSpaProxy = () => ({
@@ -32,11 +35,12 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': BACKEND_URL,
+      '/analyze': BACKEND_URL,
       '/results': createSpaProxy(),
       '/history': createSpaProxy(),
+      '/status': createSpaProxy(),
       '/health': BACKEND_URL,
       '/ai-configs': BACKEND_URL,
-      '/capabilities': BACKEND_URL,
     },
   },
 })

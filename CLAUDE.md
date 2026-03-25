@@ -28,6 +28,7 @@
 **`tox` must pass before every commit. No exceptions.**
 
 Run all tests:
+
 ```bash
 uvx --with tox-uv tox
 ```
@@ -37,6 +38,7 @@ This runs both environments:
 - `frontend` — Frontend build (`vite build`) + Vitest tests (`npm test`)
 
 Individual environments:
+
 ```bash
 uvx --with tox-uv tox -e backend    # Python only
 uvx --with tox-uv tox -e frontend   # Frontend only
@@ -104,7 +106,7 @@ The frontend is in `/frontend/` — a Vite + React 19 + TypeScript + Tailwind CS
 Key patterns:
 - **State**: Report page uses `useReducer` via `ReportContext` (page-scoped, not global)
 - **API**: Centralized `api.get/post/put/delete` wrapper in `lib/api.ts`
-- **Auth**: Cookie-based (`jji_username`), read/written client-side
+- **User identification**: Cookie-based (`jji_username`), read/written client-side; display-only, not an authentication/authorization boundary
 - **Grouping**: `lib/grouping.ts` ports Python's `_grouping_key()` to TypeScript
 
 ### AI Tool Access (IMPORTANT)
@@ -162,13 +164,17 @@ Uses `python-simple-logger`:
 
 ### Configuration Parity
 
-Every configurable parameter must be available through ALL interfaces:
+For request-tunable analysis settings, keep these interfaces in sync:
 1. Environment variable (server-level default)
 2. API payload field (per-request override)
 3. CLI option (command-line flag)
 4. Config file (`~/.config/jji/config.toml` per-server setting)
 
-When adding a new configurable parameter:
+Client-only transport settings and server-only deployment settings stay scoped
+to their owning interface. CLI parity for new API endpoints is a separate rule
+(see "CLI Parity" above).
+
+When adding a new analysis setting:
 1. Add the field to `Settings` in `config.py`
 2. Add the corresponding request field to `BaseAnalysisRequest` (or `AnalyzeRequest`) in `models.py`
 3. Add the field to `_merge_settings()` in `main.py` so request values override env defaults
@@ -179,3 +185,18 @@ When adding a new configurable parameter:
 Exceptions (server-level only, no payload equivalent):
 - `DEBUG` — server reload toggle
 - `LOG_LEVEL` — server log verbosity
+- `PUBLIC_BASE_URL` — trusted server-only origin for building absolute links; never derive from request headers to prevent host-header injection
+- `ENABLE_GITHUB_ISSUES` — server capability toggle for GitHub issue creation
+- `JJI_ENCRYPTION_KEY` — server-only secret for at-rest encryption; never expose via request payloads, CLI flags, or shared config files
+- Security-sensitive credentials for preview/create-issue endpoints (`GITHUB_TOKEN`, `TESTS_REPO_URL`, Jira credentials) — these use deployment config, not per-request overrides
+
+### Sensitive Data Handling
+
+Sensitive data (passwords, API tokens, credentials) must be:
+1. **Encrypted at rest** — use `encrypt_sensitive_fields()` before storing to the database
+2. **Stripped from responses** — use `strip_sensitive_from_response()` before returning to API consumers
+3. **Never logged** — do not log passwords, tokens, or credentials at any log level
+
+Sensitive fields: `jenkins_password`, `jenkins_user`, `jira_api_token`, `jira_pat`, `jira_email`, `github_token`
+
+Encryption uses Fernet (AES-128-CBC + HMAC-SHA256). Set `JJI_ENCRYPTION_KEY` env var for production; falls back to an auto-generated file-based key under `$XDG_DATA_HOME/jji/.encryption_key` (default: `~/.local/share/jji/.encryption_key`) for development.

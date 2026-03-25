@@ -1,6 +1,7 @@
 """Tests for jji CLI config module and config-driven server resolution."""
 
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -43,6 +44,9 @@ jira_ssl_verify = false
 jira_max_results = 30
 enable_jira = true
 github_token = "ghp_dev123"
+wait_for_completion = true
+poll_interval_minutes = 2
+max_wait_minutes = 45
 
 [servers.prod]
 url = "https://jji.example.com"
@@ -104,6 +108,13 @@ def empty_config(tmp_path: Path) -> Path:
 # -- load_config --------------------------------------------------------------
 
 
+def _write_config(tmp_path: Path, content: str) -> Path:
+    """Write a temporary config file and return its path."""
+    cfg = tmp_path / "bad.toml"
+    cfg.write_text(content)
+    return cfg
+
+
 class TestLoadConfig:
     def test_loads_valid_toml(self, config_file: Path):
         config = load_config(config_file)
@@ -113,6 +124,61 @@ class TestLoadConfig:
 
     def test_returns_empty_when_missing(self, empty_config: Path):
         assert load_config(empty_config) == {}
+
+    def test_raises_value_error_on_malformed_toml(self, tmp_path: Path):
+        bad_file = _write_config(tmp_path, "[invalid\n")
+        with pytest.raises(ValueError, match=r"Invalid TOML"):
+            load_config(bad_file)
+
+    def test_raises_on_non_dict_default(self, tmp_path: Path):
+        bad_file = _write_config(tmp_path, 'default = "not-a-dict"\n')
+        with pytest.raises(ValueError, match=r"'default' must be a mapping"):
+            load_config(bad_file)
+
+    def test_raises_on_non_dict_defaults(self, tmp_path: Path):
+        bad_file = _write_config(tmp_path, 'defaults = "not-a-dict"\n')
+        with pytest.raises(ValueError, match=r"'defaults' must be a mapping"):
+            load_config(bad_file)
+
+    def test_raises_on_missing_server_url(self, tmp_path: Path):
+        bad_file = _write_config(tmp_path, '[servers.myserver]\nusername = "user"\n')
+        with pytest.raises(
+            ValueError, match=r"servers\.myserver\.url must be a non-empty"
+        ):
+            load_config(bad_file)
+
+    def test_raises_on_empty_server_url(self, tmp_path: Path):
+        bad_file = _write_config(tmp_path, '[servers.myserver]\nurl = ""\n')
+        with pytest.raises(
+            ValueError, match=r"servers\.myserver\.url must be a non-empty"
+        ):
+            load_config(bad_file)
+
+    def test_raises_on_whitespace_only_server_url(self, tmp_path: Path):
+        bad_file = _write_config(tmp_path, '[servers.myserver]\nurl = "   "\n')
+        with pytest.raises(
+            ValueError, match=r"servers\.myserver\.url must be a non-empty"
+        ):
+            load_config(bad_file)
+
+    def test_raises_on_leading_trailing_whitespace_url(self, tmp_path: Path):
+        bad_file = _write_config(
+            tmp_path, '[servers.myserver]\nurl = " https://api.example.com "\n'
+        )
+        with pytest.raises(
+            ValueError, match=r"servers\.myserver\.url must be a non-empty"
+        ):
+            load_config(bad_file)
+
+    def test_raises_on_non_dict_server_entry(self, tmp_path: Path):
+        bad_file = _write_config(tmp_path, '[servers]\nmyserver = "not-a-dict"\n')
+        with pytest.raises(ValueError, match=r"servers\.myserver must be a mapping"):
+            load_config(bad_file)
+
+    def test_rejects_defaults_server_key(self, tmp_path: Path):
+        bad_file = _write_config(tmp_path, '[defaults]\nserver = "prod"\n')
+        with pytest.raises(ValueError, match=r"'defaults\.server' is not supported"):
+            load_config(bad_file)
 
 
 # -- get_default_server_name --------------------------------------------------
@@ -168,7 +234,7 @@ class TestGetServerConfig:
         assert cfg is not None
         assert cfg.jenkins_url == "https://jenkins.dev.local"
         assert cfg.jenkins_user == "jenkins-dev"
-        assert cfg.jenkins_password == "dev-token"  # pragma: allowlist secret
+        assert cfg.jenkins_password == "dev-token"  # noqa: S105  # pragma: allowlist secret
         assert cfg.jenkins_ssl_verify is False
         assert cfg.tests_repo_url == "https://github.com/org/tests"
         assert cfg.ai_provider == "claude"
@@ -176,13 +242,16 @@ class TestGetServerConfig:
         assert cfg.ai_cli_timeout == 15
         assert cfg.jira_url == "https://jira.dev.local"
         assert cfg.jira_email == "dev@example.com"
-        assert cfg.jira_api_token == "jira-tok-dev"
-        assert cfg.jira_pat == "jira-pat-dev"
+        assert cfg.jira_api_token == "jira-tok-dev"  # noqa: S105
+        assert cfg.jira_pat == "jira-pat-dev"  # noqa: S105
         assert cfg.jira_project_key == "DEV"
         assert cfg.jira_ssl_verify is False
         assert cfg.jira_max_results == 30
         assert cfg.enable_jira is True
-        assert cfg.github_token == "ghp_dev123"
+        assert cfg.github_token == "ghp_dev123"  # noqa: S105
+        assert cfg.wait_for_completion is True
+        assert cfg.poll_interval_minutes == 2
+        assert cfg.max_wait_minutes == 45
 
     def test_defaults_for_missing_analyze_fields(self, config_file: Path):
         """Servers without analyze fields get dataclass defaults."""
@@ -190,13 +259,16 @@ class TestGetServerConfig:
         cfg = get_server_config("prod", config)
         assert cfg is not None
         assert cfg.jenkins_url == ""
-        assert cfg.jenkins_ssl_verify is True
+        assert cfg.jenkins_ssl_verify is None
         assert cfg.ai_provider == ""
         assert cfg.ai_cli_timeout == 0
-        assert cfg.jira_ssl_verify is True
+        assert cfg.jira_ssl_verify is None
         assert cfg.jira_max_results == 0
-        assert cfg.enable_jira is False
+        assert cfg.enable_jira is None
         assert cfg.github_token == ""
+        assert cfg.wait_for_completion is None
+        assert cfg.poll_interval_minutes == 0
+        assert cfg.max_wait_minutes == 0
 
 
 # -- list_servers --------------------------------------------------------------
@@ -227,6 +299,14 @@ class TestListServers:
         assert dev.enable_jira is True
 
 
+def _mock_healthy_client(mock_client_fn: MagicMock) -> MagicMock:
+    """Wire up a mock client that returns a healthy status."""
+    client = MagicMock()
+    client.health.return_value = {"status": "healthy"}
+    mock_client_fn.return_value = client
+    return client
+
+
 # -- CLI integration: --server with config name ----------------------------------
 
 
@@ -235,29 +315,25 @@ class TestServerNameResolution:
 
     def test_server_name_resolves_from_config(self, config_file: Path):
         with (
-            patch("jenkins_job_insight.cli.main.load_config") as mock_load,
             patch("jenkins_job_insight.cli.main.get_server_config") as mock_get,
             patch("jenkins_job_insight.cli.main.list_servers") as mock_list,
             patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
             patch.dict(os.environ, {}, clear=True),
         ):
-            config = load_config(config_file)
-            mock_load.return_value = config
             mock_get.return_value = ServerConfig(
                 url="https://jji.example.com",
                 username="prod-user",
                 no_verify_ssl=False,
             )
             mock_list.return_value = {}
-            client = MagicMock()
-            client.health.return_value = {"status": "healthy"}
-            mock_client_fn.return_value = client
+            _mock_healthy_client(mock_client_fn)
 
             result = runner.invoke(app, ["--server", "prod", "health"])
             assert result.exit_code == 0
             assert "healthy" in result.output
+            mock_get.assert_called_once_with("prod")
 
-    def test_unknown_server_name_errors(self, config_file: Path):
+    def test_unknown_server_name_errors(self):
         with (
             patch("jenkins_job_insight.cli.main.get_server_config", return_value=None),
             patch(
@@ -276,23 +352,32 @@ class TestDefaultServerFromConfig:
     """Default server from config is used when no --server given."""
 
     def test_default_server_used(self, config_file: Path):
+        config = load_config(config_file)
+        # Verify default profile name resolves to "dev"
+        assert get_default_server_name(config) == "dev"
+        resolved = get_server_config("dev", config)
+        assert resolved is not None
+
         with (
-            patch("jenkins_job_insight.cli.main.get_server_config") as mock_get,
+            patch("jenkins_job_insight.cli.config.load_config", return_value=config),
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                wraps=get_server_config,
+            ) as mock_get,
             patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
             patch.dict(os.environ, {}, clear=True),
         ):
-            mock_get.return_value = ServerConfig(
-                url="http://localhost:8000",
-                username="dev-user",
-                no_verify_ssl=True,
-            )
-            client = MagicMock()
-            client.health.return_value = {"status": "healthy"}
-            mock_client_fn.return_value = client
+            _mock_healthy_client(mock_client_fn)
 
             result = runner.invoke(app, ["health"])
             assert result.exit_code == 0
             assert "healthy" in result.output
+            # Default server resolution: called without explicit name,
+            # internally resolves default profile "dev" from config.
+            mock_get.assert_called_once()
+            # Verify no explicit server name was passed (relies on default)
+            args, _kwargs = mock_get.call_args
+            assert not args or args[0] is None
 
     def test_no_server_no_config_errors(self):
         with (
@@ -308,7 +393,7 @@ class TestDefaultServerFromConfig:
 class TestCLIOverridesConfig:
     """CLI flags take precedence over config values."""
 
-    def test_cli_user_overrides_config(self, config_file: Path):
+    def test_cli_user_overrides_config(self):
         with (
             patch("jenkins_job_insight.cli.main.get_server_config") as mock_get,
             patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
@@ -320,18 +405,18 @@ class TestCLIOverridesConfig:
                 username="config-user",
                 no_verify_ssl=False,
             )
-            client = MagicMock()
-            client.health.return_value = {"status": "healthy"}
-            mock_client_fn.return_value = client
+            _mock_healthy_client(mock_client_fn)
 
             result = runner.invoke(
                 app,
-                ["--server", "http://localhost:8000", "--user", "cli-user", "health"],
+                ["--server", "dev", "--user", "cli-user", "health"],
             )
             assert result.exit_code == 0
             assert mock_state["username"] == "cli-user"
+            # Ensure config profile was loaded (named server exercises the override path)
+            mock_get.assert_called_once_with("dev")
 
-    def test_cli_no_verify_ssl_overrides_config(self, config_file: Path):
+    def test_cli_no_verify_ssl_overrides_config(self):
         with (
             patch("jenkins_job_insight.cli.main.get_server_config") as mock_get,
             patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
@@ -343,19 +428,19 @@ class TestCLIOverridesConfig:
                 username="",
                 no_verify_ssl=False,
             )
-            client = MagicMock()
-            client.health.return_value = {"status": "healthy"}
-            mock_client_fn.return_value = client
+            _mock_healthy_client(mock_client_fn)
 
             result = runner.invoke(
                 app,
-                ["--server", "http://localhost:8000", "--no-verify-ssl", "health"],
+                ["--server", "dev", "--no-verify-ssl", "health"],
             )
             assert result.exit_code == 0
             assert mock_state["no_verify_ssl"] is True
+            # Ensure config profile was loaded (named server exercises the override path)
+            mock_get.assert_called_once_with("dev")
 
-    def test_url_uses_config_fallback_for_username(self):
-        """When --server is a URL, config username is used as fallback."""
+    def test_url_does_not_inherit_config_profile(self):
+        """When --server is a concrete URL, config profile is NOT loaded."""
         with (
             patch("jenkins_job_insight.cli.main.get_server_config") as mock_get,
             patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
@@ -367,14 +452,17 @@ class TestCLIOverridesConfig:
                 username="default-user",
                 no_verify_ssl=False,
             )
-            client = MagicMock()
-            client.health.return_value = {"status": "healthy"}
-            mock_client_fn.return_value = client
+            _mock_healthy_client(mock_client_fn)
 
             result = runner.invoke(app, ["--server", "http://custom:9000", "health"])
             assert result.exit_code == 0
             assert mock_state["server_url"] == "http://custom:9000"
-            assert mock_state["username"] == "default-user"
+            # A concrete URL is self-contained; config username is NOT inherited.
+            assert mock_state["username"] == ""
+            # server_config should be None (no profile loaded).
+            assert mock_state["server_config"] is None
+            # get_server_config should NOT have been called.
+            mock_get.assert_not_called()
 
 
 # -- Config subcommand tests ---------------------------------------------------
@@ -485,32 +573,22 @@ class TestConfigServers:
             assert parsed["dev"]["default"] is True
 
 
-class TestConfigSubcommandNoServer:
-    """Config subcommands must work without any server configured."""
-
-    def test_config_show_without_server(self):
-        with (
-            patch("jenkins_job_insight.cli.main.load_config", return_value={}),
-            patch.dict(os.environ, {}, clear=True),
-        ):
-            result = runner.invoke(app, ["config", "show"])
-            assert result.exit_code == 0
-
-    def test_config_servers_without_server(self):
-        with (
-            patch("jenkins_job_insight.cli.main.load_config", return_value={}),
-            patch(
-                "jenkins_job_insight.cli.main.get_default_server_name",
-                return_value="",
-            ),
-            patch("jenkins_job_insight.cli.main.list_servers", return_value={}),
-            patch.dict(os.environ, {}, clear=True),
-        ):
-            result = runner.invoke(app, ["config", "servers"])
-            assert result.exit_code == 0
-
-
 # -- XDG_CONFIG_HOME ----------------------------------------------------------
+
+
+@contextmanager
+def _reload_config_under_env(env_patch: dict[str, str], *, clear: bool = False):
+    """Reload ``jenkins_job_insight.cli.config`` under *env_patch*, restoring afterwards."""
+    import importlib
+
+    import jenkins_job_insight.cli.config as cfg_mod
+
+    try:
+        with patch.dict(os.environ, env_patch, clear=clear):
+            importlib.reload(cfg_mod)
+            yield cfg_mod
+    finally:
+        importlib.reload(cfg_mod)
 
 
 class TestXDGConfigHome:
@@ -518,14 +596,8 @@ class TestXDGConfigHome:
 
     def test_default_config_dir_uses_home_dot_config(self):
         """When XDG_CONFIG_HOME is unset, falls back to ~/.config."""
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("XDG_CONFIG_HOME", None)
-            # Re-import to pick up the env change.
-            import importlib
-
-            import jenkins_job_insight.cli.config as cfg_mod
-
-            importlib.reload(cfg_mod)
+        env = {k: v for k, v in os.environ.items() if k != "XDG_CONFIG_HOME"}
+        with _reload_config_under_env(env, clear=True) as cfg_mod:
             assert cfg_mod.CONFIG_DIR == Path.home() / ".config" / "jji"
             assert (
                 cfg_mod.CONFIG_FILE == Path.home() / ".config" / "jji" / "config.toml"
@@ -533,12 +605,7 @@ class TestXDGConfigHome:
 
     def test_xdg_config_home_override(self, tmp_path: Path):
         """When XDG_CONFIG_HOME is set, CONFIG_DIR uses it."""
-        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(tmp_path)}):
-            import importlib
-
-            import jenkins_job_insight.cli.config as cfg_mod
-
-            importlib.reload(cfg_mod)
+        with _reload_config_under_env({"XDG_CONFIG_HOME": str(tmp_path)}) as cfg_mod:
             assert cfg_mod.CONFIG_DIR == tmp_path / "jji"
             assert cfg_mod.CONFIG_FILE == tmp_path / "jji" / "config.toml"
 
@@ -557,7 +624,7 @@ class TestGlobalDefaults:
         # Inherited from [defaults]
         assert cfg.jenkins_url == "https://jenkins.shared.local"
         assert cfg.jenkins_user == "shared-user"
-        assert cfg.jenkins_password == "shared-token"  # pragma: allowlist secret
+        assert cfg.jenkins_password == "shared-token"  # noqa: S105  # pragma: allowlist secret
         assert cfg.ai_provider == "claude"
         assert cfg.ai_model == "opus-4"
         assert cfg.tests_repo_url == "https://github.com/org/tests"

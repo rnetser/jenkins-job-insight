@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { api } from '@/lib/api'
-import { parseApiTimestamp, isAnalysisTimeout } from '@/lib/utils'
+import { api, ApiError } from '@/lib/api'
+import { formatTimestamp, isAnalysisTimeout, INVALID_DATE_FALLBACK } from '@/lib/utils'
 import type { ResultResponse } from '@/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -22,6 +22,17 @@ const statusMessages: Record<string, { title: string; subtitle: string }> = {
     title: 'Analysis in progress',
     subtitle: 'Crunching test results with AI...',
   },
+  completed: {
+    title: 'Analysis complete',
+    subtitle: 'Analysis finished.',
+  },
+}
+
+/** Title text for terminal error states rendered via the error branch. */
+const terminalErrorTitles: Record<string, string> = {
+  not_found: 'Job not found',
+  unauthorized: 'Access denied',
+  failed: 'Analysis failed',
 }
 
 export function StatusPage() {
@@ -29,55 +40,83 @@ export function StatusPage() {
   const navigate = useNavigate()
   const [data, setData] = useState<ResultResponse | null>(null)
   const [error, setError] = useState('')
+  const [terminalErrorKind, setTerminalErrorKind] = useState<'not_found' | 'unauthorized' | 'failed' | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval>>(null)
-  const inFlightRef = useRef(false)
-
-  const mountedRef = useRef(true)
 
   useEffect(() => {
-    mountedRef.current = true
     if (!jobId) return
 
+    let cancelled = false
+    let inFlight = false
+    const stopPolling = () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+    setData(null)
+    setError('')
+    setTerminalErrorKind(null)
+
     async function poll() {
-      if (inFlightRef.current) return
-      inFlightRef.current = true
+      if (inFlight || cancelled) return
+      inFlight = true
       try {
-        setError('')
         const res = await api.get<ResultResponse>(`/results/${jobId}`)
-        if (!mountedRef.current) return
+        if (cancelled) return
+        setError('')
         setData(res)
         if (res.status === 'completed') {
-          if (intervalRef.current) clearInterval(intervalRef.current)
+          stopPolling()
           navigate(`/results/${jobId}`, { replace: true })
         } else if (res.status === 'failed') {
-          if (intervalRef.current) clearInterval(intervalRef.current)
+          stopPolling()
+          setTerminalErrorKind('failed')
           setError(res.result?.error ?? 'Analysis failed')
         }
-      } catch {
-        if (mountedRef.current) {
-          setError('Failed to reach the server. Retrying...')
+      } catch (err) {
+        if (!cancelled) {
+          if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
+            // Permanent error — stop polling
+            stopPolling()
+            setTerminalErrorKind(err.status === 404 ? 'not_found' : 'unauthorized')
+            setError(
+              err.status === 404
+                ? 'Job not found. It may have been deleted.'
+                : 'Access denied. You are not authorized to view this job.'
+            )
+            setData(null)
+          } else {
+            // Transient transport error — keep polling, don't clear data
+            setTerminalErrorKind(null)
+            setError('Failed to reach the server. Retrying...')
+          }
         }
       } finally {
-        inFlightRef.current = false
+        inFlight = false
       }
     }
 
     poll()
     intervalRef.current = setInterval(poll, POLL_MS)
     return () => {
-      mountedRef.current = false
-      if (intervalRef.current) clearInterval(intervalRef.current)
+      cancelled = true
+      stopPolling()
     }
   }, [jobId, navigate])
 
-  const status = data?.status ?? 'pending'
-  const isRunning = status === 'running'
-  const isWaiting = status === 'waiting'
+  const status = data?.status ?? terminalErrorKind ?? 'pending'
+  const isTimeout = isAnalysisTimeout(status, error)
+  const displayStatus = isTimeout ? 'timeout' : status
+  const queuedAtDisplay = data?.created_at ? formatTimestamp(data.created_at) : null
+  const isRunning = displayStatus === 'running'
+  const isWaiting = displayStatus === 'waiting'
   const isActive = isRunning || isWaiting
-  const msg = statusMessages[status] ?? statusMessages.running
+  const msg = statusMessages[displayStatus] ?? statusMessages.running
+  const statusBadgeLabel = displayStatus.replace(/_/g, ' ').toUpperCase()
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-surface-page overflow-hidden">
+    <div className="relative flex min-h-screen items-start justify-center overflow-x-hidden overflow-y-auto bg-surface-page py-8 sm:items-center">
       {/* Scan-line overlay */}
       <div
         className="pointer-events-none absolute inset-0 opacity-[0.015]"
@@ -129,9 +168,9 @@ export function StatusPage() {
             </div>
 
             {/* Status label */}
-            <div className="text-center">
-              {error && status === 'failed' ? (
-                isAnalysisTimeout(status, error) ? (
+            <div className="text-center" aria-live="polite" aria-atomic="true">
+              {error && terminalErrorKind ? (
+                isTimeout ? (
                   <>
                     <div className="flex items-center justify-center gap-2">
                       <Clock className="h-5 w-5 text-signal-orange" />
@@ -146,7 +185,7 @@ export function StatusPage() {
                 ) : (
                   <>
                     <h2 className="font-display text-lg font-semibold text-signal-red">
-                      Analysis failed
+                      {terminalErrorTitles[terminalErrorKind] ?? terminalErrorTitles.failed}
                     </h2>
                     <p className="mt-2 text-sm text-signal-red/80 bg-signal-red/10 rounded-md px-3 py-2">
                       {error}
@@ -175,8 +214,8 @@ export function StatusPage() {
                 <Row
                   label="BUILD"
                   value={
-                    data?.result?.jenkins_url ? (
-                      <a href={String(data.result.jenkins_url)} target="_blank" rel="noopener noreferrer" className="text-text-link hover:underline font-mono">
+                    data?.jenkins_url ? (
+                      <a href={String(data.jenkins_url)} target="_blank" rel="noopener noreferrer" className="text-text-link hover:underline font-mono">
                         #{data.result.build_number}
                       </a>
                     ) : (
@@ -190,20 +229,27 @@ export function StatusPage() {
                 label="STATUS"
                 value={
                   <Badge variant={isRunning || isWaiting ? 'default' : 'outline'}>
-                    {status.toUpperCase()}
+                    {statusBadgeLabel}
                   </Badge>
                 }
               />
-              {data?.created_at && (
+              {queuedAtDisplay && queuedAtDisplay !== INVALID_DATE_FALLBACK && (
                 <Row
                   label="QUEUED"
-                  value={parseApiTimestamp(data.created_at).toLocaleString()}
+                  value={queuedAtDisplay}
                 />
               )}
             </div>
 
-            {error && status !== 'failed' && (
-              <p className="text-xs text-signal-orange animate-fade-in">{error}</p>
+            {error && !terminalErrorKind && (
+              <p
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+                className="text-xs text-signal-orange animate-fade-in"
+              >
+                {error}
+              </p>
             )}
           </CardContent>
         </Card>
@@ -218,7 +264,7 @@ function Row({
   mono,
 }: {
   label: string
-  value: React.ReactNode
+  value: ReactNode
   mono?: boolean
 }) {
   return (

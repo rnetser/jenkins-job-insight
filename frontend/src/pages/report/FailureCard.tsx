@@ -33,7 +33,8 @@ function CopyableSectionHeader({ title, content, sectionId, copiedSection, onCop
         type="button"
         className="text-text-tertiary hover:text-text-primary transition-colors"
         onClick={() => onCopy(content, sectionId)}
-        title="Copy to clipboard"
+        title={copiedSection === sectionId ? `Copied ${title}` : `Copy ${title} to clipboard`}
+        aria-label={copiedSection === sectionId ? `Copied ${title}` : `Copy ${title} to clipboard`}
       >
         {copiedSection === sectionId ? <Check className="h-3 w-3 text-signal-green" /> : <Copy className="h-3 w-3" />}
       </button>
@@ -50,9 +51,11 @@ interface FailureCardProps {
 }
 
 export function FailureCard({ group, jobId, childJobName, childBuildNumber, index }: FailureCardProps) {
+  const scopedChildJobName = childJobName ?? ''
+  const scopedChildBuildNumber = childBuildNumber ?? 0
   const { githubAvailable, jiraAvailable, comments, reviews, aiConfigs, result, classifications } = useReportState()
   const dispatch = useReportDispatch()
-  const expandKey = `jji-expand-${jobId}-${group.id}`
+  const expandKey = `jji-expand-${jobId}-${scopedChildJobName}-${scopedChildBuildNumber}-${group.id}`
   const [expanded, setExpanded] = useSessionState(expandKey, false)
   const [bugTarget, setBugTarget] = useState<'github' | 'jira' | null>(null)
   const [reviewingAll, setReviewingAll] = useState(false)
@@ -70,11 +73,14 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
   }, [])
 
   function copyToClipboard(text: string, section: string) {
+    if (!navigator.clipboard?.writeText) return
     void navigator.clipboard.writeText(text).then(() => {
       setCopiedSection(section)
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current)
       copyTimeoutRef.current = setTimeout(() => setCopiedSection(null), 2000)
-    }).catch(() => {})
+    }).catch(() => {
+      setCopiedSection(null)
+    })
   }
 
   function getModelsForProvider(provider: string) {
@@ -83,7 +89,6 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
 
   const providers = [...new Set(aiConfigs.map((c) => c.ai_provider))]
   const models = getModelsForProvider(selectedProvider)
-  const showAiSelector = providers.length > 0 || models.length > 0
 
   function handleProviderChange(provider: string) {
     setSelectedProvider(provider)
@@ -95,19 +100,27 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
     }
   }
 
+  const scopedReviewKey = (testName: string) =>
+    reviewKey(testName, scopedChildJobName, scopedChildBuildNumber)
+
   const rep = group.tests[0]
   const analysis = rep.analysis
-  const repKey = reviewKey(rep.test_name, childJobName, childBuildNumber)
+  const repKey = scopedReviewKey(rep.test_name)
   const classification = classifications[repKey] ?? analysis.classification
   const borderColor = classification === 'PRODUCT BUG' ? 'border-l-signal-orange' : 'border-l-signal-blue'
+  const issueCreationAvailable =
+    group.count === 1 &&
+    ((classification === 'PRODUCT BUG' && jiraAvailable) ||
+      (classification !== 'PRODUCT BUG' && githubAvailable))
+  const showAiSelector = (providers.length > 0 || models.length > 0) && issueCreationAvailable
 
   // Comment count for ALL tests in the group
   const groupTestNames = group.tests.map((t) => t.test_name)
-  const commentCount = comments.filter((c) => isCommentInScope(c, groupTestNames, childJobName, childBuildNumber)).length
+  const commentCount = comments.filter((c) => isCommentInScope(c, groupTestNames, scopedChildJobName, scopedChildBuildNumber)).length
 
   // Review-all: check how many tests in group are reviewed
   const reviewedCount = group.tests.filter((t) => {
-    const key = reviewKey(t.test_name, childJobName, childBuildNumber)
+    const key = scopedReviewKey(t.test_name)
     return reviews[key]?.reviewed
   }).length
   const allReviewed = reviewedCount === group.tests.length
@@ -116,32 +129,39 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
     setReviewingAll(true)
     setReviewAllError(null)
     const newState = !allReviewed
+    const BATCH_SIZE = 5
     try {
-      const results = await Promise.allSettled(
-        group.tests.map((t) =>
-          api.put<{ status: string; reviewed_by: string }>(`/results/${jobId}/reviewed`, {
-            test_name: t.test_name,
-            reviewed: newState,
-            child_job_name: childJobName ?? '',
-            child_build_number: childBuildNumber ?? 0,
-          }).then((res) => ({ test: t, reviewed_by: res.reviewed_by })),
-        ),
-      )
       let failedCount = 0
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          const { test: t, reviewed_by } = result.value
-          const key = reviewKey(t.test_name, childJobName, childBuildNumber)
-          dispatch({
-            type: 'SET_REVIEW',
-            payload: { key, state: { reviewed: newState, updated_at: new Date().toISOString(), username: reviewed_by || getUsername() } },
-          })
-        } else {
-          failedCount++
+      const failedTestNames: string[] = []
+      for (let batchStart = 0; batchStart < group.tests.length; batchStart += BATCH_SIZE) {
+        const batch = group.tests.slice(batchStart, batchStart + BATCH_SIZE)
+        const results = await Promise.allSettled(
+          batch.map((t) =>
+            api.put<{ status: string; reviewed_by: string }>(`/results/${jobId}/reviewed`, {
+              test_name: t.test_name,
+              reviewed: newState,
+              child_job_name: scopedChildJobName,
+              child_build_number: scopedChildBuildNumber,
+            }).then((res) => ({ test: t, reviewed_by: res.reviewed_by })),
+          ),
+        )
+        for (let i = 0; i < results.length; i++) {
+          const result = results[i]
+          if (result.status === 'fulfilled') {
+            const { test: t, reviewed_by } = result.value
+            const key = scopedReviewKey(t.test_name)
+            dispatch({
+              type: 'SET_REVIEW',
+              payload: { key, state: { reviewed: newState, updated_at: new Date().toISOString(), username: reviewed_by ?? getUsername() } },
+            })
+          } else {
+            failedCount++
+            failedTestNames.push(batch[i].test_name)
+          }
         }
       }
       if (failedCount > 0) {
-        setReviewAllError(`Failed to update ${failedCount} of ${results.length} tests`)
+        setReviewAllError(`Failed to update ${failedCount} of ${group.tests.length} tests: ${failedTestNames.join(', ')}`)
       }
     } finally {
       setReviewingAll(false)
@@ -172,7 +192,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             {(() => {
               const secondaryBadges = new Set<string>()
               for (const t of group.tests) {
-                const key = reviewKey(t.test_name, childJobName, childBuildNumber)
+                const key = scopedReviewKey(t.test_name)
                 const cls = classifications[key]
                 if (cls && cls !== classification) secondaryBadges.add(cls)
               }
@@ -180,7 +200,9 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                 <ClassificationBadge key={cls} classification={cls} />
               ))
             })()}
-            <ReviewToggle jobId={jobId} testName={rep.test_name} childJobName={childJobName} childBuildNumber={childBuildNumber} />
+            {group.count === 1 && (
+              <ReviewToggle jobId={jobId} testName={rep.test_name} childJobName={scopedChildJobName} childBuildNumber={scopedChildBuildNumber} />
+            )}
             {commentCount > 0 && (
               <span className="flex items-center gap-1 rounded-md bg-surface-elevated px-2 py-1 text-[10px] font-mono text-text-tertiary">
                 <MessageSquare className="h-3 w-3" />
@@ -208,7 +230,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                   <CheckCircle2 className="h-4 w-4" />
                   {allReviewed ? 'All Reviewed' : `Review All (${reviewedCount}/${group.count})`}
                 </button>
-                {reviewAllError && <span className="text-signal-red text-xs">{reviewAllError}</span>}
+                {reviewAllError && <span role="alert" className="text-signal-red text-xs">{reviewAllError}</span>}
               </div>
             )}
 
@@ -220,7 +242,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                   {group.tests.map((t) => (
                     <div key={t.test_name} className="flex items-center justify-between gap-2">
                       <p className="font-mono text-xs text-text-secondary truncate">{t.test_name}</p>
-                      <ReviewToggle jobId={jobId} testName={t.test_name} childJobName={childJobName} childBuildNumber={childBuildNumber} />
+                      <ReviewToggle jobId={jobId} testName={t.test_name} childJobName={scopedChildJobName} childBuildNumber={scopedChildBuildNumber} disabled={reviewingAll} />
                     </div>
                   ))}
                 </div>
@@ -244,7 +266,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                   sectionId="analysis"
                   copiedSection={copiedSection}
                   onCopy={copyToClipboard}
-                  extra={analysis.details.toLowerCase().includes('timed out') ? (
+                  extra={/timed?\s*-?\s*out/i.test(analysis.details) ? (
                     <Badge variant="warning" className="text-[10px] gap-1">
                       <Clock className="h-3 w-3" />
                       Timed Out
@@ -298,7 +320,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                   {analysis.product_bug_report.title && <p className="font-medium text-text-primary">{analysis.product_bug_report.title}</p>}
                   {analysis.product_bug_report.severity && <Badge variant="warning" className="text-[10px]">{analysis.product_bug_report.severity}</Badge>}
                   {analysis.product_bug_report.description && <p className="text-text-secondary whitespace-pre-wrap">{analysis.product_bug_report.description}</p>}
-                  {analysis.product_bug_report.jira_matches?.length > 0 && (
+                  {analysis.product_bug_report?.jira_matches?.length > 0 && (
                     <div className="mt-2">
                       <p className="text-xs font-display uppercase tracking-widest text-text-tertiary mb-1">Matching Jira Issues</p>
                       <ul className="space-y-1">
@@ -322,9 +344,10 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
               <ClassificationSelect
                 jobId={jobId}
                 testName={rep.test_name}
+                testNames={groupTestNames}
                 currentClassification={classification}
-                childJobName={childJobName}
-                childBuildNumber={childBuildNumber}
+                childJobName={scopedChildJobName}
+                childBuildNumber={scopedChildBuildNumber}
               />
               {showAiSelector && (
                 <>
@@ -335,6 +358,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                       value={selectedProvider}
                       onChange={(e) => handleProviderChange(e.target.value)}
                       placeholder="provider"
+                      aria-label="AI provider"
                       className="h-7 rounded-md border border-border-default bg-surface-card px-2 text-xs text-text-primary w-24"
                     />
                     <datalist id={`provider-options-${group.id}`}>
@@ -348,6 +372,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                       value={selectedModel}
                       onChange={(e) => setSelectedModel(e.target.value)}
                       placeholder="model"
+                      aria-label="AI model"
                       className="h-7 rounded-md border border-border-default bg-surface-card px-2 text-xs text-text-primary w-44"
                     />
                     <datalist id={`model-options-${group.id}`}>
@@ -358,21 +383,23 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                   </div>
                 </>
               )}
-              <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={includeLinks}
-                  onChange={(e) => setIncludeLinks(e.target.checked)}
-                  className="rounded border-border-default"
-                />
-                Include links
-              </label>
-              {classification !== 'PRODUCT BUG' && githubAvailable && (
+              {issueCreationAvailable && (
+                <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={includeLinks}
+                    onChange={(e) => setIncludeLinks(e.target.checked)}
+                    className="rounded border-border-default"
+                  />
+                  Include links
+                </label>
+              )}
+              {group.count === 1 && classification !== 'PRODUCT BUG' && githubAvailable && (
                 <Button variant="outline" size="sm" onClick={() => setBugTarget('github')}>
                   <Bug className="h-3.5 w-3.5 mr-1" /> GitHub Issue
                 </Button>
               )}
-              {classification === 'PRODUCT BUG' && jiraAvailable && (
+              {group.count === 1 && classification === 'PRODUCT BUG' && jiraAvailable && (
                 <Button variant="outline" size="sm" onClick={() => setBugTarget('jira')}>
                   <Bug className="h-3.5 w-3.5 mr-1" /> Jira Bug
                 </Button>
@@ -380,12 +407,12 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             </div>
 
             {/* Comments */}
-            <CommentsSection jobId={jobId} testNames={groupTestNames} childJobName={childJobName} childBuildNumber={childBuildNumber} />
+            <CommentsSection jobId={jobId} testNames={groupTestNames} childJobName={scopedChildJobName} childBuildNumber={scopedChildBuildNumber} />
           </CardContent>
         )}
       </Card>
 
-      {bugTarget && (
+      {group.count === 1 && bugTarget && (
         <BugCreationDialog
           open={bugTarget !== null}
           onOpenChange={(o) => { if (!o) setBugTarget(null) }}
@@ -393,8 +420,8 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
           testName={rep.test_name}
           includeLinks={includeLinks}
           target={bugTarget}
-          childJobName={childJobName}
-          childBuildNumber={childBuildNumber}
+          childJobName={scopedChildJobName}
+          childBuildNumber={scopedChildBuildNumber}
           aiProvider={selectedProvider}
           aiModel={selectedModel}
         />

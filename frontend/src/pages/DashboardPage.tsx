@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import type { DashboardJob } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -25,12 +25,41 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { Skeleton } from '@/components/ui/skeleton'
-import { parseApiTimestamp, isAnalysisTimeout, formatDuration } from '@/lib/utils'
+import { parseApiTimestamp, isAnalysisTimeout, formatDuration, formatTimestamp } from '@/lib/utils'
 import { StatusChip } from '@/components/shared/StatusChip'
 import { SearchInput } from '@/components/shared/SearchInput'
 import { Pagination } from '@/components/shared/Pagination'
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { Trash2, MessageSquare, CheckCircle2, GitFork, AlertTriangle } from 'lucide-react'
+
+function MetricCell({ value, displayValue, icon, tone, tooltipText }: {
+  value: number | null | undefined
+  displayValue?: ReactNode
+  icon: ReactNode
+  tone: string
+  tooltipText: string
+}) {
+  if (!value || value <= 0) {
+    return (
+      <TableCell className="text-center">
+        <span className="text-xs text-text-tertiary">—</span>
+      </TableCell>
+    )
+  }
+  return (
+    <TableCell className="text-center">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={`inline-flex items-center gap-1 font-mono text-xs ${tone}`}>
+            {icon}
+            {displayValue ?? value}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{tooltipText}</TooltipContent>
+      </Tooltip>
+    </TableCell>
+  )
+}
 
 const STATUS_BORDER: Record<string, string> = {
   completed: 'border-l-signal-green',
@@ -43,7 +72,10 @@ const STATUS_BORDER: Record<string, string> = {
 
 function relativeTime(iso: string): string {
   // SQLite timestamps are UTC but lack timezone marker — normalize to ISO 8601
-  const diff = Date.now() - parseApiTimestamp(iso).getTime()
+  const parsed = parseApiTimestamp(iso)
+  const timestamp = parsed.getTime()
+  if (Number.isNaN(timestamp)) return '\u2014'
+  const diff = Date.now() - timestamp
   const mins = Math.floor(diff / 60_000)
   if (mins < 1) return 'just now'
   if (mins < 60) return `${mins}m ago`
@@ -51,6 +83,10 @@ function relativeTime(iso: string): string {
   if (hrs < 24) return `${hrs}h ago`
   const days = Math.floor(hrs / 24)
   return `${days}d ago`
+}
+
+function getJobDisplayName(job: DashboardJob | null | undefined): string {
+  return job?.job_name || job?.job_id || ''
 }
 
 export function DashboardPage() {
@@ -71,10 +107,10 @@ export function DashboardPage() {
     if (inFlightRef.current) return
     inFlightRef.current = true
     const thisSeq = ++fetchSeqRef.current
-    setError(null)
     try {
-      const data = await api.get<DashboardJob[]>('/api/dashboard?limit=500')
+      const data = await api.get<DashboardJob[]>('/api/dashboard')
       if (thisSeq === fetchSeqRef.current) {
+        setError(null)
         setJobs(data)
       }
     } catch (err) {
@@ -99,18 +135,26 @@ export function DashboardPage() {
   const filtered = useMemo(() => {
     if (!search) return jobs
     const q = search.toLowerCase()
-    return jobs.filter((j) => (j.job_name || j.job_id).toLowerCase().includes(q))
+    return jobs.filter((j) => {
+      const haystack = `${j.job_name ?? ''} ${j.job_id}`.toLowerCase()
+      return haystack.includes(q)
+    })
   }, [jobs, search])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / perPage))
   const safePage = Math.min(page, totalPages)
   const pageJobs = filtered.slice((safePage - 1) * perPage, safePage * perPage)
 
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage)
+  }, [page, safePage])
+
   async function handleDelete() {
     if (!deleteTarget) return
     setDeleting(true)
     try {
       await api.delete(`/results/${deleteTarget.job_id}`)
+      fetchSeqRef.current += 1
       setJobs((prev) => prev.filter((j) => j.job_id !== deleteTarget.job_id))
       setDeleteTarget(null)
     } catch (err) {
@@ -120,11 +164,14 @@ export function DashboardPage() {
     }
   }
 
-  function handleRowClick(job: DashboardJob) {
-    const dest = ['waiting', 'pending', 'running'].includes(job.status)
+  function getJobRoute(job: DashboardJob): string {
+    return ['waiting', 'pending', 'running'].includes(job.status)
       ? `/status/${job.job_id}`
       : `/results/${job.job_id}`
-    navigate(dest)
+  }
+
+  function handleRowClick(job: DashboardJob) {
+    navigate(getJobRoute(job))
   }
 
   return (
@@ -138,10 +185,10 @@ export function DashboardPage() {
               {filtered.length} analysis {filtered.length === 1 ? 'run' : 'runs'}
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <SearchInput value={search} onChange={setSearch} placeholder="Filter jobs..." className="w-64" />
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <SearchInput value={search} onChange={setSearch} placeholder="Filter jobs..." className="w-full sm:w-64" />
             <Select value={String(perPage)} onValueChange={(v) => setPerPage(Number(v))}>
-              <SelectTrigger className="w-20">
+              <SelectTrigger aria-label="Rows per page" className="w-full sm:w-20">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -154,7 +201,11 @@ export function DashboardPage() {
         </div>
 
         {/* Error */}
-        {error && <p className="text-center text-signal-red py-8">{error}</p>}
+        {error && (
+          <p role="alert" className="text-center text-signal-red py-8">
+            {error}
+          </p>
+        )}
 
         {/* Table */}
         {loading ? (
@@ -163,13 +214,13 @@ export function DashboardPage() {
               <Skeleton key={i} className="h-11 w-full" />
             ))}
           </div>
-        ) : pageJobs.length === 0 ? (
+        ) : pageJobs.length === 0 && (!error || jobs.length > 0) ? (
           <div className="flex flex-col items-center justify-center rounded-lg border border-border-muted bg-surface-card py-16 text-center animate-fade-in">
             <p className="text-text-secondary">
               {search ? 'No jobs match your search.' : 'No analysis runs yet.'}
             </p>
           </div>
-        ) : (
+        ) : error && jobs.length === 0 ? null : (
           <Table>
             <TableHeader>
               <TableRow className="bg-surface-card hover:bg-surface-card">
@@ -180,14 +231,18 @@ export function DashboardPage() {
                 <TableHead className="text-center">Comments</TableHead>
                 <TableHead className="text-center">Children</TableHead>
                 <TableHead className="text-right">Created</TableHead>
-                <TableHead className="w-10" />
+                <TableHead className="w-10">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {pageJobs.map((job, i) => {
-                const displayStatus = isAnalysisTimeout(job.status, job.error) ? 'timeout' : job.status
+                const displayStatus = isAnalysisTimeout(job.status, job.error, job.summary) ? 'timeout' : job.status
                 const borderColor = STATUS_BORDER[displayStatus] ?? 'border-l-border-default'
                 const failureCount = job.failure_count ?? 0
+                const failureHint = job.summary || job.error
+                const rowDest = getJobRoute(job)
 
                 return (
                   <TableRow
@@ -195,24 +250,29 @@ export function DashboardPage() {
                     className={`group cursor-pointer animate-slide-up ${i % 2 === 0 ? 'bg-surface-card' : 'bg-surface-elevated/40'}`}
                     style={{ animationDelay: `${i * 30}ms`, animationFillMode: 'backwards' }}
                     onClick={() => handleRowClick(job)}
-                    tabIndex={0}
-                    role="link"
-                    aria-label={`Open ${job.job_name || job.job_id}${job.build_number !== undefined ? ` #${job.build_number}` : ''}`}
-                    onKeyDown={(e) => {
-                      if (e.target !== e.currentTarget) return
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        handleRowClick(job)
-                      }
-                    }}
                   >
                     {/* Job name + build (with left accent border) */}
                     <TableCell className={`border-l-4 ${borderColor}`}>
-                      <span className="font-display text-sm font-medium text-text-primary">
-                        {job.job_name || job.job_id}
-                      </span>
-                      {job.build_number !== undefined && (
-                        <span className="ml-2 font-mono text-xs text-text-tertiary">#{job.build_number}</span>
+                      <div>
+                        <Link
+                          to={rowDest}
+                          className="font-display text-sm font-medium text-text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+                          onClick={(e) => e.stopPropagation()}
+                          aria-label={`Open ${getJobDisplayName(job)}${job.build_number !== undefined ? ` #${job.build_number}` : ''}`}
+                        >
+                          {getJobDisplayName(job)}
+                        </Link>
+                        {job.build_number !== undefined && (
+                          <span className="ml-2 font-mono text-xs text-text-tertiary">#{job.build_number}</span>
+                        )}
+                      </div>
+                      {failureHint && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <p className="mt-0.5 max-w-xs truncate text-xs text-text-tertiary">{failureHint}</p>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-sm whitespace-pre-wrap">{failureHint}</TooltipContent>
+                        </Tooltip>
                       )}
                     </TableCell>
 
@@ -227,80 +287,43 @@ export function DashboardPage() {
                     </TableCell>
 
                     {/* Failures */}
-                    <TableCell className="text-center">
-                      {failureCount > 0 ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="inline-flex items-center gap-1 font-mono text-xs text-signal-red">
-                              <AlertTriangle className="h-3 w-3" />
-                              {failureCount}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>{failureCount} test {failureCount === 1 ? 'failure' : 'failures'}</TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        <span className="text-xs text-text-tertiary">—</span>
-                      )}
-                    </TableCell>
+                    <MetricCell
+                      value={failureCount}
+                      icon={<AlertTriangle className="h-3 w-3" />}
+                      tone="text-signal-red"
+                      tooltipText={`${failureCount} test ${failureCount === 1 ? 'failure' : 'failures'}`}
+                    />
 
                     {/* Reviewed */}
-                    <TableCell className="text-center">
-                      {failureCount > 0 ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className={`inline-flex items-center gap-1 font-mono text-xs ${
-                              job.reviewed_count === failureCount
-                                ? 'text-signal-green'
-                                : job.reviewed_count > 0
-                                  ? 'text-signal-orange'
-                                  : 'text-signal-red'
-                            }`}>
-                              <CheckCircle2 className="h-3 w-3" />
-                              {job.reviewed_count}/{failureCount}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            {job.reviewed_count} of {failureCount} failures reviewed
-                          </TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        <span className="text-xs text-text-tertiary">—</span>
-                      )}
-                    </TableCell>
+                    <MetricCell
+                      value={failureCount}
+                      displayValue={<>{job.reviewed_count}/{failureCount}</>}
+                      icon={<CheckCircle2 className="h-3 w-3" />}
+                      tone={
+                        job.reviewed_count === failureCount
+                          ? 'text-signal-green'
+                          : job.reviewed_count > 0
+                            ? 'text-signal-orange'
+                            : 'text-signal-red'
+                      }
+                      tooltipText={`${job.reviewed_count} of ${failureCount} failures reviewed`}
+                    />
 
                     {/* Comments */}
-                    <TableCell className="text-center">
-                      {job.comment_count > 0 ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="inline-flex items-center gap-1 font-mono text-xs text-text-secondary">
-                              <MessageSquare className="h-3 w-3" />
-                              {job.comment_count}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>{job.comment_count} {job.comment_count === 1 ? 'comment' : 'comments'}</TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        <span className="text-xs text-text-tertiary">—</span>
-                      )}
-                    </TableCell>
+                    <MetricCell
+                      value={job.comment_count}
+                      icon={<MessageSquare className="h-3 w-3" />}
+                      tone="text-text-secondary"
+                      tooltipText={`${job.comment_count} ${job.comment_count === 1 ? 'comment' : 'comments'}`}
+                    />
 
                     {/* Children */}
-                    <TableCell className="text-center">
-                      {job.child_job_count !== undefined && job.child_job_count > 0 ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="inline-flex items-center gap-1 font-mono text-xs text-text-secondary">
-                              <GitFork className="h-3 w-3" />
-                              {job.child_job_count}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>{job.child_job_count} child {job.child_job_count === 1 ? 'job' : 'jobs'}</TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        <span className="text-xs text-text-tertiary">—</span>
-                      )}
-                    </TableCell>
+                    <MetricCell
+                      value={job.child_job_count}
+                      icon={<GitFork className="h-3 w-3" />}
+                      tone="text-text-secondary"
+                      tooltipText={`${job.child_job_count ?? 0} child ${job.child_job_count === 1 ? 'job' : 'jobs'}`}
+                    />
 
                     {/* Created */}
                     <TableCell className="text-right">
@@ -309,11 +332,13 @@ export function DashboardPage() {
                           <span className="font-mono text-xs text-text-tertiary">{relativeTime(job.created_at)}</span>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <span>Created: {parseApiTimestamp(job.created_at).toLocaleString()}</span>
+                          <span>Created: {formatTimestamp(job.created_at)}</span>
                           {(() => {
                             const startTime = job.analysis_started_at || job.created_at
-                            const duration = job.completed_at && startTime
-                              ? formatDuration(parseApiTimestamp(startTime), parseApiTimestamp(job.completed_at))
+                            const start = startTime ? parseApiTimestamp(startTime) : null
+                            const end = job.completed_at ? parseApiTimestamp(job.completed_at) : null
+                            const duration = start && end && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())
+                              ? formatDuration(start, end)
                               : null
                             return duration ? (
                               <>
@@ -332,8 +357,8 @@ export function DashboardPage() {
                         type="button"
                         variant="ghost"
                         size="icon"
-                        aria-label="Delete"
-                        className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100"
+                        aria-label={`Delete analysis ${getJobDisplayName(job)}`}
+                        className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                         onClick={(e) => {
                           e.stopPropagation()
                           setDeleteTarget(job)
@@ -349,13 +374,15 @@ export function DashboardPage() {
           </Table>
         )}
 
-        <Pagination page={safePage} totalPages={totalPages} onPageChange={setPage} />
+        {(!error || jobs.length > 0) && (
+          <Pagination page={safePage} totalPages={totalPages} onPageChange={setPage} />
+        )}
 
         <ConfirmDialog
           open={deleteTarget !== null}
           onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
           title="Delete analysis"
-          description={`Permanently delete "${deleteTarget?.job_name || deleteTarget?.job_id}"? This cannot be undone.`}
+          description={`Permanently delete "${getJobDisplayName(deleteTarget)}"? This cannot be undone.`}
           confirmLabel="Delete"
           variant="destructive"
           onConfirm={handleDelete}

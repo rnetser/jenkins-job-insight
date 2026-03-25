@@ -3,6 +3,7 @@
 import os
 import tempfile
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Generator
 from unittest.mock import MagicMock, patch
 
@@ -105,6 +106,20 @@ def sample_analysis_result(
         ai_model="test-model",
         failures=[sample_failure_analysis],
     )
+
+
+@pytest.fixture
+def fake_clock() -> tuple[Callable[[], float], Callable[[float], Awaitable[None]]]:
+    """Provide a controllable monotonic clock and async sleep for timer tests."""
+    clock = [0.0]
+
+    def monotonic() -> float:
+        return clock[0]
+
+    async def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    return monotonic, sleep
 
 
 @pytest.fixture

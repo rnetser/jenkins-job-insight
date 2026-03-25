@@ -15,34 +15,49 @@ interface ChildJobSectionProps {
   depth?: number
   /** Hash fragment (without #) from the URL, used for auto-expand on load. */
   activeHash?: string
+  /** Hash ID of the parent section, used to build ancestry-based unique IDs. */
+  parentHashId?: string
 }
 
-export function ChildJobSection({ child, jobId, depth = 0, activeHash }: ChildJobSectionProps) {
-  const expandKey = `jji-expand-${jobId}-child-${child.job_name}-${child.build_number}`
-  const hashId = childJobHashId(child.job_name, child.build_number)
+export function ChildJobSection({ child, jobId, depth = 0, activeHash, parentHashId }: ChildJobSectionProps) {
+  const hashId = childJobHashId(child.job_name, child.build_number, parentHashId)
+  const expandKey = `jji-expand-${jobId}-${hashId}`
   const sectionRef = useRef<HTMLDivElement>(null)
   const [expanded, setExpanded] = useSessionState(expandKey, false)
 
-  // Auto-expand and scroll when the URL hash targets this child job
+  // Auto-expand and scroll when the URL hash targets this child job or any descendant
   useEffect(() => {
-    if (activeHash && activeHash === hashId && !expanded) {
-      setExpanded(true)
-      // Scroll after DOM updates
-      requestAnimationFrame(() => {
-        sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      })
+    if (activeHash && (activeHash === hashId || activeHash.startsWith(`${hashId}--`))) {
+      if (!expanded) {
+        setExpanded(true)
+      }
+      // Scroll only when the hash targets this exact section (even if already expanded)
+      if (activeHash === hashId) {
+        requestAnimationFrame(() => {
+          sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        })
+      }
     }
   }, [activeHash, hashId, expanded, setExpanded])
 
   const handleToggle = useCallback(() => {
+    const replaceHash = (url: string) => {
+      history.replaceState(null, '', url)
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    }
+
     const next = !expanded
     setExpanded(next)
     if (next) {
-      // Set hash without navigation
-      history.replaceState(null, '', `#${hashId}`)
-    } else {
-      // Clear hash
-      history.replaceState(null, '', window.location.pathname + window.location.search)
+      // Set hash without navigation; dispatch hashchange so ReportPage's
+      // activeHash stays in sync (history.replaceState alone does not fire it).
+      replaceHash(`#${hashId}`)
+    } else if (
+      window.location.hash === `#${hashId}` ||
+      window.location.hash.startsWith(`#${hashId}--`)
+    ) {
+      // Only clear hash when it points into this section's branch
+      replaceHash(window.location.pathname + window.location.search)
     }
   }, [expanded, setExpanded, hashId])
 
@@ -50,8 +65,8 @@ export function ChildJobSection({ child, jobId, depth = 0, activeHash }: ChildJo
   const failedChildren = child.failed_children ?? []
 
   const groups = useMemo(
-    () => groupFailures(failures, `child-${child.job_name}-${child.build_number}`),
-    [failures, child.job_name, child.build_number]
+    () => groupFailures(failures, `child-${hashId}`),
+    [failures, hashId]
   )
 
   // Expand/collapse all failure cards within this child job
@@ -88,6 +103,7 @@ export function ChildJobSection({ child, jobId, depth = 0, activeHash }: ChildJo
             target="_blank"
             rel="noopener noreferrer"
             className="shrink-0 text-text-tertiary hover:text-text-link"
+            aria-label={`Open Jenkins job ${child.job_name} #${child.build_number}`}
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </a>
@@ -127,11 +143,12 @@ export function ChildJobSection({ child, jobId, depth = 0, activeHash }: ChildJo
             <div className="mt-1 space-y-3">
               {failedChildren.map((nested) => (
                 <ChildJobSection
-                  key={`${nested.job_name}-${nested.build_number}`}
+                  key={childJobHashId(nested.job_name, nested.build_number, hashId)}
                   child={nested}
                   jobId={jobId}
                   depth={depth + 1}
                   activeHash={activeHash}
+                  parentHashId={hashId}
                 />
               ))}
             </div>

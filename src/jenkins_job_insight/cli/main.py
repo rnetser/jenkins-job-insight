@@ -29,7 +29,7 @@ comments_app = typer.Typer(
 classifications_app = typer.Typer(
     help="List test classifications.", no_args_is_help=True
 )
-config_app = typer.Typer(help="Manage JJI configuration.", no_args_is_help=True)
+config_app = typer.Typer(help="Manage JJI configuration.")
 
 app.add_typer(results_app, name="results")
 app.add_typer(history_app, name="history")
@@ -71,10 +71,39 @@ def _handle_error(err: JJIError) -> None:
     raise typer.Exit(code=1)
 
 
+def _run_client_command(
+    json_output: bool,
+    request_fn,
+    *,
+    columns: list[str] | None = None,
+    labels: dict[str, str] | None = None,
+    emit_output: bool = True,
+):
+    """Execute a client request with standard json/table scaffolding.
+
+    Handles ``_set_json``, ``_get_client``, ``JJIError`` handling, and output
+    formatting.  Returns the response data for callers that need post-processing.
+
+    When *emit_output* is ``False``, JSON output is still emitted (``--json``
+    mode) but human-readable table output is suppressed so callers can print
+    bespoke messages instead.
+    """
+    _set_json(json_output)
+    try:
+        data = request_fn(_get_client())
+    except JJIError as err:
+        _handle_error(err)
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    elif emit_output:
+        print_output(data, columns=columns or [], labels=labels, as_json=False)
+    return data
+
+
 def _resolve_server(
     server: str | None,
     username: str,
-    no_verify_ssl: bool,
+    no_verify_ssl: bool | None,
 ) -> tuple[str, str, bool, ServerConfig | None]:
     """Resolve server URL, username, and SSL setting from CLI/env/config.
 
@@ -87,6 +116,7 @@ def _resolve_server(
             a config server name, or empty).
         username: Value from --user / JJI_USERNAME.
         no_verify_ssl: Value from --no-verify-ssl / JJI_NO_VERIFY_SSL.
+            None means "inherit from config profile".
 
     Returns:
         (server_url, username, no_verify_ssl, server_config) with config
@@ -97,14 +127,8 @@ def _resolve_server(
         typer.Exit: If no server can be determined.
     """
     if server and (server.startswith("http://") or server.startswith("https://")):
-        # Explicit URL -- use config only as fallback for username / ssl.
-        cfg = get_server_config()
-        if cfg:
-            if not username:
-                username = cfg.username
-            if not no_verify_ssl:
-                no_verify_ssl = cfg.no_verify_ssl
-        return server, username, no_verify_ssl, cfg
+        # Explicit URL -- treat as self-contained; do not inherit profile config.
+        return server, username, no_verify_ssl or False, None
 
     if server:
         # Treat as a config server name.
@@ -119,7 +143,7 @@ def _resolve_server(
             raise typer.Exit(1)
         if not username:
             username = cfg.username
-        if not no_verify_ssl:
+        if no_verify_ssl is None:
             no_verify_ssl = cfg.no_verify_ssl
         return cfg.url, username, no_verify_ssl, cfg
 
@@ -128,7 +152,7 @@ def _resolve_server(
     if cfg:
         if not username:
             username = cfg.username
-        if not no_verify_ssl:
+        if no_verify_ssl is None:
             no_verify_ssl = cfg.no_verify_ssl
         return cfg.url, username, no_verify_ssl, cfg
 
@@ -161,15 +185,39 @@ def main_callback(
         envvar="JJI_USERNAME",
         help="Username displayed in comments and reviews.",
     ),
-    no_verify_ssl: bool = typer.Option(
-        False,
+    no_verify_ssl: bool | None = typer.Option(
+        None,
         "--no-verify-ssl",
         envvar="JJI_NO_VERIFY_SSL",
         help="Disable SSL certificate verification for HTTPS connections.",
     ),
+    verify_ssl: bool | None = typer.Option(
+        None,
+        "--verify-ssl",
+        help="Force SSL certificate verification on (overrides config profile).",
+    ),
+    insecure: bool = typer.Option(
+        False,
+        "--insecure",
+        help="Alias for --no-verify-ssl.",
+    ),
 ):
     """jji -- CLI for the jenkins-job-insight REST API."""
     _state["json"] = json_output
+
+    # Merge --insecure / --verify-ssl into no_verify_ssl.
+    # --verify-ssl explicitly forces verification on (no_verify_ssl=False).
+    # --insecure unconditionally disables verification, overriding env/config.
+    if verify_ssl and insecure:
+        typer.echo(
+            "Error: --verify-ssl and --insecure are mutually exclusive.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if verify_ssl:
+        no_verify_ssl = False
+    elif insecure:
+        no_verify_ssl = True
 
     # Config subcommands do not require a server connection.
     if ctx.invoked_subcommand == "config":
@@ -193,13 +241,7 @@ def health(
     json_output: bool = _JSON_OPTION,
 ):
     """Check server health."""
-    _set_json(json_output)
-    try:
-        client = _get_client()
-        data = client.health()
-    except JJIError as err:
-        _handle_error(err)
-    print_output(data, columns=["status"], as_json=_state.get("json", False))
+    _run_client_command(json_output, lambda c: c.health(), columns=["status"])
 
 
 # -- Results ------------------------------------------------------------------
@@ -211,53 +253,37 @@ def results_list(
     json_output: bool = _JSON_OPTION,
 ):
     """List recent analyzed jobs."""
-    _set_json(json_output)
-    try:
-        client = _get_client()
-        data = client.list_results(limit=limit)
-    except JJIError as err:
-        _handle_error(err)
-    print_output(
-        data,
+    _run_client_command(
+        json_output,
+        lambda c: c.list_results(limit=limit),
         columns=["job_id", "status", "jenkins_url", "created_at"],
         labels={
             "job_id": "JOB ID",
             "jenkins_url": "JENKINS URL",
             "created_at": "CREATED",
         },
-        as_json=_state.get("json", False),
     )
 
 
 @results_app.command("dashboard")
 def dashboard(
-    limit: int = typer.Option(500, "--limit", "-l", help="Maximum number of results"),
     json_output: bool = _JSON_OPTION,
 ):
     """List analysis jobs with dashboard metadata (failure counts, review progress)."""
-    _set_json(json_output)
-    try:
-        client = _get_client()
-        data = client.dashboard(limit=limit)
-    except JJIError as err:
-        _handle_error(err)
-
-    if _state.get("json", False):
-        print_output(data, columns=[], as_json=True)
-    else:
-        print_output(
-            data,
-            columns=[
-                "job_id",
-                "job_name",
-                "status",
-                "failure_count",
-                "reviewed_count",
-                "comment_count",
-                "created_at",
-            ],
-            as_json=False,
-        )
+    _run_client_command(
+        json_output,
+        lambda c: c.dashboard(),
+        columns=[
+            "job_id",
+            "job_name",
+            "build_number",
+            "status",
+            "failure_count",
+            "reviewed_count",
+            "comment_count",
+            "created_at",
+        ],
+    )
 
 
 @results_app.command("show")
@@ -332,20 +358,11 @@ def review_status(
     json_output: bool = _JSON_OPTION,
 ):
     """Show review status for an analysis."""
-    _set_json(json_output)
-    try:
-        client = _get_client()
-        data = client.get_review_status(job_id)
-    except JJIError as err:
-        _handle_error(err)
-    if _state.get("json", False):
-        print_output(data, columns=[], as_json=True)
-    else:
-        print_output(
-            data,
-            columns=["total_failures", "reviewed_count", "comment_count"],
-            as_json=False,
-        )
+    _run_client_command(
+        json_output,
+        lambda c: c.get_review_status(job_id),
+        columns=["total_failures", "reviewed_count", "comment_count"],
+    )
 
 
 @results_app.command("set-reviewed")
@@ -360,23 +377,31 @@ def set_reviewed_cmd(
     json_output: bool = _JSON_OPTION,
 ):
     """Set or clear the reviewed state for a test failure."""
-    _set_json(json_output)
-    try:
-        client = _get_client()
-        data = client.set_reviewed(
+    if child_build_number < 0:
+        typer.echo("Error: --child-build must be non-negative.", err=True)
+        raise typer.Exit(1)
+    if child_build_number > 0 and not child_job_name:
+        typer.echo("Error: --child-build requires --child-job.", err=True)
+        raise typer.Exit(1)
+
+    data = _run_client_command(
+        json_output,
+        lambda c: c.set_reviewed(
             job_id=job_id,
             test_name=test_name,
             reviewed=reviewed,
             child_job_name=child_job_name,
             child_build_number=child_build_number,
-        )
-    except JJIError as err:
-        _handle_error(err)
-    if _state.get("json", False):
-        print_output(data, columns=[], as_json=True)
-    else:
+        ),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
         state = "reviewed" if reviewed else "not reviewed"
-        typer.echo(f"Marked as {state} (by {data.get('reviewed_by', '')})")
+        reviewer = data.get("reviewed_by", "")
+        msg = f"Marked as {state}"
+        if reviewer:
+            msg += f" (by {reviewer})"
+        typer.echo(msg)
 
 
 @results_app.command("enrich-comments")
@@ -385,15 +410,12 @@ def enrich_comments_cmd(
     json_output: bool = _JSON_OPTION,
 ):
     """Enrich comments with live PR/ticket statuses."""
-    _set_json(json_output)
-    try:
-        client = _get_client()
-        data = client.enrich_comments(job_id)
-    except JJIError as err:
-        _handle_error(err)
-    if _state.get("json", False):
-        print_output(data, columns=[], as_json=True)
-    else:
+    data = _run_client_command(
+        json_output,
+        lambda c: c.enrich_comments(job_id),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
         enriched = data.get("enriched", 0)
         typer.echo(f"Enriched {enriched} comment(s).")
 
@@ -503,6 +525,22 @@ def analyze(
     """Submit a Jenkins job for analysis."""
     _set_json(json_output)
 
+    _positive_int_fields = {
+        "--build-number": build_number,
+        "--poll-interval": poll_interval,
+        "--jira-max-results": jira_max_results,
+        "--ai-cli-timeout": ai_cli_timeout,
+        "--jenkins-artifacts-max-size-mb": jenkins_artifacts_max_size_mb,
+        "--jenkins-artifacts-context-lines": jenkins_artifacts_context_lines,
+    }
+    for flag_name, flag_value in _positive_int_fields.items():
+        if flag_value is not None and flag_value <= 0:
+            typer.echo(f"Error: {flag_name} must be greater than 0.", err=True)
+            raise typer.Exit(1)
+    if max_wait is not None and max_wait < 0:
+        typer.echo("Error: --max-wait must be non-negative.", err=True)
+        raise typer.Exit(1)
+
     # Start from config defaults (lowest priority), then overlay CLI flags.
     extras: dict = {}
     cfg = _state.get("server_config")
@@ -526,24 +564,41 @@ def analyze(
             if value:
                 extras[key] = value
 
-        # Integer fields from config -- only set if not None.
+        # Integer fields from config -- only forward values that differ from
+        # the dataclass default (0 = "use server default" for all these fields).
         _cfg_int_fields = {
             "ai_cli_timeout": cfg.ai_cli_timeout,
             "jira_max_results": cfg.jira_max_results,
             "poll_interval_minutes": cfg.poll_interval_minutes,
             "max_wait_minutes": cfg.max_wait_minutes,
         }
+        _cfg_int_defaults = {
+            "ai_cli_timeout": ServerConfig.ai_cli_timeout,
+            "jira_max_results": ServerConfig.jira_max_results,
+            "poll_interval_minutes": ServerConfig.poll_interval_minutes,
+            "max_wait_minutes": ServerConfig.max_wait_minutes,
+        }
         for key, value in _cfg_int_fields.items():
-            if value is not None:
-                extras[key] = value
+            if value == _cfg_int_defaults[key]:
+                continue
+            if key == "max_wait_minutes":
+                if value < 0:
+                    typer.echo(f"Error: config {key} must be non-negative.", err=True)
+                    raise typer.Exit(1)
+            elif value <= 0:
+                typer.echo(f"Error: config {key} must be greater than 0.", err=True)
+                raise typer.Exit(1)
+            extras[key] = value
 
-        # Boolean fields from config.
-        if cfg.enable_jira:
-            extras["enable_jira"] = True
-        if not cfg.jenkins_ssl_verify:
-            extras["jenkins_ssl_verify"] = False
-        if not cfg.jira_ssl_verify:
-            extras["jira_ssl_verify"] = False
+        # Boolean fields from config -- forward when they differ from the
+        # dataclass default so that explicit ``enable_jira = false`` in the
+        # config is not silently dropped.
+        if cfg.enable_jira is not None:
+            extras["enable_jira"] = cfg.enable_jira
+        if cfg.jenkins_ssl_verify is not None:
+            extras["jenkins_ssl_verify"] = cfg.jenkins_ssl_verify
+        if cfg.jira_ssl_verify is not None:
+            extras["jira_ssl_verify"] = cfg.jira_ssl_verify
         if cfg.wait_for_completion is not None:
             extras["wait_for_completion"] = cfg.wait_for_completion
 
@@ -754,43 +809,6 @@ def history_stats(
                 columns=["test_name", "count", "classification"],
                 as_json=False,
             )
-
-
-@history_app.command("trends")
-def history_trends(
-    period: str = typer.Option(
-        "daily", "--period", "-p", help="Aggregation period: daily or weekly."
-    ),
-    days: int = typer.Option(30, "--days", "-d", help="Lookback window in days."),
-    job_name: str = typer.Option("", "--job-name", "-j"),
-    exclude_job_id: str = typer.Option(
-        "", "--exclude-job-id", help="Exclude results from this job ID."
-    ),
-    json_output: bool = _JSON_OPTION,
-):
-    """Show failure rate trends over time."""
-    _set_json(json_output)
-    try:
-        client = _get_client()
-        data = client.get_trends(
-            period=period, days=days, job_name=job_name, exclude_job_id=exclude_job_id
-        )
-    except JJIError as err:
-        _handle_error(err)
-
-    if _state.get("json", False):
-        print_output(data, columns=[], as_json=True)
-    else:
-        trend_data = data.get("data", [])
-        if trend_data:
-            print_output(
-                trend_data,
-                columns=["date", "failures", "unique_tests"],
-                labels={"unique_tests": "UNIQUE TESTS"},
-                as_json=False,
-            )
-        else:
-            typer.echo("No trend data available.")
 
 
 @history_app.command("failures")
@@ -1014,17 +1032,11 @@ def capabilities(
     Reports whether the server is configured to create GitHub issues
     and Jira bugs automatically. Requires server-level credentials.
     """
-    _set_json(json_output)
-    try:
-        client = _get_client()
-        data = client.capabilities()
-    except JJIError as err:
-        _handle_error(err)
-
-    if _state.get("json", False):
-        print_output(data, columns=[], as_json=True)
-    else:
-        print_output(data, columns=["github_issues", "jira_bugs"], as_json=False)
+    _run_client_command(
+        json_output,
+        lambda c: c.capabilities(),
+        columns=["github_issues", "jira_bugs"],
+    )
 
 
 @app.command("ai-configs")

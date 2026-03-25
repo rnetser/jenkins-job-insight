@@ -2,9 +2,12 @@
 
 import json
 import os
+from types import MappingProxyType
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
+import typer.main
 from typer.testing import CliRunner
 
 from jenkins_job_insight.cli.client import JJIError
@@ -13,7 +16,50 @@ from jenkins_job_insight.cli.main import app
 
 runner = CliRunner()
 
+
+def _extract_envvar_names(command_name: str) -> tuple[str, ...]:
+    """Extract envvar names bound to a typer command's options.
+
+    Derives the set directly from the Click command object so it stays
+    in sync with the analyze command definition automatically.
+    """
+    # Resolve the underlying Click command via the typer-created Click Group
+    click_group: click.Group = typer.main.get_command(app)  # type: ignore[attr-defined]
+    cmd = click_group.commands.get(command_name)
+    if not cmd:
+        raise AssertionError(
+            f"Command {command_name!r} not found in {click_group.name!r}; "
+            f"available: {sorted(click_group.commands)}"
+        )
+    names: list[str] = []
+    for param in cmd.params:
+        if isinstance(param, click.Option) and param.envvar:
+            names.extend(
+                param.envvar if isinstance(param.envvar, list) else [param.envvar]
+            )
+    return tuple(sorted(names))
+
+
+# Environment variables that the analyze CLI options bind to via envvar=.
+# Used by tests that need a clean environment without inherited CI/local values.
+# Derived from the analyze command definition to avoid hard-coded duplication.
+_ANALYZE_ENV_VARS = _extract_envvar_names("analyze")
+
+
+def _env_without_analyze_bindings() -> dict[str, str]:
+    """Return a copy of os.environ without analyze-related env vars."""
+    return {k: v for k, v in os.environ.items() if k not in _ANALYZE_ENV_VARS}
+
+
 _TEST_SERVER = "http://test-server:8000"
+
+# Fake credential constants used throughout tests.
+_FAKE_JENKINS_PASSWORD = "cfg-jenkins-pw"  # noqa: S105  # pragma: allowlist secret
+_FAKE_JIRA_API_TOKEN = "cfg-jira-tok"  # noqa: S105
+_FAKE_JIRA_PAT = "cfg-jira-pat"  # noqa: S105
+_FAKE_GITHUB_TOKEN = "ghp_cfg_token"  # noqa: S105
+_FAKE_GITHUB_CLI_TOKEN = "ghp_tok"  # noqa: S105
+_FAKE_GITHUB_CLI_OVERRIDE = "ghp_cli_override"  # noqa: S105  # pragma: allowlist secret
 
 
 @pytest.fixture
@@ -21,10 +67,23 @@ def mock_client():
     """Provide a mocked JJIClient for all CLI tests.
 
     Sets JJI_SERVER so the main_callback does not exit early,
-    and patches _get_client so no real HTTP calls are made.
+    patches _get_client so no real HTTP calls are made,
+    and stubs get_server_config to prevent local config.toml from
+    injecting unexpected defaults.
     """
     with (
-        patch.dict(os.environ, {"JJI_SERVER": _TEST_SERVER}),
+        patch.dict(
+            os.environ,
+            {
+                **{k: v for k, v in os.environ.items() if not k.startswith("JJI_")},
+                "JJI_SERVER": _TEST_SERVER,
+            },
+            clear=True,
+        ),
+        patch(
+            "jenkins_job_insight.cli.main.get_server_config",
+            return_value=ServerConfig(url=_TEST_SERVER),
+        ),
         patch("jenkins_job_insight.cli.main._get_client") as mock_get,
     ):
         client = MagicMock()
@@ -237,11 +296,11 @@ class TestDashboardCommand:
         assert parsed == []
         mock_client.dashboard.assert_called_once()
 
-    def test_dashboard_custom_limit(self, mock_client):
+    def test_dashboard_called_without_args(self, mock_client):
         mock_client.dashboard.return_value = []
-        result = runner.invoke(app, ["results", "dashboard", "--limit", "10"])
+        result = runner.invoke(app, ["results", "dashboard"])
         assert result.exit_code == 0
-        mock_client.dashboard.assert_called_once_with(limit=10)
+        mock_client.dashboard.assert_called_once_with()
 
 
 class TestAnalyzeCommand:
@@ -303,15 +362,6 @@ class TestHistoryCommands:
         result = runner.invoke(app, ["history", "stats", "ocp-e2e"])
         assert result.exit_code == 0
         assert "ocp-e2e" in result.output
-
-    def test_history_trends(self, mock_client):
-        mock_client.get_trends.return_value = {
-            "period": "daily",
-            "data": [{"date": "2026-03-18", "failures": 5, "unique_tests": 3}],
-        }
-        result = runner.invoke(app, ["history", "trends"])
-        assert result.exit_code == 0
-        assert "2026-03-18" in result.output or "daily" in result.output
 
     def test_history_failures(self, mock_client):
         mock_client.get_all_failures.return_value = {
@@ -428,6 +478,7 @@ class TestServerFlag:
         """CLI exits with error when no server is configured."""
         env = {k: v for k, v in os.environ.items() if k != "JJI_SERVER"}
         with (
+            patch("jenkins_job_insight.cli.main._state", {}),
             patch.dict(os.environ, env, clear=True),
             patch("jenkins_job_insight.cli.main.get_server_config", return_value=None),
         ):
@@ -583,8 +634,9 @@ class TestAnalyzeFlags:
             ],
         )
         assert result.exit_code == 0
-        call_kwargs = mock_client.analyze.call_args
-        assert "ai_provider" in str(call_kwargs)
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs["ai_provider"] == "claude"
+        assert kwargs["ai_model"] == "opus-4"
 
 
 class TestClassifyForwardsChildJob:
@@ -638,20 +690,7 @@ class TestAnalyzeJiraField:
     def test_analyze_jira_omitted_not_in_extras(self, mock_client):
         """When neither --jira nor --no-jira is given, enable_jira is not sent."""
         mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
-        env_vars_to_clear = [
-            "JENKINS_URL",
-            "JENKINS_USER",
-            "JENKINS_PASSWORD",
-            "TESTS_REPO_URL",
-            "JIRA_URL",
-            "JIRA_EMAIL",
-            "JIRA_API_TOKEN",
-            "JIRA_PAT",
-            "JIRA_PROJECT_KEY",
-            "GITHUB_TOKEN",
-        ]
-        clean_env = {k: v for k, v in os.environ.items() if k not in env_vars_to_clear}
-        with patch.dict(os.environ, clean_env, clear=True):
+        with patch.dict(os.environ, _env_without_analyze_bindings(), clear=True):
             result = runner.invoke(
                 app,
                 ["analyze", "--job-name", "my-job", "--build-number", "27"],
@@ -708,16 +747,6 @@ class TestHistoryExcludeJobId:
         kwargs = mock_client.get_job_stats.call_args[1]
         assert kwargs["exclude_job_id"] == "job-99"
 
-    def test_history_trends_exclude_job_id(self, mock_client):
-        mock_client.get_trends.return_value = {"period": "daily", "data": []}
-        result = runner.invoke(
-            app,
-            ["history", "trends", "--exclude-job-id", "job-99"],
-        )
-        assert result.exit_code == 0
-        kwargs = mock_client.get_trends.call_args[1]
-        assert kwargs["exclude_job_id"] == "job-99"
-
 
 class TestClassificationsParentJobName:
     def test_classifications_list_parent_job_name(self, mock_client):
@@ -734,7 +763,7 @@ class TestClassificationsParentJobName:
 class TestAnalyzeAllOptions:
     """Verify that all AnalyzeRequest fields are forwarded via CLI options."""
 
-    _ANALYZE_RESPONSE = {"status": "queued", "job_id": "j1"}
+    _ANALYZE_RESPONSE = MappingProxyType({"status": "queued", "job_id": "j1"})
 
     @pytest.mark.parametrize(
         "cli_flag,cli_value,body_key,expected_value",
@@ -746,7 +775,12 @@ class TestAnalyzeAllOptions:
                 "https://jenkins.local",
             ),
             ("--jenkins-user", "admin", "jenkins_user", "admin"),
-            ("--jenkins-password", "s3cret", "jenkins_password", "s3cret"),
+            (
+                "--jenkins-password",
+                _FAKE_JENKINS_PASSWORD,
+                "jenkins_password",
+                _FAKE_JENKINS_PASSWORD,
+            ),
             (
                 "--tests-repo-url",
                 "https://github.com/org/tests",
@@ -760,10 +794,20 @@ class TestAnalyzeAllOptions:
                 "https://jira.example.com",
             ),
             ("--jira-email", "user@example.com", "jira_email", "user@example.com"),
-            ("--jira-api-token", "tok-123", "jira_api_token", "tok-123"),
-            ("--jira-pat", "pat-abc", "jira_pat", "pat-abc"),
+            (
+                "--jira-api-token",
+                _FAKE_JIRA_API_TOKEN,
+                "jira_api_token",
+                _FAKE_JIRA_API_TOKEN,
+            ),
+            ("--jira-pat", _FAKE_JIRA_PAT, "jira_pat", _FAKE_JIRA_PAT),
             ("--jira-project-key", "PROJ", "jira_project_key", "PROJ"),
-            ("--github-token", "ghp_abc123", "github_token", "ghp_abc123"),
+            (
+                "--github-token",
+                _FAKE_GITHUB_CLI_TOKEN,
+                "github_token",
+                _FAKE_GITHUB_CLI_TOKEN,
+            ),
             ("--raw-prompt", "extra instructions", "raw_prompt", "extra instructions"),
         ],
     )
@@ -852,21 +896,7 @@ class TestAnalyzeAllOptions:
     def test_no_optional_fields_when_not_provided(self, mock_client):
         """When no optional flags are given and no env vars set, extras should be empty."""
         mock_client.analyze.return_value = self._ANALYZE_RESPONSE
-        # Clear environment variables that the CLI options bind to via envvar=.
-        env_vars_to_clear = [
-            "JENKINS_URL",
-            "JENKINS_USER",
-            "JENKINS_PASSWORD",
-            "TESTS_REPO_URL",
-            "JIRA_URL",
-            "JIRA_EMAIL",
-            "JIRA_API_TOKEN",
-            "JIRA_PAT",
-            "JIRA_PROJECT_KEY",
-            "GITHUB_TOKEN",
-        ]
-        clean_env = {k: v for k, v in os.environ.items() if k not in env_vars_to_clear}
-        with patch.dict(os.environ, clean_env, clear=True):
+        with patch.dict(os.environ, _env_without_analyze_bindings(), clear=True):
             result = runner.invoke(
                 app, ["analyze", "--job-name", "my-job", "--build-number", "1"]
             )
@@ -899,7 +929,7 @@ class TestAnalyzeAllOptions:
                 "50",
                 "--no-jenkins-ssl-verify",
                 "--github-token",
-                "ghp_tok",
+                _FAKE_GITHUB_CLI_TOKEN,
             ],
         )
         assert result.exit_code == 0
@@ -909,7 +939,7 @@ class TestAnalyzeAllOptions:
         assert kwargs["jira_url"] == "https://jira.local"
         assert kwargs["jira_max_results"] == 50
         assert kwargs["jenkins_ssl_verify"] is False
-        assert kwargs["github_token"] == "ghp_tok"
+        assert kwargs["github_token"] == _FAKE_GITHUB_CLI_TOKEN
 
 
 class TestCapabilitiesCommand:
@@ -1202,7 +1232,13 @@ class TestNoVerifySSL:
     def test_no_verify_ssl_passes_to_client(self):
         """--no-verify-ssl should cause _get_client to create client with verify_ssl=False."""
         with (
-            patch.dict(os.environ, {"JJI_SERVER": _TEST_SERVER}),
+            patch.dict(
+                os.environ, {"JJI_SERVER": _TEST_SERVER, "JJI_USERNAME": ""}, clear=True
+            ),
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=ServerConfig(url=_TEST_SERVER),
+            ),
             patch("jenkins_job_insight.cli.main.JJIClient") as mock_cls,
         ):
             mock_instance = MagicMock()
@@ -1217,7 +1253,14 @@ class TestNoVerifySSL:
     def test_without_no_verify_ssl_flag(self):
         """Without --no-verify-ssl, client should be created with verify_ssl=True."""
         with (
-            patch.dict(os.environ, {"JJI_SERVER": _TEST_SERVER}),
+            patch("jenkins_job_insight.cli.main._state", {}),
+            patch.dict(
+                os.environ, {"JJI_SERVER": _TEST_SERVER, "JJI_USERNAME": ""}, clear=True
+            ),
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=ServerConfig(url=_TEST_SERVER),
+            ),
             patch("jenkins_job_insight.cli.main.JJIClient") as mock_cls,
         ):
             mock_instance = MagicMock()
@@ -1234,7 +1277,16 @@ class TestNoVerifySSL:
         with (
             patch.dict(
                 os.environ,
-                {"JJI_SERVER": _TEST_SERVER, "JJI_NO_VERIFY_SSL": "true"},
+                {
+                    "JJI_SERVER": _TEST_SERVER,
+                    "JJI_NO_VERIFY_SSL": "true",
+                    "JJI_USERNAME": "",
+                },
+                clear=True,
+            ),
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=ServerConfig(url=_TEST_SERVER),
             ),
             patch("jenkins_job_insight.cli.main.JJIClient") as mock_cls,
         ):
@@ -1301,7 +1353,7 @@ class TestJsonPerCommand:
 class TestAnalyzeConfigDefaults:
     """Config file values are used as defaults when CLI flags are not provided."""
 
-    _ANALYZE_RESPONSE = {"status": "queued", "job_id": "j1"}
+    _ANALYZE_RESPONSE = MappingProxyType({"status": "queued", "job_id": "j1"})
 
     _FULL_CONFIG = ServerConfig(
         url="http://localhost:8000",
@@ -1309,7 +1361,7 @@ class TestAnalyzeConfigDefaults:
         no_verify_ssl=False,
         jenkins_url="https://jenkins.cfg.local",
         jenkins_user="cfg-jenkins-user",
-        jenkins_password="cfg-jenkins-pw",  # pragma: allowlist secret
+        jenkins_password=_FAKE_JENKINS_PASSWORD,
         jenkins_ssl_verify=False,
         tests_repo_url="https://github.com/cfg/tests",
         ai_provider="gemini",
@@ -1317,13 +1369,13 @@ class TestAnalyzeConfigDefaults:
         ai_cli_timeout=20,
         jira_url="https://jira.cfg.local",
         jira_email="cfg@example.com",
-        jira_api_token="cfg-jira-tok",
-        jira_pat="cfg-jira-pat",
+        jira_api_token=_FAKE_JIRA_API_TOKEN,
+        jira_pat=_FAKE_JIRA_PAT,
         jira_project_key="CFG",
         jira_ssl_verify=False,
         jira_max_results=40,
         enable_jira=True,
-        github_token="ghp_cfg_token",
+        github_token=_FAKE_GITHUB_TOKEN,
     )
 
     def _invoke_analyze(self, cli_args: list[str], cfg: ServerConfig | None = None):
@@ -1352,17 +1404,16 @@ class TestAnalyzeConfigDefaults:
         kwargs = client.analyze.call_args[1]
         assert kwargs["jenkins_url"] == "https://jenkins.cfg.local"
         assert kwargs["jenkins_user"] == "cfg-jenkins-user"
-        _pw = "cfg-jenkins-pw"  # pragma: allowlist secret
-        assert kwargs["jenkins_password"] == _pw
+        assert kwargs["jenkins_password"] == _FAKE_JENKINS_PASSWORD
         assert kwargs["tests_repo_url"] == "https://github.com/cfg/tests"
         assert kwargs["ai_provider"] == "gemini"
         assert kwargs["ai_model"] == "2.5-pro"
         assert kwargs["jira_url"] == "https://jira.cfg.local"
         assert kwargs["jira_email"] == "cfg@example.com"
-        assert kwargs["jira_api_token"] == "cfg-jira-tok"
-        assert kwargs["jira_pat"] == "cfg-jira-pat"
+        assert kwargs["jira_api_token"] == _FAKE_JIRA_API_TOKEN
+        assert kwargs["jira_pat"] == _FAKE_JIRA_PAT
         assert kwargs["jira_project_key"] == "CFG"
-        assert kwargs["github_token"] == "ghp_cfg_token"
+        assert kwargs["github_token"] == _FAKE_GITHUB_TOKEN
 
     def test_config_integer_fields_used_as_defaults(self):
         """Integer config fields are sent when CLI flags are absent."""
@@ -1401,7 +1452,7 @@ class TestAnalyzeConfigDefaults:
                 "--jenkins-url",
                 "https://jenkins.cli.local",
                 "--github-token",
-                "ghp_cli_override",
+                _FAKE_GITHUB_CLI_OVERRIDE,
             ]
         )
         assert result.exit_code == 0
@@ -1409,7 +1460,7 @@ class TestAnalyzeConfigDefaults:
         assert kwargs["ai_provider"] == "claude"
         assert kwargs["ai_model"] == "opus-4"
         assert kwargs["jenkins_url"] == "https://jenkins.cli.local"
-        assert kwargs["github_token"] == "ghp_cli_override"
+        assert kwargs["github_token"] == _FAKE_GITHUB_CLI_OVERRIDE
         # Non-overridden fields still come from config.
         assert kwargs["jenkins_user"] == "cfg-jenkins-user"
         assert kwargs["jira_url"] == "https://jira.cfg.local"
@@ -1464,6 +1515,45 @@ class TestAnalyzeConfigDefaults:
         assert "ai_provider" not in kwargs
         assert "enable_jira" not in kwargs
         assert "github_token" not in kwargs
+
+    def test_config_wait_for_completion_used_as_default(self):
+        """wait_for_completion from config is sent when CLI flag is absent."""
+        cfg = ServerConfig(
+            url="http://localhost:8000",
+            wait_for_completion=True,
+        )
+        result, client = self._invoke_analyze(
+            ["analyze", "--job-name", "my-job", "--build-number", "1"], cfg=cfg
+        )
+        assert result.exit_code == 0
+        kwargs = client.analyze.call_args[1]
+        assert kwargs["wait_for_completion"] is True
+
+    def test_config_poll_interval_used_as_default(self):
+        """poll_interval_minutes from config is sent when CLI flag is absent."""
+        cfg = ServerConfig(
+            url="http://localhost:8000",
+            poll_interval_minutes=7,
+        )
+        result, client = self._invoke_analyze(
+            ["analyze", "--job-name", "my-job", "--build-number", "1"], cfg=cfg
+        )
+        assert result.exit_code == 0
+        kwargs = client.analyze.call_args[1]
+        assert kwargs["poll_interval_minutes"] == 7
+
+    def test_config_max_wait_used_as_default(self):
+        """max_wait_minutes from config is sent when CLI flag is absent."""
+        cfg = ServerConfig(
+            url="http://localhost:8000",
+            max_wait_minutes=90,
+        )
+        result, client = self._invoke_analyze(
+            ["analyze", "--job-name", "my-job", "--build-number", "1"], cfg=cfg
+        )
+        assert result.exit_code == 0
+        kwargs = client.analyze.call_args[1]
+        assert kwargs["max_wait_minutes"] == 90
 
 
 class TestAnalyzeWaitFlags:
@@ -1532,20 +1622,7 @@ class TestAnalyzeWaitFlags:
     def test_wait_omitted_not_in_extras(self, mock_client):
         """When --wait/--no-wait is not given, wait_for_completion is not sent."""
         mock_client.analyze.return_value = {"status": "queued", "job_id": "j1"}
-        env_vars_to_clear = [
-            "JENKINS_URL",
-            "JENKINS_USER",
-            "JENKINS_PASSWORD",
-            "TESTS_REPO_URL",
-            "JIRA_URL",
-            "JIRA_EMAIL",
-            "JIRA_API_TOKEN",
-            "JIRA_PAT",
-            "JIRA_PROJECT_KEY",
-            "GITHUB_TOKEN",
-        ]
-        clean_env = {k: v for k, v in os.environ.items() if k not in env_vars_to_clear}
-        with patch.dict(os.environ, clean_env, clear=True):
+        with patch.dict(os.environ, _env_without_analyze_bindings(), clear=True):
             result = runner.invoke(
                 app,
                 ["analyze", "--job-name", "my-job", "--build-number", "1"],

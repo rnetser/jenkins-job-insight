@@ -3,7 +3,6 @@
 from typing import Any
 
 import httpx
-import urllib3
 
 
 class JJIError(Exception):
@@ -39,8 +38,6 @@ class JJIClient:
         verify_ssl: bool = True,
     ):
         self.server_url = server_url.rstrip("/")
-        if not verify_ssl:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         cookies = {}
         if username:
             cookies["jji_username"] = username
@@ -118,9 +115,9 @@ class JJIClient:
         """List recent analyzed jobs. GET /results?limit="""
         return self._request("GET", "/results", params={"limit": limit})
 
-    def dashboard(self, limit: int = 500) -> list[dict]:
+    def dashboard(self) -> list[dict]:
         """List analysis jobs with dashboard metadata. GET /api/dashboard"""
-        return self._request("GET", "/api/dashboard", params={"limit": limit})
+        return self._request("GET", "/api/dashboard")
 
     def get_result(self, job_id: str) -> dict:
         """Get a stored result by job_id. GET /results/{job_id}"""
@@ -198,25 +195,6 @@ class JJIClient:
             "GET",
             f"/history/stats/{job_name}",
             params={"exclude_job_id": exclude_job_id},
-        )
-
-    def get_trends(
-        self,
-        period: str = "daily",
-        days: int = 30,
-        job_name: str = "",
-        exclude_job_id: str = "",
-    ) -> dict:
-        """Get failure rate trends. GET /history/trends"""
-        return self._request(
-            "GET",
-            "/history/trends",
-            params={
-                "period": period,
-                "days": days,
-                "job_name": job_name,
-                "exclude_job_id": exclude_job_id,
-            },
         )
 
     def get_all_failures(
@@ -306,9 +284,7 @@ class JJIClient:
             "test_name": test_name,
             "comment": comment,
         }
-        if child_job_name:
-            body["child_job_name"] = child_job_name
-            body["child_build_number"] = child_build_number
+        body = self._with_child_scope(body, child_job_name, child_build_number)
         return self._request(
             "POST",
             f"/results/{job_id}/comments",
@@ -450,8 +426,8 @@ class JJIClient:
     # -- Capabilities ---------------------------------------------------------
 
     def capabilities(self) -> dict:
-        """Get server-level automation capabilities (GitHub issues, Jira bugs). GET /capabilities"""
-        return self._request("GET", "/capabilities")
+        """Get server-level automation capabilities (GitHub issues, Jira bugs). GET /api/capabilities"""
+        return self._request("GET", "/api/capabilities")
 
     # -- AI Configs -----------------------------------------------------------
 

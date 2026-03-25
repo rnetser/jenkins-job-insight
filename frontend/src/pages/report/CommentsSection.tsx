@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { api } from '@/lib/api'
-import { parseApiTimestamp } from '@/lib/utils'
+import { formatTimestamp } from '@/lib/utils'
 import { isCommentInScope } from '@/lib/grouping'
 import { getUsername } from '@/lib/cookies'
 import { useReportState, useReportDispatch, useRefreshEnrichments } from './ReportContext'
@@ -23,6 +23,10 @@ function trimTrailingPunctuation(url: string): string {
   let result = url
   while (result.length > 0) {
     const last = result[result.length - 1]
+    if (last === '>') {
+      result = result.slice(0, -1)
+      continue
+    }
     if (last === ')') {
       const opens = (result.match(/\(/g) || []).length
       const closes = (result.match(/\)/g) || []).length
@@ -41,6 +45,8 @@ function trimTrailingPunctuation(url: string): string {
   return result
 }
 
+type LinkMatch = { start: number; end: number; text: string; href: string }
+
 interface LinkSegment {
   type: 'text' | 'link'
   text: string
@@ -50,33 +56,44 @@ interface LinkSegment {
 function collectMatches(
   raw: string,
   pattern: RegExp,
-  matches: Array<{ start: number; end: number; text: string; href: string }>,
+  matches: LinkMatch[],
   textFn: (m: RegExpMatchArray) => string,
 ) {
   for (const m of raw.matchAll(pattern)) {
-    if (matches.some((e) => e.start === m.index)) continue
+    const start = m.index!
     const href = trimTrailingPunctuation(m[0])
-    const end = m.index! + href.length
+    const end = start + href.length
     const text = textFn(m)
-    matches.push({ start: m.index!, end, text, href })
+    matches.push({ start, end, text, href })
   }
+}
+
+/** Remove overlapping matches, preferring earlier entries (specific patterns added first). */
+function deduplicateMatches(matches: LinkMatch[]): LinkMatch[] {
+  const sorted = [...matches].sort((a, b) => a.start - b.start)
+  const result: typeof matches = []
+  for (const m of sorted) {
+    if (result.length > 0 && m.start < result[result.length - 1].end) continue
+    result.push(m)
+  }
+  return result
 }
 
 function autoLinkComment(raw: string): LinkSegment[] {
   // Collect all link matches with their positions
-  const matches: { start: number; end: number; text: string; href: string }[] = []
+  const matches: LinkMatch[] = []
 
   collectMatches(raw, GITHUB_PR_RE, matches, (m) => `${m[1]}#${m[2]}`)
   collectMatches(raw, GITHUB_ISSUE_RE, matches, (m) => `${m[1]}#${m[2]}`)
   collectMatches(raw, JIRA_BROWSE_RE, matches, (m) => m[1])
   collectMatches(raw, GENERIC_URL_RE, matches, (m) => trimTrailingPunctuation(m[0]))
 
-  matches.sort((a, b) => a.start - b.start)
+  const deduplicated = deduplicateMatches(matches)
 
   // Build segments
   const segments: LinkSegment[] = []
   let cursor = 0
-  for (const m of matches) {
+  for (const m of deduplicated) {
     if (m.start > cursor) segments.push({ type: 'text', text: raw.slice(cursor, m.start) })
     segments.push({ type: 'link', text: m.text, href: m.href })
     cursor = m.end
@@ -109,36 +126,72 @@ interface CommentsSectionProps {
 }
 
 export function CommentsSection({ jobId, testNames, childJobName, childBuildNumber }: CommentsSectionProps) {
+  const canPost = testNames.length === 1
+  const primaryTestName = canPost ? testNames[0] : null
+  const scopedChildJobName = childJobName ?? ''
+  const scopedChildBuildNumber = childBuildNumber ?? 0
+
   const { comments, enrichments } = useReportState()
   const dispatch = useReportDispatch()
   const refreshEnrichments = useRefreshEnrichments()
   const [text, setText] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const draftActiveRef = useRef(false)
   const username = getUsername()
 
-  const testComments = comments.filter((c) => isCommentInScope(c, testNames, childJobName, childBuildNumber))
+  /** Centralized draft-count state machine: syncs draftActiveRef with the global count. */
+  const syncDraftActive = (hasContent: boolean) => {
+    if (hasContent && !draftActiveRef.current) {
+      draftActiveRef.current = true
+      dispatch({ type: 'INCREMENT_DRAFT_COUNT' })
+    } else if (!hasContent && draftActiveRef.current) {
+      draftActiveRef.current = false
+      dispatch({ type: 'DECREMENT_DRAFT_COUNT' })
+    }
+  }
+
+  // Sync draft-active state whenever text changes (including after submit clears it).
+  // This replaces the previous side-effect inside the setText updater, keeping updaters pure.
+  useEffect(() => {
+    syncDraftActive(canPost && text.trim().length > 0)
+  }, [canPost, text]) // eslint-disable-line react-hooks/exhaustive-deps -- syncDraftActive is stable via ref
+
+  // Ensure the draft count is decremented if this editor unmounts while active.
+  useEffect(() => {
+    return () => {
+      if (draftActiveRef.current) {
+        dispatch({ type: 'DECREMENT_DRAFT_COUNT' })
+      }
+    }
+  }, [dispatch])
+
+  const testComments = comments.filter((c) => isCommentInScope(c, testNames, scopedChildJobName, scopedChildBuildNumber))
 
   async function handleSubmit() {
     if (submitting) return
-    if (!testNames.length) return
-    const submittedText = text.trim()
+    if (!canPost || !primaryTestName) {
+      setSubmitError('Posting comments from grouped failures is not supported yet.')
+      return
+    }
+    const submittedDraft = text
+    const submittedText = submittedDraft.trim()
     if (!submittedText) return
     setSubmitting(true)
     setSubmitError(null)
     try {
       const res = await api.post<{ id: number }>(`/results/${jobId}/comments`, {
-        test_name: testNames[0],
+        test_name: primaryTestName,
         comment: submittedText,
-        child_job_name: childJobName ?? '',
-        child_build_number: childBuildNumber ?? 0,
+        child_job_name: scopedChildJobName,
+        child_build_number: scopedChildBuildNumber,
       })
       const fresh: Comment = {
         id: res.id,
         job_id: jobId,
-        test_name: testNames[0],
-        child_job_name: childJobName ?? '',
-        child_build_number: childBuildNumber ?? 0,
+        test_name: primaryTestName,
+        child_job_name: scopedChildJobName,
+        child_build_number: scopedChildBuildNumber,
         comment: submittedText,
         username,
         created_at: new Date().toISOString(),
@@ -146,7 +199,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
       dispatch({ type: 'ADD_COMMENT', payload: fresh })
       // Refresh enrichments to pick up any tracker links in the new comment
       refreshEnrichments(jobId)
-      setText((current) => (current === submittedText ? '' : current))
+      setText((current) => (current === submittedDraft ? '' : current))
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Failed to post comment')
     } finally {
@@ -154,12 +207,23 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
     }
   }
 
+  const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set())
+
   async function handleDelete(id: number) {
+    if (deletingIds.has(id)) return
+    setSubmitError(null)
+    setDeletingIds((prev) => new Set(prev).add(id))
     try {
       await api.delete(`/results/${jobId}/comments/${id}`)
       dispatch({ type: 'REMOVE_COMMENT', payload: id })
-    } catch {
-      /* UI-courtesy delete — swallow */
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Failed to delete comment')
+    } finally {
+      setDeletingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     }
   }
 
@@ -185,7 +249,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-xs text-signal-blue">{c.username || 'anon'}</span>
                     <span className="text-[10px] text-text-tertiary">
-                      {parseApiTimestamp(c.created_at).toLocaleString()}
+                      {formatTimestamp(c.created_at)}
                     </span>
                   </div>
                   <p className="mt-1 whitespace-pre-wrap text-text-secondary">
@@ -215,7 +279,8 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
                     type="button"
                     aria-label="Delete comment"
                     onClick={() => handleDelete(c.id)}
-                    className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal-blue"
+                    disabled={deletingIds.has(c.id)}
+                    className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal-blue disabled:opacity-50"
                     title="Delete comment"
                   >
                     <Trash2 className="h-3.5 w-3.5 text-text-tertiary hover:text-signal-red" />
@@ -228,26 +293,37 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
       )}
 
       <div className="space-y-1">
-        <div className="flex gap-2">
-          <Textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Add a comment..."
-            className="min-h-[36px] resize-none text-sm"
-            rows={1}
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing) return
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                handleSubmit()
-              }
-            }}
-          />
-          <Button size="sm" onClick={handleSubmit} disabled={!text.trim() || submitting} className="shrink-0">
-            Post
-          </Button>
-        </div>
-        {submitError && <span className="text-signal-red text-xs">{submitError}</span>}
+        {canPost ? (
+          <div className="flex gap-2">
+            <Textarea
+              aria-label="Add a comment"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Add a comment..."
+              className="min-h-[36px] resize-none text-sm"
+              rows={1}
+              onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  handleSubmit()
+                }
+              }}
+            />
+            <Button size="sm" onClick={handleSubmit} disabled={!text.trim() || submitting} className="shrink-0">
+              Post
+            </Button>
+          </div>
+        ) : (
+          <span className="text-xs text-text-tertiary">
+            Posting comments from grouped failures is not supported yet.
+          </span>
+        )}
+        {submitError && (
+          <span role="alert" className="text-signal-red text-xs">
+            {submitError}
+          </span>
+        )}
       </div>
     </div>
   )

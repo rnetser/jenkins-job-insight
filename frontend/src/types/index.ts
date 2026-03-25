@@ -1,6 +1,17 @@
 /* ------------------------------------------------------------------ */
-/*  TypeScript types mirroring Pydantic models from models.py          */
+/*  TypeScript types for API response shapes.                          */
+/*                                                                     */
+/*  The backend returns untyped dicts (not Pydantic response models),  */
+/*  so auto-generation from the OpenAPI schema is not possible.        */
+/*  These types ARE the contract definition for the frontend.          */
+/*                                                                     */
+/*  When modifying backend response shapes, update the corresponding   */
+/*  types here. If the backend adds typed response models in the       */
+/*  future, switch to auto-generated types (e.g. openapi-typescript).  */
 /* ------------------------------------------------------------------ */
+
+/** Shared status union matching the backend contract. */
+export type AnalysisStatus = 'waiting' | 'pending' | 'running' | 'completed' | 'failed'
 
 // -- Analysis domain ------------------------------------------------
 
@@ -60,7 +71,7 @@ export interface AnalysisResult {
   job_name: string
   build_number: number
   jenkins_url: string | null
-  status: 'waiting' | 'pending' | 'running' | 'completed' | 'failed'
+  status: AnalysisStatus
   summary: string
   ai_provider: string
   ai_model: string
@@ -74,7 +85,7 @@ export interface AnalysisResult {
 export interface DashboardJob {
   job_id: string
   jenkins_url: string | null
-  status: string
+  status: AnalysisStatus
   created_at: string
   completed_at?: string | null
   analysis_started_at?: string | null
@@ -84,6 +95,7 @@ export interface DashboardJob {
   build_number?: number
   failure_count?: number
   child_job_count?: number
+  summary?: string
   error?: string
 }
 
@@ -130,7 +142,7 @@ export interface PreviewIssueResponse {
 export interface CreateIssueResponse {
   url: string
   key: string
-  number: number
+  number?: number | null
   title: string
   comment_id: number
 }
@@ -195,11 +207,15 @@ export interface AiConfig {
 
 export interface ResultResponse {
   job_id: string
-  status: string
+  jenkins_url: string | null
+  status: AnalysisStatus
   result: AnalysisResult | null
   created_at: string
-  completed_at?: string
+  completed_at?: string | null
   analysis_started_at?: string | null
+  base_url: string | null
+  result_url: string | null
+  capabilities?: { github_issues: boolean; jira_bugs: boolean }
 }
 
 // -- Comment enrichment ---------------------------------------------

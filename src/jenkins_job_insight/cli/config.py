@@ -26,7 +26,7 @@ class ServerConfig:
     jenkins_url: str = ""
     jenkins_user: str = ""
     jenkins_password: str = ""
-    jenkins_ssl_verify: bool = True
+    jenkins_ssl_verify: bool | None = None
     # Tests
     tests_repo_url: str = ""
     # AI
@@ -39,15 +39,32 @@ class ServerConfig:
     jira_api_token: str = ""
     jira_pat: str = ""
     jira_project_key: str = ""
-    jira_ssl_verify: bool = True
+    jira_ssl_verify: bool | None = None
     jira_max_results: int = 0  # 0 means use server default
-    enable_jira: bool = False
+    enable_jira: bool | None = None
     # GitHub
     github_token: str = ""
     # Jenkins job monitoring
     wait_for_completion: bool | None = None
     poll_interval_minutes: int = 0  # 0 means use server default
     max_wait_minutes: int = 0  # 0 means use server default
+
+
+def _validate_section_server_field(
+    section: dict, section_name: str, config_path: Path
+) -> None:
+    """Validate the ``server`` field inside a config section.
+
+    Raises ``ValueError`` when the field is present but not a non-empty string.
+    """
+    server = section.get("server")
+    if server is not None and (
+        not isinstance(server, str) or not server.strip() or server != server.strip()
+    ):
+        raise ValueError(
+            f"Invalid config in {config_path}: '{section_name}.server' must be a non-empty, trimmed string, "
+            f"got {type(server).__name__}"
+        )
 
 
 def load_config(path: Path | None = None) -> dict:
@@ -63,8 +80,59 @@ def load_config(path: Path | None = None) -> dict:
     config_path = path or CONFIG_FILE
     if not config_path.exists():
         return {}
-    with open(config_path, "rb") as f:
-        return tomllib.load(f)
+    try:
+        with open(config_path, "rb") as f:
+            data = tomllib.load(f)
+    except tomllib.TOMLDecodeError as e:
+        raise ValueError(f"Invalid TOML in {config_path}: {e}") from e
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Invalid config in {config_path}: top-level value must be a mapping, "
+            f"got {type(data).__name__}"
+        )
+
+    default = data.get("default")
+    if default is not None and not isinstance(default, dict):
+        raise ValueError(
+            f"Invalid config in {config_path}: 'default' must be a mapping, "
+            f"got {type(default).__name__}"
+        )
+    if default is not None:
+        _validate_section_server_field(default, "default", config_path)
+
+    defaults = data.get("defaults")
+    if defaults is not None and not isinstance(defaults, dict):
+        raise ValueError(
+            f"Invalid config in {config_path}: 'defaults' must be a mapping, "
+            f"got {type(defaults).__name__}"
+        )
+    if defaults is not None and "server" in defaults:
+        raise ValueError(
+            f"Invalid config in {config_path}: 'defaults.server' is not supported; use [default].server"
+        )
+
+    servers = data.get("servers")
+    if servers is not None:
+        if not isinstance(servers, dict):
+            raise ValueError(
+                f"Invalid config in {config_path}: 'servers' must be a mapping, "
+                f"got {type(servers).__name__}"
+            )
+        for name, entry in servers.items():
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"Invalid config in {config_path}: servers.{name} must be a mapping, "
+                    f"got {type(entry).__name__}"
+                )
+            merged = _merge_server_dict(defaults or {}, entry)
+            url = merged.get("url")
+            if not isinstance(url, str) or not url.strip() or url != url.strip():
+                raise ValueError(
+                    f"Invalid config in {config_path}: servers.{name}.url must be a non-empty, trimmed string"
+                )
+
+    return data
 
 
 def get_default_server_name(config: dict | None = None) -> str:
@@ -98,7 +166,7 @@ def _server_config_from_dict(data: dict) -> ServerConfig:
         jenkins_url=data.get("jenkins_url", ""),
         jenkins_user=data.get("jenkins_user", ""),
         jenkins_password=data.get("jenkins_password", ""),
-        jenkins_ssl_verify=data.get("jenkins_ssl_verify", True),
+        jenkins_ssl_verify=data.get("jenkins_ssl_verify"),
         # Tests
         tests_repo_url=data.get("tests_repo_url", ""),
         # AI
@@ -111,9 +179,9 @@ def _server_config_from_dict(data: dict) -> ServerConfig:
         jira_api_token=data.get("jira_api_token", ""),
         jira_pat=data.get("jira_pat", ""),
         jira_project_key=data.get("jira_project_key", ""),
-        jira_ssl_verify=data.get("jira_ssl_verify", True),
+        jira_ssl_verify=data.get("jira_ssl_verify"),
         jira_max_results=data.get("jira_max_results", 0),
-        enable_jira=data.get("enable_jira", False),
+        enable_jira=data.get("enable_jira"),
         # GitHub
         github_token=data.get("github_token", ""),
         # Jenkins job monitoring
@@ -149,14 +217,20 @@ def get_server_config(
         return None
 
     server_data = config.get("servers", {}).get(server_name)
-    if not server_data:
+    if server_data is None:
         return None
 
-    # Merge: global defaults first, server-specific values override.
-    defaults = config.get("defaults", {})
-    merged = {**defaults, **server_data}
+    return _build_server_config(config.get("defaults", {}), server_data)
 
-    return _server_config_from_dict(merged)
+
+def _merge_server_dict(defaults: dict, overrides: dict) -> dict:
+    """Merge default settings with per-server overrides."""
+    return {**defaults, **overrides}
+
+
+def _build_server_config(defaults: dict, overrides: dict) -> ServerConfig:
+    """Merge defaults with per-server overrides and build a ServerConfig."""
+    return _server_config_from_dict(_merge_server_dict(defaults, overrides))
 
 
 def list_servers(config: dict | None = None) -> dict[str, ServerConfig]:
@@ -175,6 +249,5 @@ def list_servers(config: dict | None = None) -> dict[str, ServerConfig]:
     defaults = config.get("defaults", {})
     result: dict[str, ServerConfig] = {}
     for name, data in config.get("servers", {}).items():
-        merged = {**defaults, **data}
-        result[name] = _server_config_from_dict(merged)
+        result[name] = _build_server_config(defaults, data)
     return result

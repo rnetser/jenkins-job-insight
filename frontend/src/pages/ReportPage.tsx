@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
-import { parseApiTimestamp, isAnalysisTimeout, formatDuration } from '@/lib/utils'
+import { parseApiTimestamp, isAnalysisTimeout, formatDuration, formatTimestamp } from '@/lib/utils'
 import { groupFailures } from '@/lib/grouping'
 import { useExpandCollapseAll } from '@/lib/useExpandCollapseAll'
 import type { ResultResponse, CommentsAndReviews, AiConfig } from '@/types'
 import { ReportProvider, useReportState, useReportDispatch, useRefreshEnrichments } from './report/ReportContext'
 import { FailureCard } from './report/FailureCard'
 import { ChildJobSection } from './report/ChildJobSection'
+import { collectChildExpandKeys } from '@/lib/childJobHash'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusChip } from '@/components/shared/StatusChip'
@@ -16,26 +17,50 @@ import { ExternalLink, CheckCircle2, Clock, Calendar, Cpu, Timer } from 'lucide-
 import { reviewKey } from './report/ReportContext'
 import type { ChildJobAnalysis } from '@/types'
 
+/** Interval in milliseconds between comment poll requests.
+ *  Override at build time via VITE_COMMENT_POLL_MS (e.g. 60000 for 1 minute).
+ *  Clamped to [5 000, 300 000] ms to avoid accidental runaway polling. */
+const COMMENT_POLL_MS = Math.max(5_000, Math.min(300_000,
+  Number(import.meta.env.VITE_COMMENT_POLL_MS) || 30_000,
+))
+
+/** Walk the child-job tree once, calling `visitor` at each node.
+ *  Centralises the recursion so every consumer stays in sync. */
+function walkChildTree(
+  failures: { test_name: string }[],
+  children: ChildJobAnalysis[],
+  visitor: (failures: { test_name: string }[], parentJobName?: string, parentBuildNumber?: number) => void,
+  parentJobName?: string,
+  parentBuildNumber?: number,
+): void {
+  visitor(failures ?? [], parentJobName, parentBuildNumber)
+  for (const child of children ?? []) {
+    walkChildTree(child.failures ?? [], child.failed_children ?? [], visitor, child.job_name, child.build_number)
+  }
+}
+
 /** Recursively collect all review keys from failures + nested children. */
 function collectAllTestKeys(
   failures: { test_name: string }[],
   children: ChildJobAnalysis[],
+  parentJobName?: string,
+  parentBuildNumber?: number,
 ): string[] {
-  const keys: string[] = (failures ?? []).map((f) => reviewKey(f.test_name))
-  for (const child of children ?? []) {
-    keys.push(...(child.failures ?? []).map((f) => reviewKey(f.test_name, child.job_name, child.build_number)))
-    keys.push(...collectAllTestKeys([], child.failed_children ?? []))
-  }
+  const keys: string[] = []
+  walkChildTree(failures, children, (nodeFailures, jobName, buildNumber) => {
+    for (const f of nodeFailures) {
+      keys.push(reviewKey(f.test_name, jobName, buildNumber))
+    }
+  }, parentJobName, parentBuildNumber)
   return keys
 }
 
 /** Recursively count all failures including nested children. */
 function countAllFailures(failures: { test_name: string }[], children: ChildJobAnalysis[]): number {
-  let count = (failures ?? []).length
-  for (const child of children ?? []) {
-    count += (child.failures ?? []).length
-    count += countAllFailures([], child.failed_children ?? [])
-  }
+  let count = 0
+  walkChildTree(failures, children, (nodeFailures) => {
+    count += nodeFailures.length
+  })
   return count
 }
 
@@ -64,6 +89,51 @@ function ReportContent() {
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
+  // Single-flight comment fetcher shared by initial hydrate and polling.
+  // Prevents overlapping /comments requests: if a request is in-flight,
+  // subsequent calls are queued and only the latest is executed when the
+  // current one finishes.
+  const commentSeqRef = useRef(0)
+  const prevCommentsJsonRef = useRef<string>('')
+  const commentInFlightRef = useRef(false)
+  const pendingCommentFetchRef = useRef<string | null>(null)
+  const latestLocalMutationRevRef = useRef(state.localMutationRev)
+  latestLocalMutationRevRef.current = state.localMutationRev
+
+  const fetchComments = useCallback((fetchJobId: string) => {
+    if (commentInFlightRef.current) {
+      pendingCommentFetchRef.current = fetchJobId
+      commentSeqRef.current += 1
+      return
+    }
+    commentInFlightRef.current = true
+    pendingCommentFetchRef.current = null
+    const thisSeq = ++commentSeqRef.current
+    // Snapshot the current local mutation revision so we can detect
+    // optimistic edits that happened while the request was in-flight.
+    const mutationRevAtFetch = latestLocalMutationRevRef.current
+    api.get<CommentsAndReviews>(`/results/${fetchJobId}/comments`)
+      .then((res) => {
+        if (thisSeq === commentSeqRef.current && mutationRevAtFetch === latestLocalMutationRevRef.current) {
+          const json = JSON.stringify(res)
+          if (json !== prevCommentsJsonRef.current) {
+            prevCommentsJsonRef.current = json
+            dispatch({ type: 'SET_COMMENTS_AND_REVIEWS', payload: res })
+            refreshEnrichments(fetchJobId)
+          }
+        }
+      })
+      .catch(() => { /* comment fetch is best-effort */ })
+      .finally(() => {
+        commentInFlightRef.current = false
+        const pending = pendingCommentFetchRef.current
+        if (pending) {
+          pendingCommentFetchRef.current = null
+          fetchComments(pending)
+        }
+      })
+  }, [dispatch, refreshEnrichments])
+
   useEffect(() => {
     if (!jobId) return
 
@@ -82,39 +152,37 @@ function ReportContent() {
           return
         }
 
+        if (resultRes.status === 'failed') {
+          const errorMsg = resultRes.result?.error ?? 'Analysis failed'
+          dispatch({ type: 'SET_ERROR', payload: String(errorMsg) })
+          return
+        }
+
         if (!resultRes.result) {
           dispatch({ type: 'SET_ERROR', payload: 'No result data found.' })
           return
         }
 
-        if (resultRes.status === 'failed') {
-          const errorMsg = resultRes.result.error ?? 'Analysis failed'
-          dispatch({ type: 'SET_ERROR', payload: String(errorMsg) })
-          return
-        }
-
         dispatch({ type: 'SET_RESULT', payload: { result: resultRes.result, createdAt: resultRes.created_at, completedAt: resultRes.completed_at ?? '', analysisStartedAt: resultRes.analysis_started_at ?? '' } })
 
-        // Comments, AI configs, classifications, and capabilities are best-effort
-        const [commentsResult, aiConfigsResult, classificationsResult, capabilitiesResult] = await Promise.allSettled([
-          api.get<CommentsAndReviews>(`/results/${jobId}/comments`),
+        // Use capabilities from the result response (job-scoped, avoids separate call)
+        if (resultRes.capabilities) {
+          dispatch({ type: 'SET_GITHUB_AVAILABLE', payload: resultRes.capabilities.github_issues })
+          dispatch({ type: 'SET_JIRA_AVAILABLE', payload: resultRes.capabilities.jira_bugs })
+        }
+
+        // Initial comment fetch via the shared single-flight helper
+        fetchComments(jobId)
+
+        // AI configs and classifications are best-effort
+        const [aiConfigsResult, classificationsResult] = await Promise.allSettled([
           api.get<AiConfig[]>('/ai-configs'),
           api.get<{ classifications: Array<{ test_name: string; classification: string; job_name: string; parent_job_name: string; reason: string; references_info: string; created_by: string; job_id: string; child_build_number: number; created_at: string }> }>(
             `/history/classifications?job_id=${jobId}`,
           ),
-          api.get<{ github_issues: boolean; jira_bugs: boolean }>('/capabilities'),
         ])
         if (cancelled) return
 
-        if (capabilitiesResult.status === 'fulfilled') {
-          dispatch({ type: 'SET_GITHUB_AVAILABLE', payload: capabilitiesResult.value.github_issues })
-          dispatch({ type: 'SET_JIRA_AVAILABLE', payload: capabilitiesResult.value.jira_bugs })
-        }
-        if (commentsResult.status === 'fulfilled') {
-          dispatch({ type: 'SET_COMMENTS_AND_REVIEWS', payload: commentsResult.value })
-          // Fetch enrichments once at report level
-          if (jobId) refreshEnrichments(jobId)
-        }
         if (aiConfigsResult.status === 'fulfilled') {
           dispatch({ type: 'SET_AI_CONFIGS', payload: aiConfigsResult.value })
         }
@@ -136,33 +204,22 @@ function ReportContent() {
 
     load()
     return () => { cancelled = true }
-  }, [jobId, navigate, dispatch])
+  }, [jobId, navigate, dispatch, refreshEnrichments, fetchComments])
 
-  // Poll for new comments every 30 seconds (serialized with sequence counter)
+  // Poll for new comments every 30 seconds (single-flight via fetchComments).
+  // Pauses while user is typing in any comment textarea to avoid overwriting draft state.
   useEffect(() => {
-    if (!jobId) return
+    if (!jobId || state.error || !state.result) return
 
-    let cancelled = false
-    let seq = 0
-    const interval = setInterval(async () => {
-      const thisSeq = ++seq
-      try {
-        const res = await api.get<CommentsAndReviews>(`/results/${jobId}/comments`)
-        if (!cancelled && thisSeq === seq) {
-          dispatch({ type: 'SET_COMMENTS_AND_REVIEWS', payload: res })
-          // Refresh enrichments so link badges appear for new comments
-          refreshEnrichments(jobId)
-        }
-      } catch {
-        /* polling failure is non-critical */
-      }
-    }, 30000)
+    const interval = setInterval(() => {
+      if (state.commentDraftCount > 0) return
+      fetchComments(jobId)
+    }, COMMENT_POLL_MS)
 
     return () => {
-      cancelled = true
       clearInterval(interval)
     }
-  }, [jobId, dispatch, refreshEnrichments])
+  }, [jobId, fetchComments, state.commentDraftCount, state.error, state.result])
 
   // Preserve scroll position across F5 refreshes
   const scrollKey = `jji-scroll-${jobId}`
@@ -170,7 +227,13 @@ function ReportContent() {
   // Restore scroll after data loads (not on mount — skeleton is too short)
   useEffect(() => {
     if (state.loading || state.error) return
-    const saved = sessionStorage.getItem(scrollKey)
+    if (window.location.hash) return
+    let saved: string | null = null
+    try {
+      saved = sessionStorage.getItem(scrollKey)
+    } catch {
+      /* storage may be blocked in privacy mode */
+    }
     let raf1 = 0
     let raf2 = 0
     if (saved) {
@@ -193,7 +256,11 @@ function ReportContent() {
     function handleScroll() {
       clearTimeout(timeout)
       timeout = setTimeout(() => {
-        sessionStorage.setItem(scrollKey, String(window.scrollY))
+        try {
+          sessionStorage.setItem(scrollKey, String(window.scrollY))
+        } catch {
+          /* scroll persistence is best-effort */
+        }
       }, 150)
     }
     window.addEventListener('scroll', handleScroll, { passive: true })
@@ -205,10 +272,23 @@ function ReportContent() {
 
   // Derived values (safe to compute even when result is null)
   const result = state.result
-  const groups = result ? groupFailures(result.failures ?? []) : []
-  const totalFailures = result ? countAllFailures(result.failures ?? [], result.child_job_analyses ?? []) : 0
-  const allTestKeys = result ? collectAllTestKeys(result.failures ?? [], result.child_job_analyses ?? []) : []
+  const groups = useMemo(
+    () => (result ? groupFailures(result.failures ?? []) : []),
+    [result],
+  )
+  const totalFailures = useMemo(
+    () => (result ? countAllFailures(result.failures ?? [], result.child_job_analyses ?? []) : 0),
+    [result],
+  )
+  const allTestKeys = useMemo(
+    () => (result ? collectAllTestKeys(result.failures ?? [], result.child_job_analyses ?? []) : []),
+    [result],
+  )
   const reviewedCount = allTestKeys.filter((k) => state.reviews[k]?.reviewed).length
+
+  /** Format the AI provider/model label for display. */
+  const formatAiLabel = (provider: string | undefined, model: string | undefined): string =>
+    provider ? (model ? `${provider} / ${model}` : provider) : ''
 
   // Expand/collapse all for top-level failure cards
   const getFailureKeys = useCallback(
@@ -221,20 +301,7 @@ function ReportContent() {
   // Expand/collapse all for child job sections (and their nested failure cards)
   const getChildKeys = useCallback(() => {
     if (!result) return []
-    const keys: string[] = []
-    const resultJobId = result.job_id
-    function walk(children: ChildJobAnalysis[]) {
-      for (const child of children ?? []) {
-        keys.push(`jji-expand-${resultJobId}-child-${child.job_name}-${child.build_number}`)
-        const childGroups = groupFailures(child.failures ?? [], `child-${child.job_name}-${child.build_number}`)
-        for (const g of childGroups) {
-          keys.push(`jji-expand-${resultJobId}-${g.id}`)
-        }
-        walk(child.failed_children ?? [])
-      }
-    }
-    walk(result.child_job_analyses ?? [])
-    return keys
+    return collectChildExpandKeys(result.child_job_analyses ?? [], result.job_id)
   }, [result])
   const { remountKey: childRemountKey, expandAll: expandAllChildren, collapseAll: collapseAllChildren } =
     useExpandCollapseAll(getChildKeys)
@@ -242,7 +309,7 @@ function ReportContent() {
   /* ---- Loading skeleton ---- */
   if (state.loading) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6" aria-busy="true" aria-label="Loading report">
         <Skeleton className="h-10 w-96" />
         <Skeleton className="h-24 w-full" />
         {Array.from({ length: 3 }).map((_, i) => (
@@ -255,7 +322,7 @@ function ReportContent() {
   /* ---- Error ---- */
   if (state.error) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 animate-fade-in">
+      <div className="flex flex-col items-center justify-center py-20 animate-fade-in" role="alert">
         <p className="text-signal-red text-sm">{state.error}</p>
       </div>
     )
@@ -307,8 +374,7 @@ function ReportContent() {
           )}
           {result.ai_provider && (
             <Badge variant="outline" className="text-[10px]">
-              {result.ai_provider}
-              {result.ai_model ? ` / ${result.ai_model}` : ''}
+              {formatAiLabel(result.ai_provider, result.ai_model)}
             </Badge>
           )}
           {result.jenkins_url && (
@@ -329,25 +395,32 @@ function ReportContent() {
         {state.createdAt && (
           <span className="inline-flex items-center gap-1">
             <Calendar className="h-3 w-3" />
-            {parseApiTimestamp(state.createdAt).toLocaleString()}
+            {formatTimestamp(state.createdAt)}
           </span>
         )}
         {state.completedAt && (state.analysisStartedAt || state.createdAt) && (
-          <span className="inline-flex items-center gap-1">
-            <Timer className="h-3 w-3" />
-            {formatDuration(parseApiTimestamp(state.analysisStartedAt || state.createdAt), parseApiTimestamp(state.completedAt))}
-          </span>
+          (() => {
+            const start = parseApiTimestamp(state.analysisStartedAt || state.createdAt)
+            const end = parseApiTimestamp(state.completedAt)
+            if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null
+            return (
+              <span className="inline-flex items-center gap-1">
+                <Timer className="h-3 w-3" />
+                {formatDuration(start, end)}
+              </span>
+            )
+          })()
         )}
         {result.ai_provider && (
           <span className="inline-flex items-center gap-1">
             <Cpu className="h-3 w-3" />
-            {result.ai_provider}{result.ai_model ? ` / ${result.ai_model}` : ''}
+            {formatAiLabel(result.ai_provider, result.ai_model)}
           </span>
         )}
         {state.completedAt && (
           <span className="inline-flex items-center gap-1">
             <Clock className="h-3 w-3" />
-            Completed {parseApiTimestamp(state.completedAt).toLocaleString()}
+            Completed {formatTimestamp(state.completedAt)}
           </span>
         )}
       </div>
@@ -401,7 +474,7 @@ function ReportContent() {
         <p>
           Job ID: <span className="font-mono">{result.job_id}</span>
         </p>
-        {state.completedAt && <p>Completed: {parseApiTimestamp(state.completedAt).toLocaleString()}</p>}
+        {state.completedAt && <p>Completed: {formatTimestamp(state.completedAt)}</p>}
         {result.ai_provider && (
           <p>
             AI: {result.ai_provider}
