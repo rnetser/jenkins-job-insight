@@ -80,6 +80,65 @@ PROVIDER_CLI_FLAGS: dict[str, list[str]] = {
     "cursor": ["--force"],
 }
 
+# Known transient AI CLI errors that are retried (up to max_retries times).
+# Add new patterns here when new transient failures are discovered.
+RETRYABLE_AI_CLI_PATTERNS: list[str] = [
+    "ENOENT: no such file or directory",  # Cursor CLI config race condition
+]
+
+
+async def _call_ai_cli_with_retry(
+    prompt: str,
+    *,
+    cwd: Path | None = None,
+    ai_provider: str = "",
+    ai_model: str = "",
+    ai_cli_timeout: int | None = None,
+    cli_flags: list[str] | None = None,
+    max_retries: int = 3,
+) -> tuple[bool, str]:
+    """Call AI CLI with retry on known transient errors.
+
+    Wraps :func:`call_ai_cli` with a simple retry loop that re-attempts the
+    call when the output matches one of :data:`RETRYABLE_AI_CLI_PATTERNS`.
+
+    Args:
+        prompt: The prompt to send to the AI CLI.
+        cwd: Working directory for the CLI process.
+        ai_provider: AI provider name (e.g. ``"claude"``).
+        ai_model: Model identifier passed to the CLI.
+        ai_cli_timeout: Timeout in minutes for the CLI process.
+        cli_flags: Extra CLI flags forwarded to the provider.
+        max_retries: Maximum number of retry attempts after the initial call.
+
+    Returns:
+        Tuple of ``(success, output)`` from the final attempt.
+    """
+    success, output = False, ""
+    for attempt in range(max_retries + 1):
+        success, output = await call_ai_cli(
+            prompt,
+            cwd=cwd,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            ai_cli_timeout=ai_cli_timeout,
+            cli_flags=cli_flags,
+        )
+        if success:
+            return success, output
+        # Check if the error matches a known retryable pattern
+        if attempt < max_retries and any(
+            pattern in output for pattern in RETRYABLE_AI_CLI_PATTERNS
+        ):
+            logger.warning(
+                f"AI CLI transient error (attempt {attempt + 1}/{max_retries + 1}), retrying: {output}"
+            )
+            await asyncio.sleep(2**attempt)  # Exponential backoff: 1s, 2s, 4s
+            continue
+        return success, output
+    return success, output  # Should not reach here, but satisfy type checker
+
+
 _JSON_RESPONSE_SCHEMA = """CRITICAL: Your response must be ONLY a valid JSON object. No text before or after. No markdown code blocks. No explanation.
 
 If CODE ISSUE:
@@ -861,7 +920,7 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
         f"Calling {ai_provider.upper()} CLI for failure group ({len(failures)} tests with same error)"
     )
     logger.info(f"Calling AI CLI with {_format_timeout_log(ai_cli_timeout)}")
-    success, analysis_output = await call_ai_cli(
+    success, analysis_output = await _call_ai_cli_with_retry(
         prompt,
         cwd=repo_path,
         ai_provider=ai_provider,
@@ -1136,7 +1195,7 @@ You have access to the repository if one was cloned. Explore to understand the f
 """
     logger.debug(f"AI prompt length: {len(prompt)} chars")
     logger.info(f"Calling AI CLI with {_format_timeout_log(ai_cli_timeout)}")
-    success, analysis_output = await call_ai_cli(
+    success, analysis_output = await _call_ai_cli_with_retry(
         prompt,
         cwd=repo_path,
         ai_provider=ai_provider,
@@ -1476,7 +1535,7 @@ You have access to the repository if one was cloned. Explore to understand the f
                 logger.info(
                     f"Calling AI CLI with {_format_timeout_log(settings.ai_cli_timeout)}"
                 )
-                success, analysis_output = await call_ai_cli(
+                success, analysis_output = await _call_ai_cli_with_retry(
                     prompt,
                     cwd=repo_path,
                     ai_provider=ai_provider,

@@ -4,6 +4,7 @@ import type { AnalysisResult, Comment, ReviewState, CommentsAndReviews, AiConfig
 
 interface ReportState {
   result: AnalysisResult | null
+  createdAt: string
   completedAt: string
   comments: Comment[]
   reviews: Record<string, ReviewState>
@@ -17,7 +18,7 @@ interface ReportState {
 }
 
 type ReportAction =
-  | { type: 'SET_RESULT'; payload: { result: AnalysisResult; completedAt: string } }
+  | { type: 'SET_RESULT'; payload: { result: AnalysisResult; createdAt: string; completedAt: string } }
   | { type: 'SET_COMMENTS_AND_REVIEWS'; payload: CommentsAndReviews }
   | { type: 'ADD_COMMENT'; payload: Comment }
   | { type: 'REMOVE_COMMENT'; payload: number }
@@ -41,6 +42,7 @@ type ReportAction =
 
 const initialState: ReportState = {
   result: null,
+  createdAt: '',
   completedAt: '',
   comments: [],
   reviews: {},
@@ -56,7 +58,7 @@ const initialState: ReportState = {
 function reportReducer(state: ReportState, action: ReportAction): ReportState {
   switch (action.type) {
     case 'SET_RESULT':
-      return { ...state, result: action.payload.result, completedAt: action.payload.completedAt, loading: false }
+      return { ...state, result: action.payload.result, createdAt: action.payload.createdAt, completedAt: action.payload.completedAt, loading: false }
     case 'SET_COMMENTS_AND_REVIEWS':
       return { ...state, comments: action.payload.comments, reviews: action.payload.reviews }
     case 'ADD_COMMENT':

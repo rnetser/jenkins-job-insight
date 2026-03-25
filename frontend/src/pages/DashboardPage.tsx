@@ -25,7 +25,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { Skeleton } from '@/components/ui/skeleton'
-import { parseApiTimestamp, isAnalysisTimeout } from '@/lib/utils'
+import { parseApiTimestamp, isAnalysisTimeout, formatDuration } from '@/lib/utils'
 import { StatusChip } from '@/components/shared/StatusChip'
 import { SearchInput } from '@/components/shared/SearchInput'
 import { Pagination } from '@/components/shared/Pagination'
@@ -38,16 +38,6 @@ const STATUS_BORDER: Record<string, string> = {
   pending: 'border-l-border-default',
   failed: 'border-l-signal-red',
   timeout: 'border-l-signal-orange',
-}
-
-function formatDuration(start: Date, end: Date): string {
-  const diffMs = end.getTime() - start.getTime()
-  if (diffMs < 0) return '—'
-  const totalSeconds = Math.floor(diffMs / 1000)
-  const mins = Math.floor(totalSeconds / 60)
-  const secs = totalSeconds % 60
-  if (mins === 0) return `${secs}s`
-  return `${mins}m ${secs}s`
 }
 
 function relativeTime(iso: string): string {

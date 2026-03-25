@@ -1,10 +1,13 @@
 """Tests for analyzer module."""
 
+from unittest.mock import AsyncMock, patch
+
 import jenkins
 import pytest
 from fastapi import HTTPException
 
 from jenkins_job_insight.analyzer import (
+    _call_ai_cli_with_retry,
     handle_jenkins_exception,
 )
 
@@ -67,3 +70,71 @@ class TestHandleJenkinsException:
             handle_jenkins_exception(exc, "my-job", 123)
         assert exc_info.value.status_code == 502
         assert "Failed to connect to Jenkins" in exc_info.value.detail
+
+
+class TestCallAiCliWithRetry:
+    """Tests for the _call_ai_cli_with_retry function."""
+
+    @pytest.mark.asyncio
+    async def test_success_no_retry(self) -> None:
+        """Test that a successful first call does not retry."""
+        with patch(
+            "jenkins_job_insight.analyzer.call_ai_cli", new_callable=AsyncMock
+        ) as mock:
+            mock.return_value = (True, "result")
+            success, output = await _call_ai_cli_with_retry(
+                "prompt", ai_provider="test"
+            )
+            assert success is True
+            assert output == "result"
+            assert mock.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retryable_error_retries(self) -> None:
+        """Test that a retryable error triggers a retry and succeeds."""
+        with (
+            patch(
+                "jenkins_job_insight.analyzer.call_ai_cli", new_callable=AsyncMock
+            ) as mock,
+            patch("jenkins_job_insight.analyzer.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock.side_effect = [
+                (False, "ENOENT: no such file or directory, rename config"),
+                (True, "success after retry"),
+            ]
+            success, output = await _call_ai_cli_with_retry(
+                "prompt", ai_provider="test", max_retries=1
+            )
+            assert success is True
+            assert output == "success after retry"
+            assert mock.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_non_retryable_error_no_retry(self) -> None:
+        """Test that a non-retryable error does not trigger a retry."""
+        with patch(
+            "jenkins_job_insight.analyzer.call_ai_cli", new_callable=AsyncMock
+        ) as mock:
+            mock.return_value = (False, "some other error")
+            success, output = await _call_ai_cli_with_retry(
+                "prompt", ai_provider="test", max_retries=3
+            )
+            assert success is False
+            assert "some other error" in output
+            assert mock.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_max_retries_exhausted(self) -> None:
+        """Test that retries stop after max_retries is exhausted."""
+        with (
+            patch(
+                "jenkins_job_insight.analyzer.call_ai_cli", new_callable=AsyncMock
+            ) as mock,
+            patch("jenkins_job_insight.analyzer.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock.return_value = (False, "ENOENT: no such file or directory")
+            success, output = await _call_ai_cli_with_retry(
+                "prompt", ai_provider="test", max_retries=2
+            )
+            assert success is False
+            assert mock.call_count == 3  # initial + 2 retries

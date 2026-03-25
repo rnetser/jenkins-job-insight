@@ -12,6 +12,17 @@ export function isAnalysisTimeout(status: string, error?: string | null, summary
   return check(error) || check(summary)
 }
 
+/** Format the duration between two dates as a compact string. */
+export function formatDuration(start: Date, end: Date): string {
+  const diffMs = end.getTime() - start.getTime()
+  if (diffMs < 0) return '\u2014'
+  const totalSeconds = Math.floor(diffMs / 1000)
+  const mins = Math.floor(totalSeconds / 60)
+  const secs = totalSeconds % 60
+  if (mins === 0) return `${secs}s`
+  return `${mins}m ${secs}s`
+}
+
 /** Parse a UTC timestamp from the API (SQLite format) into a Date. */
 export function parseApiTimestamp(ts: string): Date {
   // Normalize: ensure UTC timezone marker

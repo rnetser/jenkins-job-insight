@@ -1,7 +1,7 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
-import { parseApiTimestamp, isAnalysisTimeout } from '@/lib/utils'
+import { parseApiTimestamp, isAnalysisTimeout, formatDuration } from '@/lib/utils'
 import { groupFailures } from '@/lib/grouping'
 import { useExpandCollapseAll } from '@/lib/useExpandCollapseAll'
 import type { ResultResponse, CommentsAndReviews, AiConfig } from '@/types'
@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusChip } from '@/components/shared/StatusChip'
 import { ExpandCollapseButtons } from '@/components/shared/ExpandCollapseButtons'
-import { ExternalLink, CheckCircle2 } from 'lucide-react'
+import { ExternalLink, CheckCircle2, Clock, Calendar, Cpu, Timer } from 'lucide-react'
 import { reviewKey } from './report/ReportContext'
 import type { ChildJobAnalysis } from '@/types'
 
@@ -55,6 +55,15 @@ function ReportContent() {
   const dispatch = useReportDispatch()
   const refreshEnrichments = useRefreshEnrichments()
 
+  // Capture hash fragment on mount and listen for changes (child-job deep linking)
+  const [activeHash, setActiveHash] = useState(() => window.location.hash.replace(/^#/, ''))
+
+  useEffect(() => {
+    const onHashChange = () => setActiveHash(window.location.hash.replace(/^#/, ''))
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
+
   useEffect(() => {
     if (!jobId) return
 
@@ -82,7 +91,7 @@ function ReportContent() {
           return
         }
 
-        dispatch({ type: 'SET_RESULT', payload: { result: resultRes.result, completedAt: resultRes.completed_at ?? '' } })
+        dispatch({ type: 'SET_RESULT', payload: { result: resultRes.result, createdAt: resultRes.created_at, completedAt: resultRes.completed_at ?? '' } })
 
         // Comments, AI configs, classifications, and capabilities are best-effort
         const [commentsResult, aiConfigsResult, classificationsResult, capabilitiesResult] = await Promise.allSettled([
@@ -304,6 +313,34 @@ function ReportContent() {
         </div>
       </div>
 
+      {/* ---- Metadata detail row ---- */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-text-tertiary animate-slide-up">
+        {state.createdAt && (
+          <span className="inline-flex items-center gap-1">
+            <Calendar className="h-3 w-3" />
+            {parseApiTimestamp(state.createdAt).toLocaleString()}
+          </span>
+        )}
+        {state.createdAt && state.completedAt && (
+          <span className="inline-flex items-center gap-1">
+            <Timer className="h-3 w-3" />
+            {formatDuration(parseApiTimestamp(state.createdAt), parseApiTimestamp(state.completedAt))}
+          </span>
+        )}
+        {result.ai_provider && (
+          <span className="inline-flex items-center gap-1">
+            <Cpu className="h-3 w-3" />
+            {result.ai_provider}{result.ai_model ? ` / ${result.ai_model}` : ''}
+          </span>
+        )}
+        {state.completedAt && (
+          <span className="inline-flex items-center gap-1">
+            <Clock className="h-3 w-3" />
+            Completed {parseApiTimestamp(state.completedAt).toLocaleString()}
+          </span>
+        )}
+      </div>
+
       {/* ---- Key takeaway ---- */}
       {result.summary && (
         <div className="rounded-lg border-l-4 border-l-signal-orange bg-glow-orange p-4 animate-slide-up">
@@ -342,7 +379,7 @@ function ReportContent() {
           </div>
           <div className="space-y-6" key={childRemountKey}>
             {result.child_job_analyses.map((child) => (
-              <ChildJobSection key={`${child.job_name}-${child.build_number}`} child={child} jobId={result.job_id} />
+              <ChildJobSection key={`${child.job_name}-${child.build_number}`} child={child} jobId={result.job_id} activeHash={activeHash} />
             ))}
           </div>
         </section>

@@ -1,8 +1,9 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ChildJobAnalysis } from '@/types'
 import { useSessionState } from '@/lib/useSessionState'
 import { groupFailures } from '@/lib/grouping'
 import { useExpandCollapseAll } from '@/lib/useExpandCollapseAll'
+import { childJobHashId } from '@/lib/childJobHash'
 import { FailureCard } from './FailureCard'
 import { Badge } from '@/components/ui/badge'
 import { ExpandCollapseButtons } from '@/components/shared/ExpandCollapseButtons'
@@ -12,11 +13,39 @@ interface ChildJobSectionProps {
   child: ChildJobAnalysis
   jobId: string
   depth?: number
+  /** Hash fragment (without #) from the URL, used for auto-expand on load. */
+  activeHash?: string
 }
 
-export function ChildJobSection({ child, jobId, depth = 0 }: ChildJobSectionProps) {
+export function ChildJobSection({ child, jobId, depth = 0, activeHash }: ChildJobSectionProps) {
   const expandKey = `jji-expand-${jobId}-child-${child.job_name}-${child.build_number}`
+  const hashId = childJobHashId(child.job_name, child.build_number)
+  const sectionRef = useRef<HTMLDivElement>(null)
   const [expanded, setExpanded] = useSessionState(expandKey, false)
+
+  // Auto-expand and scroll when the URL hash targets this child job
+  useEffect(() => {
+    if (activeHash && activeHash === hashId && !expanded) {
+      setExpanded(true)
+      // Scroll after DOM updates
+      requestAnimationFrame(() => {
+        sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+    }
+  }, [activeHash, hashId, expanded, setExpanded])
+
+  const handleToggle = useCallback(() => {
+    const next = !expanded
+    setExpanded(next)
+    if (next) {
+      // Set hash without navigation
+      history.replaceState(null, '', `#${hashId}`)
+    } else {
+      // Clear hash
+      history.replaceState(null, '', window.location.pathname + window.location.search)
+    }
+  }, [expanded, setExpanded, hashId])
+
   const groups = useMemo(
     () => groupFailures(child.failures, `child-${child.job_name}-${child.build_number}`),
     [child.failures, child.job_name, child.build_number]
@@ -31,14 +60,14 @@ export function ChildJobSection({ child, jobId, depth = 0 }: ChildJobSectionProp
     useExpandCollapseAll(getFailureKeys)
 
   return (
-    <div className={depth > 0 ? 'ml-4 border-l-2 border-border-muted pl-4' : ''}>
+    <div ref={sectionRef} id={hashId} className={depth > 0 ? 'ml-4 border-l-2 border-border-muted pl-4' : ''}>
       {/* Header */}
       <div className="flex w-full items-center gap-3 rounded-md bg-surface-elevated/50 px-4 py-3 text-left mb-4">
         <button
           type="button"
           className="flex items-center gap-3 min-w-0 flex-1 bg-transparent border-none p-0 text-left cursor-pointer"
           aria-expanded={expanded}
-          onClick={() => setExpanded(!expanded)}
+          onClick={handleToggle}
         >
           {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-text-tertiary" /> : <ChevronRight className="h-4 w-4 shrink-0 text-text-tertiary" />}
           <GitFork className="h-4 w-4 text-signal-blue shrink-0" />
@@ -99,6 +128,7 @@ export function ChildJobSection({ child, jobId, depth = 0 }: ChildJobSectionProp
                   child={nested}
                   jobId={jobId}
                   depth={depth + 1}
+                  activeHash={activeHash}
                 />
               ))}
             </div>
