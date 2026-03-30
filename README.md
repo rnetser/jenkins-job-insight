@@ -1,6 +1,6 @@
 # Jenkins Job Insight
 
-A containerized webhook service that analyzes Jenkins job failures, classifies them as code issues or product bugs, and provides actionable suggestions. This service operates without a UI, receiving requests via webhooks and delivering results through callbacks.
+A containerized service that analyzes Jenkins job failures, classifies them as code issues or product bugs, and provides a React-based dashboard for exploring results.
 
 ## Overview
 
@@ -18,16 +18,16 @@ For each failure, the service provides detailed explanations and either fix sugg
 - **Multiple AI providers**: Supports Claude CLI, Gemini CLI, and Cursor Agent CLI
 - **Optional Jira integration**: Searches Jira for matching bugs on PRODUCT BUG failures with AI-powered relevance filtering
 - **SQLite result storage**: Persists analysis results for later retrieval
-- **Callback webhooks**: Delivers results to your specified endpoint with custom headers
-- **HTML report output**: Generate self-contained, dark-themed HTML failure reports viewable in any browser
+- **React-based dashboard and report UI**: Browse analysis results, explore failures, and manage reviews in a modern web interface
 - **Direct failure analysis**: Analyze raw test failures without Jenkins via `POST /analyze-failures`
 - **pytest JUnit XML integration**: Enrich JUnit XML reports with AI analysis via a pytest plugin
 - **Raw XML analysis**: Accept raw JUnit XML via API, extract failures, analyze, and return enriched XML
 - **One-click bug creation**: Create GitHub issues or Jira bugs directly from failure cards with AI-generated content, editable preview, and duplicate detection
+- **Jenkins job monitoring**: Submit analysis while a build is still running — the service waits for completion, then analyzes automatically (fire and forget)
 
 ### One-Click Bug Creation
 
-Failure cards in the HTML report include bug creation buttons based on classification:
+Failure cards in the report page include bug creation buttons based on classification:
 
 - **CODE ISSUE** failures show an "Open GitHub Issue" button (requires `GITHUB_TOKEN` and `TESTS_REPO_URL`)
 - **PRODUCT BUG** failures show an "Open Jira Bug" button (requires Jira configuration)
@@ -66,7 +66,7 @@ uv tool install jenkins-job-insight
 #### Configuration
 
 ```bash
-export JJI_SERVER_URL=http://your-server:8700  # required
+export JJI_SERVER=http://your-server:8000  # optional if a default config profile is set
 export JJI_USERNAME=myakove                  # for comments/reviews
 ```
 
@@ -82,7 +82,7 @@ jji health
 jji results list
 
 # Trigger a new analysis
-jji analyze mtv-2.11-ocp-4.20-test-release-non-gate 27 --provider claude --jira
+jji analyze --job-name mtv-2.11-ocp-4.20-test-release-non-gate --build-number 27 --provider claude --jira
 
 # Check status
 jji status <job_id>
@@ -105,6 +105,46 @@ jji results list --json
 
 Run `jji --help` for all commands.
 
+### Claude Code Integration
+
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill is included for AI-assisted Jenkins job analysis. Install it to use from any directory:
+
+```bash
+# From the repository root:
+cp -r skills/jji-analyze ~/.claude/skills/
+```
+
+Once installed, Claude Code automatically discovers the skill. Ask it to analyze Jenkins jobs and it will use the `jji` CLI.
+
+## Frontend
+
+The web UI is built with React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui. It's served by the same FastAPI container -- no separate frontend service needed.
+
+### Pages
+
+| Page | Route | Description |
+|------|-------|-------------|
+| Register | `/register` | Set your username (stored as cookie) |
+| Dashboard | `/dashboard` (alias: `/`) | Table of all analysis runs with search, pagination, delete |
+| Report | `/results/{jobId}` | Full failure analysis with comments, review toggles, classification overrides, bug creation |
+| Status | `/status/{jobId}` | Polling status page while analysis is running |
+| History | `/history` | Searchable failure history with classification filters |
+| Test History | `/history/test/:testName` | Per-test drill-down showing test runs, failures and details |
+
+### Development
+
+For local frontend development:
+
+```bash
+cd frontend
+npm install
+npm run dev    # Vite dev server with HMR on port 5173
+npm test       # Run Vitest test suite
+npm run build  # Production build to dist/
+```
+
+The Vite dev server proxies API requests to `localhost:8000` (the FastAPI backend).
+
 ## Quick Start
 
 > **Note:** The `data` directory must exist on the host before starting the container. Docker creates mounted directories as root, but the container runs as a non-root user for security.
@@ -126,47 +166,51 @@ docker run -d \
 
 ## Configuration
 
-Configure the service using environment variables. The service is tied to a single Jenkins instance via `JENKINS_URL`.
+Configure the service using environment variables. Jenkins settings are optional at the server level and can be provided (or overridden) per-request in the API payload or CLI options.
 
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | **Jenkins** | | | |
-| `JENKINS_URL` | Yes | - | Jenkins server URL (service is tied to this instance) |
-| `JENKINS_USER` | Yes | - | Jenkins username |
-| `JENKINS_PASSWORD` | Yes | - | Jenkins password or API token |
+| `JENKINS_URL` | No* | - | Jenkins server URL (can be provided per-request) |
+| `JENKINS_USER` | No* | - | Jenkins username (can be provided per-request) |
+| `JENKINS_PASSWORD` | No* | - | Jenkins password or API token (can be provided per-request) |
 | `JENKINS_SSL_VERIFY` | No | `true` | Enable SSL certificate verification (set to `false` for self-signed certs) |
+| `WAIT_FOR_COMPLETION` | No | `true` | Wait for running Jenkins builds to finish before analyzing |
+| `POLL_INTERVAL_MINUTES` | No | `2` | Minutes between polls when waiting for a build to finish |
+| `MAX_WAIT_MINUTES` | No | `0` | Maximum minutes to wait for a build (0 = no limit, wait forever) |
 | **AI Provider** | | | |
 | `AI_PROVIDER` | Yes | - | AI provider to use (`claude`, `gemini`, or `cursor`) |
 | `AI_MODEL` | Yes | - | Model for the AI provider |
 | `AI_CLI_TIMEOUT` | No | `10` | Timeout for AI CLI calls in minutes (increase for slower models) |
 | `LOG_LEVEL` | No | `INFO` | Log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `CALLBACK_URL` | No | - | Default callback URL for results (can be overridden per-request) |
-| `CALLBACK_HEADERS` | No | - | Default callback headers as JSON (can be overridden per-request) |
 | **Other** | | | |
+| `PUBLIC_BASE_URL` | No | - | Trusted public base URL for result links and tracker URLs (avoids relying on request headers) |
 | `TESTS_REPO_URL` | No | - | Default tests repository URL (can be overridden per-request) |
-| `HTML_REPORT` | No | `true` | Generate HTML reports (set to `false` to disable) |
 | `DEBUG` | No | `false` | Enable debug mode with hot reload for development |
 | **Jira (Optional)** | | | |
 | `ENABLE_JIRA` | No | *(auto-detect)* | Explicitly enable/disable Jira integration (overrides auto-detection) |
 | `JIRA_URL` | No | - | Jira instance URL (enables Jira integration) |
 | `JIRA_EMAIL` | No | - | Email for Jira Cloud authentication (if set, Cloud auth is used; if not set, Server/DC auth is used) |
-| `JIRA_API_TOKEN` | No | - | API token for Jira Cloud (kept for backward compatibility; prefer `JIRA_PAT`) |
-| `JIRA_PAT` | No | - | Personal Access Token (works for both Cloud and Server/DC) |
-| `JIRA_PROJECT_KEY` | No | - | Scope Jira searches to a specific project |
+| `JIRA_API_TOKEN` | No | - | API token for Jira Cloud (used with `JIRA_EMAIL` for Basic auth) |
+| `JIRA_PAT` | No | - | Personal Access Token for Jira Server/Data Center (Bearer auth) |
+| `JIRA_PROJECT_KEY` | Yes* | - | Required to enable Jira integration and scope searches to a project |
 | `JIRA_SSL_VERIFY` | No | `true` | SSL certificate verification for Jira |
 | `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
 | **Build Artifact Analysis (Optional)** | | | |
 | `GET_JOB_ARTIFACTS` | No | `true` | Download all build artifacts for AI artifacts context |
 | `JENKINS_ARTIFACTS_MAX_SIZE_MB` | No | `500` | Maximum size per downloaded artifact in MB |
 | `JENKINS_ARTIFACTS_CONTEXT_LINES` | No | `200` | Maximum artifacts context lines for AI prompt |
-| **GitHub** | | | |
-| `GITHUB_TOKEN` | No | - | GitHub API token for private repo PR status in comments |
+| **GitHub (Optional)** | | | |
+| `ENABLE_GITHUB_ISSUES` | No | *(auto-detect)* | Explicitly enable/disable GitHub issue creation (overrides auto-detection). Requires both `GITHUB_TOKEN` and `TESTS_REPO_URL` to be set for issue creation to work. |
+| `GITHUB_TOKEN` | No | - | GitHub API token for private repo PR status in comments and for GitHub issue creation |
+
+> **\*** Can be provided per-request in the API payload or CLI options instead of as environment variables.
 
 ### Jenkins Configuration
 
-The `JENKINS_URL` environment variable defines which Jenkins instance the service connects to. API requests specify only the job name and build number; the service constructs the full URL internally.
+Jenkins settings (`JENKINS_URL`, `JENKINS_USER`, `JENKINS_PASSWORD`) are optional at the server level. They can be set as environment variables for a default Jenkins instance, or provided per-request in the API payload or CLI options. For Jenkins-backed `/analyze` requests, the API accepts only the job name and build number; the service constructs the full URL internally. The `/analyze-failures` endpoint accepts raw failures or XML directly without Jenkins connectivity.
 
 ### AI CLI Configuration
 
@@ -310,21 +354,21 @@ All configuration fields can be overridden per-request in the webhook payload. R
 | **General**          |                      |          |                        |                                                                |
 | `TESTS_REPO_URL`     | `tests_repo_url`     | No       | Both                   | Repository URL for test context                                |
 | --                   | `raw_prompt`         | No       | Both                   | Additional AI instructions (overrides repo-level prompt file)  |
-| `CALLBACK_URL`       | `callback_url`       | No       | `/analyze`             | Callback webhook URL for results                               |
-| `CALLBACK_HEADERS`   | `callback_headers`   | No       | `/analyze`             | Headers for callback requests                                  |
-| `HTML_REPORT`        | `html_report`        | No       | `/analyze`             | Generate HTML report (default: true)                           |
 | **Jenkins**          |                      |          |                        |                                                                |
 | `JENKINS_URL`        | `jenkins_url`        | Yes*     | `/analyze`             | Jenkins server URL                                             |
 | `JENKINS_USER`       | `jenkins_user`       | Yes*     | `/analyze`             | Jenkins username                                               |
 | `JENKINS_PASSWORD`   | `jenkins_password`   | Yes*     | `/analyze`             | Jenkins password or API token                                  |
 | `JENKINS_SSL_VERIFY` | `jenkins_ssl_verify` | No       | `/analyze`             | Jenkins SSL certificate verification (default: true)           |
+| `WAIT_FOR_COMPLETION` | `wait_for_completion` | No      | `/analyze`             | Wait for running builds to finish before analyzing (default: true) |
+| `POLL_INTERVAL_MINUTES` | `poll_interval_minutes` | No  | `/analyze`             | Minutes between polls when waiting for a build (default: 2)    |
+| `MAX_WAIT_MINUTES`   | `max_wait_minutes`   | No       | `/analyze`             | Maximum minutes to wait for a build (default: 0 = no limit)    |
 | **Jira**             |                      |          |                        |                                                                |
 | `ENABLE_JIRA`        | `enable_jira`        | No       | Both                   | Enable/disable Jira bug search (default: auto-detect)          |
 | `JIRA_URL`           | `jira_url`           | No       | Both                   | Jira instance URL                                              |
 | `JIRA_EMAIL`         | `jira_email`         | No       | Both                   | Email for Jira Cloud (determines auth mode: set = Cloud, unset = Server/DC) |
-| `JIRA_API_TOKEN`     | `jira_api_token`     | No       | Both                   | Backward-compatible alias for `JIRA_PAT`                       |
-| `JIRA_PAT`           | `jira_pat`           | No       | Both                   | Personal Access Token (works for both Cloud and Server/DC)     |
-| `JIRA_PROJECT_KEY`   | `jira_project_key`   | No       | Both                   | Scope Jira searches to a specific project                      |
+| `JIRA_API_TOKEN`     | `jira_api_token`     | No       | Both                   | API token for Jira Cloud (used with `JIRA_EMAIL` for Basic auth) |
+| `JIRA_PAT`           | `jira_pat`           | No       | Both                   | Personal Access Token for Jira Server/Data Center (Bearer auth)  |
+| `JIRA_PROJECT_KEY`   | `jira_project_key`   | Yes*     | Both                   | Required to enable Jira integration; scopes searches to a project |
 | `JIRA_SSL_VERIFY`    | `jira_ssl_verify`    | No       | Both                   | SSL certificate verification for Jira (default: true)          |
 | `JIRA_MAX_RESULTS`   | `jira_max_results`   | No       | Both                   | Maximum Jira results per search (default: 5)                   |
 | **Build Artifact Analysis** |                    |          |                        |                                                                |
@@ -352,7 +396,7 @@ When the AI classifies a failure as **PRODUCT BUG**, the service can optionally 
 2. After analysis completes, the service searches Jira for Bug-type issues using those keywords
 3. AI evaluates each Jira candidate by reading its summary and description to determine actual relevance
 4. Only relevant matches are attached to the response as `jira_matches`
-5. HTML reports render matches as clickable links
+5. The report UI renders matches as clickable links
 6. JUnit XML reports include matches as properties
 
 Jira integration works with all analysis endpoints: `/analyze`, `/analyze?sync=true`, and `/analyze-failures`.
@@ -362,10 +406,10 @@ Jira integration works with all analysis endpoints: `/analyze`, `/analyze?sync=t
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `JIRA_URL` | Yes* | - | Jira instance URL (Cloud or Server/DC) |
-| `JIRA_PAT` | Yes* | - | Personal Access Token (works for both Cloud and Server/DC) |
-| `JIRA_EMAIL` | No | - | Email for Jira Cloud — determines auth mode: if set, Cloud auth (Basic with email:PAT); if not set, Server/DC auth (Bearer PAT) |
-| `JIRA_API_TOKEN` | No | - | Kept for backward compatibility (prefer `JIRA_PAT`) |
-| `JIRA_PROJECT_KEY` | No | - | Scope searches to a specific project |
+| `JIRA_EMAIL` | No | - | Email for Jira Cloud authentication (if set, Cloud auth is used; if not set, Server/DC auth is used) |
+| `JIRA_API_TOKEN` | No | - | API token for Jira Cloud (used with `JIRA_EMAIL` for Basic auth) |
+| `JIRA_PAT` | No | - | Personal Access Token for Jira Server/Data Center (Bearer auth) |
+| `JIRA_PROJECT_KEY` | Yes* | - | Required to enable Jira integration; scopes searches to a project |
 | `JIRA_SSL_VERIFY` | No | `true` | SSL certificate verification |
 | `JIRA_MAX_RESULTS` | No | `5` | Maximum Jira results per search |
 
@@ -376,7 +420,8 @@ Jira integration works with all analysis endpoints: `/analyze`, `/analyze?sync=t
 ```bash
 JIRA_URL=https://your-org.atlassian.net
 JIRA_EMAIL=your-email@example.com
-JIRA_PAT=your-personal-access-token
+JIRA_API_TOKEN=your-api-token
+JIRA_PROJECT_KEY=MYPROJ
 ```
 
 **Jira Server/DC:**
@@ -384,9 +429,10 @@ JIRA_PAT=your-personal-access-token
 ```bash
 JIRA_URL=https://jira.your-company.com
 JIRA_PAT=your-personal-access-token
+JIRA_PROJECT_KEY=MYPROJ
 ```
 
-`JIRA_EMAIL` is the switch that determines which authentication mode is used. When `JIRA_EMAIL` is set, the service uses Basic authentication (email:PAT) for Jira Cloud. When `JIRA_EMAIL` is omitted, the service uses Bearer token authentication (PAT) for Jira Server/DC.
+`JIRA_EMAIL` is the switch that determines which authentication mode is used. When `JIRA_EMAIL` is set, the service uses Basic authentication (email + API token) for Jira Cloud. When `JIRA_EMAIL` is omitted, the service uses Bearer token authentication (PAT) for Jira Server/DC.
 
 #### Error Handling
 
@@ -489,7 +535,7 @@ Each analyzed test failure supports user comments and a "Reviewed" checkbox for 
 |----------|----------|---------|-------------|
 | `GITHUB_TOKEN` | No | - | GitHub API token for fetching PR status from private repositories. Public repositories work without a token. This value can also be set per-request via the `github_token` field in the payload. |
 
-Jira enrichment reuses existing Jira configuration (`JIRA_URL`, `JIRA_PAT`, and optionally `JIRA_EMAIL` for Cloud auth).
+Jira enrichment reuses existing Jira configuration (`JIRA_URL`, `JIRA_API_TOKEN` or `JIRA_PAT`, and optionally `JIRA_EMAIL` for Cloud auth).
 
 ### Failure History & AI Tools
 
@@ -502,7 +548,6 @@ The service maintains a history of all analyzed test failures and exposes it thr
 | `GET` | `/history/test/{test_name}` | Estimated pass/fail history for a specific test (pass count is derived by subtracting recorded failures from total analyzed builds), including failure rate, classifications breakdown, recent runs, and related comments |
 | `GET` | `/history/search?signature={sig}` | Find all tests that failed with the same error signature, with occurrence counts and last classification |
 | `GET` | `/history/stats/{job_name}` | Aggregate statistics for a specific job: overall health, most common failures, failure trend direction |
-| `GET` | `/history/trends` | Daily or weekly failure rate data points over time |
 | `POST` | `/history/classify` | Classify a test as FLAKY, REGRESSION, INFRASTRUCTURE, KNOWN_BUG, or INTERMITTENT (used by AI and humans) |
 | `GET` | `/history/classifications` | Query existing test classifications, filterable by test_name, classification, and job_name |
 
@@ -532,7 +577,7 @@ Projects can enhance the AI's history analysis by placing a `JOB_INSIGHT_FAILURE
 
 #### History Page
 
-The `/history` endpoint serves an interactive HTML page accessible from the dashboard header. It provides a UI for exploring failure trends and searching test history.
+The `/history` route serves the React-based failure history page with searchable, paginated failure data.
 
 ### SSL Verification
 
@@ -667,15 +712,48 @@ This context helps the AI distinguish between test infrastructure issues (CODE I
 | `JENKINS_ARTIFACTS_MAX_SIZE_MB` | `500` | Maximum size per downloaded artifact in MB |
 | `JENKINS_ARTIFACTS_CONTEXT_LINES` | `200` | Maximum lines of artifacts context included in AI prompt |
 
-## API Endpoints
+### Jenkins Job Monitoring
+
+When you submit an analysis request, the server automatically checks if the Jenkins build is still running. If it is, the system monitors the job until it completes, then starts the analysis automatically. This lets you trigger analysis right after starting a Jenkins job — fire and forget.
+
+- **Always on by default** — no configuration needed
+- **Polls every 2 minutes** (configurable via `poll_interval_minutes`)
+- **No timeout by default** — waits until the job finishes (configurable via `max_wait_minutes`; set to a positive number to impose a limit)
+- **Any terminal state triggers analysis** — success, failure, error, aborted
+- **Status shows "Waiting"** in the dashboard and status page while monitoring
+- **Opt out with `--no-wait`** via CLI or `"wait_for_completion": false` in the payload
+
+#### CLI example
+
+```bash
+# Fire and forget — starts monitoring immediately
+jji --server dev analyze --job-name my-job --build-number 42
+
+# Skip monitoring (fail if job still running)
+jji --server dev analyze --job-name my-job --build-number 42 --no-wait
+```
+
+#### API example
+
+```json
+{
+  "job_name": "my-job",
+  "build_number": 42,
+  "wait_for_completion": true,
+  "poll_interval_minutes": 2,
+  "max_wait_minutes": 0
+}
+```
+
+## All API Endpoints
 
 | Endpoint                 | Method | Description                                       |
 |--------------------------|--------|---------------------------------------------------|
 | `/analyze`               | POST   | Submit analysis job (async, returns 202)          |
 | `/analyze?sync=true`     | POST   | Submit and wait for result (returns JSON)         |
 | `/analyze-failures`      | POST   | Analyze raw test failures directly (no Jenkins)   |
-| `/results/{job_id}`      | GET    | Retrieve stored result (JSON)                     |
-| `/results/{job_id}.html` | GET    | Retrieve stored result as an HTML report (supports `?refresh=1`) |
+| `/results/{job_id}`      | GET    | Retrieve stored result (JSON or serve SPA for browsers)       |
+| `/results/{job_id}`      | DELETE | Delete a stored analysis result                   |
 | `/results`               | GET    | List recent analysis jobs (default: 50, max: 100) |
 | `/results/{job_id}/comments` | GET | Get all comments and review states for a job     |
 | `/results/{job_id}/comments` | POST | Add a comment to a test failure                 |
@@ -688,18 +766,22 @@ This context helps the AI distinguish between test infrastructure issues (CODE I
 | `/results/{job_id}/create-github-issue` | POST | Create a GitHub issue (returns 201)          |
 | `/results/{job_id}/create-jira-bug` | POST | Create a Jira bug (returns 201)                |
 | `/results/{job_id}/override-classification` | PUT | Override failure classification            |
-| `/dashboard`             | GET    | HTML dashboard listing all analysis reports       |
-| `/history`               | GET    | Interactive failure history page (HTML)            |
+| `/api/dashboard`         | GET    | Dashboard job list as JSON (for React frontend)   |
+| `/dashboard`             | GET    | React SPA (dashboard view)                        |
+| `/status/{job_id}`       | GET    | React SPA status page for queued/running/waiting jobs |
+| `/history`               | GET    | React SPA (history view)                          |
+| `/history/failures`      | GET    | Paginated failure history for the History page and CLI |
 | `/history/test/{test_name}` | GET | Pass/fail history for a specific test              |
 | `/history/search`        | GET    | Find tests by error signature                     |
 | `/history/stats/{job_name}` | GET | Aggregate statistics for a job                     |
-| `/history/trends`        | GET    | Failure rate data over time                        |
 | `/history/classify`      | POST   | Classify a test (FLAKY, REGRESSION, etc.)          |
 | `/history/classifications` | GET  | Query existing test classifications                |
+| `/api/capabilities`      | GET    | Report available automation features (Jira, GitHub) |
 | `/health`                | GET    | Health check endpoint                             |
+| `/ai-configs`            | GET    | List known AI provider/model configurations       |
 | `/favicon.ico`           | GET    | Application favicon (SVG)                         |
 
-The service connects to the Jenkins instance configured via the `JENKINS_URL` environment variable. All analysis requests specify only the job name and build number.
+The service connects to the Jenkins instance configured via the `JENKINS_URL` environment variable or per-request payload. For Jenkins-backed `/analyze` requests, clients specify only the job name and build number; the `/analyze-failures` endpoint does not use job name or build number and instead accepts raw failure data or XML directly via the request body.
 
 ## Request/Response Examples
 
@@ -716,8 +798,6 @@ curl -X POST http://localhost:8000/analyze \
     "ai_provider": "claude",
     "ai_model": "sonnet",
     "tests_repo_url": "https://github.com/org/my-project",
-    "callback_url": "https://my-service.example.com/webhook",
-    "callback_headers": {"Authorization": "Bearer my-token"},
     "enable_jira": true,
     "jira_project_key": "MYPROJ"
   }'
@@ -782,7 +862,7 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
       }
     ],
   "child_job_analyses": [],
-  "html_report_url": "/results/550e8400-e29b-41d4-a716-446655440000.html"
+  "result_url": "/results/550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
@@ -830,7 +910,8 @@ curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000
     ],
     "child_job_analyses": []
   },
-  "created_at": "2024-01-15T10:30:00"
+  "created_at": "2024-01-15T10:30:00",
+  "result_url": "/results/550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
@@ -964,9 +1045,9 @@ Note: `enriched_xml` is only present when `raw_xml` was provided in the request.
 |-------|------|-------------|
 | `job_id` | string | Unique identifier for the analysis job |
 | `jenkins_url` | string | URL of the analyzed Jenkins build |
-| `status` | string | Analysis status: `pending`, `running`, `completed`, or `failed` |
+| `status` | string | Analysis status: `waiting`, `pending`, `running`, `completed`, or `failed` |
 | `summary` | string | Summary of the analysis findings |
-| `html_report_url` | string | URL to view the HTML report (only present when `html_report` is enabled) |
+| `result_url` | string | Canonical URL for the stored result (`/results/{job_id}`) |
 
 For the full result (via `/results/{job_id}`), each failure contains:
 
@@ -981,8 +1062,6 @@ For the full result (via `/results/{job_id}`), each failure contains:
 
 ## Output Formats
 
-By default, HTML reports are automatically generated and saved alongside JSON results. The sync response includes an `html_report_url` field with the link. Set `html_report` to `false` to disable HTML generation.
-
 ### JSON
 
 ```bash
@@ -991,36 +1070,6 @@ curl -X POST "http://localhost:8000/analyze?sync=true" \
   -H "Content-Type: application/json" \
   -d '{"job_name": "my-project", "build_number": 123, "ai_provider": "claude", "ai_model": "sonnet"}'
 ```
-
-### HTML Report
-
-Retrieve an analysis as a self-contained HTML report with a dark theme and collapsible failure details. While the analysis is still running, the HTML endpoint serves a status page that auto-refreshes every 10 seconds:
-
-```bash
-curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000.html -o report.html
-
-# Open in browser
-open report.html  # macOS
-xdg-open report.html  # Linux
-```
-
-By default, HTML reports are served from disk cache once generated. To force regeneration of the report from stored data, append the `?refresh=1` query parameter:
-
-```bash
-curl http://localhost:8000/results/550e8400-e29b-41d4-a716-446655440000.html?refresh=1 -o report.html
-```
-
-This is useful after server code updates when cached reports may be stale and need to reflect the latest rendering logic.
-
-The HTML report includes:
-
-- **Sticky header** with job name, build number, and failure count badge
-- **Root cause analysis cards** grouped by bug, with BUG-ID, classification, and severity badges
-- **Collapsible bug cards** with AI analysis, code fix or product bug report details, affected tests list, and error details
-- **All failures table** listing every failure with test name, error, classification, and bug reference
-- **Key takeaway** callout summarizing the analysis
-
-The report is fully self-contained (no external CSS/JS) and can be shared as a single file.
 
 ## pytest Integration
 
@@ -1037,9 +1086,9 @@ Enrich JUnit XML reports with AI-powered failure analysis. After tests complete,
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `JJI_SERVER_URL` | Yes | - | Jenkins Job Insight server URL |
+| `JJI_SERVER` | Yes | - | Jenkins Job Insight server URL |
 | `JJI_AI_PROVIDER` | No | `claude` | AI provider: claude, gemini, or cursor |
-| `JJI_AI_MODEL` | No | `claude-opus-4-6[1m]` | AI model to use |
+| `JJI_AI_MODEL` | No | `claude-opus-4-6` | AI model to use |
 | `JJI_TIMEOUT` | No | `600` | Request timeout in seconds |
 
 ### Usage
@@ -1084,18 +1133,18 @@ For each failed test case, the JUnit XML is enriched with:
 ### Setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/jenkins-job-insight.git
+git clone https://github.com/myk-org/jenkins-job-insight.git
 cd jenkins-job-insight
 
-# Install with development dependencies
-pip install -e ".[dev]"
+# Backend
+uv sync
+uv run pytest
 
-# Run tests
-pytest
-
-# Run locally with hot reload
-DEBUG=true jenkins-job-insight
+# Frontend
+cd frontend
+npm install
+npm test
+npm run build
 ```
 
 ### Environment File
@@ -1147,14 +1196,7 @@ The `/data` volume mount ensures SQLite database persistence across container re
                         │  3. Optionally clone repo for context        │
                         │  4. Send to AI for classification            │
                         │  5. Store result in SQLite                   │
-                        │  6. Deliver via callback webhook             │
                         └──────────────────────────────────────────────┘
-                                         │
-                                         ▼
-                                 ┌───────────────┐
-                                 │  Callback     │
-                                 │  Webhook      │
-                                 └───────────────┘
 ```
 
 ### Analysis Flow
@@ -1164,9 +1206,7 @@ The `/data` volume mount ensures SQLite database persistence across container re
 3. **Clone repository** (optional): Clone the source repository for additional context
 4. **AI analysis**: Send collected data to the configured AI provider (Claude, Gemini, or Cursor)
 5. **Classify failures**: AI determines if each failure is a code issue or product bug
-6. **Store result**: Save analysis to SQLite database for retrieval
-7. **Generate HTML report**: Save self-contained HTML report to disk (if enabled)
-8. **Deliver result**: Send to callback URL
+6. **Store result**: Save analysis to SQLite database for retrieval via `GET /results/{job_id}`
 
 ## License
 

@@ -5,8 +5,10 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from jenkins_job_insight.comment_enrichment import (
+    detect_github_issues,
     detect_github_prs,
     detect_jira_keys,
+    fetch_github_issue_status,
     fetch_github_pr_status,
     fetch_jira_ticket_status,
 )
@@ -26,6 +28,32 @@ class TestDetectGitHubPRs:
     def test_no_prs(self):
         prs = detect_github_prs("just a regular comment")
         assert prs == []
+
+
+class TestDetectGitHubIssues:
+    def test_detect_issue_url(self):
+        issues = detect_github_issues(
+            "See https://github.com/RedHatQE/mtv-api-tests/issues/359"
+        )
+        assert len(issues) == 1
+        assert issues[0] == {
+            "owner": "RedHatQE",
+            "repo": "mtv-api-tests",
+            "number": 359,
+        }
+
+    def test_detect_multiple_issues(self):
+        text = "See https://github.com/a/b/issues/1 and https://github.com/c/d/issues/2"
+        issues = detect_github_issues(text)
+        assert len(issues) == 2
+
+    def test_no_issues(self):
+        issues = detect_github_issues("just a regular comment")
+        assert issues == []
+
+    def test_does_not_match_pr_urls(self):
+        issues = detect_github_issues("https://github.com/org/repo/pull/42")
+        assert issues == []
 
 
 class TestDetectJiraKeys:
@@ -94,6 +122,98 @@ class TestFetchGitHubPRStatus:
             mock_client.return_value = mock_instance
 
             status = await fetch_github_pr_status("org", "repo", 999)
+            assert status is None
+
+
+class TestFetchGitHubIssueStatus:
+    @pytest.mark.asyncio
+    async def test_fetch_open_issue(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"state": "open"}
+
+        with patch(
+            "jenkins_job_insight.comment_enrichment.httpx.AsyncClient"
+        ) as mock_client:
+            mock_instance = AsyncMock()
+            mock_instance.get.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_client.return_value = mock_instance
+
+            status = await fetch_github_issue_status("org", "repo", 42)
+            assert status == "open"
+
+    @pytest.mark.asyncio
+    async def test_fetch_closed_issue(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"state": "closed"}
+
+        with patch(
+            "jenkins_job_insight.comment_enrichment.httpx.AsyncClient"
+        ) as mock_client:
+            mock_instance = AsyncMock()
+            mock_instance.get.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_client.return_value = mock_instance
+
+            status = await fetch_github_issue_status("org", "repo", 42)
+            assert status == "closed"
+
+    @pytest.mark.asyncio
+    async def test_fetch_issue_not_found(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+
+        with patch(
+            "jenkins_job_insight.comment_enrichment.httpx.AsyncClient"
+        ) as mock_client:
+            mock_instance = AsyncMock()
+            mock_instance.get.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_client.return_value = mock_instance
+
+            status = await fetch_github_issue_status("org", "repo", 999)
+            assert status is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_issue_with_token(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"state": "open"}
+
+        with patch(
+            "jenkins_job_insight.comment_enrichment.httpx.AsyncClient"
+        ) as mock_client:
+            mock_instance = AsyncMock()
+            mock_instance.get.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_client.return_value = mock_instance
+
+            status = await fetch_github_issue_status(
+                "org", "repo", 42, token="ghp_test123"
+            )
+            assert status == "open"
+            call_args = mock_instance.get.call_args
+            headers = call_args.kwargs.get("headers", call_args[1].get("headers", {}))
+            assert headers.get("Authorization") == "Bearer ghp_test123"
+
+    @pytest.mark.asyncio
+    async def test_fetch_issue_network_error(self):
+        with patch(
+            "jenkins_job_insight.comment_enrichment.httpx.AsyncClient"
+        ) as mock_client:
+            mock_instance = AsyncMock()
+            mock_instance.get.side_effect = httpx.ConnectError("connection refused")
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_client.return_value = mock_instance
+
+            status = await fetch_github_issue_status("org", "repo", 42)
             assert status is None
 
 

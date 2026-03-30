@@ -36,20 +36,6 @@ class TestAnalyzeRequest:
         assert request.job_name == "test"
         assert request.build_number == 123
         assert str(request.tests_repo_url) == "https://github.com/example/repo"
-        assert request.callback_url is None
-        assert request.callback_headers is None
-
-    def test_analyze_request_with_optional_fields(self) -> None:
-        """Test creating AnalyzeRequest with all optional fields."""
-        request = AnalyzeRequest(
-            job_name="test",
-            build_number=123,
-            tests_repo_url="https://github.com/example/repo",
-            callback_url="https://callback.example.com/webhook",
-            callback_headers={"Authorization": "Bearer token"},
-        )
-        assert request.callback_url is not None
-        assert request.callback_headers == {"Authorization": "Bearer token"}
 
     def test_analyze_request_without_tests_repo_url(self) -> None:
         """Test creating AnalyzeRequest without tests_repo_url (now optional)."""
@@ -69,6 +55,64 @@ class TestAnalyzeRequest:
                 build_number=123,
                 tests_repo_url="not-a-valid-url",
             )
+
+    def test_wait_for_completion_defaults(self) -> None:
+        """Test wait_for_completion fields have correct defaults."""
+        request = AnalyzeRequest(job_name="test", build_number=1)
+        assert request.wait_for_completion is True
+        assert request.poll_interval_minutes == 2
+        assert request.max_wait_minutes == 0
+
+    def test_wait_for_completion_custom_values(self) -> None:
+        """Test overriding wait_for_completion fields."""
+        request = AnalyzeRequest(
+            job_name="test",
+            build_number=1,
+            wait_for_completion=False,
+            poll_interval_minutes=5,
+            max_wait_minutes=60,
+        )
+        assert request.wait_for_completion is False
+        assert request.poll_interval_minutes == 5
+        assert request.max_wait_minutes == 60
+
+    def test_poll_interval_rejects_zero(self) -> None:
+        """Test that poll_interval_minutes rejects zero."""
+        with pytest.raises(ValidationError):
+            AnalyzeRequest(job_name="test", build_number=1, poll_interval_minutes=0)
+
+    @pytest.mark.parametrize("field", ["poll_interval_minutes", "max_wait_minutes"])
+    def test_wait_fields_reject_negative(self, field: str) -> None:
+        """Test that poll_interval_minutes and max_wait_minutes reject negative values."""
+        with pytest.raises(ValidationError):
+            AnalyzeRequest(job_name="test", build_number=1, **{field: -1})
+
+    def test_max_wait_minutes_accepts_zero(self) -> None:
+        """Test that max_wait_minutes=0 is valid (means no limit)."""
+        request = AnalyzeRequest(job_name="test", build_number=1, max_wait_minutes=0)
+        assert request.max_wait_minutes == 0
+
+
+class TestAnalysisResultWaitingStatus:
+    """Tests for 'waiting' status support in AnalysisResult and JobStatus."""
+
+    def test_analysis_result_accepts_waiting_status(self) -> None:
+        """Test that AnalysisResult accepts 'waiting' as a valid status."""
+        result = AnalysisResult(
+            job_id="test-id",
+            status="waiting",
+            summary="Waiting for Jenkins job to complete",
+        )
+        assert result.status == "waiting"
+
+    def test_job_status_accepts_waiting_status(self) -> None:
+        """Test that JobStatus accepts 'waiting' as a valid status."""
+        status = JobStatus(
+            job_id="test-id",
+            status="waiting",
+            created_at=datetime.now(),
+        )
+        assert status.status == "waiting"
 
 
 class TestProductBugReport:
@@ -389,14 +433,15 @@ class TestPreviewIssueRequest:
         assert req.child_job_name == ""
         assert req.child_build_number == 0
 
-    def test_child_job_fields_validation(self) -> None:
-        """Test that child_job_name requires child_build_number."""
-        with pytest.raises(ValueError, match="child_build_number must be positive"):
-            PreviewIssueRequest(
-                test_name="tests.TestFoo.test_bar",
-                child_job_name="child-job",
-                child_build_number=0,
-            )
+    def test_child_job_name_with_zero_build_number_allowed(self) -> None:
+        """Test that child_job_name with build_number=0 is allowed (match any build)."""
+        req = PreviewIssueRequest(
+            test_name="tests.TestFoo.test_bar",
+            child_job_name="child-job",
+            child_build_number=0,
+        )
+        assert req.child_job_name == "child-job"
+        assert req.child_build_number == 0
 
 
 class TestCreateIssueRequest:

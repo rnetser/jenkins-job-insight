@@ -114,7 +114,7 @@ class TestApplyAnalysisToXml:
                 assert "ai_classification" in prop_names
                 assert "ai_details" in prop_names
 
-    def test_adds_html_report_url_property(self) -> None:
+    def test_adds_report_url_property(self) -> None:
         analysis_map = {
             ("com.example.Tests", "test_fail_with_message"): {
                 "classification": "CODE ISSUE",
@@ -122,15 +122,15 @@ class TestApplyAnalysisToXml:
             },
         }
         enriched = apply_analysis_to_xml(
-            JUNIT_XML_WITH_FAILURES, analysis_map, "http://server/results/job-1.html"
+            JUNIT_XML_WITH_FAILURES, analysis_map, "http://server/results/job-1"
         )
         root = ET.fromstring(enriched)
         for testsuite in root.iter("testsuite"):
             ts_props = testsuite.find("properties")
             assert ts_props is not None
-            html_props = [p for p in ts_props if p.get("name") == "html_report_url"]
-            assert len(html_props) == 1
-            assert html_props[0].get("value") == "http://server/results/job-1.html"
+            report_props = [p for p in ts_props if p.get("name") == "report_url"]
+            assert len(report_props) == 1
+            assert report_props[0].get("value") == "http://server/results/job-1"
 
     def test_returns_string(self) -> None:
         enriched = apply_analysis_to_xml(JUNIT_XML_WITH_FAILURES, {})

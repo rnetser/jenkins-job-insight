@@ -1,16 +1,19 @@
 import asyncio
 import json
+import math
 import os
-import re
+import time as _time
 import urllib.parse
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from pathlib import Path
 from xml.etree.ElementTree import ParseError
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import SecretStr
 from simple_logger.logger import get_logger
@@ -19,9 +22,15 @@ from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
     analyze_failure_group,
     analyze_job,
+    format_exception_with_type,
     get_failure_signature,
 )
 from jenkins_job_insight.config import Settings, get_settings
+from jenkins_job_insight.encryption import (
+    SENSITIVE_KEYS,
+    decrypt_sensitive_fields,
+    encrypt_sensitive_fields,
+)
 from jenkins_job_insight.jira import enrich_with_jira_matches
 from jenkins_job_insight.bug_creation import (
     create_github_issue,
@@ -33,7 +42,6 @@ from jenkins_job_insight.bug_creation import (
 )
 from jenkins_job_insight.models import (
     AddCommentRequest,
-    AnalysisResult,
     AnalyzeFailuresRequest,
     AnalyzeRequest,
     BaseAnalysisRequest,
@@ -50,38 +58,28 @@ from jenkins_job_insight.xml_enrichment import (
     build_enriched_xml,
     extract_test_failures,
 )
-from jenkins_job_insight.html_report import (
-    FAVICON_SVG,
-    format_result_as_html,
-    format_status_page,
-    generate_dashboard_html,
-    generate_history_html,
-    generate_register_html,
-)
-from jenkins_job_insight.output import send_callback
 from jenkins_job_insight.repository import RepositoryManager
 from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
     get_ai_configs,
     get_effective_classification,
-    get_html_report,
     get_result,
     init_db,
     list_results,
     list_results_for_dashboard,
+    patch_result_json,
     populate_failure_history,
-    save_html_report,
     save_result,
     update_status,
 )
 
+# Inline favicon
+FAVICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="0.9em" font-size="90">\xf0\x9f\x94\x8d</text></svg>'
+
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
-_HOST_RE = re.compile(
-    r"^([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)"  # first label
-    r"(\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"  # additional labels
-    r"(:\d+)?$"  # optional port
-)
+# Statuses that indicate the analysis is still in progress.
+IN_PROGRESS_STATUSES = ("pending", "running", "waiting")
 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "").lower()
 AI_MODEL = os.getenv("AI_MODEL", "")
@@ -123,30 +121,6 @@ def _build_internal_server_url() -> str:
     return url
 
 
-async def deliver_results(
-    result: AnalysisResult,
-    body: AnalyzeRequest,
-    settings: Settings,
-) -> None:
-    """Deliver analysis results to callback webhook.
-
-    Uses request values if provided, otherwise falls back to settings.
-
-    Args:
-        result: The analysis result to deliver.
-        body: The original analyze request containing optional callback URL.
-        settings: Application settings with default callback URL.
-    """
-    logger.debug(f"deliver_results: job_id={result.job_id}, status={result.status}")
-    callback_url = body.callback_url or settings.callback_url
-    callback_headers = body.callback_headers or settings.callback_headers
-    if callback_url:
-        try:
-            await send_callback(str(callback_url), result, callback_headers)
-        except Exception:
-            logger.exception("Failed to send callback to %s", callback_url)
-
-
 def build_jenkins_url(base_url: str, job_name: str, build_number: int) -> str:
     """Construct full Jenkins build URL from job name and build number.
 
@@ -165,47 +139,278 @@ def build_jenkins_url(base_url: str, job_name: str, build_number: int) -> str:
     return f"{base_url.rstrip('/')}/job/{job_path}/{build_number}/"
 
 
-def _extract_base_url(request: Request) -> str:
-    """Extract the external base URL from incoming request headers.
+def _extract_base_url() -> str:
+    """Extract the external base URL for building public-facing links.
 
-    Priority:
-        1. X-Forwarded-Proto + X-Forwarded-Host (reverse proxy scenario)
-        2. Host header + request scheme (direct access)
-        3. Fallback to request.url components
-
-    Args:
-        request: The incoming FastAPI/Starlette request.
+    When ``PUBLIC_BASE_URL`` is set, it is used directly as the trusted
+    origin.  Otherwise the function returns an empty string so that
+    callers produce relative URLs, avoiding host-header injection.
 
     Returns:
-        Base URL without trailing slash (e.g. "https://example.com").
+        Base URL without trailing slash (e.g. "https://example.com"),
+        or an empty string when no trusted origin is configured.
     """
-    forwarded_proto = request.headers.get("x-forwarded-proto")
-    forwarded_host = request.headers.get("x-forwarded-host")
+    settings = get_settings()
+    if settings.public_base_url:
+        return settings.public_base_url.rstrip("/")
 
-    if forwarded_proto and forwarded_host:
-        # Take first value from comma-separated list (multi-hop proxies)
-        proto = forwarded_proto.split(",")[0].strip().lower()
-        host = forwarded_host.split(",")[0].strip()
-        scheme = proto if proto in ("http", "https") else "https"
-        if _HOST_RE.match(host):
-            base_url = f"{scheme}://{host}".rstrip("/")
-            logger.debug("Base URL from X-Forwarded headers: %s", base_url)
-            return base_url
+    logger.debug(
+        "PUBLIC_BASE_URL is not set; returning empty base URL (relative paths)"
+    )
+    return ""
 
-    host = request.headers.get("host")
-    if host and _HOST_RE.match(host):
-        base_url = f"{request.url.scheme}://{host}".rstrip("/")
-        logger.debug("Base URL from Host header: %s", base_url)
-        return base_url
 
-    base_url = f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
-    logger.debug("Base URL from request URL fallback: %s", base_url)
-    return base_url
+def _build_report_context(
+    include_links: bool,
+    base_url: str,
+    job_id: str,
+    result_data: dict,
+) -> tuple[str, str]:
+    """Build report URL and Jenkins URL for bug preview endpoints.
+
+    When ``include_links`` is *True* the returned URLs are fully-qualified
+    hyperlinks.  Otherwise plain-text identifiers are returned so that
+    previews remain useful without clickable links.
+
+    Args:
+        include_links: Whether to produce full hyperlinks.
+        base_url: The external base URL of the service.
+        job_id: The stored job identifier.
+        result_data: Raw result dict from storage (contains jenkins_url, job_name, etc.).
+
+    Returns:
+        A ``(report_url, jenkins_url)`` tuple.
+    """
+    jenkins_url = result_data.get("jenkins_url", "")
+
+    if include_links and base_url:
+        report_url = f"{base_url}/results/{job_id}"
+    else:
+        report_url = f"/results/{job_id}"
+        job_name = result_data.get("job_name", "")
+        build_number = result_data.get("build_number", 0)
+        jenkins_url = f"{job_name} #{build_number}" if job_name else ""
+
+    return report_url, jenkins_url
+
+
+def _attach_result_links(payload: dict, base_url: str, job_id: str) -> dict:
+    """Attach ``base_url`` and ``result_url`` to a response payload."""
+    payload["base_url"] = base_url
+    result_url = f"{base_url}/results/{job_id}"
+    payload["result_url"] = result_url
+    return payload
+
+
+def _reconstruct_from_params(
+    result_data: dict,
+) -> tuple[AnalyzeRequest, Settings]:
+    """Reconstruct an AnalyzeRequest and Settings from stored request_params.
+
+    Args:
+        result_data: Stored result dict containing ``job_name``,
+            ``build_number``, and ``request_params``.
+
+    Returns:
+        Tuple of (AnalyzeRequest, Settings).
+    """
+    params = decrypt_sensitive_fields(result_data["request_params"])
+    # Fail fast if any sensitive field is still encrypted (key changed / corrupt)
+    for _key in SENSITIVE_KEYS:
+        _val = params.get(_key)
+        if isinstance(_val, str) and _val.startswith("enc:"):
+            raise ValueError(
+                f"Cannot resume waiting job: stored {_key} could not be decrypted"
+            )
+    body = AnalyzeRequest(
+        job_name=result_data["job_name"],
+        build_number=result_data["build_number"],
+        ai_provider=params.get("ai_provider", ""),
+        ai_model=params.get("ai_model", ""),
+        wait_for_completion=params.get("wait_for_completion", True),
+        poll_interval_minutes=params.get("poll_interval_minutes", 2),
+        max_wait_minutes=params.get("max_wait_minutes", 0),
+        enable_jira=params.get("enable_jira"),
+        raw_prompt=params.get("raw_prompt") or None,
+        tests_repo_url=params.get("tests_repo_url") or None,
+    )
+    # Build Settings from env defaults, then layer stored overrides
+    base_settings = get_settings()
+    overrides: dict = {}
+    settings_fields = [
+        "jenkins_url",
+        "jenkins_user",
+        "jenkins_password",
+        "jenkins_ssl_verify",
+        "wait_for_completion",
+        "poll_interval_minutes",
+        "max_wait_minutes",
+        "jira_url",
+        "jira_email",
+        "jira_project_key",
+        "jira_ssl_verify",
+        "jira_max_results",
+        "ai_cli_timeout",
+        "jenkins_artifacts_max_size_mb",
+        "jenkins_artifacts_context_lines",
+        "get_job_artifacts",
+    ]
+    for field in settings_fields:
+        if field in params:
+            overrides[field] = params[field]
+
+    # Tests repo URL
+    if params.get("tests_repo_url"):
+        overrides["tests_repo_url"] = params["tests_repo_url"]
+
+    # SecretStr fields
+    if params.get("jira_api_token"):
+        overrides["jira_api_token"] = SecretStr(params["jira_api_token"])
+    if params.get("jira_pat"):
+        overrides["jira_pat"] = SecretStr(params["jira_pat"])
+    if params.get("github_token"):
+        overrides["github_token"] = SecretStr(params["github_token"])
+
+    # Enable jira
+    if params.get("enable_jira") is not None:
+        overrides["enable_jira"] = params["enable_jira"]
+
+    if overrides:
+        merged_data = base_settings.model_dump(mode="python") | overrides
+        merged = Settings.model_validate(merged_data)
+    else:
+        merged = base_settings
+
+    return body, merged
+
+
+_background_tasks: set[asyncio.Task] = set()
+
+
+async def _fail_resumed_waiting_job(job_id: str, result_data: dict, error: str) -> None:
+    """Mark a resumed waiting job as failed with a standard payload.
+
+    Args:
+        job_id: The job identifier.
+        result_data: The stored result data dict for the job.
+        error: Human-readable error message.
+    """
+    await storage.update_status(
+        job_id,
+        "failed",
+        {
+            "job_name": result_data.get("job_name", ""),
+            "build_number": result_data.get("build_number", 0),
+            "error": error,
+        },
+    )
+
+
+async def _resume_waiting_jobs(waiting_jobs: list[dict]) -> None:
+    """Resume waiting jobs by re-creating their background tasks.
+
+    Args:
+        waiting_jobs: List of dicts with ``job_id`` and ``result_data``
+            returned by ``mark_stale_results_failed``.
+    """
+    for job in waiting_jobs:
+        result_data = job["result_data"]
+        params = result_data.get("request_params")
+        if not params:
+            logger.warning(
+                f"Waiting job {job['job_id']} has no request_params, marking as failed"
+            )
+            await _fail_resumed_waiting_job(
+                job["job_id"],
+                result_data,
+                "Cannot resume: no request_params stored (queued before resume support)",
+            )
+            continue
+
+        try:
+            body, merged = _reconstruct_from_params(result_data)
+        except Exception as exc:
+            logger.warning(
+                f"Failed to reconstruct params for waiting job {job['job_id']}: {exc}"
+            )
+            await _fail_resumed_waiting_job(
+                job["job_id"],
+                result_data,
+                f"Cannot resume: failed to reconstruct request params: {exc}",
+            )
+            continue
+
+        # Adjust max_wait_minutes to account for time already elapsed before
+        # the restart, so the original deadline is honoured.
+        raw_wait_started_at = params.get("wait_started_at")
+        wait_started_at: float | None = None
+        if raw_wait_started_at is not None:
+            try:
+                wait_started_at = float(raw_wait_started_at)
+            except (TypeError, ValueError):
+                await _fail_resumed_waiting_job(
+                    job["job_id"],
+                    result_data,
+                    f"Cannot resume: malformed wait_started_at value: {raw_wait_started_at!r}",
+                )
+                continue
+            if not math.isfinite(wait_started_at):
+                await _fail_resumed_waiting_job(
+                    job["job_id"],
+                    result_data,
+                    f"Cannot resume: non-finite wait_started_at value: {raw_wait_started_at!r}",
+                )
+                continue
+        if merged.max_wait_minutes > 0 and wait_started_at is not None:
+            elapsed_minutes = (_time.time() - wait_started_at) / 60
+            remaining = merged.max_wait_minutes - elapsed_minutes
+            if remaining <= 0:
+                await _fail_resumed_waiting_job(
+                    job["job_id"],
+                    result_data,
+                    (
+                        f"Timed out waiting for Jenkins job "
+                        f"{result_data.get('job_name')} #{result_data.get('build_number')} "
+                        f"after {merged.max_wait_minutes} minutes (deadline passed during restart)"
+                    ),
+                )
+                continue
+            merged_data = merged.model_dump(mode="python")
+            merged_data["max_wait_minutes"] = max(1, math.ceil(remaining))
+            merged = Settings.model_validate(merged_data)
+
+        task = asyncio.create_task(
+            process_analysis_with_id(job["job_id"], body, merged)
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+        logger.info(
+            f"Resumed waiting job {job['job_id']} "
+            f"({result_data.get('job_name')} #{result_data.get('build_number')})"
+        )
+
+
+async def _deferred_resume_waiting_jobs(waiting_jobs: list[dict]) -> None:
+    """Resume waiting jobs after startup is complete.
+
+    Waits briefly so uvicorn finishes binding and the app is ready to
+    serve internal API requests before any resumed job transitions to
+    the "running" phase.
+    """
+    await asyncio.sleep(1)
+    await _resume_waiting_jobs(waiting_jobs)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    waiting_jobs = await storage.mark_stale_results_failed()
+    if waiting_jobs:
+        # Schedule resumption as a background task so it runs after the
+        # app is fully started and ready to serve internal API requests.
+        task = asyncio.create_task(_deferred_resume_waiting_jobs(waiting_jobs))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
     yield
 
 
@@ -216,25 +421,39 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# React frontend static assets
+_FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+if _FRONTEND_DIR.is_dir():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(_FRONTEND_DIR / "assets")),
+        name="frontend-assets",
+    )
+
 
 class UsernameMiddleware(BaseHTTPMiddleware):
     """Middleware that checks for jji_username cookie and redirects to /register if missing."""
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if path in ("/register", "/health", "/favicon.ico") or path.startswith(
-            "/register"
+        # Allow register page, health check, static assets, and API paths without auth
+        if (
+            path in ("/register", "/health", "/favicon.ico", "/api")
+            or path.startswith("/register")
+            or path.startswith("/assets/")
+            or path.startswith("/api/")
         ):
             return await call_next(request)
 
         username = request.cookies.get("jji_username", "")
+        request.state.username = username
+
+        # Only redirect browser (HTML) requests without auth
         if not username:
-            # Only redirect browser requests, not API calls
             accept = request.headers.get("accept", "")
             if "text/html" in accept:
                 return RedirectResponse(url="/register", status_code=303)
 
-        request.state.username = username
         return await call_next(request)
 
 
@@ -242,32 +461,9 @@ app.add_middleware(UsernameMiddleware)
 
 
 @app.get("/", include_in_schema=False)
-async def root() -> RedirectResponse:
-    """Redirect root to dashboard."""
-    return RedirectResponse(url="/dashboard")
-
-
-@app.get("/register", response_class=HTMLResponse)
-async def register_page() -> str:
-    """Show registration page for new users."""
-    return generate_register_html()
-
-
-@app.post("/register")
-async def register(request: Request) -> RedirectResponse:
-    """Set username cookie and redirect to dashboard."""
-    form = await request.form()
-    username = str(form.get("username", "")).strip()
-    if not username:
-        return RedirectResponse(url="/register", status_code=303)
-    response = RedirectResponse(url="/dashboard", status_code=303)
-    response.set_cookie(
-        key="jji_username",
-        value=username,
-        max_age=365 * 24 * 60 * 60,  # 1 year
-        samesite="lax",
-    )
-    return response
+async def root() -> HTMLResponse:
+    """Serve the React SPA."""
+    return _serve_spa()
 
 
 def _resolve_ai_config_values(
@@ -291,6 +487,14 @@ def _resolve_ai_config_values(
         raise HTTPException(
             status_code=400,
             detail=f"No AI provider configured. Set AI_PROVIDER env var or pass ai_provider in request body. Valid providers: {', '.join(sorted(VALID_AI_PROVIDERS))}",
+        )
+    if provider not in VALID_AI_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported AI provider: {provider}. "
+                f"Valid providers: {', '.join(sorted(VALID_AI_PROVIDERS))}"
+            ),
         )
     if not model:
         raise HTTPException(
@@ -346,8 +550,6 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
     #   tests_repo_url   - HttpUrl vs str type mismatch; resolved in endpoint code
     #   ai_provider      - resolved + validated by _resolve_ai_config()
     #   ai_model         - resolved + validated by _resolve_ai_config()
-    #   callback_url     - resolved in deliver_results()
-    #   callback_headers - resolved in deliver_results()
     direct_fields = [
         "jira_url",
         "jira_email",
@@ -373,7 +575,7 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
     if body.github_token is not None:
         overrides["github_token"] = SecretStr(body.github_token)
 
-    # AnalyzeRequest-specific fields (Jenkins overrides)
+    # AnalyzeRequest-specific fields (Jenkins overrides + monitoring)
     if isinstance(body, AnalyzeRequest):
         jenkins_fields = [
             "jenkins_url",
@@ -385,6 +587,19 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
             value = getattr(body, field, None)
             if value is not None:
                 overrides[field] = value
+
+        # Monitoring fields have non-None defaults in the model.  Only
+        # apply them as overrides when explicitly sent by the caller
+        # (present in ``model_fields_set``) so that omitted fields fall
+        # back to the environment/settings default instead of always
+        # overriding with the model default.
+        for field in (
+            "wait_for_completion",
+            "poll_interval_minutes",
+            "max_wait_minutes",
+        ):
+            if field in body.model_fields_set:
+                overrides[field] = getattr(body, field)
 
     if overrides:
         merged_data = settings.model_dump(mode="python") | overrides
@@ -428,8 +643,96 @@ async def _enrich_result_with_jira(
     await enrich_with_jira_matches(all_failures, settings, ai_provider, ai_model)
 
 
+async def _wait_for_jenkins_completion(
+    jenkins_url: str,
+    job_name: str,
+    build_number: int,
+    jenkins_user: str,
+    jenkins_password: str,
+    jenkins_ssl_verify: bool,
+    poll_interval_minutes: int,
+    max_wait_minutes: int,
+) -> tuple[bool, str]:
+    """Poll Jenkins until the build finishes.
+
+    Args:
+        jenkins_url: Jenkins server base URL.
+        job_name: Name of the Jenkins job.
+        build_number: Build number to monitor.
+        jenkins_user: Jenkins username for authentication.
+        jenkins_password: Jenkins password or API token.
+        jenkins_ssl_verify: Whether to verify SSL certificates.
+        poll_interval_minutes: Minutes between polls.
+        max_wait_minutes: Maximum minutes to wait before timing out.
+            0 means no limit (poll forever until job finishes).
+
+    Returns:
+        A tuple of (success, error_message). success is True if the build
+        completed, False otherwise. error_message is empty on success.
+    """
+    import jenkins
+
+    from jenkins_job_insight.jenkins import JenkinsClient
+
+    client = JenkinsClient(
+        url=jenkins_url,
+        username=jenkins_user,
+        password=jenkins_password,
+        ssl_verify=jenkins_ssl_verify,
+    )
+
+    if max_wait_minutes > 0:
+        deadline: float | None = _time.monotonic() + max_wait_minutes * 60
+    else:
+        deadline = None  # No limit
+
+    while True:
+        try:
+            build_info = await asyncio.to_thread(
+                client.get_build_info_safe, job_name, build_number
+            )
+
+            if build_info and not build_info.get("building", True):
+                logger.info(
+                    f"Jenkins job {job_name} #{build_number} completed "
+                    f"with result: {build_info.get('result')}"
+                )
+                return True, ""
+
+            logger.info(f"Jenkins job {job_name} #{build_number} still running")
+
+        except jenkins.NotFoundException:
+            logger.error(
+                f"Jenkins job {job_name} #{build_number} not found (404). "
+                "Stopping poll."
+            )
+            return False, f"Jenkins job {job_name} #{build_number} not found (404)"
+
+        except (OSError, TimeoutError) as e:
+            logger.warning(f"Transient error checking Jenkins status: {e}")
+
+        except Exception as e:
+            logger.error(f"Non-transient error checking Jenkins status: {e}")
+            return False, f"Jenkins poll failed: {e}"
+
+        if deadline is not None:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(poll_interval_minutes * 60, remaining))
+        else:
+            await asyncio.sleep(poll_interval_minutes * 60)
+
+    error_msg = (
+        f"Timed out waiting for Jenkins job {job_name} #{build_number} "
+        f"after {max_wait_minutes} minutes"
+    )
+    logger.warning(error_msg)
+    return False, error_msg
+
+
 async def process_analysis_with_id(
-    job_id: str, body: AnalyzeRequest, settings: Settings, base_url: str = ""
+    job_id: str, body: AnalyzeRequest, settings: Settings
 ) -> None:
     """Background task to process analysis with a pre-generated job_id.
 
@@ -437,19 +740,53 @@ async def process_analysis_with_id(
         job_id: Pre-generated job ID for tracking.
         body: The analysis request.
         settings: Application settings.
-        base_url: External base URL for constructing absolute result URLs.
     """
     logger.info(
         f"Analysis request received for {body.job_name} #{body.build_number} "
         f"(job_id: {job_id})"
     )
     try:
+        # Validate AI config early -- before potentially waiting hours for Jenkins.
+        # This ensures invalid provider/model fails fast instead of after a long wait.
+        ai_provider, ai_model = _resolve_ai_config(body)
+
+        # Wait for Jenkins job to finish if requested and Jenkins is configured
+        if settings.wait_for_completion and not settings.jenkins_url:
+            logger.info(
+                f"Wait requested for job {job_id} but jenkins_url not configured, skipping wait"
+            )
+
+        if settings.wait_for_completion and settings.jenkins_url:
+            await update_status(job_id, "waiting")
+
+            completed, wait_error = await _wait_for_jenkins_completion(
+                jenkins_url=settings.jenkins_url,
+                job_name=body.job_name,
+                build_number=body.build_number,
+                jenkins_user=settings.jenkins_user,
+                jenkins_password=settings.jenkins_password,
+                jenkins_ssl_verify=settings.jenkins_ssl_verify,
+                poll_interval_minutes=settings.poll_interval_minutes,
+                max_wait_minutes=settings.max_wait_minutes,
+            )
+
+            if not completed:
+                await update_status(
+                    job_id,
+                    "failed",
+                    {
+                        "job_name": body.job_name,
+                        "build_number": body.build_number,
+                        "error": wait_error,
+                    },
+                )
+                return
+
         logger.debug(
             f"process_analysis_with_id: updating status to running, job_id={job_id}"
         )
         await update_status(job_id, "running")
 
-        ai_provider, ai_model = _resolve_ai_config(body)
         logger.debug(
             f"process_analysis_with_id: ai_provider={ai_provider}, ai_model={ai_model}"
         )
@@ -481,11 +818,10 @@ async def process_analysis_with_id(
             f"process_analysis_with_id: saving completed result, job_id={job_id}"
         )
         result_data = result.model_dump(mode="json")
-        result_data["base_url"] = base_url
-        result_data["result_url"] = f"{base_url}/results/{job_id}"
-        result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
 
-        # Save to storage
+        # Save to storage — do NOT persist base_url / result_url as they are
+        # request-derived and re-generated on every GET to avoid host-header
+        # injection from being stored.
         await update_status(job_id, result.status, result_data)
         logger.info(
             f"Analysis completed for {body.job_name} #{body.build_number} "
@@ -505,13 +841,81 @@ async def process_analysis_with_id(
 
         # Reveal classifications created during analysis
         await storage.make_classifications_visible(job_id)
-        await _invalidate_cached_html(job_id)
-
-        await deliver_results(result, body, settings)
 
     except Exception as e:
         logger.exception(f"Analysis failed for job {job_id}")
-        await update_status(job_id, "failed", {"error": str(e)})
+        error_detail = format_exception_with_type(e)
+        await update_status(
+            job_id,
+            "failed",
+            {
+                "job_name": body.job_name,
+                "build_number": body.build_number,
+                "error": error_detail,
+            },
+        )
+
+
+def _build_request_params(
+    body: AnalyzeRequest,
+    merged: Settings,
+    ai_provider: str,
+    ai_model: str,
+) -> dict:
+    """Serialize the request parameters needed to resume a waiting job.
+
+    Captures everything ``process_analysis_with_id`` needs so that the
+    background task can be re-created after a server restart.
+
+    Args:
+        body: The original analysis request.
+        merged: Settings with per-request overrides applied.
+        ai_provider: Resolved AI provider name.
+        ai_model: Resolved AI model name.
+
+    Returns:
+        Dict of serializable request parameters.
+    """
+    params = {
+        "ai_provider": ai_provider,
+        "ai_model": ai_model,
+        "jenkins_url": merged.jenkins_url,
+        "jenkins_user": merged.jenkins_user,
+        "jenkins_password": merged.jenkins_password,
+        "jenkins_ssl_verify": merged.jenkins_ssl_verify,
+        "tests_repo_url": (
+            str(body.tests_repo_url)
+            if body.tests_repo_url is not None
+            else str(merged.tests_repo_url)
+            if merged.tests_repo_url
+            else ""
+        ),
+        "wait_for_completion": merged.wait_for_completion,
+        "poll_interval_minutes": merged.poll_interval_minutes,
+        "max_wait_minutes": merged.max_wait_minutes,
+        "enable_jira": body.enable_jira
+        if body.enable_jira is not None
+        else merged.enable_jira,
+        "jira_url": merged.jira_url or "",
+        "jira_email": merged.jira_email or "",
+        "jira_api_token": merged.jira_api_token.get_secret_value()
+        if merged.jira_api_token
+        else "",
+        "jira_pat": merged.jira_pat.get_secret_value() if merged.jira_pat else "",
+        "jira_project_key": merged.jira_project_key or "",
+        "jira_ssl_verify": merged.jira_ssl_verify,
+        "jira_max_results": merged.jira_max_results,
+        "github_token": merged.github_token.get_secret_value()
+        if merged.github_token
+        else "",
+        "ai_cli_timeout": merged.ai_cli_timeout,
+        "jenkins_artifacts_max_size_mb": merged.jenkins_artifacts_max_size_mb,
+        "jenkins_artifacts_context_lines": merged.jenkins_artifacts_context_lines,
+        "get_job_artifacts": merged.get_job_artifacts,
+        "raw_prompt": body.raw_prompt or "",
+        "wait_started_at": _time.time(),
+    }
+    return encrypt_sensitive_fields(params)
 
 
 @app.post("/analyze", status_code=202, response_model=None)
@@ -520,115 +924,56 @@ async def analyze(
     body: AnalyzeRequest,
     background_tasks: BackgroundTasks,
     *,
-    sync: bool = Query(
-        default=False, description="If true, wait for result and return it"
-    ),
     settings: Settings = Depends(get_settings),
-) -> dict | JSONResponse:
+) -> dict:
     """Submit a Jenkins job for analysis.
 
-    By default (async mode), returns immediately with a job_id.
-    With ?sync=true, blocks until analysis is complete and returns the full result.
+    Returns immediately with a job_id. Poll /results/{job_id} for status.
     """
     logger.debug(f"Starting analysis for {body.job_name} #{body.build_number}")
-    base_url = _extract_base_url(request)
+    base_url = _extract_base_url()
 
-    if sync:
-        logger.info(
-            f"Sync analysis request received for {body.job_name} #{body.build_number}"
-        )
+    # Validate AI config early -- fail fast before queuing invalid jobs.
+    _resolve_ai_config(body)
 
-        merged = _merge_settings(body, settings)
-        ai_provider, ai_model = _resolve_ai_config(body)
-
-        server_url = _build_internal_server_url()
-
-        result = await analyze_job(
-            body,
-            merged,
-            ai_provider=ai_provider,
-            ai_model=ai_model,
-            server_url=server_url,
-        )
-
-        # Enrich PRODUCT BUG failures with Jira matches
-        if _resolve_enable_jira(body, merged):
-            await _enrich_result_with_jira(
-                result.failures + list(result.child_job_analyses),
-                merged,
-                ai_provider,
-                ai_model,
-            )
-
-        jenkins_url = build_jenkins_url(
-            merged.jenkins_url, body.job_name, body.build_number
-        )
-        await save_result(
-            result.job_id, jenkins_url, result.status, result.model_dump(mode="json")
-        )
-        logger.info(
-            f"Sync analysis completed for {body.job_name} #{body.build_number} "
-            f"(job_id: {result.job_id})"
-        )
-
-        # Populate failure history
-        try:
-            await populate_failure_history(
-                result.job_id, result.model_dump(mode="json")
-            )
-        except Exception:
-            logger.warning(
-                "Failed to populate failure_history for job_id=%s",
-                result.job_id,
-                exc_info=True,
-            )
-
-        # Reveal classifications created during analysis
-        await storage.make_classifications_visible(result.job_id)
-        await _invalidate_cached_html(result.job_id)
-
-        await deliver_results(result, body, merged)
-
-        content = result.model_dump(mode="json")
-        content["base_url"] = base_url
-        content["result_url"] = f"{base_url}/results/{result.job_id}"
-        content["html_report_url"] = f"{base_url}/results/{result.job_id}.html"
-
-        return JSONResponse(content=content, status_code=200)
-
-    # Async mode - queue background task
     # Generate job_id here so we can return it to the client for polling
     job_id = str(uuid.uuid4())
     merged = _merge_settings(body, settings)
     jenkins_url = build_jenkins_url(
         merged.jenkins_url, body.job_name, body.build_number
     )
-    # Save initial pending state before queueing background task
-    # Include job_name and build_number so the status page can display them
+    # Save initial pending state before queueing background task.
+    # Only persist request_params for waiting jobs (wait_for_completion),
+    # since those are the only ones that need resumption after restart.
+    # This avoids storing encrypted secrets with no operational use.
+    initial_result: dict = {
+        "job_name": body.job_name,
+        "build_number": body.build_number,
+    }
+    can_resume_wait = merged.wait_for_completion and bool(merged.jenkins_url)
+    if can_resume_wait:
+        initial_result["request_params"] = _build_request_params(
+            body,
+            merged,
+            body.ai_provider or AI_PROVIDER,
+            body.ai_model or AI_MODEL,
+        )
     await save_result(
         job_id,
         jenkins_url,
-        "pending",
-        {"job_name": body.job_name, "build_number": body.build_number},
+        "waiting" if can_resume_wait else "pending",
+        initial_result,
     )
-    background_tasks.add_task(process_analysis_with_id, job_id, body, merged, base_url)
-    callback_url = body.callback_url or merged.callback_url
-    message = "Analysis job queued."
-    if callback_url:
-        message += " Results will be delivered to callback."
-    else:
-        message += f" Poll /results/{job_id} for status."
+    background_tasks.add_task(process_analysis_with_id, job_id, body, merged)
+    message = f"Analysis job queued. Poll /results/{job_id} for status."
 
     response: dict = {
         "status": "queued",
         "job_id": job_id,
         "message": message,
-        "base_url": base_url,
-        "result_url": f"{base_url}/results/{job_id}",
-        "html_report_url": f"{base_url}/results/{job_id}.html",
     }
 
-    return response
+    return _attach_result_links(response, base_url, job_id)
 
 
 @app.post("/analyze-failures", response_model=None)
@@ -648,13 +993,13 @@ async def analyze_failures(
     logger.debug(
         f"POST /analyze-failures: failures_count={len(body.failures) if body.failures else 0}, has_raw_xml={body.raw_xml is not None}"
     )
-    base_url = _extract_base_url(request)
+    base_url = _extract_base_url()
 
     if raw_xml := body.raw_xml:
         try:
             test_failures = extract_test_failures(raw_xml)
         except ParseError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid XML: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid XML: {e}") from e
 
         if not test_failures:
             job_id = str(uuid.uuid4())
@@ -665,10 +1010,10 @@ async def analyze_failures(
                 enriched_xml=raw_xml,
             )
             result_data = analysis_result.model_dump(mode="json")
-            result_data["base_url"] = base_url
-            result_data["result_url"] = f"{base_url}/results/{job_id}"
-            result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
-            return JSONResponse(content=result_data)
+            await save_result(job_id, "", "completed", result_data)
+            return JSONResponse(
+                content=_attach_result_links(result_data, base_url, job_id)
+            )
     else:
         if not body.failures:
             raise HTTPException(status_code=400, detail="No failures provided")
@@ -749,7 +1094,7 @@ async def analyze_failures(
         enriched_xml = None
         if raw_xml is not None:
             enriched_xml = build_enriched_xml(
-                raw_xml, all_analyses, f"{base_url}/results/{job_id}.html"
+                raw_xml, all_analyses, f"{base_url}/results/{job_id}"
             )
 
         analysis_result = FailureAnalysisResult(
@@ -763,10 +1108,6 @@ async def analyze_failures(
         )
 
         result_data = analysis_result.model_dump(mode="json")
-        result_data["base_url"] = base_url
-        result_data["result_url"] = f"{base_url}/results/{job_id}"
-        result_data["html_report_url"] = f"{base_url}/results/{job_id}.html"
-
         await update_status(job_id, "completed", result_data)
 
         # Populate failure history
@@ -781,151 +1122,50 @@ async def analyze_failures(
 
         # Reveal classifications created during analysis
         await storage.make_classifications_visible(job_id)
-        await _invalidate_cached_html(job_id)
 
-        return JSONResponse(content=result_data)
+        return JSONResponse(content=_attach_result_links(result_data, base_url, job_id))
 
     except Exception as e:
         logger.exception(f"Direct failure analysis failed for job {job_id}")
+        error_detail = format_exception_with_type(e)
         analysis_result = FailureAnalysisResult(
             job_id=job_id,
             status="failed",
-            summary=f"Analysis failed: {e}",
+            summary=f"Analysis failed: {error_detail}",
             ai_provider=ai_provider,
             ai_model=ai_model,
         )
         await update_status(job_id, "failed", analysis_result.model_dump(mode="json"))
         content = analysis_result.model_dump(mode="json")
-        content["base_url"] = base_url
-        content["result_url"] = f"{base_url}/results/{job_id}"
-        return JSONResponse(content=content)
+        return JSONResponse(content=_attach_result_links(content, base_url, job_id))
 
     finally:
         repo_manager.cleanup()
 
 
-def _build_analysis_result(job_id: str, result_data: dict) -> AnalysisResult:
-    """Reconstruct an AnalysisResult from stored result JSON.
-
-    Handles both Jenkins analysis results (which have jenkins_url) and
-    direct failure analysis results (which don't).
-
-    Args:
-        job_id: The job identifier.
-        result_data: The stored result JSON dict.
-
-    Returns:
-        AnalysisResult suitable for HTML report generation.
-    """
-    if result_data.get("jenkins_url"):
-        return AnalysisResult.model_validate(result_data)
-
-    # Direct failure analysis — wrap in AnalysisResult
-    return AnalysisResult(
-        job_id=job_id,
-        job_name=result_data.get("job_name", "Direct Failure Analysis"),
-        build_number=result_data.get("build_number", 0),
-        jenkins_url=None,
-        status="completed",
-        summary=result_data.get("summary", ""),
-        ai_provider=result_data.get("ai_provider", ""),
-        ai_model=result_data.get("ai_model", ""),
-        failures=[
-            FailureAnalysis.model_validate(f) for f in result_data.get("failures", [])
-        ],
-    )
-
-
-@app.get("/results/{job_id}.html", response_class=HTMLResponse)
-async def get_job_report(
-    job_id: str,
-    *,
-    refresh: bool = Query(
-        default=False, description="Force regeneration of the HTML report"
-    ),
-    settings: Settings = Depends(get_settings),
-) -> HTMLResponse:
-    """Serve an HTML report, generating it on-demand if needed.
-
-    Reports are generated lazily from stored results and cached to disk.
-    Pass ``?refresh=1`` to force regeneration (e.g. after a code update).
-    """
-    logger.debug(f"GET /results/{job_id}.html: refresh={refresh}")
-    # NOTE: The cached HTML bakes in github_available / jira_available at render
-    # time.  If integration settings change (e.g. GITHUB_TOKEN added), stale
-    # button state may be served until the cache is refreshed (?refresh=1) or
-    # a re-analysis invalidates it.  In practice this is rare because config
-    # changes require a server restart, but callers can force regeneration via
-    # the refresh query parameter.
-
-    # Compute availability flags first so we can compare against what the cache
-    # would contain.
-    github_available = bool(settings.tests_repo_url and settings.github_token)
-    jira_available = settings.jira_enabled
-
-    # Try disk cache first (skip when refresh requested)
-    if not refresh:
-        html_content = await get_html_report(job_id)
-        if html_content:
-            return HTMLResponse(html_content)
-
-    # Check if the job exists
-    result = await get_result(job_id)
-    if not result:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Job '{job_id}' not found.",
-        )
-
-    status = result.get("status", "unknown")
-    if status in ("pending", "running"):
-        return HTMLResponse(
-            format_status_page(job_id, status, result),
-            headers={"Refresh": "10"},
-        )
-
-    # Generate HTML on-demand from stored result data
-    result_data = result.get("result")
-    if result_data and status == "completed":
-        analysis_result = _build_analysis_result(job_id, result_data)
-        html_content = format_result_as_html(
-            analysis_result,
-            completed_at=result.get("created_at", ""),
-            github_available=github_available,
-            jira_available=jira_available,
-        )
-        try:
-            await save_html_report(job_id, html_content)
-        except OSError:
-            logger.warning(
-                "Failed to cache HTML report for job_id: %s", job_id, exc_info=True
-            )
-        logger.info(f"HTML report generated on-demand for job_id: {job_id}")
-        return HTMLResponse(html_content)
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"No report available for job '{job_id}'.",
-    )
-
-
 @app.get("/results/{job_id}", response_model=None)
-async def get_job_result(request: Request, job_id: str) -> dict:
-    """Retrieve stored result by job_id."""
+async def get_job_result(request: Request, job_id: str, response: Response):
+    """Retrieve stored result by job_id, or serve SPA for browser requests."""
+    # Content negotiation: browsers requesting HTML get the SPA
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept and "application/json" not in accept:
+        result = await get_result(job_id)
+        if result and result.get("status") in IN_PROGRESS_STATUSES:
+            return RedirectResponse(url=f"/status/{job_id}", status_code=302)
+        return _serve_spa()
+
     logger.debug(f"GET /results/{job_id}")
     result = await get_result(job_id)
     if not result:
         raise HTTPException(status_code=404, detail="Job not found")
-    base_url = _extract_base_url(request)
-    result["base_url"] = base_url
-    result["result_url"] = f"{base_url}/results/{job_id}"
-    result_data = result.get("result")
-    if isinstance(result_data, dict) and "html_report_url" in result_data:
-        # Ensure it's a full URL (update legacy relative paths)
-        if result_data["html_report_url"].startswith("/"):
-            result_data["html_report_url"] = (
-                f"{base_url}{result_data['html_report_url']}"
-            )
+    _attach_result_links(result, _extract_base_url(), job_id)
+    settings = get_settings()
+    result["capabilities"] = {
+        "github_issues": settings.github_issues_enabled,
+        "jira_bugs": settings.jira_enabled,
+    }
+    if result.get("status") in IN_PROGRESS_STATUSES:
+        response.status_code = 202
     return result
 
 
@@ -970,7 +1210,7 @@ async def _validate_test_name_in_result(
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
     status = stored.get("status", "unknown")
-    if status in ("pending", "running"):
+    if status in IN_PROGRESS_STATUSES:
         raise HTTPException(status_code=202, detail=f"Job {job_id} is still pending")
     if status == "failed":
         raise HTTPException(status_code=409, detail=f"Job {job_id} failed")
@@ -1089,16 +1329,6 @@ async def _resolve_effective_failure(
     )
 
 
-async def _invalidate_cached_html(job_id: str) -> None:
-    """Delete cached HTML report so next request regenerates it."""
-    logger.debug(f"_invalidate_cached_html: job_id={job_id}")
-    try:
-        report_path = storage.REPORTS_DIR / f"{job_id}.html"
-        await asyncio.to_thread(lambda: report_path.unlink(missing_ok=True))
-    except OSError:
-        pass  # Cache cleanup is best-effort
-
-
 @app.get("/results/{job_id}/comments")
 async def get_comments(job_id: str) -> dict:
     """Get all comments and review states for a job."""
@@ -1132,8 +1362,7 @@ async def add_comment(job_id: str, body: AddCommentRequest, request: Request) ->
             username=username,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    await _invalidate_cached_html(job_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"id": comment_id}
 
 
@@ -1157,7 +1386,6 @@ async def delete_comment_endpoint(
             status_code=404, detail="Comment not found or not owned by you"
         )
 
-    await _invalidate_cached_html(job_id)
     return {"status": "deleted"}
 
 
@@ -1181,9 +1409,11 @@ async def set_reviewed(job_id: str, body: SetReviewedRequest, request: Request) 
             username=username,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    await _invalidate_cached_html(job_id)
-    return {"status": "ok"}
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": "ok",
+        "reviewed_by": username if body.reviewed else "",
+    }
 
 
 @app.post("/results/{job_id}/enrich-comments")
@@ -1193,8 +1423,10 @@ async def enrich_comments(
     """Fetch live statuses for GitHub PRs and Jira tickets found in comments."""
     logger.debug(f"POST /results/{job_id}/enrich-comments")
     from jenkins_job_insight.comment_enrichment import (
+        detect_github_issues,
         detect_github_prs,
         detect_jira_keys,
+        fetch_github_issue_status,
         fetch_github_pr_status,
         fetch_jira_ticket_status,
     )
@@ -1205,7 +1437,7 @@ async def enrich_comments(
     # Detect Cloud vs Server/DC auth once, matching JiraClient logic:
     # - Cloud: jira_email is set -> Basic auth with email:token
     # - Server/DC: no email -> Bearer PAT
-    # Token resolution: prefer jira_api_token (backward compat), fall back to jira_pat
+    # Token resolution: prefer jira_api_token, fall back to jira_pat
     auth: tuple[str, str] | None = None
     auth_headers: dict[str, str] = {}
     jira_url: str | None = settings.jira_url if settings.jira_enabled else None
@@ -1252,6 +1484,24 @@ async def enrich_comments(
                 },
             )
 
+        for issue in detect_github_issues(c["comment"]):
+            idx = len(tasks)
+            tasks.append(
+                fetch_github_issue_status(
+                    issue["owner"],
+                    issue["repo"],
+                    issue["number"],
+                    token=github_token,
+                )
+            )
+            task_map[idx] = (
+                str(c["id"]),
+                {
+                    "type": "github_issue",
+                    "key": f"{issue['owner']}/{issue['repo']}#{issue['number']}",
+                },
+            )
+
         if jira_active and jira_url:
             for key in detect_jira_keys(c["comment"]):
                 idx = len(tasks)
@@ -1287,6 +1537,42 @@ async def enrich_comments(
     return {"enrichments": enrichments}
 
 
+async def _load_effective_failure(
+    job_id: str,
+    test_name: str,
+    child_job_name: str,
+    child_build_number: int,
+) -> tuple[FailureAnalysis, dict]:
+    """Shared lookup for preview/create endpoints: validate, load, and resolve a failure.
+
+    Returns:
+        Tuple of (resolved FailureAnalysis, result_data dict).
+
+    Raises:
+        HTTPException: 404 if the job is not found, 400 if the test is not found.
+    """
+    await _validate_test_name_in_result(
+        job_id, test_name, child_job_name, child_build_number
+    )
+    stored = await storage.get_result(job_id)
+    if not stored or not stored.get("result"):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    result_data = stored["result"]
+    failure_dict = _find_failure_in_result(
+        result_data, test_name, child_job_name, child_build_number
+    )
+    if not failure_dict:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Test '{test_name}' not found in job {job_id}",
+        )
+    failure = FailureAnalysis.model_validate(failure_dict)
+    failure = await _resolve_effective_failure(
+        job_id, failure, child_job_name, child_build_number
+    )
+    return failure, result_data
+
+
 # NOTE: Preview/create bug endpoints intentionally bypass _merge_settings().
 # These are server-level operations (GITHUB_TOKEN, TESTS_REPO_URL, Jira config)
 # that act on behalf of the server, not per-request analysis overrides. The
@@ -1302,41 +1588,26 @@ async def preview_github_issue(
     logger.debug(
         f"POST /results/{job_id}/preview-github-issue: test_name={body.test_name}"
     )
-    await _validate_test_name_in_result(
-        job_id, body.test_name, body.child_job_name, body.child_build_number
-    )
-    stored = await storage.get_result(job_id)
-    if not stored or not stored.get("result"):
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    result_data = stored["result"]
-    failure_dict = _find_failure_in_result(
-        result_data, body.test_name, body.child_job_name, body.child_build_number
-    )
-    if not failure_dict:
+    if not settings.github_issues_enabled:
         raise HTTPException(
-            status_code=400,
-            detail=f"Test '{body.test_name}' not found in job {job_id}",
+            status_code=403,
+            detail="GitHub issue creation is disabled on this server",
         )
-    failure = FailureAnalysis.model_validate(failure_dict)
-
-    # Apply any classification override from test_classifications
-    failure = await _resolve_effective_failure(
-        job_id, failure, body.child_job_name, body.child_build_number
+    failure, result_data = await _load_effective_failure(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
     )
 
     # AI config is best-effort for preview — fallback content is generated if not configured
     ai_provider = body.ai_provider or AI_PROVIDER
     ai_model = body.ai_model or AI_MODEL
-    base_url = _extract_base_url(request)
-    jenkins_url = result_data.get("jenkins_url", "")
-
-    if body.include_links:
-        report_url = f"{base_url}/results/{job_id}.html"
-    else:
-        report_url = f"results/{job_id}.html"
-        job_name = result_data.get("job_name", "")
-        build_number = result_data.get("build_number", 0)
-        jenkins_url = f"{job_name} #{build_number}" if job_name else ""
+    base_url = _extract_base_url()
+    effective_include_links = body.include_links and bool(base_url)
+    report_url, jenkins_url = _build_report_context(
+        include_links=effective_include_links,
+        base_url=base_url,
+        job_id=job_id,
+        result_data=result_data,
+    )
 
     content = await generate_github_issue_content(
         failure=failure,
@@ -1344,7 +1615,7 @@ async def preview_github_issue(
         ai_provider=ai_provider,
         ai_model=ai_model,
         jenkins_url=jenkins_url,
-        include_links=body.include_links,
+        include_links=effective_include_links,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
@@ -1383,41 +1654,26 @@ async def preview_jira_bug(
 ) -> dict:
     """Generate preview content for a Jira bug from a failure analysis."""
     logger.debug(f"POST /results/{job_id}/preview-jira-bug: test_name={body.test_name}")
-    await _validate_test_name_in_result(
-        job_id, body.test_name, body.child_job_name, body.child_build_number
-    )
-    stored = await storage.get_result(job_id)
-    if not stored or not stored.get("result"):
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    result_data = stored["result"]
-    failure_dict = _find_failure_in_result(
-        result_data, body.test_name, body.child_job_name, body.child_build_number
-    )
-    if not failure_dict:
+    if not settings.jira_enabled:
         raise HTTPException(
-            status_code=400,
-            detail=f"Test '{body.test_name}' not found in job {job_id}",
+            status_code=403,
+            detail="Jira integration is disabled on this server",
         )
-    failure = FailureAnalysis.model_validate(failure_dict)
-
-    # Apply any classification override from test_classifications
-    failure = await _resolve_effective_failure(
-        job_id, failure, body.child_job_name, body.child_build_number
+    failure, result_data = await _load_effective_failure(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
     )
 
     # AI config is best-effort for preview — fallback content is generated if not configured
     ai_provider = body.ai_provider or AI_PROVIDER
     ai_model = body.ai_model or AI_MODEL
-    base_url = _extract_base_url(request)
-    jenkins_url = result_data.get("jenkins_url", "")
-
-    if body.include_links:
-        report_url = f"{base_url}/results/{job_id}.html"
-    else:
-        report_url = f"results/{job_id}.html"
-        job_name = result_data.get("job_name", "")
-        build_number = result_data.get("build_number", 0)
-        jenkins_url = f"{job_name} #{build_number}" if job_name else ""
+    base_url = _extract_base_url()
+    effective_include_links = body.include_links and bool(base_url)
+    report_url, jenkins_url = _build_report_context(
+        include_links=effective_include_links,
+        base_url=base_url,
+        job_id=job_id,
+        result_data=result_data,
+    )
 
     content = await generate_jira_bug_content(
         failure=failure,
@@ -1425,7 +1681,7 @@ async def preview_jira_bug(
         ai_provider=ai_provider,
         ai_model=ai_model,
         jenkins_url=jenkins_url,
-        include_links=body.include_links,
+        include_links=effective_include_links,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
@@ -1450,6 +1706,69 @@ async def preview_jira_bug(
     }
 
 
+def _require_tracker_url(result: dict, tracker_name: str) -> str:
+    """Extract and validate the issue URL from a tracker API response.
+
+    Raises:
+        HTTPException: 502 when the response does not contain a ``url`` field.
+    """
+    issue_url = str(result.get("url", ""))
+    if not issue_url:
+        raise HTTPException(
+            status_code=502,
+            detail=f"{tracker_name} API returned unexpected response: missing url",
+        )
+    return issue_url
+
+
+async def _add_tracker_comment(
+    tracker_label: str,
+    job_id: str,
+    body: CreateIssueRequest,
+    result: dict,
+    username: str,
+) -> int:
+    """Best-effort auto-add a comment linking to the created tracker issue.
+
+    Args:
+        tracker_label: Human-readable tracker name (e.g. "GitHub Issue", "Jira Bug").
+        job_id: Analysis job ID.
+        body: The create-issue request (carries test_name, child_job_name, etc.).
+        result: The tracker API response (must contain ``url`` and optionally ``key``).
+        username: Username from the request cookie.
+
+    Returns:
+        The comment ID on success, or ``0`` on failure.
+    """
+    comment_id = 0
+    issue_url = str(result.get("url", ""))
+    try:
+        if not issue_url:
+            raise ValueError("Tracker response missing url")
+        key = result.get("key", "")
+        key_suffix = f" [{key}]" if key else ""
+        comment_text = f"{tracker_label}{key_suffix}: [{body.title}]({issue_url})"
+        error_signature = await _get_error_signature(
+            job_id, body.test_name, body.child_job_name, body.child_build_number
+        )
+        comment_id = await storage.add_comment(
+            job_id=job_id,
+            test_name=body.test_name,
+            comment=comment_text,
+            child_job_name=body.child_job_name,
+            child_build_number=body.child_build_number,
+            error_signature=error_signature,
+            username=username,
+        )
+    except Exception:
+        logger.warning(
+            f"Failed to add comment after {tracker_label} creation "
+            f"for job_id={job_id}, issue url={issue_url or '<missing>'}",
+            exc_info=True,
+        )
+    return comment_id
+
+
 @app.post("/results/{job_id}/create-github-issue", status_code=201)
 async def create_github_issue_endpoint(
     job_id: str,
@@ -1461,9 +1780,11 @@ async def create_github_issue_endpoint(
     logger.debug(
         f"POST /results/{job_id}/create-github-issue: test_name={body.test_name}"
     )
-    await _validate_test_name_in_result(
-        job_id, body.test_name, body.child_job_name, body.child_build_number
-    )
+    if not settings.github_issues_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="GitHub issue creation is disabled on this server",
+        )
     tests_repo_url = str(settings.tests_repo_url or "")
     github_token = (
         settings.github_token.get_secret_value() if settings.github_token else ""
@@ -1476,24 +1797,14 @@ async def create_github_issue_endpoint(
         )
 
     # Verify classification matches tracker
-    stored = await storage.get_result(job_id)
-    if not stored or not stored.get("result"):
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    failure_dict = _find_failure_in_result(
-        stored["result"], body.test_name, body.child_job_name, body.child_build_number
+    failure, _result_data = await _load_effective_failure(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
     )
-    if failure_dict:
-        failure = await _resolve_effective_failure(
-            job_id,
-            FailureAnalysis.model_validate(failure_dict),
-            body.child_job_name,
-            body.child_build_number,
+    if failure.analysis.classification == "PRODUCT BUG":
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot create GitHub issue for a PRODUCT BUG classification. Use Jira instead.",
         )
-        if failure.analysis.classification == "PRODUCT BUG":
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot create GitHub issue for a PRODUCT BUG classification. Use Jira instead.",
-            )
 
     username = request.cookies.get("jji_username", "")
     issue_body = body.body
@@ -1528,35 +1839,14 @@ async def create_github_issue_endpoint(
             detail=f"GitHub API returned unexpected response: {exc}",
         ) from exc
 
-    # Auto-add comment with issue link (best-effort: the remote issue is
-    # already created, so a failure here must not lose the created URL).
-    comment_id = 0
-    try:
-        comment_text = f"GitHub Issue: {result['url']}"
-        error_signature = await _get_error_signature(
-            job_id, body.test_name, body.child_job_name, body.child_build_number
-        )
-        comment_id = await storage.add_comment(
-            job_id=job_id,
-            test_name=body.test_name,
-            comment=comment_text,
-            child_job_name=body.child_job_name,
-            child_build_number=body.child_build_number,
-            error_signature=error_signature,
-            username=username,
-        )
-        await _invalidate_cached_html(job_id)
-    except Exception:
-        logger.warning(
-            "Failed to add comment/invalidate cache after GitHub issue creation "
-            "for job_id=%s, issue url=%s",
-            job_id,
-            result["url"],
-            exc_info=True,
-        )
+    issue_url = _require_tracker_url(result, "GitHub")
+
+    comment_id = await _add_tracker_comment(
+        "GitHub Issue", job_id, body, result, username
+    )
 
     return {
-        "url": result["url"],
+        "url": issue_url,
         "number": result.get("number", 0),
         "key": "",
         "title": body.title,
@@ -1573,35 +1863,22 @@ async def create_jira_bug_endpoint(
 ) -> dict:
     """Create a Jira bug from a failure analysis."""
     logger.debug(f"POST /results/{job_id}/create-jira-bug: test_name={body.test_name}")
-    await _validate_test_name_in_result(
-        job_id, body.test_name, body.child_job_name, body.child_build_number
-    )
 
     if not settings.jira_enabled:
         raise HTTPException(
-            status_code=400,
-            detail="Jira must be configured to create Jira bugs",
+            status_code=403,
+            detail="Jira integration is disabled on this server",
         )
 
     # Verify classification matches tracker
-    stored = await storage.get_result(job_id)
-    if not stored or not stored.get("result"):
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    failure_dict = _find_failure_in_result(
-        stored["result"], body.test_name, body.child_job_name, body.child_build_number
+    failure, _result_data = await _load_effective_failure(
+        job_id, body.test_name, body.child_job_name, body.child_build_number
     )
-    if failure_dict:
-        failure = await _resolve_effective_failure(
-            job_id,
-            FailureAnalysis.model_validate(failure_dict),
-            body.child_job_name,
-            body.child_build_number,
+    if failure.analysis.classification == "CODE ISSUE":
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot create Jira bug for a CODE ISSUE classification. Use GitHub instead.",
         )
-        if failure.analysis.classification == "CODE ISSUE":
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot create Jira bug for a CODE ISSUE classification. Use GitHub instead.",
-            )
 
     username = request.cookies.get("jji_username", "")
     bug_body = body.body
@@ -1630,39 +1907,92 @@ async def create_jira_bug_endpoint(
             detail=f"Jira API returned unexpected response: {exc}",
         ) from exc
 
-    # Auto-add comment with issue link (best-effort: the remote bug is
-    # already created, so a failure here must not lose the created URL).
-    comment_id = 0
-    try:
-        comment_text = f"Jira Bug: {result['url']}"
-        error_signature = await _get_error_signature(
-            job_id, body.test_name, body.child_job_name, body.child_build_number
-        )
-        comment_id = await storage.add_comment(
-            job_id=job_id,
-            test_name=body.test_name,
-            comment=comment_text,
-            child_job_name=body.child_job_name,
-            child_build_number=body.child_build_number,
-            error_signature=error_signature,
-            username=username,
-        )
-        await _invalidate_cached_html(job_id)
-    except Exception:
-        logger.warning(
-            "Failed to add comment/invalidate cache after Jira bug creation "
-            "for job_id=%s, bug url=%s",
-            job_id,
-            result["url"],
-            exc_info=True,
-        )
+    issue_url = _require_tracker_url(result, "Jira")
+
+    comment_id = await _add_tracker_comment("Jira Bug", job_id, body, result, username)
 
     return {
-        "url": result["url"],
+        "url": issue_url,
         "key": result.get("key", ""),
         "title": body.title,
         "comment_id": comment_id,
     }
+
+
+def _patch_failure_classification(
+    failures: list[dict], test_name: str, classification: str
+) -> None:
+    """Patch classification for matching failures in a list.
+
+    Also clears stale subtype fields: when switching to CODE ISSUE the
+    old product_bug_report is removed, and vice-versa.
+    """
+    for f in failures:
+        if f.get("test_name") == test_name:
+            analysis = f.get("analysis", {})
+            if isinstance(analysis, dict):
+                analysis["classification"] = classification
+                if classification == "CODE ISSUE":
+                    analysis.pop("product_bug_report", None)
+                elif classification == "PRODUCT BUG":
+                    analysis.pop("code_fix", None)
+
+
+def _apply_classification_override(
+    result_data: dict,
+    test_name: str,
+    classification: str,
+    child_job_name: str,
+    child_build_number: int,
+) -> None:
+    """Mutate result_data to apply a classification override to matching failures."""
+    if child_job_name:
+        # Override in child job failures
+        for child in result_data.get("child_job_analyses", []):
+            if child.get("job_name") == child_job_name and (
+                child_build_number == 0
+                or child.get("build_number") == child_build_number
+            ):
+                _patch_failure_classification(
+                    child.get("failures", []), test_name, classification
+                )
+            # Also check nested failed_children recursively
+            _patch_children(
+                child.get("failed_children", []),
+                test_name,
+                classification,
+                child_job_name,
+                child_build_number,
+            )
+    else:
+        # Override in top-level failures
+        _patch_failure_classification(
+            result_data.get("failures", []), test_name, classification
+        )
+
+
+def _patch_children(
+    children: list[dict],
+    test_name: str,
+    classification: str,
+    child_job_name: str,
+    child_build_number: int,
+) -> None:
+    """Recursively patch classification in nested children."""
+    for child in children:
+        if child.get("job_name") == child_job_name and (
+            child_build_number == 0 or child.get("build_number") == child_build_number
+        ):
+            _patch_failure_classification(
+                child.get("failures", []), test_name, classification
+            )
+        _patch_children(
+            child.get("failed_children", []),
+            test_name,
+            classification,
+            child_job_name,
+            child_build_number,
+        )
 
 
 @app.put("/results/{job_id}/override-classification")
@@ -1686,7 +2016,7 @@ async def override_classification_endpoint(
         body.test_name, job_id=job_id
     )
 
-    await storage.override_classification(
+    group_tests = await storage.override_classification(
         job_id=job_id,
         test_name=body.test_name,
         classification=body.classification,
@@ -1695,7 +2025,31 @@ async def override_classification_endpoint(
         username=username,
         parent_job_name=parent_job_name,
     )
-    await _invalidate_cached_html(job_id)
+
+    # Persist the override into result_json so page refresh reflects it.
+    # Uses an atomic read-modify-write inside a single SQLite transaction
+    # so concurrent overrides by different reviewers cannot clobber each other.
+    # Wrapped in try/except: the authoritative override is already committed
+    # above; a failure here should not turn the response into a 500.
+    # Patch ALL tests in the signature group so grouped siblings also update.
+    def _patch_group(rd: dict) -> None:
+        for t in group_tests:
+            _apply_classification_override(
+                rd,
+                t,
+                body.classification,
+                body.child_job_name,
+                body.child_build_number,
+            )
+
+    try:
+        await patch_result_json(job_id, _patch_group)
+    except Exception:
+        logger.warning(
+            f"Failed to patch stored result_json after override for job_id={job_id}",
+            exc_info=True,
+        )
+
     return {"status": "ok", "classification": body.classification}
 
 
@@ -1740,32 +2094,25 @@ async def delete_job_endpoint(job_id: str, request: Request) -> dict:
     return {"status": "deleted", "job_id": job_id}
 
 
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(
-    request: Request,
-    limit: int = Query(500, ge=1, le=10000),
-) -> HTMLResponse:
-    """Serve the dashboard page listing analysis reports.
+@app.get("/api/dashboard")
+async def api_dashboard() -> list[dict]:
+    """Return dashboard job list as JSON for the React frontend."""
+    return await list_results_for_dashboard()
 
-    Args:
-        request: The incoming request (used for base URL detection).
-        limit: Maximum number of jobs to load from the database.
+
+@app.get("/api/capabilities")
+async def get_capabilities(settings: Settings = Depends(get_settings)) -> dict:
+    """Report which post-analysis automation features are available.
+
+    These capabilities indicate whether the server is configured to
+    automatically create GitHub issues or Jira bugs from analysis results.
+    They require server-level credentials (GITHUB_TOKEN, JIRA_API_TOKEN, etc.)
+    and cannot be provided per-request.
     """
-    logger.debug(f"GET /dashboard: limit={limit}")
-    base_url = _extract_base_url(request)
-    jobs = await list_results_for_dashboard(limit)
-    logger.debug(f"GET /dashboard: jobs_count={len(jobs)}")
-    html_content = generate_dashboard_html(jobs, base_url, limit=limit)
-    return HTMLResponse(html_content)
-
-
-@app.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request) -> HTMLResponse:
-    """Serve the failure history page."""
-    logger.debug("GET /history")
-    base_url = _extract_base_url(request)
-    html_content = generate_history_html(base_url)
-    return HTMLResponse(html_content)
+    return {
+        "github_issues": settings.github_issues_enabled,
+        "jira_bugs": settings.jira_enabled,
+    }
 
 
 @app.get("/history/failures")
@@ -1829,24 +2176,6 @@ async def get_job_stats_endpoint(
     return await storage.get_job_stats(job_name, exclude_job_id=exclude_job_id)
 
 
-@app.get("/history/trends")
-async def get_trends_endpoint(
-    period: str = Query(default="daily"),
-    days: int = Query(default=30, ge=1),
-    job_name: str = Query(default=""),
-    exclude_job_id: str = Query(
-        default="", description="Exclude results from this job ID"
-    ),
-) -> dict:
-    """Get failure rate trends over time."""
-    logger.debug(
-        f"GET /history/trends: period={period}, days={days}, job_name={job_name!r}"
-    )
-    return await storage.get_trends(
-        period=period, days=days, job_name=job_name, exclude_job_id=exclude_job_id
-    )
-
-
 @app.post("/history/classify", status_code=201)
 async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
     """Classify a test as FLAKY, REGRESSION, etc. Used by AI and humans."""
@@ -1886,20 +2215,21 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
         if result and result.get("result"):
             parent_job_name = result["result"].get("job_name", "")
 
-    classification_id = await storage.set_test_classification(
-        test_name=test_name,
-        classification=classification,
-        reason=reason,
-        job_name=job_name,
-        parent_job_name=parent_job_name,
-        created_by=created_by,
-        references=references,
-        job_id=classify_job_id,
-        child_build_number=body.child_build_number,
-        visible=visible,
-    )
-    if classify_job_id:
-        await _invalidate_cached_html(classify_job_id)
+    try:
+        classification_id = await storage.set_test_classification(
+            test_name=test_name,
+            classification=classification,
+            reason=reason,
+            job_name=job_name,
+            parent_job_name=parent_job_name,
+            created_by=created_by,
+            references=references,
+            job_id=classify_job_id,
+            child_build_number=body.child_build_number,
+            visible=visible,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"id": classification_id}
 
 
@@ -1947,6 +2277,32 @@ async def favicon() -> Response:
         media_type="image/svg+xml",
         headers={"Cache-Control": "public, max-age=86400"},
     )
+
+
+def _serve_spa() -> HTMLResponse:
+    """Read and serve the React SPA index.html."""
+    index_file = _FRONTEND_DIR / "index.html"
+    if not index_file.is_file():
+        raise HTTPException(status_code=404, detail="Frontend not built")
+    return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
+
+
+# SPA catch-all routes — must be AFTER all API routes
+@app.get("/register", include_in_schema=False)
+async def serve_spa_known_routes() -> HTMLResponse:
+    """Serve the React SPA for known frontend routes."""
+    return _serve_spa()
+
+
+@app.get("/{path:path}", include_in_schema=False)
+async def serve_frontend_catchall(request: Request, path: str) -> HTMLResponse:
+    """Catch-all: serve the React SPA for any unmatched route."""
+    if path == "api" or path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not found")
+    accept = request.headers.get("accept", "")
+    if "text/html" not in accept or "application/json" in accept:
+        raise HTTPException(status_code=404, detail="Not found")
+    return _serve_spa()
 
 
 def run() -> None:

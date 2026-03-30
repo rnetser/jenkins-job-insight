@@ -95,9 +95,9 @@ def extract_test_failures(raw_xml: str) -> list[TestFailure]:
 def apply_analysis_to_xml(
     raw_xml: str,
     analysis_map: dict[tuple[str, str], dict[str, Any]],
-    html_report_url: str = "",
+    report_url: str = "",
 ) -> str:
-    """Apply AI analysis results and HTML report URL to JUnit XML string.
+    """Apply AI analysis results and report URL to JUnit XML string.
 
     Uses exact (classname, name) matching since failures are extracted from
     the same XML content, guaranteeing identical attribute values.
@@ -105,7 +105,7 @@ def apply_analysis_to_xml(
     Args:
         raw_xml: Original JUnit XML content as a string.
         analysis_map: Mapping of (classname, test_name) to analysis results.
-        html_report_url: URL to the HTML report, added as a testsuite-level property.
+        report_url: URL to the report, added as a testsuite-level property.
 
     Returns:
         Enriched JUnit XML as a string.
@@ -128,8 +128,8 @@ def apply_analysis_to_xml(
             unmatched,
         )
 
-    # Add html_report_url to the first testsuite only
-    if html_report_url:
+    # Add report_url to the first testsuite only
+    if report_url:
         first_testsuite = next(root.iter("testsuite"), None)
         # If root itself is a testsuite, use it
         if first_testsuite is None and root.tag == "testsuite":
@@ -139,10 +139,10 @@ def apply_analysis_to_xml(
             if ts_props is None:
                 ts_props = ET.Element("properties")
                 first_testsuite.insert(0, ts_props)
-            _add_property(ts_props, "html_report_url", html_report_url)
+            _add_property(ts_props, "report_url", report_url)
         else:
             logger.warning(
-                "Could not add html_report_url: no testsuite element found in XML"
+                "Could not add report_url: no testsuite element found in XML"
             )
 
     return ET.tostring(root, encoding="unicode", xml_declaration=True)
@@ -151,7 +151,7 @@ def apply_analysis_to_xml(
 def build_enriched_xml(
     raw_xml: str,
     analyses: list,
-    html_report_url: str = "",
+    report_url: str = "",
 ) -> str:
     """Build enriched XML from raw XML and FailureAnalysis objects.
 
@@ -161,7 +161,7 @@ def build_enriched_xml(
     Args:
         raw_xml: Original JUnit XML content.
         analyses: List of FailureAnalysis objects with analysis results.
-        html_report_url: URL to the HTML report.
+        report_url: URL to the report.
 
     Returns:
         Enriched JUnit XML as a string.
@@ -178,7 +178,7 @@ def build_enriched_xml(
         else:
             analysis_map[("", test_name)] = analysis_dict
 
-    return apply_analysis_to_xml(raw_xml, analysis_map, html_report_url)
+    return apply_analysis_to_xml(raw_xml, analysis_map, report_url)
 
 
 def enrich_junit_xml_via_server(
@@ -202,7 +202,7 @@ def enrich_junit_xml_via_server(
         timeout: Request timeout in seconds (default: 600).
 
     Returns:
-        Server response dict with enriched_xml, html_report_url, status, failures.
+        Server response dict with enriched_xml, report_url, status, failures.
 
     Raises:
         httpx.HTTPStatusError: If the server returns an error status.

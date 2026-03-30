@@ -1,6 +1,7 @@
 """Tests for the JJI CLI client."""
 
 import json
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -26,6 +27,7 @@ def _make_client(handler, username: str = "") -> JJIClient:
         cookies=cookies,
     )
     client = JJIClient(BASE_URL, username=username)
+    client._client.close()
     client._client = mock_http
     return client
 
@@ -109,8 +111,25 @@ class TestJJIClientResults:
         assert result["status"] == "deleted"
 
 
+class TestJJIClientDashboard:
+    def test_dashboard(self):
+        """Test dashboard returns all jobs."""
+
+        def dashboard_handler(request):
+            assert request.method == "GET"
+            assert request.url.path == "/api/dashboard"
+            return httpx.Response(
+                200, json=[{"job_id": "test-1", "status": "completed"}]
+            )
+
+        client = _make_client(dashboard_handler)
+        result = client.dashboard()
+        assert len(result) == 1
+        assert result[0]["job_id"] == "test-1"
+
+
 class TestJJIClientAnalyze:
-    def test_analyze_async(self):
+    def test_analyze(self):
         response_data = {
             "status": "queued",
             "job_id": "new-job-1",
@@ -118,24 +137,14 @@ class TestJJIClientAnalyze:
         }
 
         def handler(request):
-            assert "sync=false" in str(request.url) or "sync" not in str(request.url)
+            body = _parse_analyze_request(request)
+            assert "sync" not in body
             return httpx.Response(202, json=response_data)
 
         client = _make_client(handler)
-        result = client.analyze("my-job", 42, sync=False)
+        result = client.analyze("my-job", 42)
         assert result["status"] == "queued"
         assert result["job_id"] == "new-job-1"
-
-    def test_analyze_sync(self):
-        response_data = {"job_id": "sync-1", "status": "completed", "summary": "Done"}
-
-        def handler(request):
-            assert "sync=true" in str(request.url)
-            return httpx.Response(200, json=response_data)
-
-        client = _make_client(handler)
-        result = client.analyze("my-job", 42, sync=True)
-        assert result["status"] == "completed"
 
 
 class TestJJIClientHistory:
@@ -143,6 +152,7 @@ class TestJJIClientHistory:
         sample = {"test_name": "tests.TestA.test_one", "failures": 3, "recent_runs": []}
 
         def handler(request):
+            assert request.method == "GET"
             assert "/history/test/tests.TestA.test_one" in str(request.url)
             return httpx.Response(200, json=sample)
 
@@ -154,6 +164,7 @@ class TestJJIClientHistory:
         sample = {"signature": "sig-abc", "total_occurrences": 5, "tests": []}
 
         def handler(request):
+            assert request.method == "GET"
             assert "signature=sig-abc" in str(request.url)
             return httpx.Response(200, json=sample)
 
@@ -165,6 +176,7 @@ class TestJJIClientHistory:
         sample = {"job_name": "ocp-e2e", "total_builds_analyzed": 10}
 
         def handler(request):
+            assert request.method == "GET"
             assert "/history/stats/ocp-e2e" in str(request.url)
             return httpx.Response(200, json=sample)
 
@@ -172,21 +184,11 @@ class TestJJIClientHistory:
         result = client.get_job_stats("ocp-e2e")
         assert result["job_name"] == "ocp-e2e"
 
-    def test_get_trends(self):
-        sample = {"period": "daily", "data": [{"date": "2026-03-18", "failures": 5}]}
-
-        def handler(request):
-            assert "/history/trends" in str(request.url)
-            return httpx.Response(200, json=sample)
-
-        client = _make_client(handler)
-        result = client.get_trends()
-        assert result["period"] == "daily"
-
     def test_get_all_failures(self):
         sample = {"failures": [], "total": 0, "limit": 50, "offset": 0}
 
         def handler(request):
+            assert request.method == "GET"
             assert "/history/failures" in str(request.url)
             return httpx.Response(200, json=sample)
 
@@ -220,6 +222,7 @@ class TestJJIClientClassifications:
         }
 
         def handler(request):
+            assert request.method == "GET"
             assert "/history/classifications" in str(request.url)
             return httpx.Response(200, json=sample)
 
@@ -233,6 +236,7 @@ class TestJJIClientComments:
         sample = {"comments": [], "reviews": {}}
 
         def handler(request):
+            assert request.method == "GET"
             assert "/results/job-1/comments" in str(request.url)
             return httpx.Response(200, json=sample)
 
@@ -325,6 +329,7 @@ class TestJJIClientBugCreation:
         }
 
         def handler(request):
+            assert request.method == "POST"
             assert "/preview-jira-bug" in str(request.url)
             return httpx.Response(200, json=response_data)
 
@@ -366,6 +371,7 @@ class TestJJIClientBugCreation:
         }
 
         def handler(request):
+            assert request.method == "POST"
             assert "/create-jira-bug" in str(request.url)
             return httpx.Response(201, json=response_data)
 
@@ -412,6 +418,19 @@ class TestJJIClientBugCreation:
             child_build_number=5,
         )
         assert result["title"] == "Fix"
+
+
+class TestJJIClientCapabilities:
+    def test_capabilities(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert request.url.path == "/api/capabilities"
+            return httpx.Response(200, json={"github_issues": True, "jira_bugs": False})
+
+        client = _make_client(handler)
+        result = client.capabilities()
+        assert result["github_issues"] is True
+        assert result["jira_bugs"] is False
 
 
 class TestJJIClientAiConfigs:
@@ -496,10 +515,147 @@ class TestJJIClientPreviewWithAiConfig:
         )
 
 
+class TestJJIClientReview:
+    def test_get_review_status(self):
+        sample = {"total_failures": 5, "reviewed_count": 3, "comment_count": 7}
+
+        def handler(request):
+            assert request.method == "GET"
+            assert "/results/job-1/review-status" in str(request.url)
+            return httpx.Response(200, json=sample)
+
+        client = _make_client(handler)
+        result = client.get_review_status("job-1")
+        assert result["total_failures"] == 5
+        assert result["reviewed_count"] == 3
+        assert result["comment_count"] == 7
+
+    def test_set_reviewed(self):
+        def handler(request):
+            assert request.method == "PUT"
+            assert "/results/job-1/reviewed" in str(request.url)
+            body = json.loads(request.content)
+            assert body["test_name"] == "tests.TestA.test_one"
+            assert body["reviewed"] is True
+            return httpx.Response(200, json={"status": "ok", "reviewed_by": "alice"})
+
+        client = _make_client(handler, username="alice")
+        result = client.set_reviewed(
+            job_id="job-1", test_name="tests.TestA.test_one", reviewed=True
+        )
+        assert result["status"] == "ok"
+        assert result["reviewed_by"] == "alice"
+
+    def test_set_reviewed_with_child_job(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert body["test_name"] == "tests.TestA.test_one"
+            assert body["reviewed"] is False
+            assert body["child_job_name"] == "child-runner"
+            assert body["child_build_number"] == 5
+            return httpx.Response(200, json={"status": "ok", "reviewed_by": "bob"})
+
+        client = _make_client(handler)
+        result = client.set_reviewed(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            reviewed=False,
+            child_job_name="child-runner",
+            child_build_number=5,
+        )
+        assert result["status"] == "ok"
+
+    def test_enrich_comments(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/results/job-1/enrich-comments" in str(request.url)
+            return httpx.Response(200, json={"enriched": 3})
+
+        client = _make_client(handler)
+        result = client.enrich_comments("job-1")
+        assert result["enriched"] == 3
+
+
+class TestJJIClientExcludeJobId:
+    def test_get_test_history_with_exclude(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert "exclude_job_id=job-99" in str(request.url)
+            return httpx.Response(
+                200, json={"test_name": "t", "failures": 0, "recent_runs": []}
+            )
+
+        client = _make_client(handler)
+        client.get_test_history("t", exclude_job_id="job-99")
+
+    def test_search_by_signature_with_exclude(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert "exclude_job_id=job-99" in str(request.url)
+            return httpx.Response(
+                200, json={"signature": "s", "total_occurrences": 0, "tests": []}
+            )
+
+        client = _make_client(handler)
+        client.search_by_signature("s", exclude_job_id="job-99")
+
+    def test_get_job_stats_with_exclude(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert "exclude_job_id=job-99" in str(request.url)
+            return httpx.Response(
+                200, json={"job_name": "j", "total_builds_analyzed": 0}
+            )
+
+        client = _make_client(handler)
+        client.get_job_stats("j", exclude_job_id="job-99")
+
+
+class TestJJIClientClassificationsParentJobName:
+    def test_get_classifications_with_parent_job_name(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert "parent_job_name=parent-job" in str(request.url)
+            return httpx.Response(200, json={"classifications": []})
+
+        client = _make_client(handler)
+        client.get_classifications(parent_job_name="parent-job")
+
+
+class TestJJIClientVerifySSL:
+    def test_verify_ssl_default_true(self):
+        """Client should verify SSL by default."""
+        with patch("jenkins_job_insight.cli.client.httpx.Client") as mock_httpx:
+            JJIClient(server_url=BASE_URL)
+            _, kwargs = mock_httpx.call_args
+            assert kwargs.get("verify", True) is True
+
+    def test_verify_ssl_false_passes_to_httpx(self):
+        """Client should pass verify=False to httpx when verify_ssl=False."""
+        with patch("jenkins_job_insight.cli.client.httpx.Client") as mock_httpx:
+            JJIClient(server_url=BASE_URL, verify_ssl=False)
+            _, kwargs = mock_httpx.call_args
+            assert kwargs["verify"] is False
+
+    def test_verify_ssl_true_passes_to_httpx(self):
+        """Client should pass verify=True to httpx when verify_ssl=True."""
+        with patch("jenkins_job_insight.cli.client.httpx.Client") as mock_httpx:
+            JJIClient(server_url=BASE_URL, verify_ssl=True)
+            _, kwargs = mock_httpx.call_args
+            assert kwargs.get("verify", True) is True
+
+
+def _parse_analyze_request(request):
+    """Assert method/path and return parsed body for /analyze handlers."""
+    assert request.method == "POST"
+    assert request.url.path == "/analyze"
+    return json.loads(request.content)
+
+
 class TestJJIClientAnalyzeExtras:
     def test_analyze_with_ai_provider(self):
         def handler(request):
-            body = json.loads(request.content)
+            body = _parse_analyze_request(request)
             assert body["ai_provider"] == "claude"
             assert body["ai_model"] == "opus"
             return httpx.Response(202, json={"status": "queued", "job_id": "x"})
@@ -508,8 +664,77 @@ class TestJJIClientAnalyzeExtras:
         result = client.analyze(
             "my-job",
             1,
-            sync=False,
             ai_provider="claude",
             ai_model="opus",
         )
+        assert result["status"] == "queued"
+
+    def test_analyze_with_all_optional_fields(self):
+        """All optional kwargs should be included in the POST body."""
+        extras = {
+            "jenkins_url": "https://jenkins.local",
+            "jenkins_user": "admin",
+            "jenkins_password": "s3cret",  # pragma: allowlist secret
+            "jenkins_ssl_verify": False,
+            "jenkins_artifacts_max_size_mb": 50,
+            "jenkins_artifacts_context_lines": 200,
+            "get_job_artifacts": True,
+            "tests_repo_url": "https://github.com/org/tests",
+            "jira_url": "https://jira.example.com",
+            "jira_email": "user@example.com",
+            "jira_api_token": "tok-123",
+            "jira_pat": "pat-abc",
+            "jira_project_key": "PROJ",
+            "jira_ssl_verify": True,
+            "jira_max_results": 25,
+            "github_token": "ghp_abc123",
+            "ai_cli_timeout": 10,
+            "enable_jira": True,
+            "raw_prompt": "extra instructions",
+        }
+
+        def handler(request):
+            body = _parse_analyze_request(request)
+            assert body["job_name"] == "my-job"
+            assert body["build_number"] == 1
+            for key, value in extras.items():
+                assert body[key] == value, (
+                    f"Expected {key}={value}, got {body.get(key)}"
+                )
+            return httpx.Response(202, json={"status": "queued", "job_id": "x"})
+
+        client = _make_client(handler)
+        result = client.analyze("my-job", 1, **extras)
+        assert result["status"] == "queued"
+
+    def test_analyze_with_wait_for_completion_fields(self):
+        """Wait-for-completion fields should be included in the POST body."""
+
+        def handler(request):
+            body = _parse_analyze_request(request)
+            assert body["wait_for_completion"] is False
+            assert body["poll_interval_minutes"] == 5
+            assert body["max_wait_minutes"] == 30
+            return httpx.Response(202, json={"status": "queued", "job_id": "x"})
+
+        client = _make_client(handler)
+        result = client.analyze(
+            "my-job",
+            1,
+            wait_for_completion=False,
+            poll_interval_minutes=5,
+            max_wait_minutes=30,
+        )
+        assert result["status"] == "queued"
+
+    def test_analyze_without_extras_sends_minimal_body(self):
+        """Without extras, only job_name and build_number should be in the body."""
+
+        def handler(request):
+            body = _parse_analyze_request(request)
+            assert body == {"job_name": "my-job", "build_number": 1}
+            return httpx.Response(202, json={"status": "queued", "job_id": "x"})
+
+        client = _make_client(handler)
+        result = client.analyze("my-job", 1)
         assert result["status"] == "queued"

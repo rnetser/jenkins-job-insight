@@ -9,7 +9,7 @@ Usage:
     2. Rename conftest_junit_ai.py to conftest.py
     3. Install dependencies: pip install requests python-dotenv
     4. Create a .env file or set environment variables:
-       - JJI_SERVER_URL: jenkins-job-insight server URL (required)
+       - JJI_SERVER: jenkins-job-insight server URL (required)
        - JJI_AI_PROVIDER: AI provider - claude, gemini, or cursor (default: claude)
        - JJI_AI_MODEL: AI model (default: claude-opus-4-6[1m])
        - JJI_TIMEOUT: request timeout in seconds (default: 600)

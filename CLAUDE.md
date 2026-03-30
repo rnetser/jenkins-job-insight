@@ -17,11 +17,32 @@
 - If the same logic exists in 2+ places, it is a BUG. Extract it immediately.
 - Before writing ANY code, search for existing helpers that do the same thing. Reuse first.
 - This applies to ALL code: Python, JavaScript, CSS, HTML templates, SQL queries.
-- Shared CSS → `_common_css()`, `_controls_css()`, `_modal_css()` helpers
-- Shared JavaScript → `_modal_js()`, `_user_badge_js()` helpers
+- Shared React components → extract to `components/shared/` or `components/ui/`
+- Shared TypeScript logic → extract to `lib/` utilities
 - Shared Python logic → extract functions, base classes, or mixins
 - Copy-paste is NEVER acceptable. Not even "just this once." Not even "it's small."
 - Every PR review will check for duplication. Duplicates found = code rejected.
+
+## Testing — MANDATORY
+
+**`tox` must pass before every commit. No exceptions.**
+
+Run all tests:
+
+```bash
+uvx --with tox-uv tox
+```
+
+This runs both environments:
+- `backend` — Python tests via `uv run pytest tests/ -q`
+- `frontend` — Frontend build (`vite build`) + Vitest tests (`npm test`)
+
+Individual environments:
+
+```bash
+uvx --with tox-uv tox -e backend    # Python only
+uvx --with tox-uv tox -e frontend   # Frontend only
+```
 
 ## Smart Context Management
 
@@ -67,6 +88,26 @@ This project uses AI CLI tools (Claude CLI, Gemini CLI, Cursor Agent CLI) instea
 | `JiraClient` | Searches Jira for matching bugs (Cloud + Server/DC) |
 | `enrich_with_jira_matches()` | Post-processing: attaches Jira matches to PRODUCT BUG failures |
 | `_filter_matches_with_ai()` | AI-powered relevance filtering of Jira candidates |
+
+### Frontend (React + TypeScript)
+
+The frontend is in `/frontend/` — a Vite + React 19 + TypeScript + Tailwind CSS + shadcn/ui application.
+
+| Directory | Purpose |
+|-----------|---------|
+| `frontend/src/pages/` | Page components (one per route) |
+| `frontend/src/pages/report/` | Report page subcomponents (FailureCard, CommentsSection, etc.) |
+| `frontend/src/components/ui/` | shadcn/ui primitives (Button, Card, Dialog, etc.) |
+| `frontend/src/components/shared/` | App-level shared components (ClassificationBadge, StatusChip, etc.) |
+| `frontend/src/components/layout/` | Layout shell (NavBar, UserBadge) |
+| `frontend/src/lib/` | Utilities (api.ts, cookies.ts, grouping.ts) |
+| `frontend/src/types/` | TypeScript types mirroring Python models |
+
+Key patterns:
+- **State**: Report page uses `useReducer` via `ReportContext` (page-scoped, not global)
+- **API**: Centralized `api.get/post/put/delete` wrapper in `lib/api.ts`
+- **User identification**: Cookie-based (`jji_username`), read/written client-side; display-only, not an authentication/authorization boundary
+- **Grouping**: `lib/grouping.ts` ports Python's `_grouping_key()` to TypeScript
 
 ### AI Tool Access (IMPORTANT)
 
@@ -121,16 +162,41 @@ Uses `python-simple-logger`:
 
 ## API Design
 
-### Environment Variable / Payload Parity
+### Configuration Parity
 
-Every environment variable that configures the service must also be available as a per-request field in the API payload. This allows callers to override any configuration on a per-request basis without changing the server environment.
+For request-tunable analysis settings, keep these interfaces in sync:
+1. Environment variable (server-level default)
+2. API payload field (per-request override)
+3. CLI option (command-line flag)
+4. Config file (`~/.config/jji/config.toml` per-server setting)
 
-When adding a new environment variable:
+Client-only transport settings and server-only deployment settings stay scoped
+to their owning interface. CLI parity for new API endpoints is a separate rule
+(see "CLI Parity" above).
+
+When adding a new analysis setting:
 1. Add the field to `Settings` in `config.py`
-2. Add the corresponding request field to `BaseAnalysisRequest` (or `AnalyzeRequest` if endpoint-specific) in `models.py`
+2. Add the corresponding request field to `BaseAnalysisRequest` (or `AnalyzeRequest`) in `models.py`
 3. Add the field to `_merge_settings()` in `main.py` so request values override env defaults
-4. Update the Request Override Priority table in `README.md`
+4. Add the CLI option to the relevant command in `cli/main.py`
+5. Add the field to `ServerConfig` in `cli/config.py`
+6. Update the Request Override Priority table in `README.md`
 
 Exceptions (server-level only, no payload equivalent):
 - `DEBUG` — server reload toggle
 - `LOG_LEVEL` — server log verbosity
+- `PUBLIC_BASE_URL` — trusted server-only origin for building absolute links; never derive from request headers to prevent host-header injection
+- `ENABLE_GITHUB_ISSUES` — server capability toggle for GitHub issue creation
+- `JJI_ENCRYPTION_KEY` — server-only secret for at-rest encryption; never expose via request payloads, CLI flags, or shared config files
+- Security-sensitive credentials for preview/create-issue endpoints (`GITHUB_TOKEN`, `TESTS_REPO_URL`, Jira credentials) — these use deployment config, not per-request overrides
+
+### Sensitive Data Handling
+
+Sensitive data (passwords, API tokens, credentials) must be:
+1. **Encrypted at rest** — use `encrypt_sensitive_fields()` before storing to the database
+2. **Stripped from responses** — use `strip_sensitive_from_response()` before returning to API consumers
+3. **Never logged** — do not log passwords, tokens, or credentials at any log level
+
+Sensitive fields: `jenkins_password`, `jenkins_user`, `jira_api_token`, `jira_pat`, `jira_email`, `github_token`
+
+Encryption uses Fernet (AES-128-CBC + HMAC-SHA256). Set `JJI_ENCRYPTION_KEY` env var for production; falls back to an auto-generated file-based key under `$XDG_DATA_HOME/jji/.encryption_key` (default: `~/.local/share/jji/.encryption_key`) for development.

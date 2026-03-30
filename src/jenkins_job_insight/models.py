@@ -84,13 +84,17 @@ class AnalyzeRequest(BaseAnalysisRequest):
         description="Jenkins job name (can include folders like 'folder/job-name')"
     )
     build_number: int = Field(description="Build number to analyze")
-    callback_url: HttpUrl | None = Field(
-        default=None,
-        description="Optional callback URL for async results (overrides env var default)",
+    wait_for_completion: bool = Field(
+        default=True,
+        description="Wait for Jenkins job to complete before analyzing",
     )
-    callback_headers: dict[str, str] | None = Field(
-        default=None,
-        description="Optional headers to include in callback request (overrides env var default)",
+    poll_interval_minutes: Annotated[int, Field(gt=0)] = Field(
+        default=2,
+        description="Minutes between Jenkins status polls when waiting",
+    )
+    max_wait_minutes: Annotated[int, Field(ge=0)] = Field(
+        default=0,
+        description="Maximum minutes to wait for job completion (0 = no limit)",
     )
     jenkins_url: str | None = Field(
         default=None,
@@ -269,7 +273,7 @@ class AnalysisResult(BaseModel):
         default=None,
         description="URL of the analyzed Jenkins job (None for non-Jenkins analysis)",
     )
-    status: Literal["pending", "running", "completed", "failed"] = Field(
+    status: Literal["pending", "waiting", "running", "completed", "failed"] = Field(
         description="Current status of the analysis"
     )
     summary: str = Field(description="Summary of the analysis findings")
@@ -288,7 +292,7 @@ class JobStatus(BaseModel):
     """Status information for a queued analysis job."""
 
     job_id: str = Field(description="Unique identifier for the analysis job")
-    status: Literal["pending", "running", "completed", "failed"] = Field(
+    status: Literal["pending", "waiting", "running", "completed", "failed"] = Field(
         description="Current status of the analysis"
     )
     created_at: datetime = Field(description="Timestamp when the job was created")
@@ -332,17 +336,17 @@ class FailureAnalysisResult(BaseModel):
 
 
 class _ChildJobFieldsValidator(BaseModel):
-    """Mixin providing child_job_name + child_build_number cross-validation."""
+    """Mixin providing child_job_name + child_build_number cross-validation.
+
+    child_build_number uses 0 as a wildcard meaning "not specified".
+    Negative values are rejected.
+    """
 
     child_job_name: str = ""
-    child_build_number: int = 0
+    child_build_number: Annotated[int, Field(ge=0)] = 0
 
     @model_validator(mode="after")
     def validate_child_fields(self):
-        if self.child_job_name and self.child_build_number <= 0:
-            raise ValueError(
-                "child_build_number must be positive when child_job_name is set"
-            )
         if not self.child_job_name and self.child_build_number > 0:
             raise ValueError(
                 "child_job_name is required when child_build_number is set"
@@ -433,11 +437,17 @@ class CreateIssueRequest(_ChildJobFieldsValidator):
         return v
 
 
+OverrideClassificationLiteral = Literal["CODE ISSUE", "PRODUCT BUG"]
+HistoryClassificationLiteral = Literal[
+    "FLAKY", "REGRESSION", "INFRASTRUCTURE", "KNOWN_BUG", "INTERMITTENT"
+]
+
+
 class OverrideClassificationRequest(_ChildJobFieldsValidator):
     """Request body for overriding a failure's classification."""
 
     test_name: str
-    classification: Literal["CODE ISSUE", "PRODUCT BUG"]
+    classification: OverrideClassificationLiteral
 
 
 class SimilarIssue(BaseModel):
@@ -478,14 +488,12 @@ class ClassifyTestRequest(BaseModel):
     """Request body for classifying a test (e.g., FLAKY, REGRESSION)."""
 
     test_name: str
-    classification: Literal[
-        "FLAKY", "REGRESSION", "INFRASTRUCTURE", "KNOWN_BUG", "INTERMITTENT"
-    ]
+    classification: HistoryClassificationLiteral
     reason: str = ""
     job_name: str = ""
     references: str = ""
     job_id: str
-    child_build_number: int = 0
+    child_build_number: Annotated[int, Field(ge=0)] = 0
 
     @field_validator("job_id")
     @classmethod

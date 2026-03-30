@@ -1,17 +1,78 @@
 """Tests for FastAPI main application."""
 
 import os
+from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, PropertyMock, patch
 
+import jenkins
 import pytest
 
 from jenkins_job_insight import storage
+from jenkins_job_insight.config import Settings
 from jenkins_job_insight.models import (
     AnalysisDetail,
     AnalysisResult,
     FailureAnalysis,
 )
+
+# Fake credentials for tests — annotated once to suppress Ruff S105/S106 globally.
+FAKE_JENKINS_PASSWORD = "not-a-real-password"  # noqa: S105  # pragma: allowlist secret
+FAKE_GITHUB_TOKEN = "not-a-real-token"  # noqa: S105  # pragma: allowlist secret
+
+
+@contextmanager
+def _with_github_issue_config():
+    """Temporarily enable GitHub issue creation settings for tests."""
+    from jenkins_job_insight.config import get_settings
+
+    with patch.dict(
+        os.environ,
+        {
+            "TESTS_REPO_URL": "https://github.com/org/repo",
+            "GITHUB_TOKEN": "ghp_test",  # pragma: allowlist secret
+        },
+    ):
+        get_settings.cache_clear()
+        try:
+            yield
+        finally:
+            get_settings.cache_clear()
+
+
+@contextmanager
+def _enable_feature(prop_name: str):
+    """Context manager to enable a Settings boolean property for tests.
+
+    Usage::
+
+        with _enable_feature("github_issues_enabled"):
+            response = test_client.post(...)
+    """
+    with patch.object(
+        Settings,
+        prop_name,
+        new_callable=PropertyMock,
+        return_value=True,
+    ):
+        yield
+
+
+def _build_wait_settings(**overrides) -> Settings:
+    """Build a Settings instance with common waiting-test defaults.
+
+    Accepts keyword overrides that are applied on top of a fresh Settings dump.
+
+    Usage::
+
+        merged = _build_wait_settings(
+            jenkins_url="https://jenkins.example.com",
+            wait_for_completion=True,
+        )
+    """
+    settings_dict = Settings().model_dump(mode="python")
+    settings_dict.update(overrides)
+    return Settings.model_validate(settings_dict)
 
 
 @pytest.fixture
@@ -28,7 +89,10 @@ def mock_settings():
         from jenkins_job_insight.config import get_settings
 
         get_settings.cache_clear()
-        yield
+        try:
+            yield
+        finally:
+            get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -69,89 +133,15 @@ class TestAnalyzeEndpoint:
                     "job_name": "test",
                     "build_number": 123,
                     "tests_repo_url": "https://github.com/example/repo",
+                    "ai_provider": "claude",
+                    "ai_model": "test-model",
                 },
             )
             assert response.status_code == 202
             data = response.json()
             assert data["status"] == "queued"
-            assert data["base_url"] == "http://testserver"
-            assert data["result_url"].startswith("http://testserver/results/")
-            assert data["html_report_url"].startswith("http://testserver/results/")
-            assert data["html_report_url"].endswith(".html")
-
-    def test_analyze_sync_accepts_sync_param(self, test_client) -> None:
-        """Test that sync parameter is accepted (validation test only).
-
-        Note: Full sync test requires extensive mocking of analyze_job,
-        Jenkins client, and AI client. This test verifies the endpoint
-        accepts the sync parameter without validation errors.
-        """
-        # Mock the analyze_job at the module level before the request
-        with patch(
-            "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
-        ) as mock_analyze:
-            with patch(
-                "jenkins_job_insight.main.save_result", new_callable=AsyncMock
-            ) as mock_save:
-                mock_result = AnalysisResult(
-                    job_id="test-123",
-                    jenkins_url="https://jenkins.example.com/job/test/123/",
-                    status="completed",
-                    summary="Analysis complete",
-                    failures=[],
-                )
-                mock_analyze.return_value = mock_result
-
-                response = test_client.post(
-                    "/analyze?sync=true",
-                    json={
-                        "job_name": "test",
-                        "build_number": 123,
-                        "tests_repo_url": "https://github.com/example/repo",
-                        "ai_provider": "claude",
-                        "ai_model": "test-model",
-                    },
-                )
-                assert response.status_code == 200
-                data = response.json()
-                assert data["status"] == "completed"
-                assert data["job_id"] == "test-123"
-                assert (
-                    data["html_report_url"] == "http://testserver/results/test-123.html"
-                )
-                assert data["base_url"] == "http://testserver"
-                assert data["result_url"] == "http://testserver/results/test-123"
-
-                # Verify result was persisted
-                mock_save.assert_called_once()
-
-    def test_analyze_sync_missing_ai_provider_returns_400(self, test_client) -> None:
-        """Test that sync analyze without AI provider returns 400."""
-        response = test_client.post(
-            "/analyze?sync=true",
-            json={
-                "job_name": "test",
-                "build_number": 123,
-                "tests_repo_url": "https://github.com/example/repo",
-                "ai_model": "test-model",
-            },
-        )
-        assert response.status_code == 400
-        assert "AI provider" in response.json()["detail"]
-
-    def test_analyze_sync_missing_ai_model_returns_400(self, test_client) -> None:
-        """Test that sync analyze without AI model returns 400."""
-        response = test_client.post(
-            "/analyze?sync=true",
-            json={
-                "job_name": "test",
-                "build_number": 123,
-                "tests_repo_url": "https://github.com/example/repo",
-                "ai_provider": "claude",
-            },
-        )
-        assert response.status_code == 400
-        assert "AI model" in response.json()["detail"]
+            assert data["base_url"] == ""
+            assert data["result_url"].startswith("/results/")
 
     def test_analyze_invalid_build_number(self, test_client) -> None:
         """Test that invalid build number returns 422."""
@@ -187,142 +177,99 @@ class TestAnalyzeEndpoint:
         )
         assert response.status_code == 422
 
-    def test_analyze_with_optional_fields(self, test_client) -> None:
-        """Test analyze with optional callback fields."""
-        with patch("jenkins_job_insight.main.process_analysis_with_id"):
-            response = test_client.post(
-                "/analyze",
-                json={
-                    "job_name": "test",
-                    "build_number": 123,
-                    "tests_repo_url": "https://github.com/example/repo",
-                    "callback_url": "https://callback.example.com/webhook",
-                    "callback_headers": {"Authorization": "Bearer token"},
-                },
-            )
-            assert response.status_code == 202
-
-    def test_analyze_sync_sends_callback(self, test_client) -> None:
-        """Test that sync analyze sends callback when URL provided."""
-        mock_result = AnalysisResult(
-            job_id="test-123",
-            jenkins_url="https://jenkins.example.com/job/test/123/",
-            status="completed",
-            summary="Analysis complete",
-            failures=[],
+    def test_analyze_missing_ai_provider_returns_400(self, test_client) -> None:
+        """Test that missing AI provider returns 400 before queuing."""
+        response = test_client.post(
+            "/analyze",
+            json={
+                "job_name": "test",
+                "build_number": 123,
+                "ai_model": "test-model",
+            },
         )
-
-        with patch(
-            "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
-        ) as mock_analyze:
-            with patch("jenkins_job_insight.main.save_result", new_callable=AsyncMock):
-                with patch(
-                    "jenkins_job_insight.main.send_callback", new_callable=AsyncMock
-                ) as mock_callback:
-                    mock_analyze.return_value = mock_result
-
-                    response = test_client.post(
-                        "/analyze?sync=true",
-                        json={
-                            "job_name": "test",
-                            "build_number": 123,
-                            "tests_repo_url": "https://github.com/example/repo",
-                            "callback_url": "https://callback.example.com/webhook",
-                            "ai_provider": "claude",
-                            "ai_model": "test-model",
-                        },
-                    )
-                    assert response.status_code == 200
-                    mock_callback.assert_called_once()
-
-    def test_analyze_async_always_includes_html_report_url(self, test_client) -> None:
-        """Test that async analyze always includes html_report_url for lazy generation."""
-        with patch("jenkins_job_insight.main.process_analysis_with_id"):
-            response = test_client.post(
-                "/analyze",
-                json={
-                    "job_name": "test",
-                    "build_number": 123,
-                },
-            )
-            assert response.status_code == 202
-            data = response.json()
-            assert data["html_report_url"].startswith("http://testserver/results/")
-            assert data["html_report_url"].endswith(".html")
-            assert data["base_url"] == "http://testserver"
-            assert data["result_url"].startswith("http://testserver/results/")
+        assert response.status_code == 400
+        assert "AI provider" in response.json()["detail"]
 
 
 class TestBaseUrlDetection:
-    """Tests for base URL detection from request headers."""
+    """Tests for base URL detection using PUBLIC_BASE_URL and header fallbacks."""
 
-    def test_base_url_from_forwarded_headers(self, test_client) -> None:
-        """Test base URL detection from X-Forwarded-Proto and X-Forwarded-Host."""
+    @staticmethod
+    def _analyze_body() -> dict[str, object]:
+        return {
+            "job_name": "test",
+            "build_number": 1,
+            "ai_provider": "claude",
+            "ai_model": "test-model",
+        }
+
+    def test_base_url_from_public_base_url(self, mock_settings, temp_db_path) -> None:
+        """PUBLIC_BASE_URL takes precedence over any request header."""
+        from jenkins_job_insight.config import get_settings
+
+        os.environ["PUBLIC_BASE_URL"] = "https://myapp.example.com"
+        get_settings.cache_clear()
+        try:
+            with patch.object(storage, "DB_PATH", temp_db_path):
+                from starlette.testclient import TestClient
+                from jenkins_job_insight.main import app
+
+                with (
+                    TestClient(app) as client,
+                    patch("jenkins_job_insight.main.process_analysis_with_id"),
+                ):
+                    response = client.post(
+                        "/analyze",
+                        json=self._analyze_body(),
+                        headers={
+                            "X-Forwarded-Proto": "https",
+                            "X-Forwarded-Host": "other.example.com",
+                        },
+                    )
+                    assert response.status_code == 202
+                    data = response.json()
+                    assert data["base_url"] == "https://myapp.example.com"
+                    assert data["result_url"].startswith(
+                        "https://myapp.example.com/results/"
+                    )
+        finally:
+            os.environ.pop("PUBLIC_BASE_URL", None)
+            get_settings.cache_clear()
+
+    def test_base_url_from_public_base_url_strips_trailing_slash(
+        self, mock_settings, temp_db_path
+    ) -> None:
+        """PUBLIC_BASE_URL trailing slash is stripped."""
+        from jenkins_job_insight.config import get_settings
+
+        os.environ["PUBLIC_BASE_URL"] = "https://myapp.example.com:8443/"
+        get_settings.cache_clear()
+        try:
+            with patch.object(storage, "DB_PATH", temp_db_path):
+                from starlette.testclient import TestClient
+                from jenkins_job_insight.main import app
+
+                with (
+                    TestClient(app) as client,
+                    patch("jenkins_job_insight.main.process_analysis_with_id"),
+                ):
+                    response = client.post(
+                        "/analyze",
+                        json=self._analyze_body(),
+                    )
+                    assert response.status_code == 202
+                    data = response.json()
+                    assert data["base_url"] == "https://myapp.example.com:8443"
+        finally:
+            os.environ.pop("PUBLIC_BASE_URL", None)
+            get_settings.cache_clear()
+
+    def test_base_url_empty_without_public_base_url(self, test_client) -> None:
+        """Without PUBLIC_BASE_URL, base_url is empty (relative paths)."""
         with patch("jenkins_job_insight.main.process_analysis_with_id"):
             response = test_client.post(
                 "/analyze",
-                json={"job_name": "test", "build_number": 1},
-                headers={
-                    "X-Forwarded-Proto": "https",
-                    "X-Forwarded-Host": "myapp.example.com",
-                },
-            )
-            assert response.status_code == 202
-            data = response.json()
-            assert data["base_url"] == "https://myapp.example.com"
-            assert data["result_url"].startswith("https://myapp.example.com/results/")
-
-    def test_base_url_from_forwarded_headers_with_port(self, test_client) -> None:
-        """Test base URL detection with forwarded host including port."""
-        with patch("jenkins_job_insight.main.process_analysis_with_id"):
-            response = test_client.post(
-                "/analyze",
-                json={"job_name": "test", "build_number": 1},
-                headers={
-                    "X-Forwarded-Proto": "https",
-                    "X-Forwarded-Host": "myapp.example.com:8443",
-                },
-            )
-            assert response.status_code == 202
-            data = response.json()
-            assert data["base_url"] == "https://myapp.example.com:8443"
-
-    def test_base_url_comma_separated_forwarded_headers(self, test_client) -> None:
-        """Test that only the first value is used from comma-separated forwarded headers."""
-        with patch("jenkins_job_insight.main.process_analysis_with_id"):
-            response = test_client.post(
-                "/analyze",
-                json={"job_name": "test", "build_number": 1},
-                headers={
-                    "X-Forwarded-Proto": "https, http",
-                    "X-Forwarded-Host": "external.example.com, internal.proxy",
-                },
-            )
-            assert response.status_code == 202
-            data = response.json()
-            assert data["base_url"] == "https://external.example.com"
-
-    def test_base_url_invalid_proto_defaults_to_https(self, test_client) -> None:
-        """Test that invalid X-Forwarded-Proto defaults to https."""
-        with patch("jenkins_job_insight.main.process_analysis_with_id"):
-            response = test_client.post(
-                "/analyze",
-                json={"job_name": "test", "build_number": 1},
-                headers={
-                    "X-Forwarded-Proto": "ftp",
-                    "X-Forwarded-Host": "myapp.example.com",
-                },
-            )
-            assert response.status_code == 202
-            data = response.json()
-            assert data["base_url"] == "https://myapp.example.com"
-
-    def test_base_url_invalid_forwarded_host_falls_back(self, test_client) -> None:
-        """Test that invalid X-Forwarded-Host (with special chars) falls back to Host header."""
-        with patch("jenkins_job_insight.main.process_analysis_with_id"):
-            response = test_client.post(
-                "/analyze",
-                json={"job_name": "test", "build_number": 1},
+                json=self._analyze_body(),
                 headers={
                     "X-Forwarded-Proto": "https",
                     "X-Forwarded-Host": "evil.com/<script>alert(1)</script>",
@@ -330,37 +277,27 @@ class TestBaseUrlDetection:
             )
             assert response.status_code == 202
             data = response.json()
-            # Should NOT contain the malicious host
-            assert "evil.com/<script>" not in data["base_url"]
-            # Should fall back to testserver
-            assert data["base_url"] == "http://testserver"
+            # Should NOT contain any host-derived URL
+            assert data["base_url"] == ""
+            assert data["result_url"].startswith("/results/")
 
-    def test_base_url_leading_dot_hostname_rejected(self, test_client) -> None:
-        """Test that leading dot in hostname is rejected by RFC-1123 validation."""
+    def test_base_url_ignores_forwarded_headers(self, test_client) -> None:
+        """Request headers are not trusted for building public URLs."""
         with patch("jenkins_job_insight.main.process_analysis_with_id"):
             response = test_client.post(
                 "/analyze",
-                json={"job_name": "test", "build_number": 1},
+                json=self._analyze_body(),
                 headers={
                     "X-Forwarded-Proto": "https",
-                    "X-Forwarded-Host": ".evil.com",
+                    "X-Forwarded-Host": "attacker.example.com",
+                    "X-Forwarded-Port": "443",
+                    "X-Forwarded-Prefix": "/hijacked",
                 },
             )
             assert response.status_code == 202
             data = response.json()
-            assert data["base_url"] == "http://testserver"
-
-    def test_base_url_default_from_host_header(self, test_client) -> None:
-        """Test base URL from Host header when no forwarded headers present."""
-        with patch("jenkins_job_insight.main.process_analysis_with_id"):
-            # TestClient always sends Host: testserver
-            response = test_client.post(
-                "/analyze",
-                json={"job_name": "test", "build_number": 1},
-            )
-            assert response.status_code == 202
-            data = response.json()
-            assert data["base_url"] == "http://testserver"
+            assert data["base_url"] == ""
+            assert data["result_url"].startswith("/results/")
 
 
 class TestAnalyzeFailuresEndpoint:
@@ -420,12 +357,8 @@ class TestAnalyzeFailuresEndpoint:
                     assert "job_id" in data
                     assert len(data["failures"]) == 1
                     assert data["failures"][0]["test_name"] == "test_foo"
-                    assert data["base_url"] == "http://testserver"
-                    assert data["result_url"].startswith("http://testserver/results/")
-                    assert data["html_report_url"].startswith(
-                        "http://testserver/results/"
-                    )
-                    assert data["html_report_url"].endswith(".html")
+                    assert data["base_url"] == ""
+                    assert data["result_url"].startswith("/results/")
 
     def test_analyze_failures_empty_failures(self, test_client) -> None:
         """Test that empty failures list returns 422 (validator rejects empty list without raw_xml)."""
@@ -905,8 +838,8 @@ class TestResultsEndpoints:
             assert response.status_code == 200
             data = response.json()
             assert data["job_id"] == "job-123"
-            assert data["base_url"] == "http://testserver"
-            assert data["result_url"] == "http://testserver/results/job-123"
+            assert data["base_url"] == ""
+            assert data["result_url"] == "/results/job-123"
 
     def test_get_result_not_found(self, test_client) -> None:
         """Test retrieving non-existent result returns 404."""
@@ -959,288 +892,6 @@ class TestResultsEndpoints:
         assert response.status_code == 200
         assert response.json() == []
 
-    def test_get_report_html(self, test_client) -> None:
-        """Test retrieving a saved HTML report."""
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = "<!DOCTYPE html><html><body>Report</body></html>"
-            response = test_client.get("/results/html-job-123.html")
-        assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/html")
-        assert "<!DOCTYPE html>" in response.text
-
-    def test_get_report_not_found(self, test_client) -> None:
-        """Test that missing HTML report returns 404."""
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get:
-            mock_get.return_value = None
-            response = test_client.get("/results/non-existent.html")
-        assert response.status_code == 404
-
-    def test_get_report_on_demand_generation(self, test_client) -> None:
-        """Test on-demand HTML generation when cache misses but completed result exists."""
-        stored_result = {
-            "job_id": "on-demand-job",
-            "status": "completed",
-            "result": {
-                "job_id": "on-demand-job",
-                "status": "completed",
-                "summary": "Analyzed 3 failures",
-                "ai_provider": "claude",
-                "ai_model": "test-model",
-                "failures": [
-                    {
-                        "test_name": "test_example",
-                        "error": "assert False",
-                        "analysis": {
-                            "classification": "CODE ISSUE",
-                            "details": "Test assertion failed",
-                        },
-                    }
-                ],
-            },
-            "created_at": "2026-01-01T00:00:00",
-        }
-
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get_html:
-            mock_get_html.return_value = None
-
-            with patch(
-                "jenkins_job_insight.main.get_result", new_callable=AsyncMock
-            ) as mock_get_result:
-                mock_get_result.return_value = stored_result
-
-                with patch(
-                    "jenkins_job_insight.main.format_result_as_html"
-                ) as mock_format:
-                    mock_format.return_value = (
-                        "<html><body>Generated Report</body></html>"
-                    )
-
-                    with patch(
-                        "jenkins_job_insight.main.save_html_report",
-                        new_callable=AsyncMock,
-                    ) as mock_save:
-                        response = test_client.get("/results/on-demand-job.html")
-
-                        assert response.status_code == 200
-                        assert response.headers["content-type"].startswith("text/html")
-                        assert "Generated Report" in response.text
-
-                        # Verify format_result_as_html was called with correct AnalysisResult
-                        mock_format.assert_called_once()
-                        analysis_arg = mock_format.call_args[0][0]
-                        assert analysis_arg.jenkins_url is None
-                        assert analysis_arg.job_name == "Direct Failure Analysis"
-                        assert analysis_arg.job_id == "on-demand-job"
-
-                        # Verify disk caching was attempted
-                        mock_save.assert_called_once_with(
-                            "on-demand-job",
-                            "<html><body>Generated Report</body></html>",
-                        )
-
-    def test_get_report_on_demand_generation_cache_failure(self, test_client) -> None:
-        """Test that disk cache failure does not prevent serving the generated report."""
-        stored_result = {
-            "job_id": "cache-fail-job",
-            "status": "completed",
-            "result": {
-                "job_id": "cache-fail-job",
-                "status": "completed",
-                "summary": "Analyzed 1 failure",
-                "ai_provider": "claude",
-                "ai_model": "test-model",
-                "failures": [
-                    {
-                        "test_name": "test_example",
-                        "error": "assert False",
-                        "analysis": {
-                            "classification": "CODE ISSUE",
-                            "details": "Test assertion failed",
-                        },
-                    }
-                ],
-            },
-            "created_at": "2026-01-01T00:00:00",
-        }
-
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get_html:
-            mock_get_html.return_value = None
-
-            with patch(
-                "jenkins_job_insight.main.get_result", new_callable=AsyncMock
-            ) as mock_get_result:
-                mock_get_result.return_value = stored_result
-
-                with patch(
-                    "jenkins_job_insight.main.format_result_as_html"
-                ) as mock_format:
-                    mock_format.return_value = "<html><body>Report</body></html>"
-
-                    with patch(
-                        "jenkins_job_insight.main.save_html_report",
-                        new_callable=AsyncMock,
-                        side_effect=OSError("Disk full"),
-                    ):
-                        response = test_client.get("/results/cache-fail-job.html")
-
-                        assert response.status_code == 200
-                        assert response.headers["content-type"].startswith("text/html")
-                        assert "Report" in response.text
-
-    def test_get_report_on_demand_generation_jenkins_path(self, test_client) -> None:
-        """Test on-demand HTML generation for Jenkins analysis results (with jenkins_url)."""
-        stored_result = {
-            "job_id": "jenkins-job",
-            "status": "completed",
-            "result": {
-                "job_id": "jenkins-job",
-                "job_name": "my-pipeline",
-                "build_number": 42,
-                "jenkins_url": "https://jenkins.example.com/job/my-pipeline/42/",
-                "status": "completed",
-                "summary": "Analyzed 2 failures",
-                "ai_provider": "claude",
-                "ai_model": "test-model",
-                "failures": [
-                    {
-                        "test_name": "test_example",
-                        "error": "assert False",
-                        "analysis": {
-                            "classification": "CODE ISSUE",
-                            "details": "Test assertion failed",
-                        },
-                    }
-                ],
-            },
-            "created_at": "2026-01-01T00:00:00",
-        }
-
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get_html:
-            mock_get_html.return_value = None
-
-            with patch(
-                "jenkins_job_insight.main.get_result", new_callable=AsyncMock
-            ) as mock_get_result:
-                mock_get_result.return_value = stored_result
-
-                with patch(
-                    "jenkins_job_insight.main.format_result_as_html"
-                ) as mock_format:
-                    mock_format.return_value = (
-                        "<html><body>Jenkins Report</body></html>"
-                    )
-
-                    with patch(
-                        "jenkins_job_insight.main.save_html_report",
-                        new_callable=AsyncMock,
-                    ) as mock_save:
-                        response = test_client.get("/results/jenkins-job.html")
-
-                        assert response.status_code == 200
-                        assert response.headers["content-type"].startswith("text/html")
-                        assert "Jenkins Report" in response.text
-
-                        # Verify format_result_as_html was called with AnalysisResult from model_validate path
-                        mock_format.assert_called_once()
-                        analysis_arg = mock_format.call_args[0][0]
-                        assert analysis_arg.jenkins_url is not None
-                        assert (
-                            str(analysis_arg.jenkins_url)
-                            == "https://jenkins.example.com/job/my-pipeline/42/"
-                        )
-                        assert analysis_arg.job_name == "my-pipeline"
-                        assert analysis_arg.build_number == 42
-
-                        # Verify disk caching was attempted
-                        mock_save.assert_called_once()
-
-    def test_get_report_refresh_forces_regeneration(self, test_client) -> None:
-        """Test that ?refresh=1 skips cache and regenerates the HTML report."""
-        stored_result = {
-            "job_id": "refresh-job",
-            "status": "completed",
-            "result": {
-                "job_id": "refresh-job",
-                "status": "completed",
-                "summary": "Analyzed 1 failure",
-                "ai_provider": "claude",
-                "ai_model": "test-model",
-                "failures": [
-                    {
-                        "test_name": "test_refresh",
-                        "error": "assert False",
-                        "analysis": {
-                            "classification": "CODE ISSUE",
-                            "details": "Assertion failed",
-                        },
-                    }
-                ],
-            },
-            "created_at": "2026-01-01T00:00:00",
-        }
-
-        cached_html = "<html><body>Cached Report v1</body></html>"
-        regenerated_html = "<html><body>Regenerated Report v2</body></html>"
-
-        # First request without refresh: serves the cached version
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get_html:
-            mock_get_html.return_value = cached_html
-            response = test_client.get("/results/refresh-job.html")
-            assert response.status_code == 200
-            assert "Cached Report v1" in response.text
-            mock_get_html.assert_called_once()
-
-        # Second request with ?refresh=1: bypasses cache and regenerates
-        with patch(
-            "jenkins_job_insight.main.get_html_report", new_callable=AsyncMock
-        ) as mock_get_html:
-            mock_get_html.return_value = cached_html
-
-            with patch(
-                "jenkins_job_insight.main.get_result", new_callable=AsyncMock
-            ) as mock_get_result:
-                mock_get_result.return_value = stored_result
-
-                with patch(
-                    "jenkins_job_insight.main.format_result_as_html"
-                ) as mock_format:
-                    mock_format.return_value = regenerated_html
-
-                    with patch(
-                        "jenkins_job_insight.main.save_html_report",
-                        new_callable=AsyncMock,
-                    ) as mock_save:
-                        response = test_client.get(
-                            "/results/refresh-job.html?refresh=1"
-                        )
-
-                        assert response.status_code == 200
-                        assert response.headers["content-type"].startswith("text/html")
-                        assert "Regenerated Report v2" in response.text
-
-                        # get_html_report should NOT have been called (cache skipped)
-                        mock_get_html.assert_not_called()
-
-                        # format_result_as_html should have been called to regenerate
-                        mock_format.assert_called_once()
-
-                        # The regenerated report should be saved to cache
-                        mock_save.assert_called_once_with(
-                            "refresh-job", regenerated_html
-                        )
-
     async def test_get_result_json_format_default(
         self, test_client, temp_db_path: Path
     ) -> None:
@@ -1257,31 +908,6 @@ class TestResultsEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["job_id"] == "json-job-456"
-
-    async def test_get_result_upgrades_legacy_relative_html_report_url(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that legacy relative html_report_url is upgraded to absolute."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="legacy-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="completed",
-                result={
-                    "summary": "Done",
-                    "html_report_url": "/results/legacy-job.html",
-                },
-            )
-
-            response = test_client.get("/results/legacy-job")
-            assert response.status_code == 200
-            data = response.json()
-            result_data = data.get("result", {})
-            assert (
-                result_data["html_report_url"]
-                == "http://testserver/results/legacy-job.html"
-            )
 
 
 class TestAppLifespan:
@@ -1317,258 +943,102 @@ class TestOpenAPISchema:
         assert response.status_code == 200
 
 
-class TestDashboardEndpoint:
-    """Tests for the GET /dashboard endpoint."""
+class TestSpaRoutes:
+    """Tests for the React SPA route handlers."""
 
-    def test_dashboard_returns_html(self, test_client) -> None:
-        """Test that GET /dashboard returns 200 with text/html content type."""
-        response = test_client.get("/dashboard")
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/dashboard",
+            "/register",
+            "/",
+            "/some/unknown/route",
+        ],
+    )
+    def test_spa_route_serves_spa_or_404(
+        self,
+        test_client,
+        path: str,
+    ) -> None:
+        response = test_client.get(path, follow_redirects=False)
+        assert response.status_code in (200, 404)
+
+
+class TestApiDashboardEndpoint:
+    """Tests for the GET /api/dashboard endpoint."""
+
+    def test_api_dashboard_returns_empty_list(self, test_client) -> None:
+        """Test that GET /api/dashboard returns an empty list when no jobs exist."""
+        response = test_client.get("/api/dashboard")
         assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/html")
+        data = response.json()
+        assert isinstance(data, list)
+        assert data == []
 
-    def test_dashboard_contains_title(self, test_client) -> None:
-        """Test that the dashboard HTML contains the application title."""
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        assert "Jenkins Job Insight" in response.text
-
-    def test_dashboard_empty_shows_message(self, test_client) -> None:
-        """Test that an empty dashboard shows the 'No analysis results yet' message."""
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        assert "No analysis results yet" in response.text
-
-    async def test_dashboard_shows_jobs(self, test_client, temp_db_path: Path) -> None:
-        """Test that stored jobs appear on the dashboard with links to HTML reports."""
+    @pytest.mark.parametrize("count", [3, 10])
+    async def test_api_dashboard_returns_seeded_jobs(
+        self, test_client, temp_db_path: Path, count: int
+    ) -> None:
+        """Test that GET /api/dashboard returns all seeded jobs."""
         with patch.object(storage, "DB_PATH", temp_db_path):
             await storage.init_db()
-            for i in range(3):
+            for i in range(count):
                 await storage.save_result(
-                    job_id=f"dash-job-{i}",
+                    job_id=f"api-dash-{count}-{i}",
                     jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
                     status="completed",
-                    result={
-                        "job_name": f"test-job-{i}",
-                        "build_number": i + 1,
-                        "failures": [{"test_name": "t"}] if i == 0 else [],
-                    },
                 )
 
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        html = response.text
-        for i in range(3):
-            assert f"dash-job-{i}" in html
-            assert f"/results/dash-job-{i}.html" in html
+            response = test_client.get("/api/dashboard")
+            assert response.status_code == 200
+            data = response.json()
+            assert isinstance(data, list)
+            assert len(data) == count
 
-    async def test_dashboard_links_open_new_tab(
+    def test_api_dashboard_calls_storage(self, test_client) -> None:
+        """Test that the endpoint delegates to list_results_for_dashboard."""
+        with patch(
+            "jenkins_job_insight.main.list_results_for_dashboard",
+            new_callable=AsyncMock,
+        ) as mock_list:
+            mock_list.return_value = []
+            response = test_client.get("/api/dashboard")
+            assert response.status_code == 200
+            mock_list.assert_called_once_with()
+
+    async def test_api_dashboard_includes_job_metadata(
         self, test_client, temp_db_path: Path
     ) -> None:
-        """Test that dashboard cards have target='_blank' for opening in new tabs."""
+        """Test that returned items include expected metadata fields."""
         with patch.object(storage, "DB_PATH", temp_db_path):
             await storage.init_db()
             await storage.save_result(
-                job_id="tab-test-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="completed",
-                result={"job_name": "tab-test", "failures": []},
-            )
-
-            response = test_client.get("/dashboard")
-            assert response.status_code == 200
-            assert 'target="_blank"' in response.text
-
-    async def test_dashboard_default_limit(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that the dashboard default limit returns up to 500 jobs."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            for i in range(10):
-                await storage.save_result(
-                    job_id=f"all-job-{i}",
-                    jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
-                    status="completed",
-                    result={"job_name": f"all-test-{i}", "failures": []},
-                )
-
-            response = test_client.get("/dashboard")
-            assert response.status_code == 200
-            html = response.text
-            # All 10 cards should be present (fewer than default limit of 500)
-            card_count = html.count('class="dashboard-card')
-            assert card_count == 10
-
-    async def test_dashboard_limit_parameter(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that ?limit=3 caps the number of job cards returned."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            for i in range(5):
-                await storage.save_result(
-                    job_id=f"lim-job-{i}",
-                    jenkins_url=f"https://jenkins.example.com/job/test/{i}/",
-                    status="completed",
-                    result={"job_name": f"lim-test-{i}", "failures": []},
-                )
-
-            response = test_client.get("/dashboard?limit=3")
-            assert response.status_code == 200
-            html = response.text
-            card_count = html.count('class="dashboard-card')
-            assert card_count == 3
-
-    def test_dashboard_limit_invalid_zero(self, test_client) -> None:
-        """Test that limit=0 returns a validation error."""
-        response = test_client.get("/dashboard?limit=0")
-        assert response.status_code == 422
-
-    def test_dashboard_limit_exceeds_max(self, test_client) -> None:
-        """Test that limit above the maximum returns a validation error."""
-        response = test_client.get("/dashboard?limit=99999")
-        assert response.status_code == 422
-
-    async def test_dashboard_completed_job_shows_passed_indicator(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that completed jobs with no failures show a passed indicator."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="passed-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="completed",
-                result={"job_name": "passing-job", "build_number": 1, "failures": []},
-            )
-
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        html = response.text
-        assert "result-passed" in html
-        assert "passed-badge" in html
-        assert "passed</span>" in html
-
-    async def test_dashboard_completed_job_shows_failure_indicator(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that completed jobs with failures show a failure indicator."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="failed-job",
+                job_id="api-dash-meta",
                 jenkins_url="https://jenkins.example.com/job/test/1/",
                 status="completed",
                 result={
-                    "job_name": "failing-job",
-                    "build_number": 1,
-                    "failures": [{"test_name": "test_one"}, {"test_name": "test_two"}],
-                },
-            )
-
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        html = response.text
-        assert "result-failures" in html
-        assert "has-failures" in html
-        assert "2 failures" in html
-
-    async def test_dashboard_counts_child_job_failures(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that failures from child job analyses are included in the total count."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="child-fail-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="completed",
-                result={
-                    "job_name": "pipeline-job",
-                    "build_number": 1,
-                    "failures": [{"test_name": "top_level_fail"}],
-                    "child_job_analyses": [
+                    "job_name": "my-pipeline",
+                    "build_number": 42,
+                    "failures": [
                         {
-                            "job_name": "child-1",
-                            "build_number": 1,
-                            "failures": [
-                                {"test_name": "child_fail_1"},
-                                {"test_name": "child_fail_2"},
-                            ],
-                            "failed_children": [],
+                            "test_name": "test_fail",
+                            "error": "assert False",
+                            "analysis": {"classification": "CODE ISSUE"},
                         }
                     ],
                 },
             )
 
-        response = test_client.get("/dashboard")
-        assert response.status_code == 200
-        html = response.text
-        assert "3 failures" in html
-        assert "result-failures" in html
-
-    async def test_dashboard_running_job_no_result_indicator(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that running jobs do not show pass/fail result indicators."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="running-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="running",
-            )
-
-            response = test_client.get("/dashboard")
+            response = test_client.get("/api/dashboard")
             assert response.status_code == 200
-            html = response.text
-            assert "dashboard-card result-passed" not in html
-            assert "dashboard-card result-failures" not in html
-            assert "card-result-icon passed" not in html
-            assert "card-result-icon has-failures" not in html
-
-    async def test_dashboard_shows_child_job_count(
-        self, test_client, temp_db_path: Path
-    ) -> None:
-        """Test that dashboard cards show the number of child jobs when present."""
-        with patch.object(storage, "DB_PATH", temp_db_path):
-            await storage.init_db()
-            await storage.save_result(
-                job_id="pipeline-job",
-                jenkins_url="https://jenkins.example.com/job/test/1/",
-                status="completed",
-                result={
-                    "job_name": "pipeline-job",
-                    "build_number": 1,
-                    "failures": [],
-                    "child_job_analyses": [
-                        {
-                            "job_name": "child-1",
-                            "build_number": 1,
-                            "failures": [],
-                            "failed_children": [],
-                        },
-                        {
-                            "job_name": "child-2",
-                            "build_number": 2,
-                            "failures": [],
-                            "failed_children": [],
-                        },
-                        {
-                            "job_name": "child-3",
-                            "build_number": 3,
-                            "failures": [],
-                            "failed_children": [],
-                        },
-                    ],
-                },
-            )
-
-            response = test_client.get("/dashboard")
-            assert response.status_code == 200
-            html = response.text
-            assert "child-jobs-badge" in html
-            assert "3 child jobs" in html
+            data = response.json()
+            assert len(data) == 1
+            item = data[0]
+            assert item["job_id"] == "api-dash-meta"
+            assert item["status"] == "completed"
+            assert "created_at" in item
+            assert item["job_name"] == "my-pipeline"
+            assert item["build_number"] == 42
 
 
 class TestFaviconEndpoint:
@@ -1698,15 +1168,22 @@ class TestReviewedEndpoint:
         await storage.save_result(
             "job-rev-1", "http://jenkins", "completed", result_data
         )
+        reviewer_name = "test-reviewer"
+        test_client.cookies.set("jji_username", reviewer_name)
         response = test_client.put(
             "/results/job-rev-1/reviewed",
             json={"test_name": "test_foo", "reviewed": True},
         )
         assert response.status_code == 200
+        put_data = response.json()
+        assert put_data["status"] == "ok"
+        assert put_data["reviewed_by"] == reviewer_name
         response = test_client.get("/results/job-rev-1/comments")
         data = response.json()
         assert "test_foo" in data["reviews"]
         assert data["reviews"]["test_foo"]["reviewed"] is True
+        assert data["reviews"]["test_foo"]["username"] == reviewer_name
+        test_client.cookies.clear()
 
     @pytest.mark.asyncio
     async def test_set_reviewed_nonexistent_job(self, test_client):
@@ -1753,16 +1230,24 @@ class TestReviewStatusEndpoint:
 
 class TestChildScopeValidation:
     @pytest.mark.asyncio
-    async def test_comment_child_job_without_build_number_rejected(self, test_client):
-        """child_job_name without child_build_number should be rejected (422)."""
+    async def test_comment_child_job_without_build_number_accepted(self, test_client):
+        """child_job_name with child_build_number=0 should be accepted and persisted."""
         result_data = {
             "status": "completed",
             "summary": "",
-            "failures": [
+            "failures": [],
+            "child_job_analyses": [
                 {
-                    "test_name": "test_foo",
-                    "error": "err",
-                    "analysis": {"classification": "CODE ISSUE"},
+                    "job_name": "child-1",
+                    "build_number": 5,
+                    "failures": [
+                        {
+                            "test_name": "test_foo",
+                            "error": "err",
+                            "analysis": {"classification": "CODE ISSUE"},
+                        }
+                    ],
+                    "failed_children": [],
                 }
             ],
         }
@@ -1774,10 +1259,21 @@ class TestChildScopeValidation:
             json={
                 "test_name": "test_foo",
                 "child_job_name": "child-1",
+                "child_build_number": 0,
                 "comment": "test",
             },
         )
-        assert response.status_code == 422
+        assert response.status_code == 201
+        # Verify the wildcard child scope round-tripped through storage
+        comments_resp = test_client.get("/results/job-val-1/comments")
+        stored_comments = comments_resp.json()["comments"]
+        matching = [
+            c
+            for c in stored_comments
+            if c["test_name"] == "test_foo" and c["child_job_name"] == "child-1"
+        ]
+        assert len(matching) == 1
+        assert matching[0]["child_build_number"] == 0
 
     @pytest.mark.asyncio
     async def test_comment_build_number_without_child_job_rejected(self, test_client):
@@ -1813,6 +1309,7 @@ class TestPreviewGithubIssue:
     @pytest.mark.asyncio
     async def test_preview_returns_title_and_body(self, test_client):
         """POST /results/{job_id}/preview-github-issue returns generated content."""
+
         result_data = {
             "status": "completed",
             "summary": "",
@@ -1830,19 +1327,26 @@ class TestPreviewGithubIssue:
         await storage.save_result(
             "job-preview-gh", "http://jenkins", "completed", result_data
         )
-        with patch(
-            "jenkins_job_insight.main.generate_github_issue_content"
-        ) as mock_gen:
-            mock_gen.return_value = {
-                "title": "Fix: login handler missing catch",
-                "body": "## Test Failure\n\nDetails...",
-            }
-            with patch("jenkins_job_insight.main.search_github_duplicates") as mock_dup:
-                mock_dup.return_value = []
-                response = test_client.post(
-                    "/results/job-preview-gh/preview-github-issue",
-                    json={"test_name": "test_login_success"},
-                )
+        with _enable_feature("github_issues_enabled"):
+            with patch(
+                "jenkins_job_insight.main.generate_github_issue_content"
+            ) as mock_gen:
+                mock_gen.return_value = {
+                    "title": "Fix: login handler missing catch",
+                    "body": "## Test Failure\n\nDetails...",
+                }
+                with patch(
+                    "jenkins_job_insight.main.search_github_duplicates"
+                ) as mock_dup:
+                    mock_dup.return_value = []
+                    response = test_client.post(
+                        "/results/job-preview-gh/preview-github-issue",
+                        json={
+                            "test_name": "test_login_success",
+                            "ai_provider": "claude",
+                            "ai_model": "opus",
+                        },
+                    )
         assert response.status_code == 200
         data = response.json()
         assert data["title"] == "Fix: login handler missing catch"
@@ -1850,15 +1354,32 @@ class TestPreviewGithubIssue:
         assert "similar_issues" in data
 
     @pytest.mark.asyncio
-    async def test_preview_not_found(self, test_client):
+    async def test_preview_disabled_returns_403(self, test_client):
+        """Preview returns 403 when GitHub issues are disabled."""
         response = test_client.post(
-            "/results/nonexistent/preview-github-issue",
-            json={"test_name": "tests.TestA.test_one"},
+            "/results/any-job/preview-github-issue",
+            json={"test_name": "test_foo", "ai_provider": "claude", "ai_model": "opus"},
         )
+        assert response.status_code == 403
+        assert "disabled" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_preview_not_found(self, test_client):
+
+        with _enable_feature("github_issues_enabled"):
+            response = test_client.post(
+                "/results/nonexistent/preview-github-issue",
+                json={
+                    "test_name": "tests.TestA.test_one",
+                    "ai_provider": "claude",
+                    "ai_model": "opus",
+                },
+            )
         assert response.status_code == 404
 
     @pytest.mark.asyncio
     async def test_preview_invalid_test(self, test_client):
+
         result_data = {
             "status": "completed",
             "summary": "",
@@ -1873,10 +1394,15 @@ class TestPreviewGithubIssue:
         await storage.save_result(
             "job-preview-gh-2", "http://jenkins", "completed", result_data
         )
-        response = test_client.post(
-            "/results/job-preview-gh-2/preview-github-issue",
-            json={"test_name": "nonexistent_test"},
-        )
+        with _enable_feature("github_issues_enabled"):
+            response = test_client.post(
+                "/results/job-preview-gh-2/preview-github-issue",
+                json={
+                    "test_name": "nonexistent_test",
+                    "ai_provider": "claude",
+                    "ai_model": "opus",
+                },
+            )
         assert response.status_code == 400
 
 
@@ -1885,6 +1411,7 @@ class TestPreviewJiraBug:
 
     @pytest.mark.asyncio
     async def test_preview_returns_title_and_body(self, test_client):
+
         result_data = {
             "status": "completed",
             "summary": "",
@@ -1902,21 +1429,40 @@ class TestPreviewJiraBug:
         await storage.save_result(
             "job-preview-jira", "http://jenkins", "completed", result_data
         )
-        with patch("jenkins_job_insight.main.generate_jira_bug_content") as mock_gen:
-            mock_gen.return_value = {
-                "title": "DNS timeout on internal resolver",
-                "body": "h2. Summary\n\nDNS resolution fails",
-            }
-            with patch("jenkins_job_insight.main.search_jira_duplicates") as mock_dup:
-                mock_dup.return_value = []
-                response = test_client.post(
-                    "/results/job-preview-jira/preview-jira-bug",
-                    json={"test_name": "test_login_success"},
-                )
+        with _enable_feature("jira_enabled"):
+            with patch(
+                "jenkins_job_insight.main.generate_jira_bug_content"
+            ) as mock_gen:
+                mock_gen.return_value = {
+                    "title": "DNS timeout on internal resolver",
+                    "body": "h2. Summary\n\nDNS resolution fails",
+                }
+                with patch(
+                    "jenkins_job_insight.main.search_jira_duplicates"
+                ) as mock_dup:
+                    mock_dup.return_value = []
+                    response = test_client.post(
+                        "/results/job-preview-jira/preview-jira-bug",
+                        json={
+                            "test_name": "test_login_success",
+                            "ai_provider": "claude",
+                            "ai_model": "opus",
+                        },
+                    )
         assert response.status_code == 200
         data = response.json()
         assert data["title"]
         assert data["body"]
+
+    @pytest.mark.asyncio
+    async def test_preview_disabled_returns_403(self, test_client):
+        """Preview returns 403 when Jira is disabled."""
+        response = test_client.post(
+            "/results/any-job/preview-jira-bug",
+            json={"test_name": "test_foo", "ai_provider": "claude", "ai_model": "opus"},
+        )
+        assert response.status_code == 403
+        assert "disabled" in response.json()["detail"].lower()
 
 
 class TestCreateGithubIssue:
@@ -1944,16 +1490,8 @@ class TestCreateGithubIssue:
                 "url": "https://github.com/org/repo/issues/99",
                 "number": 99,
             }
-            with patch.dict(
-                os.environ,
-                {
-                    "TESTS_REPO_URL": "https://github.com/org/repo",
-                    "GITHUB_TOKEN": "ghp_test",
-                },
-            ):
-                from jenkins_job_insight.config import get_settings
-
-                get_settings.cache_clear()
+            with _with_github_issue_config():
+                test_client.cookies.set("jji_username", "testuser")
                 response = test_client.post(
                     "/results/job-create-gh/create-github-issue",
                     json={
@@ -1962,15 +1500,21 @@ class TestCreateGithubIssue:
                         "body": "## Details\nLogin returns 500",
                     },
                 )
-                get_settings.cache_clear()
+                test_client.cookies.clear()
         assert response.status_code == 201
         data = response.json()
         assert "https://github.com" in data["url"]
         assert data["comment_id"] > 0
+        # Verify the auto-added tracker comment content and attribution
+        all_comments = await storage.get_comments_for_job("job-create-gh")
+        tracker_comment = next(c for c in all_comments if c["id"] == data["comment_id"])
+        assert "https://github.com/org/repo/issues/99" in tracker_comment["comment"]
+        assert "Bug: login fails" in tracker_comment["comment"]
+        assert tracker_comment["username"] == "testuser"
 
     @pytest.mark.asyncio
-    async def test_create_missing_config_returns_400(self, test_client):
-        """Creating a GitHub issue without TESTS_REPO_URL/GITHUB_TOKEN returns 400."""
+    async def test_create_disabled_returns_403(self, test_client):
+        """Creating a GitHub issue when disabled returns 403."""
         result_data = {
             "status": "completed",
             "summary": "",
@@ -1993,8 +1537,8 @@ class TestCreateGithubIssue:
                 "body": "Details",
             },
         )
-        assert response.status_code == 400
-        assert "TESTS_REPO_URL" in response.json()["detail"]
+        assert response.status_code == 403
+        assert "disabled" in response.json()["detail"].lower()
 
 
 class TestCreateJiraBug:
@@ -2002,8 +1546,6 @@ class TestCreateJiraBug:
 
     @pytest.mark.asyncio
     async def test_creates_bug_and_adds_comment(self, test_client):
-        from unittest.mock import PropertyMock
-        from jenkins_job_insight.config import Settings
 
         result_data = {
             "status": "completed",
@@ -2026,9 +1568,8 @@ class TestCreateJiraBug:
                 "url": "https://jira.example.com/browse/PROJ-456",
             }
             # Mock settings to have jira_enabled=True
-            with patch.object(
-                Settings, "jira_enabled", new_callable=PropertyMock, return_value=True
-            ):
+            with _enable_feature("jira_enabled"):
+                test_client.cookies.set("jji_username", "testuser")
                 response = test_client.post(
                     "/results/job-create-jira/create-jira-bug",
                     json={
@@ -2037,14 +1578,21 @@ class TestCreateJiraBug:
                         "body": "DNS resolution fails",
                     },
                 )
+                test_client.cookies.clear()
         assert response.status_code == 201
         data = response.json()
         assert data["key"] == "PROJ-456"
         assert data["comment_id"] > 0
+        # Verify the auto-added tracker comment content and attribution
+        all_comments = await storage.get_comments_for_job("job-create-jira")
+        tracker_comment = next(c for c in all_comments if c["id"] == data["comment_id"])
+        assert "PROJ-456" in tracker_comment["comment"]
+        assert "DNS timeout" in tracker_comment["comment"]
+        assert tracker_comment["username"] == "testuser"
 
     @pytest.mark.asyncio
-    async def test_create_jira_not_configured_returns_400(self, test_client):
-        """Creating a Jira bug without Jira configured returns 400."""
+    async def test_create_jira_disabled_returns_403(self, test_client):
+        """Creating a Jira bug when Jira is disabled returns 403."""
         result_data = {
             "status": "completed",
             "summary": "",
@@ -2067,7 +1615,8 @@ class TestCreateJiraBug:
                 "body": "Details",
             },
         )
-        assert response.status_code == 400
+        assert response.status_code == 403
+        assert "disabled" in response.json()["detail"].lower()
 
 
 class TestOverrideClassification:
@@ -2174,6 +1723,7 @@ class TestBugCreationIntegration:
     @pytest.mark.asyncio
     async def test_full_flow_github(self, test_client):
         """Test full flow: preview -> create -> verify comment."""
+
         result_data = {
             "status": "completed",
             "summary": "",
@@ -2193,6 +1743,7 @@ class TestBugCreationIntegration:
             patch("jenkins_job_insight.main.generate_github_issue_content") as mock_gen,
             patch("jenkins_job_insight.main.search_github_duplicates") as mock_dup,
             patch("jenkins_job_insight.main.create_github_issue") as mock_create,
+            _enable_feature("github_issues_enabled"),
         ):
             mock_gen.return_value = {"title": "Bug title", "body": "Bug body"}
             mock_dup.return_value = []
@@ -2204,21 +1755,16 @@ class TestBugCreationIntegration:
             # Preview
             preview_resp = test_client.post(
                 "/results/job-integ-gh/preview-github-issue",
-                json={"test_name": "test_login_success"},
+                json={
+                    "test_name": "test_login_success",
+                    "ai_provider": "claude",
+                    "ai_model": "opus",
+                },
             )
             assert preview_resp.status_code == 200
 
             # Create (need settings with TESTS_REPO_URL and GITHUB_TOKEN)
-            with patch.dict(
-                os.environ,
-                {
-                    "TESTS_REPO_URL": "https://github.com/org/repo",
-                    "GITHUB_TOKEN": "ghp_test",
-                },
-            ):
-                from jenkins_job_insight.config import get_settings
-
-                get_settings.cache_clear()
+            with _with_github_issue_config():
                 create_resp = test_client.post(
                     "/results/job-integ-gh/create-github-issue",
                     json={
@@ -2227,7 +1773,6 @@ class TestBugCreationIntegration:
                         "body": "Bug body",
                     },
                 )
-                get_settings.cache_clear()
             assert create_resp.status_code == 201
             data = create_resp.json()
             assert data["comment_id"] > 0
@@ -2268,6 +1813,8 @@ class TestBugCreationIntegration:
         # Verify the override persisted by fetching the result
         get_resp = test_client.get("/results/job-integ-override")
         assert get_resp.status_code == 200
+        failures = get_resp.json()["result"]["failures"]
+        assert failures[0]["analysis"]["classification"] == "CODE ISSUE"
 
 
 class TestCreateGithubIssueApiErrors:
@@ -2298,16 +1845,7 @@ class TestCreateGithubIssueApiErrors:
                 request=httpx.Request("POST", "https://api.github.com"),
                 response=httpx.Response(403),
             )
-            with patch.dict(
-                os.environ,
-                {
-                    "TESTS_REPO_URL": "https://github.com/org/repo",
-                    "GITHUB_TOKEN": "ghp_test",
-                },
-            ):
-                from jenkins_job_insight.config import get_settings
-
-                get_settings.cache_clear()
+            with _with_github_issue_config():
                 response = test_client.post(
                     "/results/job-gh-err/create-github-issue",
                     json={
@@ -2316,7 +1854,6 @@ class TestCreateGithubIssueApiErrors:
                         "body": "Details",
                     },
                 )
-                get_settings.cache_clear()
         assert response.status_code == 502
         assert "GitHub API error" in response.json()["detail"]
 
@@ -2344,16 +1881,7 @@ class TestCreateGithubIssueApiErrors:
                 "Connection refused",
                 request=httpx.Request("POST", "https://api.github.com"),
             )
-            with patch.dict(
-                os.environ,
-                {
-                    "TESTS_REPO_URL": "https://github.com/org/repo",
-                    "GITHUB_TOKEN": "ghp_test",
-                },
-            ):
-                from jenkins_job_insight.config import get_settings
-
-                get_settings.cache_clear()
+            with _with_github_issue_config():
                 response = test_client.post(
                     "/results/job-gh-net-err/create-github-issue",
                     json={
@@ -2362,7 +1890,6 @@ class TestCreateGithubIssueApiErrors:
                         "body": "Details",
                     },
                 )
-                get_settings.cache_clear()
         assert response.status_code == 502
         assert "GitHub API unreachable" in response.json()["detail"]
 
@@ -2374,8 +1901,6 @@ class TestCreateJiraBugApiErrors:
     async def test_jira_api_http_error_returns_502(self, test_client):
         """HTTPStatusError from Jira API should surface as 502."""
         import httpx
-        from unittest.mock import PropertyMock
-        from jenkins_job_insight.config import Settings
 
         result_data = {
             "status": "completed",
@@ -2397,9 +1922,7 @@ class TestCreateJiraBugApiErrors:
                 request=httpx.Request("POST", "https://jira.example.com"),
                 response=httpx.Response(403),
             )
-            with patch.object(
-                Settings, "jira_enabled", new_callable=PropertyMock, return_value=True
-            ):
+            with _enable_feature("jira_enabled"):
                 response = test_client.post(
                     "/results/job-jira-err/create-jira-bug",
                     json={
@@ -2415,8 +1938,6 @@ class TestCreateJiraBugApiErrors:
     async def test_jira_api_request_error_returns_502(self, test_client):
         """RequestError (network unreachable) from Jira should surface as 502."""
         import httpx
-        from unittest.mock import PropertyMock
-        from jenkins_job_insight.config import Settings
 
         result_data = {
             "status": "completed",
@@ -2437,9 +1958,7 @@ class TestCreateJiraBugApiErrors:
                 "Connection refused",
                 request=httpx.Request("POST", "https://jira.example.com"),
             )
-            with patch.object(
-                Settings, "jira_enabled", new_callable=PropertyMock, return_value=True
-            ):
+            with _enable_feature("jira_enabled"):
                 response = test_client.post(
                     "/results/job-jira-net-err/create-jira-bug",
                     json={
@@ -2501,11 +2020,830 @@ class TestHistoryEndpoints:
         assert isinstance(data["most_common_failures"], list)
         assert data["recent_trend"] in ("stable", "improving", "worsening")
 
+
+class TestClassifyEndpoint:
+    """Regression tests for POST /history/classify."""
+
     @pytest.mark.asyncio
-    async def test_get_trends(self, test_client) -> None:
-        """Test that /history/trends returns expected structure and values."""
-        response = test_client.get("/history/trends")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["period"] == "daily"
-        assert isinstance(data["data"], list)
+    async def test_classify_child_job_with_zero_build_number(self, test_client):
+        """Regression: job_name + child_build_number=0 must not raise and must persist."""
+        resp = test_client.post(
+            "/history/classify",
+            json={
+                "test_name": "some_test",
+                "classification": "FLAKY",
+                "job_name": "parent-job",
+                "child_build_number": 0,
+                "job_id": "job-classify-zero",
+            },
+        )
+        assert resp.status_code == 201
+        classification_id = resp.json()["id"]
+        assert classification_id is not None
+        assert isinstance(classification_id, int)
+        assert classification_id > 0
+        # Verify the wildcard scope was actually stored by reading the record back.
+        import aiosqlite
+
+        async with aiosqlite.connect(storage.DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT child_build_number FROM test_classifications WHERE id = ?",
+                (classification_id,),
+            )
+            row = await cursor.fetchone()
+        assert row is not None
+        assert row["child_build_number"] == 0
+
+    def test_classify_storage_value_error_returns_400(self, test_client, monkeypatch):
+        """ValueError from storage layer surfaces as 400."""
+
+        async def _boom(*args, **kwargs):
+            raise ValueError("bad value")
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.storage.set_test_classification", _boom
+        )
+        resp = test_client.post(
+            "/history/classify",
+            json={
+                "test_name": "t",
+                "classification": "FLAKY",
+                "job_id": "job-classify-err",
+            },
+        )
+        assert resp.status_code == 400
+        assert "bad value" in resp.json()["detail"]
+
+
+class TestWaitForJenkinsCompletion:
+    """Tests for the _wait_for_jenkins_completion function."""
+
+    @pytest.mark.asyncio
+    async def test_already_completed_returns_true(self) -> None:
+        """Job that is already finished returns True on first poll."""
+        with patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.return_value = {
+                "building": False,
+                "result": "SUCCESS",
+            }
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result, error = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=1,
+                jenkins_user="user",
+                jenkins_password=FAKE_JENKINS_PASSWORD,
+                jenkins_ssl_verify=True,
+                poll_interval_minutes=1,
+                max_wait_minutes=5,
+            )
+            assert result is True
+            assert error == ""
+            mock_client.get_build_info_safe.assert_called_once_with("my-job", 1)
+
+    @pytest.mark.asyncio
+    async def test_running_then_completed(self, fake_clock: tuple) -> None:
+        """Job that is running then completes returns True after polls."""
+        fake_monotonic, fake_sleep = fake_clock
+
+        with (
+            patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls,
+            patch("jenkins_job_insight.main.asyncio.sleep", side_effect=fake_sleep),
+            patch(
+                "jenkins_job_insight.main._time.monotonic", side_effect=fake_monotonic
+            ),
+        ):
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.side_effect = [
+                {"building": True},
+                {"building": True},
+                {"building": False, "result": "FAILURE"},
+            ]
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result, error = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=42,
+                jenkins_user="user",
+                jenkins_password=FAKE_JENKINS_PASSWORD,
+                jenkins_ssl_verify=False,
+                poll_interval_minutes=2,
+                max_wait_minutes=10,
+            )
+            assert result is True
+            assert error == ""
+            assert mock_client.get_build_info_safe.call_count == 3
+            # Verify JenkinsClient was constructed with the passed-through config
+            mock_cls.assert_called_once_with(
+                url="https://jenkins.example.com",
+                username="user",
+                password=FAKE_JENKINS_PASSWORD,
+                ssl_verify=False,
+            )
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_false(self, fake_clock: tuple) -> None:
+        """Job that never completes returns False after deadline."""
+        fake_monotonic, fake_sleep = fake_clock
+
+        with (
+            patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls,
+            patch("jenkins_job_insight.main.asyncio.sleep", side_effect=fake_sleep),
+            patch(
+                "jenkins_job_insight.main._time.monotonic", side_effect=fake_monotonic
+            ),
+        ):
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.return_value = {"building": True}
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result, error = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=1,
+                jenkins_user="user",
+                jenkins_password=FAKE_JENKINS_PASSWORD,
+                jenkins_ssl_verify=True,
+                poll_interval_minutes=2,
+                max_wait_minutes=6,
+            )
+            assert result is False
+            assert "Timed out" in error
+            assert "my-job" in error
+            assert "6 minutes" in error
+            # 6 min deadline with 2 min intervals: polls at t=0, 120, 240, 360
+            # then remaining=0 breaks the loop
+            assert mock_client.get_build_info_safe.call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_jenkins_error_continues_polling(self, fake_clock: tuple) -> None:
+        """Transient Jenkins errors do not stop polling."""
+        fake_monotonic, fake_sleep = fake_clock
+
+        with (
+            patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls,
+            patch("jenkins_job_insight.main.asyncio.sleep", side_effect=fake_sleep),
+            patch(
+                "jenkins_job_insight.main._time.monotonic", side_effect=fake_monotonic
+            ),
+        ):
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.side_effect = [
+                OSError("connection refused"),
+                {"building": False, "result": "SUCCESS"},
+            ]
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result, error = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=1,
+                jenkins_user="user",
+                jenkins_password=FAKE_JENKINS_PASSWORD,
+                jenkins_ssl_verify=True,
+                poll_interval_minutes=1,
+                max_wait_minutes=5,
+            )
+            assert result is True
+            assert error == ""
+
+    @pytest.mark.asyncio
+    async def test_non_transient_error_stops_polling(self) -> None:
+        """Non-transient errors (e.g. bad credentials) stop polling immediately."""
+        with patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.side_effect = ValueError("bad credentials")
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result, error = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=1,
+                jenkins_user="user",
+                jenkins_password=FAKE_JENKINS_PASSWORD,
+                jenkins_ssl_verify=True,
+                poll_interval_minutes=1,
+                max_wait_minutes=5,
+            )
+            assert result is False
+            assert "bad credentials" in error
+            mock_client.get_build_info_safe.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_job_not_found_returns_false_immediately(self) -> None:
+        """NotFoundException (404) is permanent and stops polling immediately."""
+        with patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls:
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.side_effect = jenkins.NotFoundException(
+                "job[my-job] does not exist"
+            )
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result, error = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=999,
+                jenkins_user="user",
+                jenkins_password=FAKE_JENKINS_PASSWORD,
+                jenkins_ssl_verify=True,
+                poll_interval_minutes=1,
+                max_wait_minutes=5,
+            )
+            assert result is False
+            assert "not found (404)" in error
+            assert "my-job" in error
+            assert "999" in error
+            # Should stop after the first call — no retries for 404
+            mock_client.get_build_info_safe.assert_called_once_with("my-job", 999)
+
+    @pytest.mark.asyncio
+    async def test_unlimited_wait_polls_until_complete(self) -> None:
+        """max_wait_minutes=0 polls indefinitely until job completes."""
+        with (
+            patch("jenkins_job_insight.jenkins.JenkinsClient") as mock_cls,
+            patch(
+                "jenkins_job_insight.main.asyncio.sleep", new_callable=AsyncMock
+            ) as mock_sleep,
+        ):
+            mock_client = mock_cls.return_value
+            mock_client.get_build_info_safe.side_effect = [
+                {"building": True},
+                {"building": True},
+                {"building": True},
+                {"building": False, "result": "SUCCESS"},
+            ]
+
+            from jenkins_job_insight.main import _wait_for_jenkins_completion
+
+            result, error = await _wait_for_jenkins_completion(
+                jenkins_url="https://jenkins.example.com",
+                job_name="my-job",
+                build_number=1,
+                jenkins_user="user",
+                jenkins_password=FAKE_JENKINS_PASSWORD,
+                jenkins_ssl_verify=True,
+                poll_interval_minutes=2,
+                max_wait_minutes=0,
+            )
+            assert result is True
+            assert error == ""
+            assert mock_client.get_build_info_safe.call_count == 4
+            assert mock_sleep.call_count == 3
+            mock_sleep.assert_called_with(120)  # 2 * 60
+
+
+class TestProcessAnalysisWaiting:
+    """Tests for the waiting logic in process_analysis_with_id."""
+
+    @pytest.mark.asyncio
+    async def test_wait_for_completion_true_waits(self) -> None:
+        """When wait_for_completion=True, sets status to 'waiting' and polls."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=True,
+            poll_interval_minutes=1,
+            max_wait_minutes=5,
+            ai_provider="claude",
+            ai_model="test-model",
+        )
+        merged = _build_wait_settings(
+            jenkins_url="https://jenkins.example.com",
+            jenkins_user="user",
+            jenkins_password=FAKE_JENKINS_PASSWORD,
+            wait_for_completion=True,
+            poll_interval_minutes=1,
+            max_wait_minutes=5,
+        )
+
+        statuses: list[str] = []
+
+        async def capture_status(job_id, status, result=None):
+            statuses.append(status)
+
+        with (
+            patch(
+                "jenkins_job_insight.main._wait_for_jenkins_completion",
+                new_callable=AsyncMock,
+                return_value=(True, ""),
+            ) as mock_wait,
+            patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+            patch("jenkins_job_insight.main._resolve_enable_jira", return_value=False),
+            patch(
+                "jenkins_job_insight.main.populate_failure_history",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_analyze.return_value = AnalysisResult(
+                job_id="test-id",
+                status="completed",
+                summary="ok",
+            )
+            await process_analysis_with_id("test-id", body, merged)
+            mock_wait.assert_called_once()
+            assert "waiting" in statuses
+            assert "running" in statuses
+
+    @pytest.mark.asyncio
+    async def test_wait_for_completion_false_skips_waiting(self) -> None:
+        """When wait_for_completion=False, skip waiting entirely."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=False,
+            ai_provider="claude",
+            ai_model="test-model",
+        )
+        merged = _build_wait_settings(
+            jenkins_url="https://jenkins.example.com",
+            wait_for_completion=False,
+        )
+
+        statuses: list[str] = []
+
+        async def capture_status(job_id, status, result=None):
+            statuses.append(status)
+
+        with (
+            patch(
+                "jenkins_job_insight.main._wait_for_jenkins_completion",
+                new_callable=AsyncMock,
+            ) as mock_wait,
+            patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+            patch("jenkins_job_insight.main._resolve_enable_jira", return_value=False),
+            patch(
+                "jenkins_job_insight.main.populate_failure_history",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_analyze.return_value = AnalysisResult(
+                job_id="test-id",
+                status="completed",
+                summary="ok",
+            )
+            await process_analysis_with_id("test-id", body, merged)
+            mock_wait.assert_not_called()
+            assert "waiting" not in statuses
+            assert "running" in statuses
+
+    @pytest.mark.asyncio
+    async def test_wait_timeout_marks_failed(self) -> None:
+        """When waiting times out, the job is marked as failed."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=True,
+            max_wait_minutes=10,
+            ai_provider="claude",
+            ai_model="test-model",
+        )
+        merged = _build_wait_settings(
+            jenkins_url="https://jenkins.example.com",
+            jenkins_user="user",
+            jenkins_password=FAKE_JENKINS_PASSWORD,
+            wait_for_completion=True,
+            poll_interval_minutes=1,
+            max_wait_minutes=10,
+        )
+
+        stored: list[tuple[str, dict | None]] = []
+
+        async def capture_status(job_id, status, result=None):
+            stored.append((status, result))
+
+        with (
+            patch(
+                "jenkins_job_insight.main._wait_for_jenkins_completion",
+                new_callable=AsyncMock,
+                return_value=(
+                    False,
+                    "Timed out waiting for Jenkins job my-job #1 after 10 minutes",
+                ),
+            ),
+            patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+        ):
+            await process_analysis_with_id("test-id", body, merged)
+            mock_analyze.assert_not_called()
+            # The last update should be a failed status with timeout error
+            last_status, last_result = stored[-1]
+            assert last_status == "failed"
+            assert last_result is not None
+            assert "Timed out" in last_result["error"]
+            assert "10 minutes" in last_result["error"]
+
+    @pytest.mark.asyncio
+    async def test_no_jenkins_url_skips_waiting(self) -> None:
+        """When jenkins_url is empty, skip waiting even if wait_for_completion=True."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=True,
+            ai_provider="claude",
+            ai_model="test-model",
+        )
+        settings = _build_wait_settings(
+            jenkins_url="",
+            wait_for_completion=True,
+            poll_interval_minutes=1,
+            max_wait_minutes=5,
+        )
+
+        statuses: list[str] = []
+
+        async def capture_status(job_id, status, result=None):
+            statuses.append(status)
+
+        with (
+            patch(
+                "jenkins_job_insight.main._wait_for_jenkins_completion",
+                new_callable=AsyncMock,
+            ) as mock_wait,
+            patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+            patch("jenkins_job_insight.main._resolve_enable_jira", return_value=False),
+            patch(
+                "jenkins_job_insight.main.populate_failure_history",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_analyze.return_value = AnalysisResult(
+                job_id="test-id",
+                status="completed",
+                summary="ok",
+            )
+            await process_analysis_with_id("test-id", body, settings)
+            mock_wait.assert_not_called()
+            assert "waiting" not in statuses
+            mock_analyze.assert_called_once()
+            assert "running" in statuses
+
+
+class TestBuildRequestParams:
+    """Tests for _build_request_params helper."""
+
+    def test_serializes_all_fields(self, mock_settings) -> None:
+        """All expected fields are present in the returned dict."""
+        from jenkins_job_insight.main import _build_request_params
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            ai_provider="gemini",
+            ai_model="gemini-pro",
+        )
+        settings = Settings()
+        params = _build_request_params(body, settings, "gemini", "gemini-pro")
+        assert params["ai_provider"] == "gemini"
+        assert params["ai_model"] == "gemini-pro"
+        assert "base_url" not in params
+        assert params["jenkins_url"] == settings.jenkins_url
+        assert params["wait_for_completion"] == settings.wait_for_completion
+        # SecretStr fields should be plain strings
+        assert isinstance(params["jira_api_token"], str)
+        assert isinstance(params["github_token"], str)
+
+    def test_secrets_are_encrypted(self, mock_settings) -> None:
+        """SecretStr values are encrypted, not stored as plaintext."""
+        from pydantic import SecretStr
+
+        from jenkins_job_insight.encryption import SENSITIVE_KEYS, _ENCRYPTED_PREFIX
+        from jenkins_job_insight.main import _build_request_params
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="j",
+            build_number=1,
+            github_token=FAKE_GITHUB_TOKEN,
+        )
+        settings = Settings()
+        merged_data = settings.model_dump(mode="python")
+        merged_data["github_token"] = SecretStr(FAKE_GITHUB_TOKEN)
+        merged = Settings.model_validate(merged_data)
+        params = _build_request_params(body, merged, "", "")
+        # Sensitive fields must carry the encryption prefix
+        for key in SENSITIVE_KEYS:
+            if params.get(key):
+                assert params[key].startswith(_ENCRYPTED_PREFIX)
+        # Specifically, the github_token must NOT be plaintext
+        assert params["github_token"] != FAKE_GITHUB_TOKEN
+        assert params["github_token"].startswith(_ENCRYPTED_PREFIX)
+
+
+class TestReconstructFromParams:
+    """Tests for _reconstruct_from_params helper."""
+
+    def test_reconstructs_body_and_settings(self, mock_settings) -> None:
+        """AnalyzeRequest and Settings are reconstructed from stored params.
+
+        Uses _build_request_params to produce the persisted payload, validating
+        the round-trip serializer/encryption contract.
+        """
+        from jenkins_job_insight.config import get_settings
+        from jenkins_job_insight.main import (
+            _build_request_params,
+            _merge_settings,
+            _reconstruct_from_params,
+        )
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        settings = get_settings()
+        body_in = AnalyzeRequest(
+            job_name="my-job",
+            build_number=42,
+            tests_repo_url="https://github.com/org/repo",
+            ai_provider="claude",
+            ai_model="opus",
+            wait_for_completion=True,
+            poll_interval_minutes=5,
+            max_wait_minutes=60,
+            enable_jira=False,
+        )
+        merged_in = _merge_settings(body_in, settings)
+        request_params = _build_request_params(body_in, merged_in, "claude", "opus")
+        result_data = {
+            "job_name": "my-job",
+            "build_number": 42,
+            "request_params": request_params,
+        }
+        body, merged = _reconstruct_from_params(result_data)
+        assert body.job_name == "my-job"
+        assert body.build_number == 42
+        assert str(body.tests_repo_url) == "https://github.com/org/repo"
+        assert body.ai_provider == "claude"
+        assert body.ai_model == "opus"
+        assert merged.wait_for_completion is True
+        assert merged.poll_interval_minutes == 5
+        assert merged.max_wait_minutes == 60
+        assert merged.jenkins_ssl_verify is True  # from settings default
+
+    def test_missing_optional_fields_use_defaults(self, mock_settings) -> None:
+        """Minimal request_params still produce valid objects."""
+        from jenkins_job_insight.main import _reconstruct_from_params
+
+        result_data = {
+            "job_name": "j",
+            "build_number": 1,
+            "request_params": {
+                "ai_provider": "gemini",
+                "ai_model": "m",
+            },
+        }
+        body, merged = _reconstruct_from_params(result_data)
+        assert body.job_name == "j"
+        assert merged.jenkins_url  # Falls back to env default
+
+
+class TestResumeWaitingJobs:
+    """Tests for _resume_waiting_jobs helper."""
+
+    async def test_resumes_valid_waiting_job(self, mock_settings) -> None:
+        """A waiting job with valid request_params spawns a background task."""
+        from jenkins_job_insight.config import get_settings
+        from jenkins_job_insight.main import _build_request_params, _resume_waiting_jobs
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        settings = get_settings()
+        body_in = AnalyzeRequest(
+            job_name="my-job",
+            build_number=10,
+            tests_repo_url="https://github.com/org/repo",
+            ai_provider="gemini",
+            ai_model="m",
+            wait_for_completion=True,
+            poll_interval_minutes=2,
+            max_wait_minutes=0,
+        )
+        request_params = _build_request_params(body_in, settings, "gemini", "m")
+        waiting_jobs = [
+            {
+                "job_id": "w-1",
+                "result_data": {
+                    "job_name": "my-job",
+                    "build_number": 10,
+                    "request_params": request_params,
+                },
+            }
+        ]
+        with patch(
+            "jenkins_job_insight.main.process_analysis_with_id",
+            new_callable=AsyncMock,
+        ) as mock_process:
+            await _resume_waiting_jobs(waiting_jobs)
+            # asyncio.create_task wraps the coroutine; give it a tick to start
+            import asyncio
+
+            await asyncio.sleep(0)
+            mock_process.assert_called_once()
+            call_args = mock_process.call_args
+            assert call_args[0][0] == "w-1"  # job_id
+            resumed_body = call_args[0][1]
+            assert str(resumed_body.tests_repo_url) == "https://github.com/org/repo"
+
+    async def test_marks_failed_when_no_request_params(
+        self, mock_settings, temp_db_path: Path
+    ) -> None:
+        """Waiting job without request_params is marked as failed."""
+        from jenkins_job_insight.main import _resume_waiting_jobs
+
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            await storage.save_result(
+                "w-old", "http://j/1", "waiting", {"job_name": "j", "build_number": 1}
+            )
+
+            waiting_jobs = [
+                {
+                    "job_id": "w-old",
+                    "result_data": {"job_name": "j", "build_number": 1},
+                }
+            ]
+            await _resume_waiting_jobs(waiting_jobs)
+
+            result = await storage.get_result("w-old")
+            assert result["status"] == "failed"
+            assert "no request_params" in result["result"]["error"]
+
+
+class TestLifespanResumesWaitingJobs:
+    """Tests for waiting job resumption during lifespan startup."""
+
+    @staticmethod
+    def _prepopulate_db(
+        db_path: Path, rows: list[tuple[str, str, str, str | None]]
+    ) -> None:
+        """Pre-populate the DB synchronously before lifespan runs.
+
+        Uses the production ``storage.init_db()`` to create the schema so
+        tests stay in sync with real startup behaviour, then inserts seed
+        rows via plain sqlite3.
+
+        Args:
+            db_path: Path to the SQLite database file.
+            rows: List of (job_id, jenkins_url, status, result_json) tuples.
+        """
+        import asyncio
+        import sqlite3
+
+        with patch.object(storage, "DB_PATH", db_path):
+            asyncio.run(storage.init_db())
+
+        conn = sqlite3.connect(str(db_path))
+        for job_id, jenkins_url, status, result_json in rows:
+            conn.execute(
+                "INSERT INTO results (job_id, jenkins_url, status, result_json) VALUES (?, ?, ?, ?)",
+                (job_id, jenkins_url, status, result_json),
+            )
+        conn.commit()
+        conn.close()
+
+    def test_lifespan_resumes_waiting_jobs(
+        self, mock_settings, temp_db_path: Path
+    ) -> None:
+        """Waiting jobs are resumed (not failed) when the app starts."""
+        import json
+
+        from jenkins_job_insight.config import get_settings
+        from jenkins_job_insight.main import _build_request_params
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        settings = get_settings()
+        body_in = AnalyzeRequest(
+            job_name="my-job",
+            build_number=5,
+            ai_provider="gemini",
+            ai_model="m",
+            wait_for_completion=True,
+            poll_interval_minutes=2,
+            max_wait_minutes=0,
+        )
+        request_params = _build_request_params(body_in, settings, "gemini", "m")
+        result_data = json.dumps(
+            {
+                "job_name": "my-job",
+                "build_number": 5,
+                "request_params": request_params,
+            }
+        )
+        self._prepopulate_db(
+            temp_db_path,
+            [
+                ("resume-1", "http://j/1", "waiting", result_data),
+            ],
+        )
+
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            with patch(
+                "jenkins_job_insight.main.process_analysis_with_id",
+                new_callable=AsyncMock,
+            ) as mock_process:
+                import threading
+
+                called_event = threading.Event()
+                original_side_effect = mock_process.side_effect
+
+                async def _signal_and_call(*args, **kwargs):
+                    called_event.set()
+                    if original_side_effect:
+                        return await original_side_effect(*args, **kwargs)
+
+                mock_process.side_effect = _signal_and_call
+                # Patch away the startup delay so the deferred task runs immediately
+                with patch(
+                    "jenkins_job_insight.main.asyncio.sleep", new_callable=AsyncMock
+                ):
+                    from starlette.testclient import TestClient
+                    from jenkins_job_insight.main import app
+
+                    with TestClient(app):
+                        called_event.wait(timeout=5)
+                    # The process_analysis_with_id should have been called via create_task
+                    assert mock_process.called
+                # Verify the waiting row was NOT flipped to failed during startup
+                import sqlite3
+
+                conn = sqlite3.connect(str(temp_db_path))
+                status = conn.execute(
+                    "SELECT status FROM results WHERE job_id = 'resume-1'"
+                ).fetchone()[0]
+                conn.close()
+                assert status == "waiting"
+
+    def test_lifespan_marks_pending_running_as_failed(
+        self, mock_settings, temp_db_path: Path
+    ) -> None:
+        """Pending and running jobs are marked failed; waiting jobs are not."""
+        import sqlite3
+
+        self._prepopulate_db(
+            temp_db_path,
+            [
+                ("p1", "http://j/1", "pending", None),
+                ("r1", "http://j/2", "running", None),
+            ],
+        )
+
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            from starlette.testclient import TestClient
+            from jenkins_job_insight.main import app
+
+            with TestClient(app):
+                pass
+
+            # Pending and running should be failed
+            conn = sqlite3.connect(str(temp_db_path))
+            conn.row_factory = sqlite3.Row
+            p1 = conn.execute(
+                "SELECT status FROM results WHERE job_id = 'p1'"
+            ).fetchone()
+            r1 = conn.execute(
+                "SELECT status FROM results WHERE job_id = 'r1'"
+            ).fetchone()
+            conn.close()
+            assert p1["status"] == "failed"
+            assert r1["status"] == "failed"

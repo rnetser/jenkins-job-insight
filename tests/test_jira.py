@@ -22,53 +22,59 @@ from jenkins_job_insight.models import (
 )
 
 
+_BASE_JIRA_ENV = {
+    "JENKINS_URL": "https://jenkins.example.com",
+    "JENKINS_USER": "testuser",
+    "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+}
+
+
+def _jira_settings_from_env(
+    extra_env: dict[str, str],
+) -> Generator[Settings, None, None]:
+    """Yield Settings built from the shared base env merged with *extra_env*."""
+    with patch.dict(os.environ, {**_BASE_JIRA_ENV, **extra_env}, clear=True):
+        yield Settings(_env_file=None)
+
+
 @pytest.fixture
 def jira_settings() -> Generator[Settings, None, None]:
     """Create Settings with Jira Cloud credentials."""
-    env = {
-        "JENKINS_URL": "https://jenkins.example.com",
-        "JENKINS_USER": "testuser",
-        "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
-        "JIRA_URL": "https://jira.example.com",
-        "JIRA_EMAIL": "user@example.com",
-        "JIRA_API_TOKEN": "test-token",
-        "JIRA_PROJECT_KEY": "PROJ",
-    }
-    with patch.dict(os.environ, env, clear=True):
-        yield Settings()
+    yield from _jira_settings_from_env(
+        {
+            "JIRA_URL": "https://jira.example.com",
+            "JIRA_EMAIL": "user@example.com",
+            "JIRA_API_TOKEN": "test-token",
+            "JIRA_PROJECT_KEY": "PROJ",
+        }
+    )
 
 
 @pytest.fixture
 def jira_server_settings() -> Generator[Settings, None, None]:
     """Create Settings with Jira Server/DC PAT credentials."""
-    env = {
-        "JENKINS_URL": "https://jenkins.example.com",
-        "JENKINS_USER": "testuser",
-        "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
-        "JIRA_URL": "https://jira-server.example.com",
-        "JIRA_PAT": "server-pat-token",
-    }
-    with patch.dict(os.environ, env, clear=True):
-        yield Settings()
+    yield from _jira_settings_from_env(
+        {
+            "JIRA_URL": "https://jira-server.example.com",
+            "JIRA_PAT": "server-pat-token",
+        }
+    )
 
 
 @pytest.fixture
 def jira_cloud_pat_settings() -> Generator[Settings, None, None]:
-    """Create Settings with Cloud API token stored in JIRA_PAT (no JIRA_API_TOKEN).
+    """Create Settings with JIRA_PAT + JIRA_EMAIL (no JIRA_API_TOKEN).
 
-    This is the common misconfiguration where users set JIRA_PAT with a
-    Cloud API token instead of using JIRA_API_TOKEN.
+    Even when email is present, PAT-only auth should resolve to Server/DC
+    mode to avoid sending a Bearer token down the Cloud Basic-auth path.
     """
-    env = {
-        "JENKINS_URL": "https://jenkins.example.com",
-        "JENKINS_USER": "testuser",
-        "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
-        "JIRA_URL": "https://myorg.atlassian.net",
-        "JIRA_EMAIL": "user@example.com",
-        "JIRA_PAT": "ATATT3xFfGF0AbM93-cloud-api-token",
-    }
-    with patch.dict(os.environ, env, clear=True):
-        yield Settings()
+    yield from _jira_settings_from_env(
+        {
+            "JIRA_URL": "https://myorg.atlassian.net",
+            "JIRA_EMAIL": "user@example.com",
+            "JIRA_PAT": "ATATT3xFfGF0AbM93-cloud-api-token",
+        }
+    )
 
 
 @pytest.fixture
@@ -191,29 +197,35 @@ class TestCollectProductBugReports:
 class TestJiraClient:
     """Tests for JiraClient."""
 
-    def test_cloud_auth_detection(self, jira_settings) -> None:
+    async def test_cloud_auth_detection(self, jira_settings) -> None:
         """Cloud credentials use email+token auth and API v3."""
-        client = JiraClient(jira_settings)
-        assert client._api_path == "/rest/api/3"
-        assert client._search_path == "/rest/api/3/search/jql"
-        assert client._auth is not None
+        async with JiraClient(jira_settings) as client:
+            assert client._api_path == "/rest/api/3"
+            assert client._search_path == "/rest/api/3/search/jql"
+            assert client._auth == ("user@example.com", "test-token")
+            assert client._headers == {}
 
-    def test_server_auth_detection(self, jira_server_settings) -> None:
+    async def test_server_auth_detection(self, jira_server_settings) -> None:
         """Server/DC credentials use PAT bearer token and API v2."""
-        client = JiraClient(jira_server_settings)
-        assert client._api_path == "/rest/api/2"
-        assert client._search_path == "/rest/api/2/search"
-        assert client._auth is None
-        assert "Bearer" in client._headers.get("Authorization", "")
+        async with JiraClient(jira_server_settings) as client:
+            assert client._api_path == "/rest/api/2"
+            assert client._search_path == "/rest/api/2/search"
+            assert client._auth is None
+            assert client._headers.get("Authorization") == "Bearer server-pat-token"
 
-    def test_cloud_pat_auth_detection(self, jira_cloud_pat_settings) -> None:
-        """Cloud API token in JIRA_PAT with email uses Cloud auth (Basic + v3)."""
-        client = JiraClient(jira_cloud_pat_settings)
-        assert client._api_path == "/rest/api/3"
-        assert client._search_path == "/rest/api/3/search/jql"
-        assert client._auth is not None
-        assert client._auth[0] == "user@example.com"
-        assert client._auth[1] == "ATATT3xFfGF0AbM93-cloud-api-token"
+    async def test_cloud_pat_auth_detection(self, jira_cloud_pat_settings) -> None:
+        """JIRA_PAT + JIRA_EMAIL resolves to Server/DC auth (Bearer + v2).
+
+        PAT should never promote to Cloud mode; only jira_api_token does.
+        """
+        async with JiraClient(jira_cloud_pat_settings) as client:
+            assert client._api_path == "/rest/api/2"
+            assert client._search_path == "/rest/api/2/search"
+            assert client._auth is None
+            assert (
+                client._headers.get("Authorization")
+                == "Bearer ATATT3xFfGF0AbM93-cloud-api-token"
+            )
 
     async def test_search_returns_candidates(self, jira_settings) -> None:
         """Search returns candidate dicts from API response."""
@@ -364,7 +376,7 @@ class TestEnrichWithJiraMatches:
             "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
         }
         with patch.dict(os.environ, env, clear=True):
-            settings = Settings()
+            settings = Settings(_env_file=None)
 
         await enrich_with_jira_matches([product_bug_failure], settings)
         assert product_bug_failure.analysis.product_bug_report.jira_matches == []

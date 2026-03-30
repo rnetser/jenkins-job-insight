@@ -337,10 +337,10 @@ Do not wrap in code blocks or JSON. Just the title on the first line, then the b
             return parsed
         logger.debug(
             "AI returned output but JSON parsing failed for GitHub issue, output=%s",
-            output[:500],
+            output,
         )
     else:
-        logger.debug("AI CLI call failed for GitHub issue: %s", output[:500])
+        logger.debug("AI CLI call failed for GitHub issue: %s", output)
 
     logger.warning(
         "AI content generation failed for GitHub issue, using fallback template"
@@ -453,10 +453,10 @@ Do not wrap in code blocks or JSON. Just the summary on the first line, then the
             return parsed
         logger.debug(
             "AI returned output but JSON parsing failed for Jira bug, output=%s",
-            output[:500],
+            output,
         )
     else:
-        logger.debug("AI CLI call failed for Jira bug: %s", output[:500])
+        logger.debug("AI CLI call failed for Jira bug: %s", output)
 
     logger.warning("AI content generation failed for Jira bug, using fallback template")
     return _build_fallback_jira_content(ctx, jenkins_url, report_url, include_links)
