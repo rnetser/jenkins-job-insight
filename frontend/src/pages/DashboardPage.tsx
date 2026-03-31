@@ -30,7 +30,12 @@ import { StatusChip } from '@/components/shared/StatusChip'
 import { SearchInput } from '@/components/shared/SearchInput'
 import { Pagination } from '@/components/shared/Pagination'
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
+import { SortableHeader, type SortDirection } from '@/components/shared/SortableHeader'
+import { useSessionState } from '@/lib/useSessionState'
 import { Trash2, MessageSquare, CheckCircle2, GitFork, AlertTriangle } from 'lucide-react'
+
+const STATUS_FILTER_ALL = 'ALL'
+const STATUS_FILTER_OPTIONS = [STATUS_FILTER_ALL, 'completed', 'running', 'waiting', 'pending', 'failed'] as const
 
 function MetricCell({ value, displayValue, icon, tone, tooltipText }: {
   value: number | null | undefined
@@ -94,6 +99,9 @@ export function DashboardPage() {
   const [jobs, setJobs] = useState<DashboardJob[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState(STATUS_FILTER_ALL)
+  const [sortKey, setSortKey] = useSessionState('dashboard-sortKey', 'created_at')
+  const [sortDir, setSortDir] = useSessionState<SortDirection>('dashboard-sortDir', 'desc')
   const [page, setPage] = useState(1)
   const [perPage, setPerPage] = useState(20)
   const [deleteTarget, setDeleteTarget] = useState<DashboardJob | null>(null)
@@ -130,20 +138,51 @@ export function DashboardPage() {
     const interval = setInterval(fetchJobs, 10_000)
     return () => clearInterval(interval)
   }, [fetchJobs])
-  useEffect(() => { setPage(1) }, [search, perPage])
+  useEffect(() => { setPage(1) }, [search, statusFilter, perPage])
 
   const filtered = useMemo(() => {
-    if (!search) return jobs
-    const q = search.toLowerCase()
     return jobs.filter((j) => {
-      const haystack = `${j.job_name ?? ''} ${j.job_id}`.toLowerCase()
-      return haystack.includes(q)
+      if (statusFilter !== STATUS_FILTER_ALL && j.status !== statusFilter) return false
+      if (search) {
+        const haystack = `${j.job_name ?? ''} ${j.job_id}`.toLowerCase()
+        if (!haystack.includes(search.toLowerCase())) return false
+      }
+      return true
     })
-  }, [jobs, search])
+  }, [jobs, search, statusFilter])
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage))
+  function handleSort(key: string) {
+    if (key === sortKey) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortKey(key)
+      setSortDir(key === 'created_at' ? 'desc' : 'asc')
+    }
+  }
+
+  const sorted = useMemo(() => {
+    const copy = [...filtered]
+    const dir = sortDir === 'asc' ? 1 : -1
+    copy.sort((a, b) => {
+      let cmp = 0
+      switch (sortKey) {
+        case 'job_name': cmp = (a.job_name ?? '').localeCompare(b.job_name ?? ''); break
+        case 'status': cmp = a.status.localeCompare(b.status); break
+        case 'failure_count': cmp = (a.failure_count ?? 0) - (b.failure_count ?? 0); break
+        case 'reviewed_count': cmp = a.reviewed_count - b.reviewed_count; break
+        case 'comment_count': cmp = a.comment_count - b.comment_count; break
+        case 'child_job_count': cmp = (a.child_job_count ?? 0) - (b.child_job_count ?? 0); break
+        case 'created_at': cmp = a.created_at.localeCompare(b.created_at); break
+        default: cmp = 0
+      }
+      return cmp * dir
+    })
+    return copy
+  }, [filtered, sortKey, sortDir])
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / perPage))
   const safePage = Math.min(page, totalPages)
-  const pageJobs = filtered.slice((safePage - 1) * perPage, safePage * perPage)
+  const pageJobs = sorted.slice((safePage - 1) * perPage, safePage * perPage)
 
   useEffect(() => {
     if (page !== safePage) setPage(safePage)
@@ -187,6 +226,18 @@ export function DashboardPage() {
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <SearchInput value={search} onChange={setSearch} placeholder="Filter jobs..." className="w-full sm:w-64" />
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger aria-label="Filter by status" className="w-full sm:w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {STATUS_FILTER_OPTIONS.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s === STATUS_FILTER_ALL ? 'All statuses' : s}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Select value={String(perPage)} onValueChange={(v) => setPerPage(Number(v))}>
               <SelectTrigger aria-label="Rows per page" className="w-full sm:w-20">
                 <SelectValue />
@@ -224,13 +275,13 @@ export function DashboardPage() {
           <Table>
             <TableHeader>
               <TableRow className="bg-surface-card hover:bg-surface-card">
-                <TableHead className="w-[40%]">Job</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-center">Failures</TableHead>
-                <TableHead className="text-center">Reviewed</TableHead>
-                <TableHead className="text-center">Comments</TableHead>
-                <TableHead className="text-center">Children</TableHead>
-                <TableHead className="text-right">Created</TableHead>
+                <SortableHeader label="Job" sortKey="job_name" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="w-[40%]" />
+                <SortableHeader label="Status" sortKey="status" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} />
+                <SortableHeader label="Failures" sortKey="failure_count" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-center" />
+                <SortableHeader label="Reviewed" sortKey="reviewed_count" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-center" />
+                <SortableHeader label="Comments" sortKey="comment_count" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-center" />
+                <SortableHeader label="Children" sortKey="child_job_count" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-center" />
+                <SortableHeader label="Created" sortKey="created_at" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-right" />
                 <TableHead className="w-10">
                   <span className="sr-only">Actions</span>
                 </TableHead>
