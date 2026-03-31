@@ -21,8 +21,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SearchInput } from '@/components/shared/SearchInput'
 import { Pagination } from '@/components/shared/Pagination'
 import { ClassificationBadge } from '@/components/shared/ClassificationBadge'
-import { SortableHeader, type SortDirection } from '@/components/shared/SortableHeader'
-import { useSessionState } from '@/lib/useSessionState'
+import { SortableHeader } from '@/components/shared/SortableHeader'
+import { useTableSort } from '@/lib/useTableSort'
 import { CLASSIFICATIONS } from '@/constants/classifications'
 
 const CLASSIFICATION_FILTER_OPTIONS = ['ALL', ...CLASSIFICATIONS] as const
@@ -58,8 +58,7 @@ function FailureHistoryTab() {
   const [inputValue, setInputValue] = useState('')
   const [search, setSearch] = useState('')
   const [classification, setClassification] = useState('ALL')
-  const [sortKey, setSortKey] = useSessionState('history-sortKey', 'analyzed_at')
-  const [sortDir, setSortDir] = useSessionState<SortDirection>('history-sortDir', 'desc')
+  const { sortKey, sortDir, handleSort } = useTableSort('hist', 'analyzed_at', 'desc', ['analyzed_at'])
   const [page, setPage] = useState(1)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null)
   const requestSeqRef = useRef(0)
@@ -134,15 +133,8 @@ function FailureHistoryTab() {
     setPage(1)
   }
 
-  function handleSort(key: string) {
-    if (key === sortKey) {
-      setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortKey(key)
-      setSortDir(key === 'analyzed_at' ? 'desc' : 'asc')
-    }
-  }
-
+  // Client-side sort applies to the current page only. Server-side sorting
+  // would require adding sort_key/sort_dir query params to the API.
   const sorted = useMemo(() => {
     const copy = [...data]
     const dir = sortDir === 'asc' ? 1 : -1
