@@ -39,8 +39,19 @@ from jenkins_job_insight.models import (
     TestFailure,
 )
 from jenkins_job_insight.repository import RepositoryManager
+from jenkins_job_insight.storage import update_progress_phase
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+
+
+async def _safe_update_progress(job_id: str | None, phase: str) -> None:
+    """Best-effort progress update; failures are swallowed and logged."""
+    if not job_id:
+        return
+    try:
+        await update_progress_phase(job_id, phase)
+    except Exception:
+        logger.debug("Failed to update progress phase", exc_info=True)
 
 
 def format_exception_with_type(exc: Exception) -> str:
@@ -833,43 +844,39 @@ def _build_resources_section(
     return ""
 
 
-async def analyze_failure_group(
+async def _run_single_ai_analysis(
+    *,
     failures: list[TestFailure],
     console_context: str,
     repo_path: Path | None,
-    ai_provider: str = "",
-    ai_model: str = "",
-    ai_cli_timeout: int | None = None,
-    custom_prompt: str = "",
-    artifacts_context: str = "",
-    server_url: str = "",
-    job_id: str = "",
-) -> list[FailureAnalysis]:
-    """Analyze a group of failures with the same error signature.
+    ai_provider: str,
+    ai_model: str,
+    ai_cli_timeout: int | None,
+    custom_prompt: str,
+    artifacts_context: str,
+    server_url: str,
+    job_id: str,
+) -> tuple[AnalysisDetail, str]:
+    """Run single-AI analysis on a failure group. Returns (parsed_analysis, error_signature).
 
-    Only calls Claude CLI once for the group, then applies the analysis
-    to all failures in the group.
+    Shared by both single-AI and peer analysis paths. Builds the orchestrator
+    prompt, calls the AI CLI, and parses the response.
 
     Args:
         failures: List of test failures with the same error signature.
         console_context: Relevant console lines for context.
         repo_path: Path to cloned test repo (optional).
-        ai_provider: AI provider to use.
-        ai_model: AI model to use.
-        ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
-        custom_prompt: Additional instructions from request payload (raw_prompt).
-        artifacts_context: Jenkins artifacts context for AI analysis (optional).
+        ai_provider: AI provider name.
+        ai_model: AI model identifier.
+        ai_cli_timeout: Timeout in minutes for the CLI process.
+        custom_prompt: Additional user instructions.
+        artifacts_context: Jenkins artifacts context.
         server_url: Base URL of this server for AI history API access.
         job_id: Current job ID to exclude from history queries.
 
     Returns:
-        List of FailureAnalysis objects, one per failure in the group.
+        Tuple of (parsed AnalysisDetail, error_signature string).
     """
-    logger.debug(
-        f"analyze_failure_group called with server_url='{server_url}', job_id='{job_id}'"
-    )
-
-    # Use the first failure as representative
     representative = failures[0]
     error_signature = get_failure_signature(representative)
     test_names = [f.test_name for f in failures]
@@ -929,19 +936,101 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
         cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
     )
 
-    # Parse the AI response into structured data
     if success:
         parsed = _parse_json_response(analysis_output)
     else:
         parsed = AnalysisDetail(details=analysis_output)
 
-    # Apply the same analysis to all failures in the group
+    return parsed, error_signature
+
+
+async def analyze_failure_group(
+    failures: list[TestFailure],
+    console_context: str,
+    repo_path: Path | None,
+    ai_provider: str = "",
+    ai_model: str = "",
+    ai_cli_timeout: int | None = None,
+    custom_prompt: str = "",
+    artifacts_context: str = "",
+    server_url: str = "",
+    job_id: str = "",
+    peer_ai_configs: list | None = None,
+    peer_analysis_max_rounds: int = 3,
+    group_label: str = "",
+) -> list[FailureAnalysis]:
+    """Analyze a group of failures with the same error signature.
+
+    Only calls Claude CLI once for the group, then applies the analysis
+    to all failures in the group.
+
+    Args:
+        failures: List of test failures with the same error signature.
+        console_context: Relevant console lines for context.
+        repo_path: Path to cloned test repo (optional).
+        ai_provider: AI provider to use.
+        ai_model: AI model to use.
+        ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
+        custom_prompt: Additional instructions from request payload (raw_prompt).
+        artifacts_context: Jenkins artifacts context for AI analysis (optional).
+        server_url: Base URL of this server for AI history API access.
+        job_id: Current job ID to exclude from history queries.
+        group_label: Human-readable label identifying which failure group is
+            being analyzed (e.g. ``"2/3"``). Forwarded to peer analysis for
+            progress phase disambiguation.
+
+    Returns:
+        List of FailureAnalysis objects, one per failure in the group.
+    """
+    logger.debug(
+        f"analyze_failure_group called with server_url='{server_url}', job_id='{job_id}'"
+    )
+
+    if peer_ai_configs:
+        from jenkins_job_insight.models import AiConfigEntry
+        from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
+
+        configs = [
+            AiConfigEntry(**c) if isinstance(c, dict) else c for c in peer_ai_configs
+        ]
+        return await analyze_failure_group_with_peers(
+            failures=failures,
+            console_context=console_context,
+            repo_path=repo_path,
+            main_ai_provider=ai_provider,
+            main_ai_model=ai_model,
+            peer_ai_configs=configs,
+            max_rounds=peer_analysis_max_rounds,
+            ai_cli_timeout=ai_cli_timeout,
+            custom_prompt=custom_prompt,
+            artifacts_context=artifacts_context,
+            server_url=server_url,
+            job_id=job_id,
+            group_label=group_label,
+        )
+
+    parsed, error_signature = await _run_single_ai_analysis(
+        failures=failures,
+        console_context=console_context,
+        repo_path=repo_path,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        ai_cli_timeout=ai_cli_timeout,
+        custom_prompt=custom_prompt,
+        artifacts_context=artifacts_context,
+        server_url=server_url,
+        job_id=job_id,
+    )
+
+    # Apply the same analysis to all failures in the group.
+    # All failures share the same signature (that's how they were grouped),
+    # so reuse the already-computed value instead of calling get_failure_signature() again.
     return [
         FailureAnalysis(
             test_name=f.test_name,
             error=f.error_message,
             analysis=parsed,
-            error_signature=get_failure_signature(f),
+            error_signature=error_signature,
         )
         for f in failures
     ]
@@ -962,6 +1051,8 @@ async def analyze_child_job(
     artifacts_context: str = "",
     server_url: str = "",
     job_id: str = "",
+    peer_ai_configs: list | None = None,
+    peer_analysis_max_rounds: int = 3,
 ) -> ChildJobAnalysis:
     """Analyze a single child job, recursively analyzing its failed children.
 
@@ -1050,6 +1141,8 @@ async def analyze_child_job(
                 artifacts_context="",
                 server_url=server_url,
                 job_id=job_id,
+                peer_ai_configs=peer_ai_configs,
+                peer_analysis_max_rounds=peer_analysis_max_rounds,
             )
             for child_name, child_num in failed_children
         ]
@@ -1114,8 +1207,9 @@ async def analyze_child_job(
         )
 
         # Analyze each unique failure group in parallel
+        total_groups = len(failure_groups)
         tasks = []
-        for sig, group in failure_groups.items():
+        for group_idx, (_sig, group) in enumerate(failure_groups.items(), 1):
             tasks.append(
                 analyze_failure_group(
                     failures=group,
@@ -1128,6 +1222,11 @@ async def analyze_child_job(
                     artifacts_context=artifacts_context,
                     server_url=server_url,
                     job_id=job_id,
+                    peer_ai_configs=peer_ai_configs,
+                    peer_analysis_max_rounds=peer_analysis_max_rounds,
+                    group_label=f"{job_name}:{group_idx}/{total_groups}"
+                    if total_groups > 1
+                    else "",
                 )
             )
         group_results = await run_parallel_with_limit(tasks)
@@ -1174,6 +1273,11 @@ async def analyze_child_job(
         )
 
     # No structured test failures - fall back to single Claude CLI analysis of console output
+    if peer_ai_configs:
+        logger.warning(
+            "Peer analysis not supported for console-only failures (no test report)"
+        )
+
     custom_prompt_section, artifacts_section, resources_section, query_section = (
         _build_prompt_sections(
             custom_prompt, artifacts_context, repo_path, server_url, job_id
@@ -1231,8 +1335,13 @@ async def analyze_job(
     ai_model: str,
     job_id: str | None = None,
     server_url: str = "",
+    peer_ai_configs: list | None = None,
+    peer_analysis_max_rounds: int = 3,
 ) -> AnalysisResult:
     """Analyze a Jenkins job failure."""
+    # Track whether the caller supplied a persisted job_id so we only
+    # issue progress-phase writes for jobs that actually exist in the DB.
+    progress_job_id = job_id
     if job_id is None:
         job_id = str(uuid.uuid4())
 
@@ -1380,6 +1489,7 @@ async def analyze_job(
 
             # Analyze failed child jobs IN PARALLEL with bounded concurrency
             if failed_child_jobs:
+                await _safe_update_progress(progress_job_id, "analyzing_child_jobs")
                 child_tasks = [
                     analyze_child_job(
                         job_name=child_name,
@@ -1396,6 +1506,8 @@ async def analyze_job(
                         artifacts_context="",
                         server_url=server_url,
                         job_id=job_id,
+                        peer_ai_configs=peer_ai_configs,
+                        peer_analysis_max_rounds=peer_analysis_max_rounds,
                     )
                     for child_name, child_num in failed_child_jobs
                 ]
@@ -1457,6 +1569,7 @@ async def analyze_job(
             # Analyze main job test failures, grouping by signature to deduplicate
             unique_errors = 0
             if test_failures:
+                await _safe_update_progress(progress_job_id, "analyzing_failures")
                 # Group failures by signature to avoid analyzing identical errors multiple times
                 failure_groups: dict[str, list[TestFailure]] = defaultdict(list)
                 for tf in test_failures:
@@ -1469,8 +1582,9 @@ async def analyze_job(
                 )
 
                 # Analyze each unique failure group in parallel
+                total_groups = len(failure_groups)
                 failure_tasks = []
-                for sig, group in failure_groups.items():
+                for group_idx, (_sig, group) in enumerate(failure_groups.items(), 1):
                     failure_tasks.append(
                         analyze_failure_group(
                             failures=group,
@@ -1483,6 +1597,11 @@ async def analyze_job(
                             artifacts_context=artifacts_context,
                             server_url=server_url,
                             job_id=job_id,
+                            peer_ai_configs=peer_ai_configs,
+                            peer_analysis_max_rounds=peer_analysis_max_rounds,
+                            group_label=f"{group_idx}/{total_groups}"
+                            if total_groups > 1
+                            else "",
                         )
                     )
                 group_results = await run_parallel_with_limit(failure_tasks)
@@ -1508,6 +1627,11 @@ async def analyze_job(
                         failures.extend(result)
             else:
                 # No structured test failures - fall back to single Claude CLI analysis
+                if peer_ai_configs:
+                    logger.warning(
+                        "Peer analysis not supported for console-only failures (no test report)"
+                    )
+
                 (
                     custom_prompt_section,
                     artifacts_section,

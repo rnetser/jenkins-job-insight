@@ -13,6 +13,23 @@ from pydantic import (
 )
 
 
+class AiConfigEntry(BaseModel):
+    """Single AI provider/model configuration for peer analysis."""
+
+    ai_provider: Literal["claude", "gemini", "cursor"] = Field(
+        description="AI provider"
+    )
+    ai_model: str = Field(min_length=1, description="AI model identifier")
+
+    @field_validator("ai_model")
+    @classmethod
+    def ai_model_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("ai_model must not be blank")
+        return v
+
+
 class BaseAnalysisRequest(BaseModel):
     """Shared fields for all analysis request types."""
 
@@ -74,6 +91,18 @@ class BaseAnalysisRequest(BaseModel):
         default=None,
         description="GitHub API token for private repo PR status in comments (overrides GITHUB_TOKEN env var)",
         json_schema_extra={"format": "password"},
+    )
+    peer_ai_configs: list[AiConfigEntry] | None = Field(
+        default=None,
+        description=(
+            "List of peer AI configs for consensus analysis. "
+            "Omit to inherit the server default; send [] to disable peer analysis "
+            "for this request. Each peer reviews the main AI's analysis."
+        ),
+    )
+    peer_analysis_max_rounds: Annotated[int, Field(ge=1, le=10)] = Field(
+        default=3,
+        description="Maximum debate rounds for peer analysis",
     )
 
 
@@ -216,6 +245,30 @@ class AnalysisDetail(BaseModel):
         return d
 
 
+class PeerRound(BaseModel):
+    """One participant's contribution in a single debate round."""
+
+    round: int  # Debate round number (1-indexed)
+    ai_provider: str
+    ai_model: str
+    role: Literal["orchestrator", "peer"]
+    classification: str
+    details: str
+    agrees_with_orchestrator: bool | None = (
+        None  # None = failed/excluded from consensus
+    )
+
+
+class PeerDebate(BaseModel):
+    """Full debate trail for a peer-analyzed failure group."""
+
+    consensus_reached: bool
+    rounds_used: int
+    max_rounds: int
+    ai_configs: list[AiConfigEntry]
+    rounds: list[PeerRound]
+
+
 class FailureAnalysis(BaseModel):
     """Analysis result for a single test failure."""
 
@@ -225,6 +278,10 @@ class FailureAnalysis(BaseModel):
     error_signature: str = Field(
         default="",
         description="SHA-256 hash of error + stack trace for deduplication",
+    )
+    peer_debate: PeerDebate | None = Field(
+        default=None,
+        description="Peer debate trail (present only when peer analysis was used)",
     )
 
     @field_validator("analysis", mode="before")

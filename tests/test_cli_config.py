@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from jenkins_job_insight.cli.config import (
     ServerConfig,
+    _server_config_from_dict,
     get_default_server_name,
     get_server_config,
     list_servers,
@@ -678,3 +679,56 @@ class TestGlobalDefaults:
         assert cfg.url == "http://a"
         assert cfg.jenkins_url == ""
         assert cfg.ai_provider == ""
+
+
+# -- _server_config_from_dict type validation ---------------------------------
+
+
+class TestServerConfigFromDictTypeValidation:
+    """Type validation for peer-analysis fields in _server_config_from_dict."""
+
+    def test_peers_non_string_raises(self) -> None:
+        """Non-string 'peers' value raises ValueError."""
+        data = {"url": "http://test", "peers": 42}
+        with pytest.raises(ValueError, match=r"peers.*must be a string"):
+            _server_config_from_dict(data)
+
+    def test_peers_none_defaults_to_empty(self) -> None:
+        """None 'peers' value defaults to empty string."""
+        data = {"url": "http://test", "peers": None}
+        cfg = _server_config_from_dict(data)
+        assert cfg.peers == ""
+
+    def test_peers_valid_string_accepted(self) -> None:
+        """Valid string 'peers' passes through."""
+        data = {"url": "http://test", "peers": "claude:opus,gemini:pro"}
+        cfg = _server_config_from_dict(data)
+        assert cfg.peers == "claude:opus,gemini:pro"
+
+    def test_peer_analysis_max_rounds_non_int_raises(self) -> None:
+        """Non-int 'peer_analysis_max_rounds' raises ValueError."""
+        data = {"url": "http://test", "peer_analysis_max_rounds": "five"}
+        with pytest.raises(
+            ValueError, match=r"peer_analysis_max_rounds.*must be an integer"
+        ):
+            _server_config_from_dict(data)
+
+    def test_peer_analysis_max_rounds_bool_raises(self) -> None:
+        """Boolean 'peer_analysis_max_rounds' raises ValueError (bool is subclass of int)."""
+        data = {"url": "http://test", "peer_analysis_max_rounds": True}
+        with pytest.raises(
+            ValueError, match=r"peer_analysis_max_rounds.*must be an integer"
+        ):
+            _server_config_from_dict(data)
+
+    def test_peer_analysis_max_rounds_none_defaults_to_zero(self) -> None:
+        """None 'peer_analysis_max_rounds' defaults to 0."""
+        data = {"url": "http://test", "peer_analysis_max_rounds": None}
+        cfg = _server_config_from_dict(data)
+        assert cfg.peer_analysis_max_rounds == 0
+
+    def test_peer_analysis_max_rounds_valid_int_accepted(self) -> None:
+        """Valid int 'peer_analysis_max_rounds' passes through."""
+        data = {"url": "http://test", "peer_analysis_max_rounds": 5}
+        cfg = _server_config_from_dict(data)
+        assert cfg.peer_analysis_max_rounds == 5

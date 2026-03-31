@@ -25,7 +25,7 @@ from jenkins_job_insight.analyzer import (
     format_exception_with_type,
     get_failure_signature,
 )
-from jenkins_job_insight.config import Settings, get_settings
+from jenkins_job_insight.config import Settings, get_settings, parse_peer_configs
 from jenkins_job_insight.encryption import (
     SENSITIVE_KEYS,
     decrypt_sensitive_fields,
@@ -70,6 +70,7 @@ from jenkins_job_insight.storage import (
     patch_result_json,
     populate_failure_history,
     save_result,
+    update_progress_phase,
     update_status,
 )
 
@@ -233,6 +234,10 @@ def _reconstruct_from_params(
         enable_jira=params.get("enable_jira"),
         raw_prompt=params.get("raw_prompt") or None,
         tests_repo_url=params.get("tests_repo_url") or None,
+        peer_ai_configs=(
+            params["peer_ai_configs"] if "peer_ai_configs" in params else []
+        ),
+        peer_analysis_max_rounds=params.get("peer_analysis_max_rounds", 3),
     )
     # Build Settings from env defaults, then layer stored overrides
     base_settings = get_settings()
@@ -254,6 +259,7 @@ def _reconstruct_from_params(
         "jenkins_artifacts_max_size_mb",
         "jenkins_artifacts_context_lines",
         "get_job_artifacts",
+        "peer_analysis_max_rounds",
     ]
     for field in settings_fields:
         if field in params:
@@ -509,6 +515,37 @@ def _resolve_ai_config(body: AnalyzeRequest) -> tuple[str, str]:
     return _resolve_ai_config_values(body.ai_provider, body.ai_model)
 
 
+def _resolve_peer_ai_configs(
+    body: BaseAnalysisRequest, settings: Settings
+) -> list | None:
+    """Resolve peer AI configs from request body or env var default.
+
+    Priority:
+    - Request field absent (None) -> use server default from PEER_AI_CONFIGS env var
+    - Request field present and empty ([]) -> explicitly disable peers
+    - Request field present and non-empty -> use request value
+
+    Returns:
+        List of peer config dicts/AiConfigEntry, or None if no peers configured.
+    """
+    if body.peer_ai_configs is not None:
+        return body.peer_ai_configs or None  # [] -> None (disable)
+    # Fall back to env var default (string format)
+    if settings.peer_ai_configs:
+        return parse_peer_configs(settings.peer_ai_configs) or None
+    return None
+
+
+def _validate_peer_configs(
+    body: BaseAnalysisRequest, settings: Settings
+) -> list | None:
+    """Resolve and validate peer AI configs. Raises HTTPException(400) on invalid input."""
+    try:
+        return _resolve_peer_ai_configs(body, settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _resolve_enable_jira(body: BaseAnalysisRequest, settings: Settings) -> bool:
     """Resolve enable_jira flag from request, env var, or auto-detection.
 
@@ -566,6 +603,11 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         value = getattr(body, field, None)
         if value is not None:
             overrides[field] = value
+
+    # peer_analysis_max_rounds has a non-None default in the model;
+    # only apply as override when explicitly sent by the caller.
+    if "peer_analysis_max_rounds" in body.model_fields_set:
+        overrides["peer_analysis_max_rounds"] = body.peer_analysis_max_rounds
 
     # SecretStr fields need wrapping
     if body.jira_api_token is not None:
@@ -745,6 +787,16 @@ async def process_analysis_with_id(
         f"Analysis request received for {body.job_name} #{body.build_number} "
         f"(job_id: {job_id})"
     )
+
+    async def _safe_update_progress_phase(phase: str) -> None:
+        try:
+            await update_progress_phase(job_id, phase)
+        except Exception:
+            logger.debug(
+                f"Failed to update progress phase for job_id={job_id}, phase={phase}",
+                exc_info=True,
+            )
+
     try:
         # Validate AI config early -- before potentially waiting hours for Jenkins.
         # This ensures invalid provider/model fails fast instead of after a long wait.
@@ -758,6 +810,7 @@ async def process_analysis_with_id(
 
         if settings.wait_for_completion and settings.jenkins_url:
             await update_status(job_id, "waiting")
+            await _safe_update_progress_phase("waiting_for_jenkins")
 
             completed, wait_error = await _wait_for_jenkins_completion(
                 jenkins_url=settings.jenkins_url,
@@ -786,12 +839,18 @@ async def process_analysis_with_id(
             f"process_analysis_with_id: updating status to running, job_id={job_id}"
         )
         await update_status(job_id, "running")
+        await _safe_update_progress_phase("analyzing")
 
         logger.debug(
             f"process_analysis_with_id: ai_provider={ai_provider}, ai_model={ai_model}"
         )
 
         server_url = _build_internal_server_url()
+
+        # Resolve peer AI configs: request body (JSON list) takes precedence
+        # over env var default (parsed from "provider:model" string).
+        # None = not sent → use env default; [] = explicitly disable peers.
+        peer_ai_configs = _resolve_peer_ai_configs(body, settings)
 
         result = await analyze_job(
             body,
@@ -800,10 +859,13 @@ async def process_analysis_with_id(
             ai_model=ai_model,
             job_id=job_id,
             server_url=server_url,
+            peer_ai_configs=peer_ai_configs,
+            peer_analysis_max_rounds=settings.peer_analysis_max_rounds,
         )
 
         # Enrich PRODUCT BUG failures with Jira matches
         if _resolve_enable_jira(body, settings):
+            await _safe_update_progress_phase("enriching_jira")
             logger.debug(
                 f"process_analysis_with_id: enriching with Jira matches, job_id={job_id}"
             )
@@ -814,6 +876,7 @@ async def process_analysis_with_id(
                 ai_model,
             )
 
+        await _safe_update_progress_phase("saving")
         logger.debug(
             f"process_analysis_with_id: saving completed result, job_id={job_id}"
         )
@@ -861,6 +924,7 @@ def _build_request_params(
     merged: Settings,
     ai_provider: str,
     ai_model: str,
+    peer_ai_configs_resolved: list | None = None,
 ) -> dict:
     """Serialize the request parameters needed to resume a waiting job.
 
@@ -913,6 +977,11 @@ def _build_request_params(
         "jenkins_artifacts_context_lines": merged.jenkins_artifacts_context_lines,
         "get_job_artifacts": merged.get_job_artifacts,
         "raw_prompt": body.raw_prompt or "",
+        "peer_ai_configs": [
+            c.model_dump() if hasattr(c, "model_dump") else c
+            for c in (peer_ai_configs_resolved or [])
+        ],
+        "peer_analysis_max_rounds": merged.peer_analysis_max_rounds,
         "wait_started_at": _time.time(),
     }
     return encrypt_sensitive_fields(params)
@@ -939,6 +1008,9 @@ async def analyze(
     # Generate job_id here so we can return it to the client for polling
     job_id = str(uuid.uuid4())
     merged = _merge_settings(body, settings)
+
+    # Validate peer configs early -- fail fast before returning 202.
+    resolved_peers = _validate_peer_configs(body, merged)
     jenkins_url = build_jenkins_url(
         merged.jenkins_url, body.job_name, body.build_number
     )
@@ -957,6 +1029,7 @@ async def analyze(
             merged,
             body.ai_provider or AI_PROVIDER,
             body.ai_model or AI_MODEL,
+            peer_ai_configs_resolved=resolved_peers,
         )
     await save_result(
         job_id,
@@ -1022,6 +1095,9 @@ async def analyze_failures(
     merged = _merge_settings(body, settings)
     ai_provider, ai_model = _resolve_ai_config_values(body.ai_provider, body.ai_model)
 
+    # Validate/resolve peer configs early -- fail fast before saving result.
+    peer_ai_configs = _validate_peer_configs(body, merged)
+
     job_id = str(uuid.uuid4())
     logger.info(
         f"Direct failure analysis request received with {len(test_failures)} failures (job_id: {job_id})"
@@ -1067,6 +1143,8 @@ async def analyze_failures(
                 custom_prompt=custom_prompt,
                 server_url=server_url,
                 job_id=job_id,
+                peer_ai_configs=peer_ai_configs,
+                peer_analysis_max_rounds=merged.peer_analysis_max_rounds,
             )
             for group_failures in groups.values()
         ]

@@ -713,3 +713,130 @@ class TestMarkStaleResultsFailed:
             waiting = await storage.mark_stale_results_failed()
             assert waiting == []
             assert (await storage.get_result("w-bad-json"))["status"] == "failed"
+
+
+class TestProgressPhaseHelpers:
+    """Tests for _make_progress_phase_patcher and update_progress_phase."""
+
+    def test_make_progress_phase_patcher_sets_field(self) -> None:
+        """_make_progress_phase_patcher creates a callable that sets progress_phase."""
+        patcher = storage._make_progress_phase_patcher("analyzing")
+        d: dict = {"existing_key": "value"}
+        patcher(d)
+        assert d["progress_phase"] == "analyzing"
+        assert d["existing_key"] == "value"
+
+    def test_make_progress_phase_patcher_overwrites_existing(self) -> None:
+        """Patcher overwrites an existing progress_phase value."""
+        patcher = storage._make_progress_phase_patcher("saving")
+        d: dict = {"progress_phase": "analyzing"}
+        patcher(d)
+        assert d["progress_phase"] == "saving"
+
+    async def test_update_progress_phase_persists(self, setup_test_db: Path) -> None:
+        """update_progress_phase writes the phase into result_json."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.save_result(
+                "phase-job",
+                "http://jenkins/1",
+                "running",
+                {"job_name": "test", "build_number": 1},
+            )
+            await storage.update_progress_phase("phase-job", "analyzing")
+
+            result = await storage.get_result("phase-job")
+            assert result is not None
+            assert result["result"]["progress_phase"] == "analyzing"
+
+    async def test_update_progress_phase_overwrites(self, setup_test_db: Path) -> None:
+        """Calling update_progress_phase twice overwrites the phase."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.save_result(
+                "phase-job-2",
+                "http://jenkins/2",
+                "running",
+                {"job_name": "test", "build_number": 2},
+            )
+            await storage.update_progress_phase("phase-job-2", "analyzing")
+            await storage.update_progress_phase("phase-job-2", "saving")
+
+            result = await storage.get_result("phase-job-2")
+            assert result is not None
+            assert result["result"]["progress_phase"] == "saving"
+
+    async def test_update_progress_phase_noop_for_missing_job(
+        self, setup_test_db: Path
+    ) -> None:
+        """update_progress_phase is a no-op for non-existent job_id."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            # Should not raise
+            await storage.update_progress_phase("nonexistent-job", "analyzing")
+
+    async def test_update_progress_phase_appends_to_progress_log(
+        self, setup_test_db: Path
+    ) -> None:
+        """Each call to update_progress_phase appends an entry to progress_log."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.save_result(
+                "phase-log-job",
+                "http://jenkins/10",
+                "running",
+                {"job_name": "test", "build_number": 10},
+            )
+            await storage.update_progress_phase("phase-log-job", "analyzing")
+            await storage.update_progress_phase("phase-log-job", "saving")
+
+            result = await storage.get_result("phase-log-job")
+            assert result is not None
+            log = result["result"]["progress_log"]
+            assert isinstance(log, list)
+            assert len(log) == 2
+            assert log[0]["phase"] == "analyzing"
+            assert log[1]["phase"] == "saving"
+            # Each entry must have a timestamp
+            assert isinstance(log[0]["timestamp"], (int, float))
+            assert isinstance(log[1]["timestamp"], (int, float))
+            # Timestamps should be ordered
+            assert log[1]["timestamp"] >= log[0]["timestamp"]
+
+    async def test_update_progress_phase_initializes_progress_log(
+        self, setup_test_db: Path
+    ) -> None:
+        """First call creates the progress_log array."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.save_result(
+                "phase-init-job",
+                "http://jenkins/11",
+                "running",
+                {"job_name": "test", "build_number": 11},
+            )
+            await storage.update_progress_phase("phase-init-job", "waiting_for_jenkins")
+
+            result = await storage.get_result("phase-init-job")
+            assert result is not None
+            log = result["result"]["progress_log"]
+            assert isinstance(log, list)
+            assert len(log) == 1
+            assert log[0]["phase"] == "waiting_for_jenkins"
+
+    async def test_update_progress_phase_preserves_existing_progress_log(
+        self, setup_test_db: Path
+    ) -> None:
+        """progress_log is preserved across updates and not reset."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.save_result(
+                "phase-preserve-job",
+                "http://jenkins/12",
+                "running",
+                {"job_name": "test", "build_number": 12},
+            )
+            phases = ["waiting_for_jenkins", "analyzing", "enriching_jira", "saving"]
+            for phase in phases:
+                await storage.update_progress_phase("phase-preserve-job", phase)
+
+            result = await storage.get_result("phase-preserve-job")
+            assert result is not None
+            log = result["result"]["progress_log"]
+            assert len(log) == len(phases)
+            for i, phase in enumerate(phases):
+                assert log[i]["phase"] == phase

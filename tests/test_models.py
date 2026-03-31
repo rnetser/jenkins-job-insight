@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from jenkins_job_insight.models import (
+    AiConfigEntry,
     AnalysisDetail,
     AnalysisResult,
     AnalyzeRequest,
@@ -16,6 +17,8 @@ from jenkins_job_insight.models import (
     JiraMatch,
     JobStatus,
     OverrideClassificationRequest,
+    PeerDebate,
+    PeerRound,
     PreviewIssueRequest,
     PreviewIssueResponse,
     ProductBugReport,
@@ -597,3 +600,270 @@ class TestCreateIssueResponse:
             title="Bug fix",
         )
         assert resp.number == 0
+
+
+class TestAiConfigEntry:
+    """Tests for the AiConfigEntry model."""
+
+    def test_valid_entry(self) -> None:
+        """Test creating a valid AiConfigEntry."""
+        entry = AiConfigEntry(ai_provider="claude", ai_model="opus")
+        assert entry.ai_provider == "claude"
+        assert entry.ai_model == "opus"
+
+    @pytest.mark.parametrize("provider", ["claude", "gemini", "cursor"])
+    def test_valid_providers(self, provider: str) -> None:
+        """Test all valid AI providers are accepted."""
+        entry = AiConfigEntry(ai_provider=provider, ai_model="model-1")
+        assert entry.ai_provider == provider
+
+    def test_invalid_provider(self) -> None:
+        """Test that invalid AI provider is rejected."""
+        with pytest.raises(ValidationError):
+            AiConfigEntry(ai_provider="openai", ai_model="gpt4")
+
+    def test_empty_model_rejected(self) -> None:
+        """Test that empty ai_model string is rejected (min_length=1)."""
+        with pytest.raises(ValidationError):
+            AiConfigEntry(ai_provider="claude", ai_model="")
+
+    def test_whitespace_only_model_rejected(self) -> None:
+        """Test that whitespace-only ai_model is rejected after stripping."""
+        with pytest.raises(ValidationError):
+            AiConfigEntry(ai_provider="claude", ai_model="   ")
+
+    def test_model_with_surrounding_whitespace_stripped(self) -> None:
+        """Test that ai_model is stripped of surrounding whitespace."""
+        entry = AiConfigEntry(ai_provider="claude", ai_model="  opus  ")
+        assert entry.ai_model == "opus"
+
+
+class TestPeerRound:
+    """Tests for the PeerRound model."""
+
+    def test_creation(self) -> None:
+        """Test creating a valid PeerRound."""
+        r = PeerRound(
+            round=1,
+            ai_provider="claude",
+            ai_model="opus",
+            role="orchestrator",
+            classification="CODE ISSUE",
+            details="test",
+        )
+        assert r.round == 1
+        assert r.role == "orchestrator"
+        assert r.agrees_with_orchestrator is None
+
+    def test_peer_role(self) -> None:
+        """Test PeerRound with peer role and agreement set."""
+        r = PeerRound(
+            round=2,
+            ai_provider="gemini",
+            ai_model="pro",
+            role="peer",
+            classification="PRODUCT BUG",
+            details="disagree",
+            agrees_with_orchestrator=False,
+        )
+        assert r.role == "peer"
+        assert r.agrees_with_orchestrator is False
+
+    def test_invalid_role(self) -> None:
+        """Test that invalid role is rejected."""
+        with pytest.raises(ValidationError):
+            PeerRound(
+                round=1,
+                ai_provider="claude",
+                ai_model="opus",
+                role="observer",
+                classification="CODE ISSUE",
+                details="test",
+            )
+
+
+class TestPeerDebate:
+    """Tests for the PeerDebate model."""
+
+    def test_creation(self) -> None:
+        """Test creating a valid PeerDebate."""
+        d = PeerDebate(
+            consensus_reached=True,
+            rounds_used=1,
+            max_rounds=3,
+            ai_configs=[{"ai_provider": "claude", "ai_model": "opus"}],
+            rounds=[],
+        )
+        assert d.consensus_reached is True
+        assert d.rounds_used == 1
+        assert d.max_rounds == 3
+        assert len(d.ai_configs) == 1
+
+    def test_ai_configs_are_ai_config_entry_instances(self) -> None:
+        """Test that ai_configs items are coerced to AiConfigEntry instances."""
+        d = PeerDebate(
+            consensus_reached=True,
+            rounds_used=1,
+            max_rounds=3,
+            ai_configs=[{"ai_provider": "claude", "ai_model": "opus"}],
+            rounds=[],
+        )
+        assert isinstance(d.ai_configs[0], AiConfigEntry)
+        assert d.ai_configs[0].ai_provider == "claude"
+        assert d.ai_configs[0].ai_model == "opus"
+
+    def test_ai_configs_reject_invalid_provider(self) -> None:
+        """Test that ai_configs rejects invalid AI provider."""
+        with pytest.raises(ValidationError):
+            PeerDebate(
+                consensus_reached=True,
+                rounds_used=1,
+                max_rounds=3,
+                ai_configs=[{"ai_provider": "openai", "ai_model": "gpt4"}],
+                rounds=[],
+            )
+
+    def test_ai_configs_reject_empty_model(self) -> None:
+        """Test that ai_configs rejects empty ai_model."""
+        with pytest.raises(ValidationError):
+            PeerDebate(
+                consensus_reached=True,
+                rounds_used=1,
+                max_rounds=3,
+                ai_configs=[{"ai_provider": "claude", "ai_model": ""}],
+                rounds=[],
+            )
+
+    def test_ai_configs_accept_model_instances(self) -> None:
+        """Test that ai_configs accepts AiConfigEntry instances directly."""
+        entry = AiConfigEntry(ai_provider="gemini", ai_model="pro")
+        d = PeerDebate(
+            consensus_reached=True,
+            rounds_used=1,
+            max_rounds=3,
+            ai_configs=[entry],
+            rounds=[],
+        )
+        assert d.ai_configs[0] is entry
+
+    def test_ai_configs_extra_fields_ignored(self) -> None:
+        """Test that extra fields in ai_configs dicts are silently ignored.
+
+        The peer_analysis module passes dicts with a 'role' key that
+        AiConfigEntry does not define. Pydantic v2 ignores extra fields
+        by default, so this should work without error.
+        """
+        d = PeerDebate(
+            consensus_reached=True,
+            rounds_used=1,
+            max_rounds=3,
+            ai_configs=[
+                {"ai_provider": "claude", "ai_model": "opus", "role": "orchestrator"},
+                {"ai_provider": "gemini", "ai_model": "pro", "role": "peer"},
+            ],
+            rounds=[],
+        )
+        assert len(d.ai_configs) == 2
+        assert d.ai_configs[0].ai_provider == "claude"
+        assert d.ai_configs[1].ai_provider == "gemini"
+
+    def test_with_rounds(self) -> None:
+        """Test PeerDebate with actual rounds."""
+        r = PeerRound(
+            round=1,
+            ai_provider="claude",
+            ai_model="opus",
+            role="orchestrator",
+            classification="CODE ISSUE",
+            details="root cause",
+        )
+        d = PeerDebate(
+            consensus_reached=True,
+            rounds_used=1,
+            max_rounds=3,
+            ai_configs=[],
+            rounds=[r],
+        )
+        assert len(d.rounds) == 1
+        assert d.rounds[0].classification == "CODE ISSUE"
+
+
+class TestFailureAnalysisPeerDebate:
+    """Tests for peer_debate field on FailureAnalysis."""
+
+    def test_peer_debate_none_by_default(self) -> None:
+        """Test that peer_debate is None when not provided."""
+        fa = FailureAnalysis(
+            test_name="t",
+            error="e",
+            analysis=AnalysisDetail(details="d"),
+            error_signature="sig",
+        )
+        data = fa.model_dump(mode="json")
+        assert data.get("peer_debate") is None
+
+    def test_with_peer_debate(self) -> None:
+        """Test FailureAnalysis with a peer debate attached."""
+        debate = PeerDebate(
+            consensus_reached=True,
+            rounds_used=1,
+            max_rounds=3,
+            ai_configs=[],
+            rounds=[],
+        )
+        fa = FailureAnalysis(
+            test_name="t",
+            error="e",
+            analysis=AnalysisDetail(details="d"),
+            error_signature="sig",
+            peer_debate=debate,
+        )
+        data = fa.model_dump(mode="json")
+        assert data["peer_debate"]["consensus_reached"] is True
+
+
+class TestBaseAnalysisRequestPeerFields:
+    """Tests for peer analysis fields on BaseAnalysisRequest."""
+
+    def test_no_peers_by_default(self) -> None:
+        """Test that peer_ai_configs is None by default."""
+        req = AnalyzeRequest(job_name="j", build_number=1)
+        assert req.peer_ai_configs is None
+
+    def test_default_max_rounds(self) -> None:
+        """Test that peer_analysis_max_rounds defaults to 3."""
+        req = AnalyzeRequest(job_name="j", build_number=1)
+        assert req.peer_analysis_max_rounds == 3
+
+    def test_with_peers(self) -> None:
+        """Test AnalyzeRequest with peer AI configs."""
+        req = AnalyzeRequest(
+            job_name="j",
+            build_number=1,
+            peer_ai_configs=[
+                AiConfigEntry(ai_provider="cursor", ai_model="gpt-5.4-xhigh"),
+                AiConfigEntry(ai_provider="gemini", ai_model="pro"),
+            ],
+        )
+        assert req.peer_ai_configs is not None
+        assert len(req.peer_ai_configs) == 2
+        assert req.peer_ai_configs[0].ai_provider == "cursor"
+
+    def test_max_rounds_lower_bound(self) -> None:
+        """Test that peer_analysis_max_rounds rejects 0."""
+        with pytest.raises(ValidationError):
+            AnalyzeRequest(job_name="j", build_number=1, peer_analysis_max_rounds=0)
+
+    def test_max_rounds_upper_bound(self) -> None:
+        """Test that peer_analysis_max_rounds rejects 11."""
+        with pytest.raises(ValidationError):
+            AnalyzeRequest(job_name="j", build_number=1, peer_analysis_max_rounds=11)
+
+    def test_max_rounds_valid_bounds(self) -> None:
+        """Test that peer_analysis_max_rounds accepts 1 and 10."""
+        req1 = AnalyzeRequest(job_name="j", build_number=1, peer_analysis_max_rounds=1)
+        assert req1.peer_analysis_max_rounds == 1
+        req10 = AnalyzeRequest(
+            job_name="j", build_number=1, peer_analysis_max_rounds=10
+        )
+        assert req10.peer_analysis_max_rounds == 10

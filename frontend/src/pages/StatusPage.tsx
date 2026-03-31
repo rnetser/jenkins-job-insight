@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '@/lib/api'
 import { formatTimestamp, isAnalysisTimeout, INVALID_DATE_FALLBACK } from '@/lib/utils'
@@ -8,6 +8,36 @@ import { Badge } from '@/components/ui/badge'
 import { Clock, Loader2 } from 'lucide-react'
 
 const POLL_MS = 10_000
+
+const phaseLabels: Record<string, string> = {
+  waiting_for_jenkins: 'Waiting for Jenkins build to complete...',
+  analyzing: 'Analyzing test failures with AI...',
+  analyzing_child_jobs: 'Analyzing child job failures...',
+  analyzing_failures: 'Analyzing test failures...',
+  enriching_jira: 'Searching Jira for matching bugs...',
+  saving: 'Saving results...',
+}
+
+function getPhaseLabel(phase: string | undefined): string | undefined {
+  if (!phase) return undefined
+  if (phaseLabels[phase]) return phaseLabels[phase]
+
+  // Handle peer_review_round_N or peer_review_round_N (group X/Y)
+  const peerMatch = phase.match(/^peer_review_round_(\d+)(?:\s*\(group (.+)\))?$/)
+  if (peerMatch) {
+    const groupInfo = peerMatch[2] ? ` \u2014 group ${peerMatch[2]}` : ''
+    return `Peer review \u2014 round ${peerMatch[1]}${groupInfo}...`
+  }
+
+  // Handle orchestrator_revising_round_N or orchestrator_revising_round_N (group X/Y)
+  const reviseMatch = phase.match(/^orchestrator_revising_round_(\d+)(?:\s*\(group (.+)\))?$/)
+  if (reviseMatch) {
+    const groupInfo = reviseMatch[2] ? ` \u2014 group ${reviseMatch[2]}` : ''
+    return `Main AI revising \u2014 round ${reviseMatch[1]}${groupInfo}...`
+  }
+
+  return undefined
+}
 
 const statusMessages: Record<string, { title: string; subtitle: string }> = {
   waiting: {
@@ -35,6 +65,12 @@ const terminalErrorTitles: Record<string, string> = {
   failed: 'Analysis failed',
 }
 
+interface StepLogEntry {
+  phase: string
+  label: string
+  timestamp: string
+}
+
 export function StatusPage() {
   const { jobId } = useParams<{ jobId: string }>()
   const navigate = useNavigate()
@@ -42,6 +78,9 @@ export function StatusPage() {
   const [error, setError] = useState('')
   const [terminalErrorKind, setTerminalErrorKind] = useState<'not_found' | 'unauthorized' | 'failed' | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval>>(null)
+  const prevLogLenRef = useRef(0)
+  const logEndRef = useRef<HTMLDivElement>(null)
+  const logContainerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!jobId) return
@@ -57,6 +96,7 @@ export function StatusPage() {
     setData(null)
     setError('')
     setTerminalErrorKind(null)
+    prevLogLenRef.current = 0
 
     async function poll() {
       if (inFlight || cancelled) return
@@ -66,6 +106,7 @@ export function StatusPage() {
         if (cancelled) return
         setError('')
         setData(res)
+
         if (res.status === 'completed') {
           stopPolling()
           navigate(`/results/${jobId}`, { replace: true })
@@ -105,10 +146,45 @@ export function StatusPage() {
     }
   }, [jobId, navigate])
 
+  // Derive stepLog from server-persisted progress_log (survives F5 refresh)
+  const rawProgressLog = data?.result?.progress_log
+  const progressLog = Array.isArray(rawProgressLog) ? rawProgressLog : []
+  const stepLog: StepLogEntry[] = useMemo(
+    () => progressLog.map(entry => ({
+      phase: entry.phase,
+      label: getPhaseLabel(entry.phase) ?? entry.phase,
+      timestamp: new Date(entry.timestamp * 1000).toLocaleTimeString(),
+    })),
+    [progressLog],
+  )
+
+  useEffect(() => {
+    if (stepLog.length > prevLogLenRef.current) {
+      const container = logContainerRef.current
+      if (container) {
+        // On first load (prevLogLenRef was 0), always scroll to bottom
+        const isFirstLoad = prevLogLenRef.current === 0
+        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 50
+        if (isFirstLoad || isNearBottom) {
+          logEndRef.current?.scrollIntoView({ behavior: isFirstLoad ? 'instant' : 'smooth' })
+        }
+      }
+      prevLogLenRef.current = stepLog.length
+    }
+  }, [stepLog.length])
+
   const status = data?.status ?? terminalErrorKind ?? 'pending'
   const isTimeout = isAnalysisTimeout(status, error)
   const displayStatus = isTimeout ? 'timeout' : status
   const queuedAtDisplay = data?.created_at ? formatTimestamp(data.created_at) : null
+
+  const params = data?.result?.request_params
+  const mainAi = params?.ai_provider && params?.ai_model
+    ? `${params.ai_provider} / ${params.ai_model}`
+    : null
+  const peers = params?.peer_ai_configs
+  const hasPeers = !!peers?.length
+  const progressPhase = data?.result?.progress_phase
   const isRunning = displayStatus === 'running'
   const isWaiting = displayStatus === 'waiting'
   const isActive = isRunning || isWaiting
@@ -198,7 +274,7 @@ export function StatusPage() {
                     {msg.title}
                   </h2>
                   <p className="mt-1 text-sm text-text-tertiary">
-                    {msg.subtitle}
+                    {getPhaseLabel(progressPhase) ?? progressPhase ?? msg.subtitle}
                   </p>
                 </>
               )}
@@ -233,6 +309,24 @@ export function StatusPage() {
                   </Badge>
                 }
               />
+              {mainAi && (
+                <Row label="MAIN AI" value={mainAi} mono />
+              )}
+              {hasPeers && (
+                <Row
+                  label="PEERS"
+                  alignTop
+                  value={
+                    <div className="flex flex-col items-end gap-0.5">
+                      {peers!.map((p, i) => (
+                        <span key={i} className="font-mono text-xs">
+                          {p.ai_provider} / {p.ai_model}
+                        </span>
+                      ))}
+                    </div>
+                  }
+                />
+              )}
               {queuedAtDisplay && queuedAtDisplay !== INVALID_DATE_FALLBACK && (
                 <Row
                   label="QUEUED"
@@ -240,6 +334,39 @@ export function StatusPage() {
                 />
               )}
             </div>
+
+            {stepLog.length > 0 && (
+              <div className="w-full rounded-md border border-border-muted bg-surface-elevated/30 overflow-hidden">
+                <div className="px-3 py-1.5 border-b border-border-muted">
+                  <span className="font-display text-[10px] font-medium uppercase tracking-widest text-text-tertiary">
+                    Progress
+                  </span>
+                </div>
+                <div ref={logContainerRef} className="max-h-64 overflow-y-auto px-3 py-2 space-y-1">
+                  {stepLog.map((step, i) => {
+                    const isLatest = i === stepLog.length - 1
+                    return (
+                      <div key={i} className={`flex items-start gap-2 text-xs ${isLatest ? 'text-signal-blue' : 'text-text-tertiary'}`}>
+                        <span className="shrink-0 font-mono text-[10px] text-text-tertiary/60">
+                          {step.timestamp}
+                        </span>
+                        {isLatest && isActive ? (
+                          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-signal-blue mt-0.5" />
+                        ) : isLatest && (displayStatus === 'failed' || displayStatus === 'timeout') ? (
+                          <span className="shrink-0 text-signal-red mt-0.5">!</span>
+                        ) : (
+                          <span className="shrink-0 text-signal-green mt-0.5">{'\u2713'}</span>
+                        )}
+                        <span className={isLatest ? 'font-medium' : ''}>
+                          {step.label}
+                        </span>
+                      </div>
+                    )
+                  })}
+                  <div ref={logEndRef} />
+                </div>
+              </div>
+            )}
 
             {error && !terminalErrorKind && (
               <p
@@ -262,21 +389,23 @@ function Row({
   label,
   value,
   mono,
+  alignTop,
 }: {
   label: string
   value: ReactNode
   mono?: boolean
+  alignTop?: boolean
 }) {
   return (
-    <div className="flex items-center justify-between gap-4">
+    <div className={`flex justify-between gap-4 ${alignTop ? 'items-start' : 'items-center'}`}>
       <span className="whitespace-nowrap font-display text-[10px] font-medium uppercase tracking-widest text-text-tertiary">
         {label}
       </span>
-      <span
+      <div
         className={`text-right text-text-secondary break-all ${mono ? 'font-mono text-xs' : ''}`}
       >
         {value}
-      </span>
+      </div>
     </div>
   )
 }
