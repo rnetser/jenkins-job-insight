@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { parseApiTimestamp } from '@/lib/utils'
@@ -7,7 +7,6 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
@@ -22,6 +21,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SearchInput } from '@/components/shared/SearchInput'
 import { Pagination } from '@/components/shared/Pagination'
 import { ClassificationBadge } from '@/components/shared/ClassificationBadge'
+import { SortableHeader } from '@/components/shared/SortableHeader'
+import { useTableSort } from '@/lib/useTableSort'
 import { CLASSIFICATIONS } from '@/constants/classifications'
 
 const CLASSIFICATION_FILTER_OPTIONS = ['ALL', ...CLASSIFICATIONS] as const
@@ -57,6 +58,7 @@ function FailureHistoryTab() {
   const [inputValue, setInputValue] = useState('')
   const [search, setSearch] = useState('')
   const [classification, setClassification] = useState('ALL')
+  const { sortKey, sortDir, handleSort } = useTableSort('hist', 'analyzed_at', 'desc', ['analyzed_at'])
   const [page, setPage] = useState(1)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null)
   const requestSeqRef = useRef(0)
@@ -131,6 +133,25 @@ function FailureHistoryTab() {
     setPage(1)
   }
 
+  // Client-side sort applies to the current page only. Server-side sorting
+  // would require adding sort_key/sort_dir query params to the API.
+  const sorted = useMemo(() => {
+    const copy = [...data]
+    const dir = sortDir === 'asc' ? 1 : -1
+    copy.sort((a, b) => {
+      let cmp = 0
+      switch (sortKey) {
+        case 'test_name': cmp = a.test_name.localeCompare(b.test_name); break
+        case 'job_name': cmp = a.job_name.localeCompare(b.job_name); break
+        case 'classification': cmp = (a.classification ?? '').localeCompare(b.classification ?? ''); break
+        case 'analyzed_at': cmp = a.analyzed_at.localeCompare(b.analyzed_at); break
+        default: cmp = 0
+      }
+      return cmp * dir
+    })
+    return copy
+  }, [data, sortKey, sortDir])
+
   const totalPages = Math.max(1, Math.ceil(total / LIMIT))
 
   return (
@@ -178,14 +199,14 @@ function FailureHistoryTab() {
         <Table>
           <TableHeader>
             <TableRow className="bg-surface-card">
-              <TableHead className="w-[40%]">Test Name</TableHead>
-              <TableHead>Job</TableHead>
-              <TableHead>Classification</TableHead>
-              <TableHead className="text-right">Date</TableHead>
+              <SortableHeader label="Test Name" sortKey="test_name" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="w-[40%]" />
+              <SortableHeader label="Job" sortKey="job_name" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} />
+              <SortableHeader label="Classification" sortKey="classification" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} />
+              <SortableHeader label="Date" sortKey="analyzed_at" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-right" />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {data.map((entry, i) => (
+            {sorted.map((entry, i) => (
               <TableRow
                 key={entry.id}
                 className={`cursor-pointer animate-slide-up ${i % 2 === 0 ? 'bg-surface-card' : 'bg-surface-elevated/40'}`}
