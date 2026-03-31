@@ -1,0 +1,46 @@
+# jenkins-job-insight
+
+> AI-powered Jenkins failure analysis service with direct JUnit XML enrichment, HTML reports, and optional Jira matching.
+
+## Introduction
+
+- [Overview](overview.md): Introduce the service, its main inputs and outputs, supported AI providers, and the primary user workflows.
+- [Architecture and Project Structure](architecture-and-project-structure.md): Map the FastAPI app, analyzer, Jenkins client, Jira integration, storage, HTML reporting, examples, and tests so readers can understand how the system is composed.
+
+## Getting Started
+
+- [Installation](installation.md): List prerequisites including Python 3.12, Jenkins access, and external AI CLI authentication, then cover local package installation.
+- [Run Locally](run-locally.md): Show how to start the service with the packaged entrypoint or uvicorn and verify it through /health, /docs, and OpenAPI.
+- [Container Deployment](container-deployment.md): Document the provided Dockerfile and docker-compose setup, persistent /data storage, provider credentials, and OpenShift-specific runtime considerations.
+- [Quickstart](quickstart.md): Walk through submitting a first analysis request and reading the returned JSON, result URL, and HTML report.
+
+## Configuration
+
+- [Configuration Reference](configuration-reference.md): Document every environment variable and matching request override for Jenkins, AI, callbacks, Jira, SSL, logging, and timeouts.
+- [AI Provider Setup](ai-provider-setup.md): Explain Claude, Gemini, and Cursor CLI authentication and the provider-agnostic execution model used by the service.
+- [Jenkins, Repository Context, and Prompts](jenkins-repository-and-prompts.md): Describe Jenkins connection settings, optional repository cloning for source-code context, allowed repository URL schemes, and custom prompt resolution via raw_prompt or JOB_INSIGHT_PROMPT.md.
+- [Jira Integration](jira-integration.md): Explain Cloud and Server/DC authentication, automatic enablement rules, project scoping, search behavior, and AI-based relevance filtering.
+
+## Guides
+
+- [Analyze Jenkins Jobs](analyze-jenkins-jobs.md): Cover POST /analyze, sync versus async execution, callbacks, polling, successful-build handling, and recursive child-job analysis.
+- [Analyze Raw Failures and JUnit XML](direct-failure-analysis.md): Show how to use POST /analyze-failures with either structured failures or raw JUnit XML and explain enriched_xml output.
+- [Pytest JUnit XML Integration](pytest-junitxml-integration.md): Document the bundled pytest example that posts junitxml output to the service and rewrites the XML artifact with AI annotations.
+- [HTML Reports and Dashboard](html-reports-and-dashboard.md): Explain lazy HTML report generation, refresh behavior, grouped root-cause cards, result browsing, and dashboard search and pagination.
+- [Pipeline Analysis and Failure Deduplication](pipeline-analysis-and-failure-deduplication.md): Explain how identical failures are grouped by signature, how failed child jobs are discovered, and how summaries and counts are computed.
+- [Jira-Assisted Bug Triage](jira-assisted-bug-triage.md): Show how PRODUCT BUG analyses carry search keywords and matched Jira issues to reduce duplicate bug filing.
+
+## API Reference
+
+- [API Overview](api-overview.md): Summarize endpoints, job states, absolute URLs in responses, and the generated OpenAPI and Swagger interfaces.
+- [POST /analyze](api-post-analyze.md): Reference the Jenkins-analysis request and response schema, sync flag, background job behavior, and callback fields.
+- [POST /analyze-failures](api-post-analyze-failures.md): Reference direct failure and raw_xml inputs, validation rules, response shapes, and enriched XML behavior.
+- [Results, Reports, and Dashboard Endpoints](api-results-and-dashboard.md): Reference GET /results, GET /results/{job_id}, GET /results/{job_id}.html, GET /dashboard, GET /health, and related supporting endpoints.
+- [Schemas and Data Models](api-schemas-and-models.md): Document request and response models such as AnalyzeRequest, AnalyzeFailuresRequest, AnalysisResult, FailureAnalysis, ChildJobAnalysis, and JiraMatch.
+
+## Operations
+
+- [Storage and Result Lifecycle](storage-and-result-lifecycle.md): Describe SQLite persistence, default DB and report paths, pending/running/completed/failed states, and HTML report caching.
+- [Reverse Proxy and Base URL Handling](reverse-proxy-and-base-urls.md): Explain forwarded-header handling and how result and report URLs are constructed when the service runs behind proxies or ingress.
+- [Troubleshooting](troubleshooting.md): Help operators diagnose Jenkins auth failures, missing AI configuration, XML parse errors, Jira issues, callback failures, and report generation problems.
+- [Development and Testing](development-and-testing.md): Cover the pytest suite, pre-commit hooks, linting, typing, secret scanning, and the repository layout for maintainers.

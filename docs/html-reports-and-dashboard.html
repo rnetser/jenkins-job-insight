@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTML Reports and Dashboard - jenkins-job-insight</title>
+    <meta name="description" content="AI-powered Jenkins failure analysis service with direct JUnit XML enrichment, HTML reports, and optional Jira matching.">
+    <link rel="stylesheet" href="assets/style.css">
+    <link rel="alternate" type="text/plain" title="LLM Documentation Index" href="llms.txt">
+    <link rel="alternate" type="text/plain" title="LLM Full Documentation" href="llms-full.txt">
+</head>
+<body>
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <a href="index.html" class="sidebar-logo">jenkins-job-insight</a>
+            <p class="sidebar-tagline">AI-powered Jenkins failure analysis service with direct JUnit XML enrichment, HTML reports, and optional Jira matching.</p>
+        </div>
+
+        <div class="sidebar-search">
+            <input type="text" id="search-input" placeholder="Search... (⌘K)" autocomplete="off" readonly>
+            <div id="search-results" class="search-results"></div>
+        </div>
+
+        <nav class="sidebar-nav">
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Introduction</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="overview.html"
+                           class="nav-link">
+                            Overview
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="architecture-and-project-structure.html"
+                           class="nav-link">
+                            Architecture and Project Structure
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Getting Started</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="installation.html"
+                           class="nav-link">
+                            Installation
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="run-locally.html"
+                           class="nav-link">
+                            Run Locally
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="container-deployment.html"
+                           class="nav-link">
+                            Container Deployment
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="quickstart.html"
+                           class="nav-link">
+                            Quickstart
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Configuration</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="configuration-reference.html"
+                           class="nav-link">
+                            Configuration Reference
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="ai-provider-setup.html"
+                           class="nav-link">
+                            AI Provider Setup
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jenkins-repository-and-prompts.html"
+                           class="nav-link">
+                            Jenkins, Repository Context, and Prompts
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jira-integration.html"
+                           class="nav-link">
+                            Jira Integration
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Guides</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="analyze-jenkins-jobs.html"
+                           class="nav-link">
+                            Analyze Jenkins Jobs
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="direct-failure-analysis.html"
+                           class="nav-link">
+                            Analyze Raw Failures and JUnit XML
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="pytest-junitxml-integration.html"
+                           class="nav-link">
+                            Pytest JUnit XML Integration
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="html-reports-and-dashboard.html"
+                           class="nav-link active" aria-current="page">
+                            HTML Reports and Dashboard
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="pipeline-analysis-and-failure-deduplication.html"
+                           class="nav-link">
+                            Pipeline Analysis and Failure Deduplication
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jira-assisted-bug-triage.html"
+                           class="nav-link">
+                            Jira-Assisted Bug Triage
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">API Reference</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="api-overview.html"
+                           class="nav-link">
+                            API Overview
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-post-analyze.html"
+                           class="nav-link">
+                            POST /analyze
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-post-analyze-failures.html"
+                           class="nav-link">
+                            POST /analyze-failures
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-results-and-dashboard.html"
+                           class="nav-link">
+                            Results, Reports, and Dashboard Endpoints
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-schemas-and-models.html"
+                           class="nav-link">
+                            Schemas and Data Models
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Operations</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="storage-and-result-lifecycle.html"
+                           class="nav-link">
+                            Storage and Result Lifecycle
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="reverse-proxy-and-base-urls.html"
+                           class="nav-link">
+                            Reverse Proxy and Base URL Handling
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="troubleshooting.html"
+                           class="nav-link">
+                            Troubleshooting
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="development-and-testing.html"
+                           class="nav-link">
+                            Development and Testing
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+        </nav>
+    </aside>
+
+    <div class="main-wrapper">
+        <header class="top-bar">
+            <div class="top-bar-left">
+                <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar" aria-expanded="false">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </button>
+                <a href="index.html" class="top-bar-title">jenkins-job-insight</a>
+            </div>
+            <div class="top-bar-spacer"></div>
+            <div class="top-bar-right">
+                <button class="top-bar-search-btn" id="search-trigger" aria-label="Search">
+                    <kbd>&#8984;K</kbd> Search
+                </button>
+                <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener" class="docsfy-badge" title="Generated with docsfy">
+                    ⚡ docs<span class="brand-accent">fy</span>
+                </a>
+
+                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                    <span class="github-stars" id="github-stars"></span>
+                </a>
+
+                <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+                    <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                    </svg>
+                    <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <main class="content">
+
+            <article class="article">
+                <div class="article-body">
+                    <!-- SECURITY: |safe is intentional. Content is AI-generated markdown
+                         converted to HTML server-side by the markdown library, not
+                         user-supplied input. XSS risk is minimal and accepted since
+                         the AI generates the content, not end users. -->
+                    <h1 id="html-reports-and-dashboard">HTML Reports and Dashboard</h1>
+<p><code>jenkins-job-insight</code> ships with a <strong>React</strong> browser UI (SPA) on top of stored analysis results. Register at <code>/register</code>, use <code>/</code> as the <strong>dashboard</strong>, open <strong><code>/results/&lt;job_id&gt;</code></strong> for a full report for one run, and use <strong><code>/history</code></strong> (and <code>/history/test/:testName</code>) for history views. The <code>/dashboard</code> path <strong>redirects to <code>/</code></strong>. The analysis APIs attach <strong><code>result_url</code></strong> (not <code>html_report_url</code>) so automation can hand reviewers a ready-to-open link to the same SPA route.</p>
+<p><code>GET /results/{job_id}</code> <strong>content-negotiates</strong>: browser HTML requests get the SPA; in-progress browser requests are redirected to <code>/status/{job_id}</code>; API clients get JSON. There are <strong>no</strong> server-rendered <code>/results/&lt;job_id&gt;.html</code> pages, <strong>no</strong> HTML report cache, <strong><code>?refresh=1</code></strong>, or regenerate control.</p>
+<p>Main routes:</p>
+<div class="highlight"><pre><span></span><code><span class="p">&lt;</span><span class="nt">Route</span><span class="w"> </span><span class="na">path</span><span class="o">=</span><span class="s">&quot;/register&quot;</span><span class="w"> </span><span class="na">element</span><span class="o">=</span><span class="p">{&lt;</span><span class="nt">RegisterPage</span><span class="w"> </span><span class="p">/&gt;}</span><span class="w"> </span><span class="p">/&gt;</span>
+<span class="p">&lt;</span><span class="nt">Route</span><span class="w"> </span><span class="na">element</span><span class="o">=</span><span class="p">{&lt;</span><span class="nt">Layout</span><span class="w"> </span><span class="p">/&gt;}&gt;</span>
+<span class="w">  </span><span class="p">&lt;</span><span class="nt">Route</span><span class="w"> </span><span class="na">index</span><span class="w"> </span><span class="na">element</span><span class="o">=</span><span class="p">{&lt;</span><span class="nt">ProtectedRoute</span><span class="p">&gt;&lt;</span><span class="nt">DashboardPage</span><span class="w"> </span><span class="p">/&gt;&lt;/</span><span class="nt">ProtectedRoute</span><span class="p">&gt;}</span><span class="w"> </span><span class="p">/&gt;</span>
+<span class="w">  </span><span class="p">&lt;</span><span class="nt">Route</span><span class="w"> </span><span class="na">path</span><span class="o">=</span><span class="s">&quot;/dashboard&quot;</span><span class="w"> </span><span class="na">element</span><span class="o">=</span><span class="p">{&lt;</span><span class="nt">Navigate</span><span class="w"> </span><span class="na">to</span><span class="o">=</span><span class="s">&quot;/&quot;</span><span class="w"> </span><span class="na">replace</span><span class="w"> </span><span class="p">/&gt;}</span><span class="w"> </span><span class="p">/&gt;</span>
+<span class="w">  </span><span class="p">&lt;</span><span class="nt">Route</span><span class="w"> </span><span class="na">path</span><span class="o">=</span><span class="s">&quot;/history&quot;</span><span class="w"> </span><span class="na">element</span><span class="o">=</span><span class="p">{&lt;</span><span class="nt">ProtectedRoute</span><span class="p">&gt;&lt;</span><span class="nt">HistoryPage</span><span class="w"> </span><span class="p">/&gt;&lt;/</span><span class="nt">ProtectedRoute</span><span class="p">&gt;}</span><span class="w"> </span><span class="p">/&gt;</span>
+<span class="w">  </span><span class="p">&lt;</span><span class="nt">Route</span><span class="w"> </span><span class="na">path</span><span class="o">=</span><span class="s">&quot;/history/test/:testName&quot;</span><span class="w"> </span><span class="na">element</span><span class="o">=</span><span class="p">{&lt;</span><span class="nt">ProtectedRoute</span><span class="p">&gt;&lt;</span><span class="nt">TestHistoryPage</span><span class="w"> </span><span class="p">/&gt;&lt;/</span><span class="nt">ProtectedRoute</span><span class="p">&gt;}</span><span class="w"> </span><span class="p">/&gt;</span>
+<span class="w">  </span><span class="p">&lt;</span><span class="nt">Route</span><span class="w"> </span><span class="na">path</span><span class="o">=</span><span class="s">&quot;/results/:jobId&quot;</span><span class="w"> </span><span class="na">element</span><span class="o">=</span><span class="p">{&lt;</span><span class="nt">ProtectedRoute</span><span class="p">&gt;&lt;</span><span class="nt">ReportPage</span><span class="w"> </span><span class="p">/&gt;&lt;/</span><span class="nt">ProtectedRoute</span><span class="p">&gt;}</span><span class="w"> </span><span class="p">/&gt;</span>
+<span class="w">  </span><span class="p">&lt;</span><span class="nt">Route</span><span class="w"> </span><span class="na">path</span><span class="o">=</span><span class="s">&quot;/status/:jobId&quot;</span><span class="w"> </span><span class="na">element</span><span class="o">=</span><span class="p">{&lt;</span><span class="nt">ProtectedRoute</span><span class="p">&gt;&lt;</span><span class="nt">StatusPage</span><span class="w"> </span><span class="p">/&gt;&lt;/</span><span class="nt">ProtectedRoute</span><span class="p">&gt;}</span><span class="w"> </span><span class="p">/&gt;</span>
+<span class="p">&lt;/</span><span class="nt">Route</span><span class="p">&gt;</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/results/</span><span class="si">{job_id}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">response_model</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">get_job_result</span><span class="p">(</span><span class="n">request</span><span class="p">:</span> <span class="n">Request</span><span class="p">,</span> <span class="n">job_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">response</span><span class="p">:</span> <span class="n">Response</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Retrieve stored result by job_id, or serve SPA for browser requests.&quot;&quot;&quot;</span>
+    <span class="c1"># Content negotiation: browsers requesting HTML get the SPA</span>
+    <span class="n">accept</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;accept&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">&quot;text/html&quot;</span> <span class="ow">in</span> <span class="n">accept</span> <span class="ow">and</span> <span class="s2">&quot;application/json&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">accept</span><span class="p">:</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">get_result</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">result</span> <span class="ow">and</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">RedirectResponse</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;/status/</span><span class="si">{</span><span class="n">job_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">status_code</span><span class="o">=</span><span class="mi">302</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">_serve_spa</span><span class="p">()</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong>Note:</strong> Browser requests without a <code>jji_username</code> cookie are redirected to <code>/register</code>. That name is then used for comments, review toggles, and other interactive UI actions.</p>
+</blockquote>
+<h2 id="stored-results-and-the-spa">Stored results and the SPA</h2>
+<p>The service <strong>stores structured analysis results first</strong>; the React app loads them via JSON. There is <strong>no</strong> lazy server-side HTML render, <strong>no</strong> on-disk HTML report cache, and <strong>no</strong> <code>?refresh=1</code> path for rebuilding HTML.</p>
+<p>For <strong>browsers</strong>, <code>GET /results/{job_id}</code> serves the SPA or redirects in-progress work to the status route (see handler below). For <strong>API clients</strong>, the same path returns JSON. You can open <code>/results/{job_id}</code> as soon as a job exists; while it is still in progress, browser navigation lands on <code>/status/{job_id}</code> instead of a completed report.</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/results/</span><span class="si">{job_id}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">response_model</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">get_job_result</span><span class="p">(</span><span class="n">request</span><span class="p">:</span> <span class="n">Request</span><span class="p">,</span> <span class="n">job_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">response</span><span class="p">:</span> <span class="n">Response</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Retrieve stored result by job_id, or serve SPA for browser requests.&quot;&quot;&quot;</span>
+    <span class="c1"># Content negotiation: browsers requesting HTML get the SPA</span>
+    <span class="n">accept</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;accept&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">&quot;text/html&quot;</span> <span class="ow">in</span> <span class="n">accept</span> <span class="ow">and</span> <span class="s2">&quot;application/json&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">accept</span><span class="p">:</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">get_result</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">result</span> <span class="ow">and</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">RedirectResponse</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;/status/</span><span class="si">{</span><span class="n">job_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">status_code</span><span class="o">=</span><span class="mi">302</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">_serve_spa</span><span class="p">()</span>
+</code></pre></div>
+
+<p>The default container setup persists the <strong>SQLite database</strong> under <code>/data</code> so data survives restarts in normal deployments.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Persist SQLite database across container restarts</span>
+<span class="c1"># The ./data directory on host maps to /data in container</span>
+<span class="nt">volumes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./data:/data</span>
+</code></pre></div>
+
+<h2 id="refresh-and-polling-behavior">Refresh and polling behavior</h2>
+<p>There is <strong>no</strong> HTML cache, HTTP <code>Refresh</code> header on a static status document, <strong><code>?refresh=1</code></strong>, or <strong>Regenerate</strong> control.</p>
+<ul>
+<li><strong>Dashboard:</strong> refetches <code>GET /api/dashboard</code> <strong>every 10 seconds</strong>.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="nx">useEffect</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">fetchJobs</span><span class="p">()</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setInterval</span><span class="p">(</span><span class="nx">fetchJobs</span><span class="p">,</span><span class="w"> </span><span class="mf">10</span><span class="nx">_000</span><span class="p">)</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">clearInterval</span><span class="p">(</span><span class="nx">interval</span><span class="p">)</span>
+<span class="p">},</span><span class="w"> </span><span class="p">[</span><span class="nx">fetchJobs</span><span class="p">])</span>
+</code></pre></div>
+
+<ul>
+<li><strong>Status page (queued / running / failed before completion):</strong> polls <code>GET /results/{job_id}</code> <strong>every 10 seconds</strong>; when status becomes <code>completed</code>, it <strong>navigates to <code>/results/{jobId}</code></strong>.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">poll</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">inFlight</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">cancelled</span><span class="p">)</span><span class="w"> </span><span class="k">return</span>
+<span class="w">  </span><span class="nx">inFlight</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">  </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">res</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">api</span><span class="p">.</span><span class="nx">get</span><span class="o">&lt;</span><span class="nx">ResultResponse</span><span class="o">&gt;</span><span class="p">(</span><span class="sb">`/results/</span><span class="si">${</span><span class="nx">jobId</span><span class="si">}</span><span class="sb">`</span><span class="p">)</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">cancelled</span><span class="p">)</span><span class="w"> </span><span class="k">return</span>
+<span class="w">    </span><span class="nx">setError</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">setData</span><span class="p">(</span><span class="nx">res</span><span class="p">)</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;completed&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">stopPolling</span><span class="p">()</span>
+<span class="w">      </span><span class="nx">navigate</span><span class="p">(</span><span class="sb">`/results/</span><span class="si">${</span><span class="nx">jobId</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">replace</span><span class="o">:</span><span class="w"> </span><span class="kt">true</span><span class="w"> </span><span class="p">})</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;failed&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</code></pre></div>
+
+<ul>
+<li><strong>Report page:</strong> loads the analysis <strong>once</strong>; <strong>comments / reviews</strong> are polled on an interval (default <strong>30 seconds</strong> via <code>COMMENT_POLL_MS</code>, configurable with <code>VITE_COMMENT_POLL_MS</code>). Polling is skipped while a comment draft is open.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="nx">useEffect</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">jobId</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">state</span><span class="p">.</span><span class="nx">error</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">!</span><span class="nx">state</span><span class="p">.</span><span class="nx">result</span><span class="p">)</span><span class="w"> </span><span class="k">return</span>
+
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setInterval</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">state</span><span class="p">.</span><span class="nx">commentDraftCount</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="p">)</span><span class="w"> </span><span class="k">return</span>
+<span class="w">    </span><span class="nx">fetchComments</span><span class="p">(</span><span class="nx">jobId</span><span class="p">)</span>
+<span class="w">  </span><span class="p">},</span><span class="w"> </span><span class="nx">COMMENT_POLL_MS</span><span class="p">)</span>
+
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">clearInterval</span><span class="p">(</span><span class="nx">interval</span><span class="p">)</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">},</span><span class="w"> </span><span class="p">[</span><span class="nx">jobId</span><span class="p">,</span><span class="w"> </span><span class="nx">fetchComments</span><span class="p">,</span><span class="w"> </span><span class="nx">state</span><span class="p">.</span><span class="nx">commentDraftCount</span><span class="p">,</span><span class="w"> </span><span class="nx">state</span><span class="p">.</span><span class="nx">error</span><span class="p">,</span><span class="w"> </span><span class="nx">state</span><span class="p">.</span><span class="nx">result</span><span class="p">])</span>
+</code></pre></div>
+
+<h2 id="grouped-failure-cards">Grouped failure cards</h2>
+<p>The report’s <strong>Failures</strong> section is grouped for noisy builds: one card can represent many tests that share the same underlying error.</p>
+<p><strong>Grouping is strict:</strong> use <code>error_signature</code> when present; <strong>otherwise</strong> each failure is its own group keyed by test name (via a <code>unique-…</code> key).</p>
+<div class="highlight"><pre><span></span><code><span class="cm">/** Compute grouping key — matches Python _grouping_key(). */</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">groupingKey</span><span class="p">(</span><span class="nx">failure</span><span class="o">:</span><span class="w"> </span><span class="kt">FailureAnalysis</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">failure</span><span class="p">.</span><span class="nx">error_signature</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="sb">`unique-</span><span class="si">${</span><span class="nx">failure</span><span class="p">.</span><span class="nx">test_name</span><span class="si">}</span><span class="sb">`</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Each grouped card typically includes the AI analysis, classification controls, affected tests, comments, and issue actions. For groups with more than one failure, the UI can <strong>Review All</strong> for the whole group:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nx">group</span><span class="p">.</span><span class="nx">count</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">1</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="p">&lt;</span><span class="nt">div</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="s">&quot;flex items-center gap-2&quot;</span><span class="p">&gt;</span>
+<span class="w">    </span><span class="p">&lt;</span><span class="nt">button</span>
+<span class="w">      </span><span class="na">onClick</span><span class="o">=</span><span class="p">{</span><span class="nx">handleReviewAll</span><span class="p">}</span>
+<span class="w">      </span><span class="na">disabled</span><span class="o">=</span><span class="p">{</span><span class="nx">reviewingAll</span><span class="p">}</span>
+<span class="w">      </span><span class="na">className</span><span class="o">=</span><span class="p">{</span><span class="sb">`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-bold transition-colors </span><span class="si">${</span>
+<span class="w">        </span><span class="nx">allReviewed</span>
+<span class="w">          </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;bg-signal-green/15 text-signal-green&#39;</span>
+<span class="w">          </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;bg-surface-elevated text-text-tertiary hover:text-text-secondary&#39;</span>
+<span class="w">      </span><span class="si">}</span><span class="sb">`</span><span class="p">}</span>
+<span class="w">    </span><span class="p">&gt;</span>
+<span class="w">      </span><span class="p">&lt;</span><span class="nt">CheckCircle2</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="s">&quot;h-4 w-4&quot;</span><span class="w"> </span><span class="p">/&gt;</span>
+<span class="w">      </span><span class="p">{</span><span class="nx">allReviewed</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;All Reviewed&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="sb">`Review All (</span><span class="si">${</span><span class="nx">reviewedCount</span><span class="si">}</span><span class="sb">/</span><span class="si">${</span><span class="nx">group</span><span class="p">.</span><span class="nx">count</span><span class="si">}</span><span class="sb">)`</span><span class="p">}</span>
+<span class="w">    </span><span class="p">&lt;/</span><span class="nt">button</span><span class="p">&gt;</span>
+</code></pre></div>
+
+<p><strong>Classification overrides</strong> still update <strong>all</strong> failures in the same job that share the same <code>error_signature</code>, so grouped cards stay in sync:</p>
+<div class="highlight"><pre><span></span><code><span class="sd">&quot;&quot;&quot;Override the classification of a failure in failure_history.</span>
+
+<span class="sd">Updates ALL failure_history rows sharing the same error_signature</span>
+<span class="sd">(within the same job) so that grouped failures stay in sync.</span>
+<span class="sd">Also inserts a test_classifications entry so the AI can learn from</span>
+<span class="sd">human overrides.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+</code></pre></div>
+
+<p>Child pipeline jobs use the same grouped model under nested <strong>Child Job</strong> sections.</p>
+<blockquote>
+<p><strong>Tip:</strong> Start with grouped cards when a build looks overwhelming—they are the quickest way to see how many distinct error signatures you have.</p>
+</blockquote>
+<h2 id="browsing-a-report">Browsing a report</h2>
+<p>A full report is laid out in the React UI with:</p>
+<ul>
+<li>a <strong>sticky header</strong> with build context, status, AI provider/model, analysis timestamp, failure counts, and Jenkins links when available</li>
+<li>an optional <strong>Key Takeaway</strong> when a summary exists</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nx">result</span><span class="p">.</span><span class="nx">summary</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="p">&lt;</span><span class="nt">div</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="s">&quot;rounded-lg border-l-4 border-l-signal-orange bg-glow-orange p-4 animate-slide-up&quot;</span><span class="p">&gt;</span>
+<span class="w">    </span><span class="p">&lt;</span><span class="nt">h2</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="s">&quot;text-xs font-display uppercase tracking-widest text-signal-orange mb-2&quot;</span><span class="p">&gt;</span><span class="nx">Key</span><span class="w"> </span><span class="nx">Takeaway</span><span class="p">&lt;/</span><span class="nt">h2</span><span class="p">&gt;</span>
+<span class="w">    </span><span class="p">&lt;</span><span class="nt">p</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="s">&quot;text-sm text-text-secondary whitespace-pre-wrap&quot;</span><span class="p">&gt;{</span><span class="nx">result</span><span class="p">.</span><span class="nx">summary</span><span class="p">}&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+<span class="w">  </span><span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+<span class="p">)}</span>
+</code></pre></div>
+
+<ul>
+<li><strong>Failures</strong> — grouped cards (section title includes total failure count); this is the primary list of failing tests—there is <strong>no</strong> separate <strong>All Failures</strong> table or <code>Bug Ref</code> column tying back to HTML-era <code>BUG-n</code> labels.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nx">groups</span><span class="p">.</span><span class="nx">length</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="p">&lt;</span><span class="nt">section</span><span class="p">&gt;</span>
+<span class="w">    </span><span class="p">&lt;</span><span class="nt">div</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="s">&quot;flex items-center justify-between mb-3&quot;</span><span class="p">&gt;</span>
+<span class="w">      </span><span class="p">&lt;</span><span class="nt">h2</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="s">&quot;text-xs font-display uppercase tracking-widest text-text-tertiary&quot;</span><span class="p">&gt;</span>
+<span class="w">        </span><span class="nx">Failures</span><span class="w"> </span><span class="p">({(</span><span class="nx">result</span><span class="p">.</span><span class="nx">failures</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="p">[]).</span><span class="nx">length</span><span class="p">})</span>
+<span class="w">      </span><span class="p">&lt;/</span><span class="nt">h2</span><span class="p">&gt;</span>
+</code></pre></div>
+
+<ul>
+<li><strong>Child job analyses</strong> — nested sections for downstream jobs; <strong>URL hash</strong> targets auto-expand matching sections and scroll them into view for deep links:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="c1">// Auto-expand and scroll when the URL hash targets this child job or any descendant</span>
+<span class="nx">useEffect</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">activeHash</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">(</span><span class="nx">activeHash</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">hashId</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">activeHash</span><span class="p">.</span><span class="nx">startsWith</span><span class="p">(</span><span class="sb">`</span><span class="si">${</span><span class="nx">hashId</span><span class="si">}</span><span class="sb">--`</span><span class="p">)))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">expanded</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">setExpanded</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">activeHash</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">hashId</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nx">requestAnimationFrame</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">sectionRef</span><span class="p">.</span><span class="nx">current</span><span class="o">?</span><span class="p">.</span><span class="nx">scrollIntoView</span><span class="p">({</span><span class="w"> </span><span class="nx">behavior</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;smooth&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;start&#39;</span><span class="w"> </span><span class="p">})</span>
+<span class="w">      </span><span class="p">})</span>
+</code></pre></div>
+
+<ul>
+<li><strong>Comments</strong> and <strong>review</strong> toggles for tracking investigation in-place on each failure card or group.</li>
+</ul>
+<h2 id="dashboard-search-and-pagination">Dashboard search and pagination</h2>
+<p>The dashboard is at <strong><code>/</code></strong> ( <strong><code>/dashboard</code> redirects to <code>/</code></strong> ). It is a <strong>table</strong> of recent jobs (not cards). The page loads jobs from <strong><code>GET /api/dashboard</code></strong> and <strong>refetches every 10 seconds</strong>.</p>
+<div class="highlight"><pre><span></span><code><span class="nx">useEffect</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">fetchJobs</span><span class="p">()</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">setInterval</span><span class="p">(</span><span class="nx">fetchJobs</span><span class="p">,</span><span class="w"> </span><span class="mf">10</span><span class="nx">_000</span><span class="p">)</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">clearInterval</span><span class="p">(</span><span class="nx">interval</span><span class="p">)</span>
+<span class="p">},</span><span class="w"> </span><span class="p">[</span><span class="nx">fetchJobs</span><span class="p">])</span>
+</code></pre></div>
+
+<p><strong>Search</strong> filters only <strong><code>job_name</code></strong> and <strong><code>job_id</code></strong> (case-insensitive substring match):</p>
+<div class="highlight"><pre><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">filtered</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">useMemo</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">search</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">jobs</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">q</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">search</span><span class="p">.</span><span class="nx">toLowerCase</span><span class="p">()</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">jobs</span><span class="p">.</span><span class="nx">filter</span><span class="p">((</span><span class="nx">j</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">haystack</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="sb">`</span><span class="si">${</span><span class="nx">j</span><span class="p">.</span><span class="nx">job_name</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="si">}</span><span class="sb"> </span><span class="si">${</span><span class="nx">j</span><span class="p">.</span><span class="nx">job_id</span><span class="si">}</span><span class="sb">`</span><span class="p">.</span><span class="nx">toLowerCase</span><span class="p">()</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">haystack</span><span class="p">.</span><span class="nx">includes</span><span class="p">(</span><span class="nx">q</span><span class="p">)</span>
+<span class="w">  </span><span class="p">})</span>
+<span class="p">},</span><span class="w"> </span><span class="p">[</span><span class="nx">jobs</span><span class="p">,</span><span class="w"> </span><span class="nx">search</span><span class="p">])</span>
+</code></pre></div>
+
+<p><strong>Pagination</strong> is client-side on the filtered rows. Page-size options are <strong>10</strong>, <strong>20</strong>, and <strong>50</strong>.</p>
+<p><strong>Row navigation:</strong> clicking a row goes to <strong><code>/status/{job_id}</code></strong> for <code>waiting</code>, <code>pending</code>, or <code>running</code> jobs; otherwise to <strong><code>/results/{job_id}</code></strong>.</p>
+<div class="highlight"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">getJobRoute</span><span class="p">(</span><span class="nx">job</span><span class="o">:</span><span class="w"> </span><span class="kt">DashboardJob</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;waiting&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;pending&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;running&#39;</span><span class="p">].</span><span class="nx">includes</span><span class="p">(</span><span class="nx">job</span><span class="p">.</span><span class="nx">status</span><span class="p">)</span>
+<span class="w">    </span><span class="o">?</span><span class="w"> </span><span class="sb">`/status/</span><span class="si">${</span><span class="nx">job</span><span class="p">.</span><span class="nx">job_id</span><span class="si">}</span><span class="sb">`</span>
+<span class="w">    </span><span class="o">:</span><span class="w"> </span><span class="sb">`/results/</span><span class="si">${</span><span class="nx">job</span><span class="p">.</span><span class="nx">job_id</span><span class="si">}</span><span class="sb">`</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The backend default dashboard window is <strong><code>DEFAULT_DASHBOARD_LIMIT = 500</code></strong> in <code>storage.py</code>. The React dashboard has <strong>no</strong> “Load last” or server <code>limit</code> control in the UI—you work within that default list.</p>
+<blockquote>
+<p><strong>Note:</strong> Search and pagination apply only to jobs already returned in the dashboard list.</p>
+<p><strong>Tip:</strong> If a run is outside that window, use other flows (for example <strong><code>/history</code></strong>) to find it.</p>
+</blockquote>
+<p>When there are no jobs, the dashboard shows an empty state.</p>
+                </div>
+            </article>
+            <nav class="page-nav">
+
+                <a href="pytest-junitxml-integration.html" class="page-nav-link page-nav-prev">
+                    <span class="page-nav-label">Previous</span>
+                    <span class="page-nav-title">Pytest JUnit XML Integration</span>
+                </a>
+
+
+                <a href="pipeline-analysis-and-failure-deduplication.html" class="page-nav-link page-nav-next">
+                    <span class="page-nav-label">Next</span>
+                    <span class="page-nav-title">Pipeline Analysis and Failure Deduplication</span>
+                </a>
+
+            </nav>
+
+            <aside class="toc-sidebar">
+                <div class="toc-container">
+                    <h3>On this page</h3>
+                    <div class="toc">
+<ul>
+<li><a href="#stored-results-and-the-spa">Stored results and the SPA</a></li>
+<li><a href="#refresh-and-polling-behavior">Refresh and polling behavior</a></li>
+<li><a href="#grouped-failure-cards">Grouped failure cards</a></li>
+<li><a href="#browsing-a-report">Browsing a report</a></li>
+<li><a href="#dashboard-search-and-pagination">Dashboard search and pagination</a></li>
+</ul>
+</div>
+
+                </div>
+            </aside>
+
+
+        </main>
+
+        <footer class="page-footer">
+            Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
+            <span class="footer-sep">·</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+        </footer>
+    </div>
+
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+    <script src="assets/theme.js"></script>
+    <script src="assets/search.js"></script>
+    <script src="assets/copy.js"></script>
+    <script src="assets/callouts.js"></script>
+    <script src="assets/scrollspy.js"></script>
+    <script src="assets/codelabels.js"></script>
+    <script src="assets/github.js"></script>
+    <script>
+(function() {
+    var toggle = document.getElementById('sidebar-toggle');
+    var sidebar = document.getElementById('sidebar');
+    var overlay = document.getElementById('sidebar-overlay');
+    if (toggle && sidebar) {
+        toggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
+            if (overlay) overlay.classList.toggle('open');
+            var expanded = sidebar.classList.contains('open');
+            toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        });
+    }
+    if (overlay) {
+        overlay.addEventListener('click', function() {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('open');
+            if (toggle) toggle.setAttribute('aria-expanded', 'false');
+        });
+    }
+})();
+</script>
+<script>
+(function() {
+    var sidebar = document.querySelector('.sidebar-nav') || document.querySelector('.sidebar');
+    if (!sidebar) return;
+
+    // Restore scroll position
+    var saved = sessionStorage.getItem('sidebar-scroll');
+    if (saved) sidebar.scrollTop = parseInt(saved, 10);
+
+    // Save scroll position before navigating
+    sidebar.addEventListener('scroll', function() {
+        sessionStorage.setItem('sidebar-scroll', sidebar.scrollTop.toString());
+    });
+
+    // Also scroll active link into view if no saved position
+    if (!saved) {
+        var active = sidebar.querySelector('.nav-link.active');
+        if (active) {
+            active.scrollIntoView({ block: 'center', behavior: 'instant' });
+        }
+    }
+})();
+</script>
+</body>
+</html>

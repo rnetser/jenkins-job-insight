@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analyze Jenkins Jobs - jenkins-job-insight</title>
+    <meta name="description" content="AI-powered Jenkins failure analysis service with direct JUnit XML enrichment, HTML reports, and optional Jira matching.">
+    <link rel="stylesheet" href="assets/style.css">
+    <link rel="alternate" type="text/plain" title="LLM Documentation Index" href="llms.txt">
+    <link rel="alternate" type="text/plain" title="LLM Full Documentation" href="llms-full.txt">
+</head>
+<body>
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <a href="index.html" class="sidebar-logo">jenkins-job-insight</a>
+            <p class="sidebar-tagline">AI-powered Jenkins failure analysis service with direct JUnit XML enrichment, HTML reports, and optional Jira matching.</p>
+        </div>
+
+        <div class="sidebar-search">
+            <input type="text" id="search-input" placeholder="Search... (⌘K)" autocomplete="off" readonly>
+            <div id="search-results" class="search-results"></div>
+        </div>
+
+        <nav class="sidebar-nav">
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Introduction</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="overview.html"
+                           class="nav-link">
+                            Overview
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="architecture-and-project-structure.html"
+                           class="nav-link">
+                            Architecture and Project Structure
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Getting Started</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="installation.html"
+                           class="nav-link">
+                            Installation
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="run-locally.html"
+                           class="nav-link">
+                            Run Locally
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="container-deployment.html"
+                           class="nav-link">
+                            Container Deployment
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="quickstart.html"
+                           class="nav-link">
+                            Quickstart
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Configuration</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="configuration-reference.html"
+                           class="nav-link">
+                            Configuration Reference
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="ai-provider-setup.html"
+                           class="nav-link">
+                            AI Provider Setup
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jenkins-repository-and-prompts.html"
+                           class="nav-link">
+                            Jenkins, Repository Context, and Prompts
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jira-integration.html"
+                           class="nav-link">
+                            Jira Integration
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Guides</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="analyze-jenkins-jobs.html"
+                           class="nav-link active" aria-current="page">
+                            Analyze Jenkins Jobs
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="direct-failure-analysis.html"
+                           class="nav-link">
+                            Analyze Raw Failures and JUnit XML
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="pytest-junitxml-integration.html"
+                           class="nav-link">
+                            Pytest JUnit XML Integration
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="html-reports-and-dashboard.html"
+                           class="nav-link">
+                            HTML Reports and Dashboard
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="pipeline-analysis-and-failure-deduplication.html"
+                           class="nav-link">
+                            Pipeline Analysis and Failure Deduplication
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jira-assisted-bug-triage.html"
+                           class="nav-link">
+                            Jira-Assisted Bug Triage
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">API Reference</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="api-overview.html"
+                           class="nav-link">
+                            API Overview
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-post-analyze.html"
+                           class="nav-link">
+                            POST /analyze
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-post-analyze-failures.html"
+                           class="nav-link">
+                            POST /analyze-failures
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-results-and-dashboard.html"
+                           class="nav-link">
+                            Results, Reports, and Dashboard Endpoints
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-schemas-and-models.html"
+                           class="nav-link">
+                            Schemas and Data Models
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Operations</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="storage-and-result-lifecycle.html"
+                           class="nav-link">
+                            Storage and Result Lifecycle
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="reverse-proxy-and-base-urls.html"
+                           class="nav-link">
+                            Reverse Proxy and Base URL Handling
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="troubleshooting.html"
+                           class="nav-link">
+                            Troubleshooting
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="development-and-testing.html"
+                           class="nav-link">
+                            Development and Testing
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+        </nav>
+    </aside>
+
+    <div class="main-wrapper">
+        <header class="top-bar">
+            <div class="top-bar-left">
+                <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar" aria-expanded="false">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </button>
+                <a href="index.html" class="top-bar-title">jenkins-job-insight</a>
+            </div>
+            <div class="top-bar-spacer"></div>
+            <div class="top-bar-right">
+                <button class="top-bar-search-btn" id="search-trigger" aria-label="Search">
+                    <kbd>&#8984;K</kbd> Search
+                </button>
+                <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener" class="docsfy-badge" title="Generated with docsfy">
+                    ⚡ docs<span class="brand-accent">fy</span>
+                </a>
+
+                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                    <span class="github-stars" id="github-stars"></span>
+                </a>
+
+                <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+                    <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                    </svg>
+                    <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <main class="content">
+
+            <article class="article">
+                <div class="article-body">
+                    <!-- SECURITY: |safe is intentional. Content is AI-generated markdown
+                         converted to HTML server-side by the markdown library, not
+                         user-supplied input. XSS risk is minimal and accepted since
+                         the AI generates the content, not end users. -->
+                    <h1 id="analyze-jenkins-jobs">Analyze Jenkins Jobs</h1>
+<p><code>POST /analyze</code> submits a Jenkins build for analysis as an async job and stores the result so you can revisit it later as JSON or in the web UI.</p>
+<p>Most clients use one of these patterns:</p>
+<ul>
+<li>submit asynchronously, then poll <code>GET /results/{job_id}</code></li>
+<li>submit asynchronously, then open <code>/status/{job_id}</code> in a browser while the job is queued, waiting, or running</li>
+<li>submit early and let the server wait for the Jenkins build to finish before analysis by leaving <code>wait_for_completion</code> enabled</li>
+</ul>
+<p>A completed analysis can represent either:</p>
+<ul>
+<li>a failing Jenkins build that was analyzed successfully</li>
+<li>a successful Jenkins build with nothing to analyze</li>
+</ul>
+<p><code>status: "failed"</code> means the analysis process failed. It does not simply mean the Jenkins build failed.</p>
+<h2 id="before-you-call-it">Before you call it</h2>
+<p>The server needs Jenkins access and an AI provider. The minimum settings shown in <code>.env.example</code> are:</p>
+<div class="highlight"><pre><span></span><code>JENKINS_URL=https://jenkins.example.com
+JENKINS_USER=your-username
+JENKINS_PASSWORD=your-api-token
+JENKINS_SSL_VERIFY=true
+
+# Choose AI provider (required): &quot;claude&quot;, &quot;gemini&quot;, or &quot;cursor&quot;
+AI_PROVIDER=claude
+
+# AI model to use (required, applies to any provider)
+# Can also be set per-request in webhook body
+AI_MODEL=your-model-name
+</code></pre></div>
+
+<p>Optional defaults in <code>.env.example</code> let you add repository context for every request:</p>
+<div class="highlight"><pre><span></span><code># Tests repository URL
+# TESTS_REPO_URL=https://github.com/org/test-repo
+</code></pre></div>
+
+<blockquote>
+<p><strong>Note:</strong> Request-body values override environment defaults. That includes <code>tests_repo_url</code>, <code>ai_provider</code>, <code>ai_model</code>, Jenkins connection settings, <code>wait_for_completion</code>, <code>poll_interval_minutes</code>, <code>max_wait_minutes</code>, artifact settings, and timeout settings. <code>PUBLIC_BASE_URL</code> is server-side only and controls whether returned <code>result_url</code> values are absolute or relative.</p>
+</blockquote>
+<h2 id="request-body">Request body</h2>
+<p>At minimum, send <code>job_name</code> and <code>build_number</code>. One of the endpoint tests uses this exact JSON body:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;job_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;test&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;build_number&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">123</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;tests_repo_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://github.com/example/repo&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The most useful request fields are:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Required</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>job_name</code></td>
+<td>Yes</td>
+<td>Jenkins job name. Folder-style names such as <code>folder/job-name</code> are supported.</td>
+</tr>
+<tr>
+<td><code>build_number</code></td>
+<td>Yes</td>
+<td>Jenkins build number to analyze.</td>
+</tr>
+<tr>
+<td><code>tests_repo_url</code></td>
+<td>No</td>
+<td>Repository to clone so the AI can inspect test code.</td>
+</tr>
+<tr>
+<td><code>ai_provider</code></td>
+<td>No</td>
+<td>Per-request AI provider override. Valid values are <code>claude</code>, <code>gemini</code>, and <code>cursor</code>.</td>
+</tr>
+<tr>
+<td><code>ai_model</code></td>
+<td>No</td>
+<td>Per-request AI model override.</td>
+</tr>
+<tr>
+<td><code>wait_for_completion</code></td>
+<td>No</td>
+<td>If <code>true</code> (default), monitor a still-running Jenkins build and start analysis only after it reaches a terminal state.</td>
+</tr>
+<tr>
+<td><code>poll_interval_minutes</code></td>
+<td>No</td>
+<td>Minutes between Jenkins status polls while waiting. Default is <code>2</code>.</td>
+</tr>
+<tr>
+<td><code>max_wait_minutes</code></td>
+<td>No</td>
+<td>Maximum minutes to wait for build completion. <code>0</code> means no limit.</td>
+</tr>
+<tr>
+<td><code>jenkins_url</code>, <code>jenkins_user</code>, <code>jenkins_password</code>, <code>jenkins_ssl_verify</code></td>
+<td>No</td>
+<td>Per-request Jenkins overrides.</td>
+</tr>
+<tr>
+<td><code>get_job_artifacts</code></td>
+<td>No</td>
+<td>Controls whether build artifacts are downloaded for analysis. Default is <code>true</code>.</td>
+</tr>
+<tr>
+<td><code>jenkins_artifacts_max_size_mb</code></td>
+<td>No</td>
+<td>Max total artifact size to process.</td>
+</tr>
+<tr>
+<td><code>jenkins_artifacts_context_lines</code></td>
+<td>No</td>
+<td>Max artifact context lines to feed into the AI prompt.</td>
+</tr>
+<tr>
+<td><code>raw_prompt</code></td>
+<td>No</td>
+<td>Extra instructions appended to the AI prompt.</td>
+</tr>
+</tbody>
+</table>
+<p>If <code>tests_repo_url</code> is provided, the repository is cloned once and reused for the main build analysis and any recursively analyzed child jobs.</p>
+<p>Validation is strict:</p>
+<ul>
+<li>Missing required fields return <code>422</code>.</li>
+<li>A non-numeric <code>build_number</code> returns <code>422</code>.</li>
+<li>Invalid URLs such as a bad <code>tests_repo_url</code> return <code>422</code>.</li>
+<li><code>poll_interval_minutes</code> must be greater than <code>0</code>, and <code>max_wait_minutes</code> cannot be negative.</li>
+</ul>
+<h2 id="async-vs-sync">Async vs Sync</h2>
+<h3 id="async-mode">Async mode</h3>
+<p>For Jenkins-backed analysis, <code>POST /analyze</code> is the submission flow. On successful submission, it returns <code>202 Accepted</code>, creates a stored job record, and schedules background work.</p>
+<p>The queueing path currently looks like this:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Validate AI config early -- fail fast before queuing invalid jobs.</span>
+<span class="n">_resolve_ai_config</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
+
+<span class="c1"># Generate job_id here so we can return it to the client for polling</span>
+<span class="n">job_id</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">())</span>
+<span class="n">merged</span> <span class="o">=</span> <span class="n">_merge_settings</span><span class="p">(</span><span class="n">body</span><span class="p">,</span> <span class="n">settings</span><span class="p">)</span>
+<span class="n">jenkins_url</span> <span class="o">=</span> <span class="n">build_jenkins_url</span><span class="p">(</span>
+    <span class="n">merged</span><span class="o">.</span><span class="n">jenkins_url</span><span class="p">,</span> <span class="n">body</span><span class="o">.</span><span class="n">job_name</span><span class="p">,</span> <span class="n">body</span><span class="o">.</span><span class="n">build_number</span>
+<span class="p">)</span>
+<span class="c1"># Save initial pending state before queueing background task.</span>
+<span class="c1"># Only persist request_params for waiting jobs (wait_for_completion),</span>
+<span class="c1"># since those are the only ones that need resumption after restart.</span>
+<span class="c1"># This avoids storing encrypted secrets with no operational use.</span>
+<span class="n">initial_result</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;job_name&quot;</span><span class="p">:</span> <span class="n">body</span><span class="o">.</span><span class="n">job_name</span><span class="p">,</span>
+    <span class="s2">&quot;build_number&quot;</span><span class="p">:</span> <span class="n">body</span><span class="o">.</span><span class="n">build_number</span><span class="p">,</span>
+<span class="p">}</span>
+<span class="n">can_resume_wait</span> <span class="o">=</span> <span class="n">merged</span><span class="o">.</span><span class="n">wait_for_completion</span> <span class="ow">and</span> <span class="nb">bool</span><span class="p">(</span><span class="n">merged</span><span class="o">.</span><span class="n">jenkins_url</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">can_resume_wait</span><span class="p">:</span>
+    <span class="n">initial_result</span><span class="p">[</span><span class="s2">&quot;request_params&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">_build_request_params</span><span class="p">(</span>
+        <span class="n">body</span><span class="p">,</span>
+        <span class="n">merged</span><span class="p">,</span>
+        <span class="n">body</span><span class="o">.</span><span class="n">ai_provider</span> <span class="ow">or</span> <span class="n">AI_PROVIDER</span><span class="p">,</span>
+        <span class="n">body</span><span class="o">.</span><span class="n">ai_model</span> <span class="ow">or</span> <span class="n">AI_MODEL</span><span class="p">,</span>
+    <span class="p">)</span>
+<span class="k">await</span> <span class="n">save_result</span><span class="p">(</span>
+    <span class="n">job_id</span><span class="p">,</span>
+    <span class="n">jenkins_url</span><span class="p">,</span>
+    <span class="s2">&quot;waiting&quot;</span> <span class="k">if</span> <span class="n">can_resume_wait</span> <span class="k">else</span> <span class="s2">&quot;pending&quot;</span><span class="p">,</span>
+    <span class="n">initial_result</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">background_tasks</span><span class="o">.</span><span class="n">add_task</span><span class="p">(</span><span class="n">process_analysis_with_id</span><span class="p">,</span> <span class="n">job_id</span><span class="p">,</span> <span class="n">body</span><span class="p">,</span> <span class="n">merged</span><span class="p">)</span>
+<span class="n">message</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;Analysis job queued. Poll /results/</span><span class="si">{</span><span class="n">job_id</span><span class="si">}</span><span class="s2"> for status.&quot;</span>
+
+<span class="n">response</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;queued&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;job_id&quot;</span><span class="p">:</span> <span class="n">job_id</span><span class="p">,</span>
+    <span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="n">message</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">return</span> <span class="n">_attach_result_links</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="n">base_url</span><span class="p">,</span> <span class="n">job_id</span><span class="p">)</span>
+</code></pre></div>
+
+<p>In practice, the submission response gives you:</p>
+<ul>
+<li><code>status: "queued"</code></li>
+<li><code>job_id</code></li>
+<li><code>message</code></li>
+<li><code>base_url</code></li>
+<li><code>result_url</code></li>
+</ul>
+<p>The response no longer includes <code>html_report_url</code>. For browser flows, use <code>/status/{job_id}</code> while the job is in progress and <code>/results/{job_id}</code> for the final report page.</p>
+<p>After submission, the stored status progresses through:</p>
+<ul>
+<li><code>waiting</code> while the service is in the Jenkins monitoring phase before analysis begins</li>
+<li><code>pending</code> when the job is queued without a waiting phase</li>
+<li><code>running</code> while analysis is actively executing</li>
+<li><code>completed</code> or <code>failed</code> when processing finishes</li>
+</ul>
+<blockquote>
+<p><strong>Note:</strong> AI configuration is validated before the job is queued. If no AI provider or model is configured, <code>POST /analyze</code> returns <code>400</code> immediately instead of returning <code>202</code> and failing later.</p>
+<p><strong>Note:</strong> Waiting jobs persist resumable request parameters. If the server restarts while a job is in the <code>waiting</code> phase, monitoring can resume when the app comes back up.</p>
+</blockquote>
+<h3 id="sync-mode">Sync mode</h3>
+<p>The older <code>?sync=true</code> pattern is not part of the current Jenkins-backed flow. Treat <code>POST /analyze</code> as async-only and retrieve the final result from <code>GET /results/{job_id}</code>.</p>
+<p>If you need a single request/response flow, the supported synchronous endpoint is <code>POST /analyze-failures</code>, which analyzes raw failures or JUnit XML instead of pulling data from Jenkins.</p>
+<h2 id="polling-and-reports">Polling and Reports</h2>
+<p>Once you have a <code>job_id</code>, there are two main ways to follow the job.</p>
+<h3 id="get-resultsjob_id"><code>GET /results/{job_id}</code></h3>
+<p>This is the machine-friendly endpoint for both progress checks and final result retrieval.</p>
+<p>The JSON response path is implemented like this:</p>
+<div class="highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">get_result</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+<span class="k">if</span> <span class="ow">not</span> <span class="n">result</span><span class="p">:</span>
+    <span class="k">raise</span> <span class="n">HTTPException</span><span class="p">(</span><span class="n">status_code</span><span class="o">=</span><span class="mi">404</span><span class="p">,</span> <span class="n">detail</span><span class="o">=</span><span class="s2">&quot;Job not found&quot;</span><span class="p">)</span>
+<span class="n">_attach_result_links</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">_extract_base_url</span><span class="p">(),</span> <span class="n">job_id</span><span class="p">)</span>
+<span class="n">settings</span> <span class="o">=</span> <span class="n">get_settings</span><span class="p">()</span>
+<span class="n">result</span><span class="p">[</span><span class="s2">&quot;capabilities&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;github_issues&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">github_issues_enabled</span><span class="p">,</span>
+    <span class="s2">&quot;jira_bugs&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">jira_enabled</span><span class="p">,</span>
+<span class="p">}</span>
+<span class="k">if</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
+    <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">=</span> <span class="mi">202</span>
+<span class="k">return</span> <span class="n">result</span>
+</code></pre></div>
+
+<p>A stored result record includes:</p>
+<ul>
+<li>top-level job metadata such as <code>job_id</code>, <code>status</code>, <code>jenkins_url</code>, <code>created_at</code>, <code>analysis_started_at</code>, and <code>completed_at</code></li>
+<li>a nested <code>result</code> object containing the latest stored payload, such as initial job metadata, a completed analysis, or failure details</li>
+<li><code>base_url</code> and <code>result_url</code>, generated on each response</li>
+<li><code>capabilities</code>, which tells the UI whether GitHub issue creation and Jira bug creation are enabled</li>
+</ul>
+<p>Status meanings:</p>
+<ul>
+<li><code>waiting</code>: accepted and stored, currently in the Jenkins monitoring phase before analysis begins</li>
+<li><code>pending</code>: accepted and queued</li>
+<li><code>running</code>: analysis is in progress</li>
+<li><code>completed</code>: analysis finished and a result is available</li>
+<li><code>failed</code>: the analysis process failed</li>
+</ul>
+<blockquote>
+<p><strong>Note:</strong> <code>completed</code> refers to the analysis job, not the Jenkins build result. A Jenkins build can fail and still produce <code>status: "completed"</code> if the analysis itself finished successfully.</p>
+<p><strong>Note:</strong> <code>GET /results/{job_id}</code> returns <code>202 Accepted</code> while the job is <code>waiting</code>, <code>pending</code>, or <code>running</code>. Once the job reaches <code>completed</code> or <code>failed</code>, the same endpoint returns <code>200 OK</code>.</p>
+</blockquote>
+<h3 id="browser-flow">Browser flow</h3>
+<p>The browser UI now uses React routes instead of <code>GET /results/{job_id}.html</code>. There is no separate HTML report endpoint to poll or refresh.</p>
+<p>For browser requests, the backend checks the <code>Accept</code> header and either redirects an in-progress job to <code>/status/{job_id}</code> or serves the report app:</p>
+<div class="highlight"><pre><span></span><code><span class="n">accept</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;accept&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+<span class="k">if</span> <span class="s2">&quot;text/html&quot;</span> <span class="ow">in</span> <span class="n">accept</span> <span class="ow">and</span> <span class="s2">&quot;application/json&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">accept</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">get_result</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">result</span> <span class="ow">and</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">RedirectResponse</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;/status/</span><span class="si">{</span><span class="n">job_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">status_code</span><span class="o">=</span><span class="mi">302</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_serve_spa</span><span class="p">()</span>
+</code></pre></div>
+
+<p>In practice:</p>
+<ul>
+<li>open <code>/status/{job_id}</code> while the job is <code>waiting</code>, <code>pending</code>, or <code>running</code></li>
+<li>open <code>/results/{job_id}</code> once the analysis is finished</li>
+<li>if you hit <code>/results/{job_id}</code> too early in a browser, the server redirects you to <code>/status/{job_id}</code> automatically</li>
+</ul>
+<p>The React status page then polls <code>GET /results/{job_id}</code> and switches to the report view when the analysis finishes:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">res</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">api</span><span class="p">.</span><span class="nx">get</span><span class="o">&lt;</span><span class="nx">ResultResponse</span><span class="o">&gt;</span><span class="p">(</span><span class="sb">`/results/</span><span class="si">${</span><span class="nx">jobId</span><span class="si">}</span><span class="sb">`</span><span class="p">)</span>
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;completed&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">stopPolling</span><span class="p">()</span>
+<span class="w">  </span><span class="nx">navigate</span><span class="p">(</span><span class="sb">`/results/</span><span class="si">${</span><span class="nx">jobId</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">replace</span><span class="o">:</span><span class="w"> </span><span class="kt">true</span><span class="w"> </span><span class="p">})</span>
+<span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;failed&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">stopPolling</span><span class="p">()</span>
+<span class="w">  </span><span class="nx">setTerminalErrorKind</span><span class="p">(</span><span class="s1">&#39;failed&#39;</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">setError</span><span class="p">(</span><span class="nx">res</span><span class="p">.</span><span class="nx">result</span><span class="o">?</span><span class="p">.</span><span class="nx">error</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;Analysis failed&#39;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong>Note:</strong> <code>result_url</code> and <code>base_url</code> come from <code>PUBLIC_BASE_URL</code> when that setting is configured. When it is not set, the service returns relative links such as <code>/results/{job_id}</code> and does not trust <code>Host</code> or <code>X-Forwarded-*</code> headers.</p>
+</blockquote>
+<h2 id="callbacks">Callbacks</h2>
+<p>Callbacks are no longer part of the <code>POST /analyze</code> flow.</p>
+<blockquote>
+<p><strong>Warning:</strong> Legacy <code>CALLBACK_URL</code>, <code>CALLBACK_HEADERS</code>, <code>callback_url</code>, and <code>callback_headers</code> examples are outdated for this endpoint.</p>
+</blockquote>
+<p>Use one of these supported patterns instead:</p>
+<ul>
+<li>poll <code>GET /results/{job_id}</code> from automation</li>
+<li>open <code>/status/{job_id}</code> in a browser while the job is still in progress</li>
+<li>treat the stored result at <code>GET /results/{job_id}</code> as the durable source of truth</li>
+</ul>
+<h2 id="how-successful-builds-are-handled">How Successful Builds Are Handled</h2>
+<p>The analyzer checks the Jenkins build result before it starts deeper failure analysis. If Jenkins reports <code>SUCCESS</code>, the service returns early with a normal completed result and an empty failure list:</p>
+<div class="highlight"><pre><span></span><code><span class="n">build_result</span> <span class="o">=</span> <span class="n">build_info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;result&quot;</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">build_result</span> <span class="o">==</span> <span class="s2">&quot;SUCCESS&quot;</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">AnalysisResult</span><span class="p">(</span>
+        <span class="n">job_id</span><span class="o">=</span><span class="n">job_id</span><span class="p">,</span>
+        <span class="n">job_name</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">job_name</span><span class="p">,</span>
+        <span class="n">build_number</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">build_number</span><span class="p">,</span>
+        <span class="n">jenkins_url</span><span class="o">=</span><span class="n">HttpUrl</span><span class="p">(</span><span class="n">jenkins_build_url</span><span class="p">),</span>
+        <span class="n">status</span><span class="o">=</span><span class="s2">&quot;completed&quot;</span><span class="p">,</span>
+        <span class="n">summary</span><span class="o">=</span><span class="s2">&quot;Build passed successfully. No failures to analyze.&quot;</span><span class="p">,</span>
+        <span class="n">ai_provider</span><span class="o">=</span><span class="n">ai_provider</span><span class="p">,</span>
+        <span class="n">ai_model</span><span class="o">=</span><span class="n">ai_model</span><span class="p">,</span>
+        <span class="n">failures</span><span class="o">=</span><span class="p">[],</span>
+    <span class="p">)</span>
+</code></pre></div>
+
+<p>What this means for users:</p>
+<ul>
+<li>a passing build is not treated as an error</li>
+<li><code>status</code> is still <code>completed</code></li>
+<li><code>failures</code> is empty</li>
+<li>the result is still stored and accessible from the results endpoints</li>
+</ul>
+<blockquote>
+<p><strong>Note:</strong> Because the service short-circuits on <code>SUCCESS</code>, no failure parsing or AI classification runs for a passing build.</p>
+</blockquote>
+<h2 id="recursive-child-job-analysis">Recursive Child-Job Analysis</h2>
+<p><code>POST /analyze</code> does not stop at the top-level Jenkins build. If the build is a pipeline or orchestrator job, it also looks for failed downstream jobs and analyzes them recursively.</p>
+<h3 id="what-gets-detected-as-a-child-job">What gets detected as a child job</h3>
+<p>The analyzer first checks structured Jenkins metadata:</p>
+<ul>
+<li><code>subBuilds</code></li>
+<li><code>actions[].triggeredBuilds</code></li>
+</ul>
+<p>Only child jobs with <code>FAILURE</code> or <code>UNSTABLE</code> are included.</p>
+<p>If no child jobs are found there, it falls back to console parsing. The console parser looks for lines like <code>Build folder » job-name #123 completed: FAILURE</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="n">pattern</span> <span class="o">=</span> <span class="sa">r</span><span class="s2">&quot;Build\s+(.+?)\s+#(\d+)\s+completed:\s*(FAILURE|UNSTABLE)&quot;</span>
+<span class="n">matches</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="n">pattern</span><span class="p">,</span> <span class="n">console_output</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">match</span> <span class="ow">in</span> <span class="n">matches</span><span class="p">:</span>
+    <span class="n">job_path</span> <span class="o">=</span> <span class="n">match</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+    <span class="n">build_num</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">match</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="n">job_name</span> <span class="o">=</span> <span class="n">job_path</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot; » &quot;</span><span class="p">,</span> <span class="s2">&quot;/&quot;</span><span class="p">)</span>
+    <span class="n">failed_jobs</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">job_name</span><span class="p">,</span> <span class="n">build_num</span><span class="p">))</span>
+</code></pre></div>
+
+<h3 id="how-recursion-works">How recursion works</h3>
+<p>When child jobs are found, the service analyzes them in parallel with bounded concurrency and descends through nested failures.</p>
+<p>Key behaviors:</p>
+<ul>
+<li>direct child analyses appear in <code>child_job_analyses</code></li>
+<li>deeper nested children appear in <code>failed_children</code></li>
+<li>if a pipeline wrapper has no direct test failures, its own <code>failures</code> list can be empty even though its child jobs contain failures</li>
+<li>if a child job cannot be inspected, or recursion reaches the limit, that child entry gets a <code>note</code> instead of failing the entire analysis</li>
+</ul>
+<blockquote>
+<p><strong>Note:</strong> The maximum child-job recursion depth is <code>3</code>. When that limit is reached, the child entry is returned with a note explaining that analysis stopped to prevent infinite recursion.</p>
+</blockquote>
+<h3 id="leaf-child-jobs-vs-pipeline-wrapper-jobs">Leaf child jobs vs pipeline wrapper jobs</h3>
+<p>Leaf child jobs are analyzed like normal Jenkins builds:</p>
+<ul>
+<li>if a Jenkins test report exists, individual failed tests are extracted and analyzed</li>
+<li>if no structured test report exists, the service falls back to console-only analysis</li>
+</ul>
+<p>Pipeline-style child jobs are treated differently:</p>
+<ul>
+<li>if they have failed children but no direct test failures, the service skips direct failure analysis for the wrapper job and returns nested child analyses instead</li>
+</ul>
+<p>This keeps pipeline results focused on the actual failing jobs instead of a vague top-level pipeline failure.</p>
+<h2 id="result-shape-to-expect">Result Shape to Expect</h2>
+<p>A completed analysis result contains:</p>
+<ul>
+<li><code>job_id</code>, <code>job_name</code>, <code>build_number</code>, and <code>jenkins_url</code></li>
+<li><code>status</code> and <code>summary</code></li>
+<li><code>ai_provider</code> and <code>ai_model</code></li>
+<li><code>failures</code> for direct failures on the requested build</li>
+<li><code>child_job_analyses</code> for direct child jobs</li>
+</ul>
+<p>Each child job can contain:</p>
+<ul>
+<li><code>job_name</code>, <code>build_number</code>, and <code>jenkins_url</code></li>
+<li><code>summary</code></li>
+<li><code>failures</code></li>
+<li>nested <code>failed_children</code></li>
+<li><code>note</code> when recursion stops or a child job could not be processed</li>
+</ul>
+<p>Each failure includes:</p>
+<ul>
+<li><code>test_name</code></li>
+<li><code>error</code></li>
+<li><code>analysis.classification</code></li>
+<li><code>analysis.details</code></li>
+<li>optional structured fields such as <code>code_fix</code> or <code>product_bug_report</code></li>
+</ul>
+<p>If the service has to fall back to console-only analysis, it creates a synthetic failure entry with:</p>
+<ul>
+<li><code>test_name</code> set to <code>&lt;job_name&gt;#&lt;build_number&gt;</code></li>
+<li><code>error</code> set to <code>Console-only analysis</code></li>
+</ul>
+<h2 id="common-response-codes">Common Response Codes</h2>
+<table>
+<thead>
+<tr>
+<th>Status code</th>
+<th>When to expect it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>202</code></td>
+<td>A <code>POST /analyze</code> request was accepted and queued, or <code>GET /results/{job_id}</code> is reporting an in-progress job with status <code>waiting</code>, <code>pending</code>, or <code>running</code>.</td>
+</tr>
+<tr>
+<td><code>200</code></td>
+<td><code>GET /results/{job_id}</code> returned a final stored result with status <code>completed</code> or <code>failed</code>.</td>
+</tr>
+<tr>
+<td><code>400</code></td>
+<td>AI provider or AI model is missing when you submit <code>POST /analyze</code>. The endpoint validates AI configuration before queuing work.</td>
+</tr>
+<tr>
+<td><code>404</code></td>
+<td>A results lookup requested an unknown <code>job_id</code>. If the Jenkins build itself cannot be found, the async job later moves to <code>failed</code> and the stored result carries the error.</td>
+</tr>
+<tr>
+<td><code>422</code></td>
+<td>The request body failed validation, such as a missing field, bad URL, non-numeric <code>build_number</code>, <code>poll_interval_minutes &lt;= 0</code>, or <code>max_wait_minutes &lt; 0</code>.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Tip:</strong> For automation, treat <code>GET /results/{job_id}</code> as the authoritative status endpoint. The initial <code>202</code> submission response is just the handoff; the stored result is the durable source of truth.</p>
+</blockquote>
+                </div>
+            </article>
+            <nav class="page-nav">
+
+                <a href="jira-integration.html" class="page-nav-link page-nav-prev">
+                    <span class="page-nav-label">Previous</span>
+                    <span class="page-nav-title">Jira Integration</span>
+                </a>
+
+
+                <a href="direct-failure-analysis.html" class="page-nav-link page-nav-next">
+                    <span class="page-nav-label">Next</span>
+                    <span class="page-nav-title">Analyze Raw Failures and JUnit XML</span>
+                </a>
+
+            </nav>
+
+            <aside class="toc-sidebar">
+                <div class="toc-container">
+                    <h3>On this page</h3>
+                    <div class="toc">
+<ul>
+<li><a href="#before-you-call-it">Before you call it</a></li>
+<li><a href="#request-body">Request body</a></li>
+<li><a href="#async-vs-sync">Async vs Sync</a><ul>
+<li><a href="#async-mode">Async mode</a></li>
+<li><a href="#sync-mode">Sync mode</a></li>
+</ul>
+</li>
+<li><a href="#polling-and-reports">Polling and Reports</a><ul>
+<li><a href="#get-resultsjob_id">GET /results/{job_id}</a></li>
+<li><a href="#browser-flow">Browser flow</a></li>
+</ul>
+</li>
+<li><a href="#callbacks">Callbacks</a></li>
+<li><a href="#how-successful-builds-are-handled">How Successful Builds Are Handled</a></li>
+<li><a href="#recursive-child-job-analysis">Recursive Child-Job Analysis</a><ul>
+<li><a href="#what-gets-detected-as-a-child-job">What gets detected as a child job</a></li>
+<li><a href="#how-recursion-works">How recursion works</a></li>
+<li><a href="#leaf-child-jobs-vs-pipeline-wrapper-jobs">Leaf child jobs vs pipeline wrapper jobs</a></li>
+</ul>
+</li>
+<li><a href="#result-shape-to-expect">Result Shape to Expect</a></li>
+<li><a href="#common-response-codes">Common Response Codes</a></li>
+</ul>
+</div>
+
+                </div>
+            </aside>
+
+
+        </main>
+
+        <footer class="page-footer">
+            Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
+            <span class="footer-sep">·</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+        </footer>
+    </div>
+
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+    <script src="assets/theme.js"></script>
+    <script src="assets/search.js"></script>
+    <script src="assets/copy.js"></script>
+    <script src="assets/callouts.js"></script>
+    <script src="assets/scrollspy.js"></script>
+    <script src="assets/codelabels.js"></script>
+    <script src="assets/github.js"></script>
+    <script>
+(function() {
+    var toggle = document.getElementById('sidebar-toggle');
+    var sidebar = document.getElementById('sidebar');
+    var overlay = document.getElementById('sidebar-overlay');
+    if (toggle && sidebar) {
+        toggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
+            if (overlay) overlay.classList.toggle('open');
+            var expanded = sidebar.classList.contains('open');
+            toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        });
+    }
+    if (overlay) {
+        overlay.addEventListener('click', function() {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('open');
+            if (toggle) toggle.setAttribute('aria-expanded', 'false');
+        });
+    }
+})();
+</script>
+<script>
+(function() {
+    var sidebar = document.querySelector('.sidebar-nav') || document.querySelector('.sidebar');
+    if (!sidebar) return;
+
+    // Restore scroll position
+    var saved = sessionStorage.getItem('sidebar-scroll');
+    if (saved) sidebar.scrollTop = parseInt(saved, 10);
+
+    // Save scroll position before navigating
+    sidebar.addEventListener('scroll', function() {
+        sessionStorage.setItem('sidebar-scroll', sidebar.scrollTop.toString());
+    });
+
+    // Also scroll active link into view if no saved position
+    if (!saved) {
+        var active = sidebar.querySelector('.nav-link.active');
+        if (active) {
+            active.scrollIntoView({ block: 'center', behavior: 'instant' });
+        }
+    }
+})();
+</script>
+</body>
+</html>

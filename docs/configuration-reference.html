@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuration Reference - jenkins-job-insight</title>
+    <meta name="description" content="AI-powered Jenkins failure analysis service with direct JUnit XML enrichment, HTML reports, and optional Jira matching.">
+    <link rel="stylesheet" href="assets/style.css">
+    <link rel="alternate" type="text/plain" title="LLM Documentation Index" href="llms.txt">
+    <link rel="alternate" type="text/plain" title="LLM Full Documentation" href="llms-full.txt">
+</head>
+<body>
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <a href="index.html" class="sidebar-logo">jenkins-job-insight</a>
+            <p class="sidebar-tagline">AI-powered Jenkins failure analysis service with direct JUnit XML enrichment, HTML reports, and optional Jira matching.</p>
+        </div>
+
+        <div class="sidebar-search">
+            <input type="text" id="search-input" placeholder="Search... (⌘K)" autocomplete="off" readonly>
+            <div id="search-results" class="search-results"></div>
+        </div>
+
+        <nav class="sidebar-nav">
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Introduction</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="overview.html"
+                           class="nav-link">
+                            Overview
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="architecture-and-project-structure.html"
+                           class="nav-link">
+                            Architecture and Project Structure
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Getting Started</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="installation.html"
+                           class="nav-link">
+                            Installation
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="run-locally.html"
+                           class="nav-link">
+                            Run Locally
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="container-deployment.html"
+                           class="nav-link">
+                            Container Deployment
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="quickstart.html"
+                           class="nav-link">
+                            Quickstart
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Configuration</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="configuration-reference.html"
+                           class="nav-link active" aria-current="page">
+                            Configuration Reference
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="ai-provider-setup.html"
+                           class="nav-link">
+                            AI Provider Setup
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jenkins-repository-and-prompts.html"
+                           class="nav-link">
+                            Jenkins, Repository Context, and Prompts
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jira-integration.html"
+                           class="nav-link">
+                            Jira Integration
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Guides</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="analyze-jenkins-jobs.html"
+                           class="nav-link">
+                            Analyze Jenkins Jobs
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="direct-failure-analysis.html"
+                           class="nav-link">
+                            Analyze Raw Failures and JUnit XML
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="pytest-junitxml-integration.html"
+                           class="nav-link">
+                            Pytest JUnit XML Integration
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="html-reports-and-dashboard.html"
+                           class="nav-link">
+                            HTML Reports and Dashboard
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="pipeline-analysis-and-failure-deduplication.html"
+                           class="nav-link">
+                            Pipeline Analysis and Failure Deduplication
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jira-assisted-bug-triage.html"
+                           class="nav-link">
+                            Jira-Assisted Bug Triage
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">API Reference</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="api-overview.html"
+                           class="nav-link">
+                            API Overview
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-post-analyze.html"
+                           class="nav-link">
+                            POST /analyze
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-post-analyze-failures.html"
+                           class="nav-link">
+                            POST /analyze-failures
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-results-and-dashboard.html"
+                           class="nav-link">
+                            Results, Reports, and Dashboard Endpoints
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-schemas-and-models.html"
+                           class="nav-link">
+                            Schemas and Data Models
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Operations</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="storage-and-result-lifecycle.html"
+                           class="nav-link">
+                            Storage and Result Lifecycle
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="reverse-proxy-and-base-urls.html"
+                           class="nav-link">
+                            Reverse Proxy and Base URL Handling
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="troubleshooting.html"
+                           class="nav-link">
+                            Troubleshooting
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="development-and-testing.html"
+                           class="nav-link">
+                            Development and Testing
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+        </nav>
+    </aside>
+
+    <div class="main-wrapper">
+        <header class="top-bar">
+            <div class="top-bar-left">
+                <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar" aria-expanded="false">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </button>
+                <a href="index.html" class="top-bar-title">jenkins-job-insight</a>
+            </div>
+            <div class="top-bar-spacer"></div>
+            <div class="top-bar-right">
+                <button class="top-bar-search-btn" id="search-trigger" aria-label="Search">
+                    <kbd>&#8984;K</kbd> Search
+                </button>
+                <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener" class="docsfy-badge" title="Generated with docsfy">
+                    ⚡ docs<span class="brand-accent">fy</span>
+                </a>
+
+                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                    <span class="github-stars" id="github-stars"></span>
+                </a>
+
+                <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+                    <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                    </svg>
+                    <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <main class="content">
+
+            <article class="article">
+                <div class="article-body">
+                    <!-- SECURITY: |safe is intentional. Content is AI-generated markdown
+                         converted to HTML server-side by the markdown library, not
+                         user-supplied input. XSS risk is minimal and accepted since
+                         the AI generates the content, not end users. -->
+                    <h1 id="configuration-reference">Configuration Reference</h1>
+<p><code>jenkins-job-insight</code> reads service configuration from environment variables and automatically loads a local <code>.env</code> file from the project root. Many of the same settings can also be overridden per request on <code>/analyze</code> and <code>/analyze-failures</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="n">model_config</span> <span class="o">=</span> <span class="n">SettingsConfigDict</span><span class="p">(</span>
+    <span class="n">env_file</span><span class="o">=</span><span class="s2">&quot;.env&quot;</span><span class="p">,</span>
+    <span class="n">env_file_encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">,</span>
+    <span class="n">extra</span><span class="o">=</span><span class="s2">&quot;ignore&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>This page covers the FastAPI service and its analysis request overrides. CLI helper variables such as <code>JJI_SERVER</code> are client-side settings and are intentionally out of scope here.</p>
+<blockquote>
+<p><strong>Note:</strong> Restart the service after changing environment variables. <code>get_settings()</code> is cached, and <code>AI_PROVIDER</code> / <code>AI_MODEL</code> are read when <code>src/jenkins_job_insight/main.py</code> is imported.</p>
+</blockquote>
+<h2 id="configuration-order">Configuration Order</h2>
+<p>For request-tunable analysis settings, configuration resolves in this order:</p>
+<ol>
+<li>Request body override, when that field is supported for the endpoint.</li>
+<li>Environment variable.</li>
+<li>Code default, if one exists.</li>
+</ol>
+<p>Deployment-only settings do not have request-body equivalents. In this page, the main examples are <code>PORT</code>, <code>DB_PATH</code>, <code>DEBUG</code>, <code>LOG_LEVEL</code>, <code>PUBLIC_BASE_URL</code>, <code>ENABLE_GITHUB_ISSUES</code>, and <code>JJI_ENCRYPTION_KEY</code>.</p>
+<p>The merge path in <code>src/jenkins_job_insight/main.py</code> applies only non-<code>None</code> request values:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_merge_settings</span><span class="p">(</span><span class="n">body</span><span class="p">:</span> <span class="n">BaseAnalysisRequest</span><span class="p">,</span> <span class="n">settings</span><span class="p">:</span> <span class="n">Settings</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Settings</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Create a copy of settings with per-request overrides applied.&quot;&quot;&quot;</span>
+    <span class="n">overrides</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="c1"># ... direct fields omitted ...</span>
+    <span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="n">direct_fields</span><span class="p">:</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">body</span><span class="p">,</span> <span class="n">field</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">overrides</span><span class="p">[</span><span class="n">field</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+    <span class="c1"># ... Jenkins-specific handling omitted ...</span>
+    <span class="k">if</span> <span class="n">overrides</span><span class="p">:</span>
+        <span class="n">merged_data</span> <span class="o">=</span> <span class="n">settings</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">)</span> <span class="o">|</span> <span class="n">overrides</span>
+        <span class="k">return</span> <span class="n">Settings</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="n">merged_data</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">settings</span>
+</code></pre></div>
+
+<p><code>enable_jira</code> has one extra fallback: if you do not set <code>enable_jira</code> or <code>ENABLE_JIRA</code>, the app auto-enables Jira enrichment only when Jira is fully configured, including <code>JIRA_PROJECT_KEY</code>.</p>
+<blockquote>
+<p><strong>Warning:</strong> Request overrides apply only to the current analysis call. They do not become new server defaults, and server-level issue creation still uses deployment config rather than a previous analysis request.</p>
+</blockquote>
+<h2 id="quick-start">Quick Start</h2>
+<p>The shipped environment template starts with Jenkins and AI basics:</p>
+<div class="highlight"><pre><span></span><code>JENKINS_URL=https://jenkins.example.com
+JENKINS_USER=your-username
+JENKINS_PASSWORD=your-api-token
+JENKINS_SSL_VERIFY=true
+
+# ===================
+# AI CLI Configuration
+# ===================
+# Choose AI provider (required): &quot;claude&quot;, &quot;gemini&quot;, or &quot;cursor&quot;
+AI_PROVIDER=claude
+
+# AI model to use (required, applies to any provider)
+# Can also be set per-request in webhook body
+AI_MODEL=your-model-name
+</code></pre></div>
+
+<blockquote>
+<p><strong>Note:</strong> <code>.env.example</code> focuses on the most common settings and shows Jenkins values as deployment defaults. They are no longer mandatory for <code>/analyze-failures</code>. The code also supports <code>WAIT_FOR_COMPLETION</code>, <code>POLL_INTERVAL_MINUTES</code>, <code>MAX_WAIT_MINUTES</code>, <code>PUBLIC_BASE_URL</code>, <code>ENABLE_JIRA</code>, <code>GET_JOB_ARTIFACTS</code>, <code>JENKINS_ARTIFACTS_MAX_SIZE_MB</code>, <code>JENKINS_ARTIFACTS_CONTEXT_LINES</code>, <code>PORT</code>, <code>DB_PATH</code>, and <code>JJI_ENCRYPTION_KEY</code>.</p>
+</blockquote>
+<h2 id="runtime-and-startup">Runtime And Startup</h2>
+<p>These settings are server-only. They do not have request-body equivalents.</p>
+<table>
+<thead>
+<tr>
+<th>Environment variable</th>
+<th>Request override</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PORT</code></td>
+<td>—</td>
+<td><code>8000</code></td>
+<td>HTTP port for the service. Must be an integer from <code>1</code> to <code>65535</code>.</td>
+</tr>
+<tr>
+<td><code>DB_PATH</code></td>
+<td>—</td>
+<td><code>/data/results.db</code></td>
+<td>SQLite database path for stored analysis results, comments, reviews, and waiting-job state.</td>
+</tr>
+<tr>
+<td><code>DEBUG</code></td>
+<td>—</td>
+<td><code>false</code></td>
+<td>Enables <code>uvicorn</code> reload mode only when you launch the app through the <code>jenkins-job-insight</code> console script. It does not change log verbosity.</td>
+</tr>
+<tr>
+<td><code>LOG_LEVEL</code></td>
+<td>—</td>
+<td><code>INFO</code></td>
+<td>Application log level used across modules. Expected values are <code>DEBUG</code>, <code>INFO</code>, <code>WARNING</code>, and <code>ERROR</code>.</td>
+</tr>
+<tr>
+<td><code>PUBLIC_BASE_URL</code></td>
+<td>—</td>
+<td>none</td>
+<td>Trusted external origin used to build absolute result links and tracker/report links. When unset, the API returns relative URLs and ignores request forwarding headers.</td>
+</tr>
+<tr>
+<td><code>JJI_ENCRYPTION_KEY</code></td>
+<td>—</td>
+<td>auto-generated file key</td>
+<td>Secret used to encrypt stored sensitive request parameters. In production, set it explicitly; otherwise the app creates a local key file under <code>$XDG_DATA_HOME/jji/.encryption_key</code> or <code>~/.local/share/jji/.encryption_key</code>.</td>
+</tr>
+</tbody>
+</table>
+<p><code>PUBLIC_BASE_URL</code> is intentionally trusted configuration, not something derived from incoming requests:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_extract_base_url</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Extract the external base URL for building public-facing links.&quot;&quot;&quot;</span>
+    <span class="n">settings</span> <span class="o">=</span> <span class="n">get_settings</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">settings</span><span class="o">.</span><span class="n">public_base_url</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">settings</span><span class="o">.</span><span class="n">public_base_url</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+        <span class="s2">&quot;PUBLIC_BASE_URL is not set; returning empty base URL (relative paths)&quot;</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="s2">&quot;&quot;</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong>Note:</strong> Sensitive request fields that are persisted for waiting-job resumption are encrypted at rest and removed from later API responses. That includes <code>jenkins_user</code>, <code>jenkins_password</code>, <code>jira_email</code>, <code>jira_api_token</code>, <code>jira_pat</code>, and <code>github_token</code>.</p>
+</blockquote>
+<p>If you use the provided Compose file, <code>.env</code> is wired in automatically and <code>./data</code> is mounted to <code>/data</code>, which matches the default <code>DB_PATH</code>.</p>
+<blockquote>
+<p><strong>Tip:</strong> In the provided container image, the app is started with <code>uvicorn</code> directly, not through <code>jenkins-job-insight</code>. That means <code>DEBUG=true</code> does not automatically turn on reload in the stock Docker setup.</p>
+</blockquote>
+<h2 id="jenkins">Jenkins</h2>
+<p>The request overrides in this section belong to <code>AnalyzeRequest</code>, so they are available on <code>/analyze</code> only.</p>
+<table>
+<thead>
+<tr>
+<th>Environment variable</th>
+<th>Request override</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JENKINS_URL</code></td>
+<td><code>jenkins_url</code></td>
+<td>none</td>
+<td>Base Jenkins URL used for build info, console output, test reports, artifacts, and generated build links.</td>
+</tr>
+<tr>
+<td><code>JENKINS_USER</code></td>
+<td><code>jenkins_user</code></td>
+<td>none</td>
+<td>Jenkins username.</td>
+</tr>
+<tr>
+<td><code>JENKINS_PASSWORD</code></td>
+<td><code>jenkins_password</code></td>
+<td>none</td>
+<td>Jenkins password or API token.</td>
+</tr>
+<tr>
+<td><code>JENKINS_SSL_VERIFY</code></td>
+<td><code>jenkins_ssl_verify</code></td>
+<td><code>true</code></td>
+<td>Controls TLS certificate verification for Jenkins API calls.</td>
+</tr>
+<tr>
+<td><code>WAIT_FOR_COMPLETION</code></td>
+<td><code>wait_for_completion</code></td>
+<td><code>true</code></td>
+<td>Wait for a running Jenkins build to finish before starting analysis.</td>
+</tr>
+<tr>
+<td><code>POLL_INTERVAL_MINUTES</code></td>
+<td><code>poll_interval_minutes</code></td>
+<td><code>2</code></td>
+<td>Minutes between Jenkins status polls while waiting for completion.</td>
+</tr>
+<tr>
+<td><code>MAX_WAIT_MINUTES</code></td>
+<td><code>max_wait_minutes</code></td>
+<td><code>0</code></td>
+<td>Maximum minutes to wait for completion. <code>0</code> means no limit.</td>
+</tr>
+<tr>
+<td><code>GET_JOB_ARTIFACTS</code></td>
+<td><code>get_job_artifacts</code></td>
+<td><code>true</code></td>
+<td>Downloads build artifacts and feeds extracted error/warning context into AI analysis.</td>
+</tr>
+<tr>
+<td><code>JENKINS_ARTIFACTS_MAX_SIZE_MB</code></td>
+<td><code>jenkins_artifacts_max_size_mb</code></td>
+<td><code>500</code></td>
+<td>Maximum size per artifact download, in MB. Oversized artifacts are skipped.</td>
+</tr>
+<tr>
+<td><code>JENKINS_ARTIFACTS_CONTEXT_LINES</code></td>
+<td><code>jenkins_artifacts_context_lines</code></td>
+<td><code>200</code></td>
+<td>Maximum number of artifact-context lines included in the AI prompt. This limits prompt context, not the number of files downloaded.</td>
+</tr>
+</tbody>
+</table>
+<p><code>JENKINS_URL</code>, <code>JENKINS_USER</code>, and <code>JENKINS_PASSWORD</code> are now optional server defaults. You can leave them unset for deployments that only use <code>/analyze-failures</code>, or pass them per request when calling <code>/analyze</code>.</p>
+<p>The wait-related request fields only override environment defaults when the caller actually sends them:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Monitoring fields have non-None defaults in the model.  Only</span>
+<span class="c1"># apply them as overrides when explicitly sent by the caller</span>
+<span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="p">(</span>
+    <span class="s2">&quot;wait_for_completion&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;poll_interval_minutes&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;max_wait_minutes&quot;</span><span class="p">,</span>
+<span class="p">):</span>
+    <span class="k">if</span> <span class="n">field</span> <span class="ow">in</span> <span class="n">body</span><span class="o">.</span><span class="n">model_fields_set</span><span class="p">:</span>
+        <span class="n">overrides</span><span class="p">[</span><span class="n">field</span><span class="p">]</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">body</span><span class="p">,</span> <span class="n">field</span><span class="p">)</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong>Note:</strong> Waiting controls matter only for Jenkins-backed <code>/analyze</code> requests. When <code>wait_for_completion</code> is enabled and Jenkins is configured, the job enters a <code>waiting</code> state until the build finishes or <code>max_wait_minutes</code> is reached.</p>
+</blockquote>
+<h2 id="ai">AI</h2>
+<p><code>AI_PROVIDER</code>, <code>AI_MODEL</code>, and <code>AI_CLI_TIMEOUT</code> can be set globally or overridden per request on <code>/analyze</code> and <code>/analyze-failures</code>. <code>ai_provider</code> and <code>ai_model</code> are also accepted on the preview issue endpoints for generated issue text.</p>
+<table>
+<thead>
+<tr>
+<th>Environment variable</th>
+<th>Request override</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AI_PROVIDER</code></td>
+<td><code>ai_provider</code></td>
+<td>none</td>
+<td>AI provider. Valid analysis values are <code>claude</code>, <code>gemini</code>, or <code>cursor</code>.</td>
+</tr>
+<tr>
+<td><code>AI_MODEL</code></td>
+<td><code>ai_model</code></td>
+<td>none</td>
+<td>Model name passed to the chosen AI CLI.</td>
+</tr>
+<tr>
+<td><code>AI_CLI_TIMEOUT</code></td>
+<td><code>ai_cli_timeout</code></td>
+<td><code>10</code></td>
+<td>Timeout in minutes for AI CLI calls. This also applies to AI-assisted Jira relevance filtering.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Note:</strong> The service can start without <code>AI_PROVIDER</code> or <code>AI_MODEL</code>, but analysis endpoints return <code>400</code> until you set them in the environment or pass them in the request body.</p>
+</blockquote>
+<p>The analysis request models also support <code>raw_prompt</code> for one-off extra AI instructions. It has no matching environment-variable equivalent.</p>
+<h3 id="provider-authentication">Provider Authentication</h3>
+<p>These variables are not request-overridable. They are consumed by the external provider CLIs.</p>
+<div class="highlight"><pre><span></span><code># --- Claude CLI Options ---
+
+# Option 1: Direct API key (simplest)
+ANTHROPIC_API_KEY=your-anthropic-api-key
+
+# Option 2: Vertex AI authentication
+# CLAUDE_CODE_USE_VERTEX=1
+# CLOUD_ML_REGION=us-east5
+# ANTHROPIC_VERTEX_PROJECT_ID=your-project-id
+
+# --- Gemini CLI Options ---
+
+# Option 1: API key
+GEMINI_API_KEY=your-gemini-api-key
+
+# Option 2: OAuth (run: gemini auth login)
+# No env vars needed for OAuth
+
+# --- Cursor Agent CLI Options ---
+
+# Choose ONE of the following authentication methods:
+
+# API key
+# CURSOR_API_KEY=your-cursor-api-key
+
+# --- AI CLI Timeout ---
+
+# Timeout for AI CLI calls in minutes (default: 10)
+# Increase for slower models like gpt-5.2
+# AI_CLI_TIMEOUT=10
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Environment variable</th>
+<th>Request override</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ANTHROPIC_API_KEY</code></td>
+<td>—</td>
+<td>none</td>
+<td>Claude CLI direct API key.</td>
+</tr>
+<tr>
+<td><code>CLAUDE_CODE_USE_VERTEX</code></td>
+<td>—</td>
+<td>none</td>
+<td>Tells the Claude CLI to use Vertex AI instead of direct API-key auth.</td>
+</tr>
+<tr>
+<td><code>CLOUD_ML_REGION</code></td>
+<td>—</td>
+<td>none in app code</td>
+<td>Vertex AI region for Claude. The example Compose file uses <code>us-east5</code>.</td>
+</tr>
+<tr>
+<td><code>ANTHROPIC_VERTEX_PROJECT_ID</code></td>
+<td>—</td>
+<td>none</td>
+<td>GCP project ID for Claude via Vertex AI.</td>
+</tr>
+<tr>
+<td><code>GEMINI_API_KEY</code></td>
+<td>—</td>
+<td>none</td>
+<td>Gemini CLI API key.</td>
+</tr>
+<tr>
+<td><code>CURSOR_API_KEY</code></td>
+<td>—</td>
+<td>none</td>
+<td>Cursor Agent CLI API key.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Tip:</strong> Gemini also supports OAuth login with <code>gemini auth login</code>, so <code>GEMINI_API_KEY</code> is optional if you use that flow.</p>
+</blockquote>
+<h2 id="callbacks">Callbacks</h2>
+<p>The current codebase no longer exposes callback delivery settings. <code>CALLBACK_URL</code> and <code>CALLBACK_HEADERS</code> are not part of the active service configuration, and <code>/analyze</code> now returns a <code>job_id</code> plus <code>result_url</code> for polling instead.</p>
+<div class="highlight"><pre><span></span><code><span class="n">response</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;queued&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;job_id&quot;</span><span class="p">:</span> <span class="n">job_id</span><span class="p">,</span>
+    <span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="n">message</span><span class="p">,</span>
+<span class="p">}</span>
+<span class="k">return</span> <span class="n">_attach_result_links</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="n">base_url</span><span class="p">,</span> <span class="n">job_id</span><span class="p">)</span>
+</code></pre></div>
+
+<p>Poll <code>GET /results/{job_id}</code> or follow <code>result_url</code> instead of configuring a callback webhook.</p>
+<h2 id="repository-and-github">Repository And GitHub</h2>
+<p><code>TESTS_REPO_URL</code> and <code>GITHUB_TOKEN</code> can be passed as analysis request overrides on both analysis endpoints, but GitHub issue workflows remain server-level operations.</p>
+<table>
+<thead>
+<tr>
+<th>Environment variable</th>
+<th>Request override</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TESTS_REPO_URL</code></td>
+<td><code>tests_repo_url</code></td>
+<td>none</td>
+<td>Repository to clone so the AI can inspect real code while analyzing failures. If cloning fails, analysis still continues without repo context.</td>
+</tr>
+<tr>
+<td><code>GITHUB_TOKEN</code></td>
+<td><code>github_token</code></td>
+<td>none</td>
+<td>GitHub token used when the server talks to GitHub for private-repo status lookups, duplicate search, and issue creation. The request override exists on analysis requests, but issue workflows use deployment settings rather than a previous analysis request override.</td>
+</tr>
+<tr>
+<td><code>ENABLE_GITHUB_ISSUES</code></td>
+<td>—</td>
+<td>auto-detect</td>
+<td>Explicitly enables or disables GitHub issue creation. When unset, the server enables GitHub issues only when both <code>TESTS_REPO_URL</code> and <code>GITHUB_TOKEN</code> are configured.</td>
+</tr>
+</tbody>
+</table>
+<p>For GitHub issue creation from the app, you need both <code>TESTS_REPO_URL</code> and <code>GITHUB_TOKEN</code> configured at the server level. <code>ENABLE_GITHUB_ISSUES</code> is only a feature gate: <code>true</code> does not bypass missing repo or token, and <code>false</code> disables the feature even when both are present.</p>
+<blockquote>
+<p><strong>Warning:</strong> GitHub issue preview/create does not reuse an earlier analysis request's <code>tests_repo_url</code> or <code>github_token</code>. Configure those on the server if you want issue workflows to work consistently.</p>
+</blockquote>
+<div class="highlight"><pre><span></span><code><span class="c1"># NOTE: Preview/create request models intentionally do NOT inherit</span>
+<span class="c1"># BaseAnalysisRequest. These are server-level operations that use deployment</span>
+<span class="c1"># config (GITHUB_TOKEN, TESTS_REPO_URL, Jira credentials), not per-request</span>
+<span class="c1"># analysis overrides. The caller identifies *which* failure to act on, but</span>
+<span class="c1"># the credentials and target repos are fixed at the server level.</span>
+</code></pre></div>
+
+<h2 id="jira">Jira</h2>
+<p>Jira enrichment can run on both analysis endpoints. If you do not set <code>ENABLE_JIRA</code> or <code>enable_jira</code>, the app auto-enables Jira enrichment only when Jira is fully configured: URL, credentials, and <code>JIRA_PROJECT_KEY</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Environment variable</th>
+<th>Request override</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ENABLE_JIRA</code></td>
+<td><code>enable_jira</code></td>
+<td>auto-detect</td>
+<td>Explicitly turns Jira enrichment on or off.</td>
+</tr>
+<tr>
+<td><code>JIRA_URL</code></td>
+<td><code>jira_url</code></td>
+<td>none</td>
+<td>Base Jira URL.</td>
+</tr>
+<tr>
+<td><code>JIRA_EMAIL</code></td>
+<td><code>jira_email</code></td>
+<td>none</td>
+<td>Email address used for Jira Cloud Basic auth. By itself it does not enable Cloud mode.</td>
+</tr>
+<tr>
+<td><code>JIRA_API_TOKEN</code></td>
+<td><code>jira_api_token</code></td>
+<td>none</td>
+<td>Jira Cloud API token. With <code>JIRA_EMAIL</code>, this enables Cloud mode. Without <code>JIRA_EMAIL</code>, it is a Server/Data Center fallback credential.</td>
+</tr>
+<tr>
+<td><code>JIRA_PAT</code></td>
+<td><code>jira_pat</code></td>
+<td>none</td>
+<td>Personal access token for Jira Server/Data Center.</td>
+</tr>
+<tr>
+<td><code>JIRA_PROJECT_KEY</code></td>
+<td><code>jira_project_key</code></td>
+<td>none</td>
+<td>Required to enable Jira integration. It scopes searches and is also used as the target <code>project.key</code> when creating Jira bugs.</td>
+</tr>
+<tr>
+<td><code>JIRA_SSL_VERIFY</code></td>
+<td><code>jira_ssl_verify</code></td>
+<td><code>true</code></td>
+<td>Controls TLS certificate verification for Jira HTTP requests.</td>
+</tr>
+<tr>
+<td><code>JIRA_MAX_RESULTS</code></td>
+<td><code>jira_max_results</code></td>
+<td><code>5</code></td>
+<td>Maximum number of Jira candidates returned per search before AI filtering.</td>
+</tr>
+</tbody>
+</table>
+<p>Cloud and Server/Data Center authentication are chosen by configuration, not by URL pattern:</p>
+<ul>
+<li>Cloud mode: set <code>JIRA_EMAIL</code> and <code>JIRA_API_TOKEN</code>.</li>
+<li>Server/Data Center mode: omit <code>JIRA_EMAIL</code>; the code prefers <code>JIRA_PAT</code> and falls back to <code>JIRA_API_TOKEN</code>.</li>
+<li><code>JIRA_EMAIL</code> plus <code>JIRA_PAT</code> stays in Server/Data Center mode. It does not switch to Cloud mode.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_resolve_jira_auth</span><span class="p">(</span><span class="n">settings</span><span class="p">:</span> <span class="n">Settings</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">bool</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolve Jira authentication mode and token value.&quot;&quot;&quot;</span>
+    <span class="n">has_api_token</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span>
+        <span class="n">settings</span><span class="o">.</span><span class="n">jira_api_token</span> <span class="ow">and</span> <span class="n">settings</span><span class="o">.</span><span class="n">jira_api_token</span><span class="o">.</span><span class="n">get_secret_value</span><span class="p">()</span>
+    <span class="p">)</span>
+    <span class="n">has_pat</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">settings</span><span class="o">.</span><span class="n">jira_pat</span> <span class="ow">and</span> <span class="n">settings</span><span class="o">.</span><span class="n">jira_pat</span><span class="o">.</span><span class="n">get_secret_value</span><span class="p">())</span>
+    <span class="n">has_email</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">settings</span><span class="o">.</span><span class="n">jira_email</span><span class="p">)</span>
+
+    <span class="n">is_cloud</span> <span class="o">=</span> <span class="n">has_email</span> <span class="ow">and</span> <span class="n">has_api_token</span>
+
+    <span class="c1"># Cloud: jira_api_token only</span>
+    <span class="c1"># Server/DC: prefer PAT, fall back to API token</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong>Tip:</strong> Set exactly one Jira credential path for the deployment you use. That makes it much easier to predict whether the server will talk to Jira in Cloud or Server/Data Center mode.</p>
+<p><strong>Warning:</strong> <code>ENABLE_JIRA=true</code> does not bypass missing Jira configuration. If <code>JIRA_URL</code>, credentials, or <code>JIRA_PROJECT_KEY</code> are missing, Jira still stays effectively disabled and the server logs a warning.</p>
+</blockquote>
+<h2 id="ssl-and-certificates">SSL And Certificates</h2>
+<p>Only two environment variables control SSL verification directly: <code>JENKINS_SSL_VERIFY</code> and <code>JIRA_SSL_VERIFY</code>. Both default to <code>true</code>.</p>
+<ul>
+<li><code>JENKINS_SSL_VERIFY=false</code> affects Jenkins API traffic, including build polling while waiting for completion, console requests, test report lookups, and artifact downloads.</li>
+<li><code>JIRA_SSL_VERIFY=false</code> affects Jira search, duplicate detection, Jira ticket-status lookups in comment enrichment, and Jira bug creation.</li>
+<li>GitHub API calls use the default TLS verification behavior of <code>httpx</code>; there is no dedicated GitHub SSL toggle.</li>
+<li>Provider CLI TLS behavior is managed by the provider CLIs themselves, not by this application.</li>
+</ul>
+<blockquote>
+<p><strong>Warning:</strong> Setting either SSL flag to <code>false</code> disables certificate verification for that integration. Use this only for controlled internal environments where you understand the risk.</p>
+</blockquote>
+<h2 id="timeouts">Timeouts</h2>
+<p>Two analysis-time controls are now user-configurable: <code>AI_CLI_TIMEOUT</code> and the Jenkins wait settings. <code>WAIT_FOR_COMPLETION</code> turns the wait loop on or off, while <code>POLL_INTERVAL_MINUTES</code> and <code>MAX_WAIT_MINUTES</code> tune that loop when it is enabled.</p>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Environment variable</th>
+<th>Request override</th>
+<th>Value</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AI CLI calls</td>
+<td><code>AI_CLI_TIMEOUT</code></td>
+<td><code>ai_cli_timeout</code></td>
+<td><code>10</code> minutes by default</td>
+<td>Applies to failure analysis and AI-based Jira match filtering.</td>
+</tr>
+<tr>
+<td>Jenkins wait poll interval</td>
+<td><code>POLL_INTERVAL_MINUTES</code></td>
+<td><code>poll_interval_minutes</code></td>
+<td><code>2</code> minutes by default</td>
+<td>Delay between Jenkins status checks when waiting for a build to finish.</td>
+</tr>
+<tr>
+<td>Jenkins wait deadline</td>
+<td><code>MAX_WAIT_MINUTES</code></td>
+<td><code>max_wait_minutes</code></td>
+<td><code>0</code> minutes by default</td>
+<td><code>0</code> means no deadline; positive values fail the job if the build does not finish in time.</td>
+</tr>
+<tr>
+<td>Comment enrichment and GitHub duplicate search</td>
+<td>—</td>
+<td>—</td>
+<td><code>10</code> seconds</td>
+<td>Fixed in code for GitHub PR/issue status lookups, Jira ticket status lookups, and GitHub duplicate search.</td>
+</tr>
+<tr>
+<td>Jira search client</td>
+<td>—</td>
+<td>—</td>
+<td><code>30</code> seconds</td>
+<td>Fixed in code.</td>
+</tr>
+<tr>
+<td>GitHub and Jira issue creation</td>
+<td>—</td>
+<td>—</td>
+<td><code>15</code> seconds</td>
+<td>Fixed in code.</td>
+</tr>
+<tr>
+<td>Jenkins artifact download</td>
+<td>—</td>
+<td>—</td>
+<td><code>60</code> seconds per request</td>
+<td>Fixed in code.</td>
+</tr>
+</tbody>
+</table>
+<p>The Jenkins wait deadline is enforced directly in the polling loop:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="n">max_wait_minutes</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+    <span class="n">deadline</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">_time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="o">+</span> <span class="n">max_wait_minutes</span> <span class="o">*</span> <span class="mi">60</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">deadline</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># No limit</span>
+<span class="c1"># ... polling omitted ...</span>
+<span class="n">error_msg</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="sa">f</span><span class="s2">&quot;Timed out waiting for Jenkins job </span><span class="si">{</span><span class="n">job_name</span><span class="si">}</span><span class="s2"> #</span><span class="si">{</span><span class="n">build_number</span><span class="si">}</span><span class="s2"> &quot;</span>
+    <span class="sa">f</span><span class="s2">&quot;after </span><span class="si">{</span><span class="n">max_wait_minutes</span><span class="si">}</span><span class="s2"> minutes&quot;</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong>Note:</strong> The current code does not expose separate environment variables or request fields for tracker HTTP timeouts or Jenkins artifact download timeouts.</p>
+</blockquote>
+                </div>
+            </article>
+            <nav class="page-nav">
+
+                <a href="quickstart.html" class="page-nav-link page-nav-prev">
+                    <span class="page-nav-label">Previous</span>
+                    <span class="page-nav-title">Quickstart</span>
+                </a>
+
+
+                <a href="ai-provider-setup.html" class="page-nav-link page-nav-next">
+                    <span class="page-nav-label">Next</span>
+                    <span class="page-nav-title">AI Provider Setup</span>
+                </a>
+
+            </nav>
+
+            <aside class="toc-sidebar">
+                <div class="toc-container">
+                    <h3>On this page</h3>
+                    <div class="toc">
+<ul>
+<li><a href="#configuration-order">Configuration Order</a></li>
+<li><a href="#quick-start">Quick Start</a></li>
+<li><a href="#runtime-and-startup">Runtime And Startup</a></li>
+<li><a href="#jenkins">Jenkins</a></li>
+<li><a href="#ai">AI</a><ul>
+<li><a href="#provider-authentication">Provider Authentication</a></li>
+</ul>
+</li>
+<li><a href="#callbacks">Callbacks</a></li>
+<li><a href="#repository-and-github">Repository And GitHub</a></li>
+<li><a href="#jira">Jira</a></li>
+<li><a href="#ssl-and-certificates">SSL And Certificates</a></li>
+<li><a href="#timeouts">Timeouts</a></li>
+</ul>
+</div>
+
+                </div>
+            </aside>
+
+
+        </main>
+
+        <footer class="page-footer">
+            Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
+            <span class="footer-sep">·</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+        </footer>
+    </div>
+
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+    <script src="assets/theme.js"></script>
+    <script src="assets/search.js"></script>
+    <script src="assets/copy.js"></script>
+    <script src="assets/callouts.js"></script>
+    <script src="assets/scrollspy.js"></script>
+    <script src="assets/codelabels.js"></script>
+    <script src="assets/github.js"></script>
+    <script>
+(function() {
+    var toggle = document.getElementById('sidebar-toggle');
+    var sidebar = document.getElementById('sidebar');
+    var overlay = document.getElementById('sidebar-overlay');
+    if (toggle && sidebar) {
+        toggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
+            if (overlay) overlay.classList.toggle('open');
+            var expanded = sidebar.classList.contains('open');
+            toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        });
+    }
+    if (overlay) {
+        overlay.addEventListener('click', function() {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('open');
+            if (toggle) toggle.setAttribute('aria-expanded', 'false');
+        });
+    }
+})();
+</script>
+<script>
+(function() {
+    var sidebar = document.querySelector('.sidebar-nav') || document.querySelector('.sidebar');
+    if (!sidebar) return;
+
+    // Restore scroll position
+    var saved = sessionStorage.getItem('sidebar-scroll');
+    if (saved) sidebar.scrollTop = parseInt(saved, 10);
+
+    // Save scroll position before navigating
+    sidebar.addEventListener('scroll', function() {
+        sessionStorage.setItem('sidebar-scroll', sidebar.scrollTop.toString());
+    });
+
+    // Also scroll active link into view if no saved position
+    if (!saved) {
+        var active = sidebar.querySelector('.nav-link.active');
+        if (active) {
+            active.scrollIntoView({ block: 'center', behavior: 'instant' });
+        }
+    }
+})();
+</script>
+</body>
+</html>

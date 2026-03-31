@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Schemas and Data Models - jenkins-job-insight</title>
+    <meta name="description" content="AI-powered Jenkins failure analysis service with direct JUnit XML enrichment, HTML reports, and optional Jira matching.">
+    <link rel="stylesheet" href="assets/style.css">
+    <link rel="alternate" type="text/plain" title="LLM Documentation Index" href="llms.txt">
+    <link rel="alternate" type="text/plain" title="LLM Full Documentation" href="llms-full.txt">
+</head>
+<body>
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <a href="index.html" class="sidebar-logo">jenkins-job-insight</a>
+            <p class="sidebar-tagline">AI-powered Jenkins failure analysis service with direct JUnit XML enrichment, HTML reports, and optional Jira matching.</p>
+        </div>
+
+        <div class="sidebar-search">
+            <input type="text" id="search-input" placeholder="Search... (⌘K)" autocomplete="off" readonly>
+            <div id="search-results" class="search-results"></div>
+        </div>
+
+        <nav class="sidebar-nav">
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Introduction</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="overview.html"
+                           class="nav-link">
+                            Overview
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="architecture-and-project-structure.html"
+                           class="nav-link">
+                            Architecture and Project Structure
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Getting Started</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="installation.html"
+                           class="nav-link">
+                            Installation
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="run-locally.html"
+                           class="nav-link">
+                            Run Locally
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="container-deployment.html"
+                           class="nav-link">
+                            Container Deployment
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="quickstart.html"
+                           class="nav-link">
+                            Quickstart
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Configuration</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="configuration-reference.html"
+                           class="nav-link">
+                            Configuration Reference
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="ai-provider-setup.html"
+                           class="nav-link">
+                            AI Provider Setup
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jenkins-repository-and-prompts.html"
+                           class="nav-link">
+                            Jenkins, Repository Context, and Prompts
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jira-integration.html"
+                           class="nav-link">
+                            Jira Integration
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Guides</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="analyze-jenkins-jobs.html"
+                           class="nav-link">
+                            Analyze Jenkins Jobs
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="direct-failure-analysis.html"
+                           class="nav-link">
+                            Analyze Raw Failures and JUnit XML
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="pytest-junitxml-integration.html"
+                           class="nav-link">
+                            Pytest JUnit XML Integration
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="html-reports-and-dashboard.html"
+                           class="nav-link">
+                            HTML Reports and Dashboard
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="pipeline-analysis-and-failure-deduplication.html"
+                           class="nav-link">
+                            Pipeline Analysis and Failure Deduplication
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="jira-assisted-bug-triage.html"
+                           class="nav-link">
+                            Jira-Assisted Bug Triage
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">API Reference</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="api-overview.html"
+                           class="nav-link">
+                            API Overview
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-post-analyze.html"
+                           class="nav-link">
+                            POST /analyze
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-post-analyze-failures.html"
+                           class="nav-link">
+                            POST /analyze-failures
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-results-and-dashboard.html"
+                           class="nav-link">
+                            Results, Reports, and Dashboard Endpoints
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="api-schemas-and-models.html"
+                           class="nav-link active" aria-current="page">
+                            Schemas and Data Models
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+            <div class="nav-group">
+                <h3 class="nav-group-title">Operations</h3>
+                <ul class="nav-group-pages">
+
+                    <li>
+                        <a href="storage-and-result-lifecycle.html"
+                           class="nav-link">
+                            Storage and Result Lifecycle
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="reverse-proxy-and-base-urls.html"
+                           class="nav-link">
+                            Reverse Proxy and Base URL Handling
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="troubleshooting.html"
+                           class="nav-link">
+                            Troubleshooting
+                        </a>
+                    </li>
+
+                    <li>
+                        <a href="development-and-testing.html"
+                           class="nav-link">
+                            Development and Testing
+                        </a>
+                    </li>
+
+                </ul>
+            </div>
+
+        </nav>
+    </aside>
+
+    <div class="main-wrapper">
+        <header class="top-bar">
+            <div class="top-bar-left">
+                <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar" aria-expanded="false">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </button>
+                <a href="index.html" class="top-bar-title">jenkins-job-insight</a>
+            </div>
+            <div class="top-bar-spacer"></div>
+            <div class="top-bar-right">
+                <button class="top-bar-search-btn" id="search-trigger" aria-label="Search">
+                    <kbd>&#8984;K</kbd> Search
+                </button>
+                <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener" class="docsfy-badge" title="Generated with docsfy">
+                    ⚡ docs<span class="brand-accent">fy</span>
+                </a>
+
+                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                    <span class="github-stars" id="github-stars"></span>
+                </a>
+
+                <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+                    <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                    </svg>
+                    <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <main class="content">
+
+            <article class="article">
+                <div class="article-body">
+                    <!-- SECURITY: |safe is intentional. Content is AI-generated markdown
+                         converted to HTML server-side by the markdown library, not
+                         user-supplied input. XSS risk is minimal and accepted since
+                         the AI generates the content, not end users. -->
+                    <h1 id="schemas-and-data-models">Schemas and Data Models</h1>
+<p><code>jenkins-job-insight</code> has two main input models and two main analysis result models:</p>
+<table>
+<thead>
+<tr>
+<th>Use case</th>
+<th>Request model</th>
+<th>Main result model</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Analyze a Jenkins build</td>
+<td><code>AnalyzeRequest</code></td>
+<td><code>AnalysisResult</code></td>
+</tr>
+<tr>
+<td>Analyze a failure list or raw JUnit XML</td>
+<td><code>AnalyzeFailuresRequest</code></td>
+<td><code>FailureAnalysisResult</code></td>
+</tr>
+</tbody>
+</table>
+<p>The shared building block underneath both flows is <code>FailureAnalysis</code>. That is the object that tells you which test failed, what error was seen, and what the AI concluded.</p>
+<p>A useful mental model is:</p>
+<ul>
+<li><code>AnalyzeRequest</code> -&gt; <code>AnalysisResult</code></li>
+<li><code>AnalyzeFailuresRequest</code> -&gt; <code>FailureAnalysisResult</code></li>
+<li><code>AnalysisResult.failures[]</code> and <code>FailureAnalysisResult.failures[]</code> -&gt; <code>FailureAnalysis</code></li>
+<li><code>FailureAnalysis.analysis</code> -&gt; <code>AnalysisDetail</code></li>
+<li><code>AnalysisDetail.code_fix</code> -&gt; <code>CodeFix</code></li>
+<li><code>AnalysisDetail.product_bug_report</code> -&gt; <code>ProductBugReport</code></li>
+<li><code>ProductBugReport.jira_matches[]</code> -&gt; <code>JiraMatch</code></li>
+<li><code>AnalysisResult.child_job_analyses[]</code> -&gt; recursive <code>ChildJobAnalysis</code></li>
+</ul>
+<h2 id="shared-request-fields">Shared Request Fields</h2>
+<p>Both <code>AnalyzeRequest</code> and <code>AnalyzeFailuresRequest</code> inherit <code>BaseAnalysisRequest</code>, so both endpoints support the same cross-cutting overrides.</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Fields</th>
+<th>What they are for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AI selection</td>
+<td><code>ai_provider</code>, <code>ai_model</code>, <code>ai_cli_timeout</code>, <code>raw_prompt</code></td>
+<td>Choose the AI backend and control how analysis is generated</td>
+</tr>
+<tr>
+<td>Source-code context</td>
+<td><code>tests_repo_url</code></td>
+<td>Let the service clone a repository and use it as extra context</td>
+</tr>
+<tr>
+<td>Jira enrichment</td>
+<td><code>enable_jira</code>, <code>jira_url</code>, <code>jira_email</code>, <code>jira_api_token</code>, <code>jira_pat</code>, <code>jira_project_key</code>, <code>jira_ssl_verify</code>, <code>jira_max_results</code></td>
+<td>Attach likely Jira matches to <code>PRODUCT BUG</code> findings</td>
+</tr>
+<tr>
+<td>GitHub access</td>
+<td><code>github_token</code></td>
+<td>Optional token used by related GitHub-aware features, especially for private repos</td>
+</tr>
+</tbody>
+</table>
+<p><code>ai_provider</code> accepts <code>claude</code>, <code>gemini</code>, or <code>cursor</code>.</p>
+<blockquote>
+<p><strong>Note:</strong> Most of these fields are optional because the server can load defaults from environment variables. If you send a non-<code>null</code> value in the request body, that value overrides the server default for that request.</p>
+<p><strong>Warning:</strong> <code>ai_provider</code> and <code>ai_model</code> are optional in the schema, but not optional at runtime. If neither the request nor the server environment provides them, the API returns <code>400</code>.</p>
+</blockquote>
+<h2 id="analyzerequest"><code>AnalyzeRequest</code></h2>
+<p>Use <code>AnalyzeRequest</code> with <code>POST /analyze</code> when you want the server to fetch Jenkins data itself.</p>
+<p>Required fields:</p>
+<ul>
+<li><code>job_name</code>: Jenkins job name. Folder-style paths such as <code>folder/job-name</code> are supported.</li>
+<li><code>build_number</code>: build number to analyze.</li>
+</ul>
+<p>Important optional fields added by <code>AnalyzeRequest</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wait_for_completion</code></td>
+<td>Wait for a running Jenkins build to finish before analysis starts</td>
+</tr>
+<tr>
+<td><code>poll_interval_minutes</code></td>
+<td>Control how often Jenkins is polled while waiting</td>
+</tr>
+<tr>
+<td><code>max_wait_minutes</code></td>
+<td>Stop waiting after a fixed time (<code>0</code> means no limit)</td>
+</tr>
+<tr>
+<td><code>jenkins_url</code>, <code>jenkins_user</code>, <code>jenkins_password</code>, <code>jenkins_ssl_verify</code></td>
+<td>Per-request Jenkins connection overrides</td>
+</tr>
+<tr>
+<td><code>jenkins_artifacts_max_size_mb</code></td>
+<td>Limit how many Jenkins artifacts are pulled</td>
+</tr>
+<tr>
+<td><code>jenkins_artifacts_context_lines</code></td>
+<td>Limit how much artifact context is sent to AI</td>
+</tr>
+<tr>
+<td><code>get_job_artifacts</code></td>
+<td>Turn artifact collection on or off</td>
+</tr>
+</tbody>
+</table>
+<p>An actual request example from the test suite:</p>
+<div class="highlight"><pre><span></span><code><span class="n">body</span> <span class="o">=</span> <span class="n">AnalyzeRequest</span><span class="p">(</span>
+    <span class="n">job_name</span><span class="o">=</span><span class="s2">&quot;my-job&quot;</span><span class="p">,</span>
+    <span class="n">build_number</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+    <span class="n">wait_for_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">poll_interval_minutes</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+    <span class="n">max_wait_minutes</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+    <span class="n">ai_provider</span><span class="o">=</span><span class="s2">&quot;claude&quot;</span><span class="p">,</span>
+    <span class="n">ai_model</span><span class="o">=</span><span class="s2">&quot;test-model&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>Response behavior is important here:</p>
+<ul>
+<li><code>POST /analyze</code> is asynchronous and returns <code>202</code> with queue metadata, not a full <code>AnalysisResult</code>.</li>
+<li>The response gives you a <code>job_id</code>; poll <code>GET /results/{job_id}</code> or follow <code>result_url</code> to fetch the eventual <code>AnalysisResult</code>.</li>
+<li>When <code>wait_for_completion</code> is enabled and Jenkins connection settings are available, the stored job can spend time in <code>waiting</code> before it moves to <code>running</code>.</li>
+</ul>
+<blockquote>
+<p><strong>Note:</strong> The helper link fields are still HTTP-layer extras rather than Pydantic model fields. <code>base_url</code> is only populated when the server is configured with <code>PUBLIC_BASE_URL</code>; otherwise it is an empty string and <code>result_url</code> is relative.</p>
+<p><strong>Tip:</strong> If you want better AI context without hard-coding repository details into the server, pass <code>tests_repo_url</code> in the request. That gives the analysis step access to the test repository for just that run.</p>
+</blockquote>
+<h2 id="analyzefailuresrequest"><code>AnalyzeFailuresRequest</code></h2>
+<p>Use <code>AnalyzeFailuresRequest</code> with <code>POST /analyze-failures</code> when you already have failure data and do not want the service to fetch from Jenkins.</p>
+<p>It supports exactly one of these input styles:</p>
+<table>
+<thead>
+<tr>
+<th>Input style</th>
+<th>Field</th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Structured failures</td>
+<td><code>failures</code></td>
+<td>The service analyzes your supplied failure list</td>
+</tr>
+<tr>
+<td>Raw JUnit XML</td>
+<td><code>raw_xml</code></td>
+<td>The service extracts failures first, then analyzes them and can return <code>enriched_xml</code></td>
+</tr>
+</tbody>
+</table>
+<p>The nested <code>TestFailure</code> objects are intentionally simple:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_name</code></td>
+<td>Fully qualified test name</td>
+</tr>
+<tr>
+<td><code>error_message</code></td>
+<td>Failure message or error text</td>
+</tr>
+<tr>
+<td><code>stack_trace</code></td>
+<td>Full stack trace, if available</td>
+</tr>
+<tr>
+<td><code>duration</code></td>
+<td>Test duration in seconds, defaults to <code>0.0</code></td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>Failure status, defaults to <code>FAILED</code></td>
+</tr>
+</tbody>
+</table>
+<p>A real JSON example from the tests:</p>
+<div class="highlight"><pre><span></span><code><span class="n">response</span> <span class="o">=</span> <span class="n">test_client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span>
+    <span class="s2">&quot;/analyze-failures&quot;</span><span class="p">,</span>
+    <span class="n">json</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">&quot;failures&quot;</span><span class="p">:</span> <span class="p">[</span>
+            <span class="p">{</span>
+                <span class="s2">&quot;test_name&quot;</span><span class="p">:</span> <span class="s2">&quot;test_foo&quot;</span><span class="p">,</span>
+                <span class="s2">&quot;error_message&quot;</span><span class="p">:</span> <span class="s2">&quot;assert False&quot;</span><span class="p">,</span>
+                <span class="s2">&quot;stack_trace&quot;</span><span class="p">:</span> <span class="s2">&quot;File test.py, line 10&quot;</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">],</span>
+        <span class="s2">&quot;ai_provider&quot;</span><span class="p">:</span> <span class="s2">&quot;claude&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;ai_model&quot;</span><span class="p">:</span> <span class="s2">&quot;test-model&quot;</span><span class="p">,</span>
+    <span class="p">},</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>The repository also includes a practical <code>raw_xml</code> example in its pytest/JUnit integration:</p>
+<div class="highlight"><pre><span></span><code><span class="k">try</span><span class="p">:</span>
+    <span class="n">response</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">server_url</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">/analyze-failures&quot;</span><span class="p">,</span>
+        <span class="n">json</span><span class="o">=</span><span class="p">{</span>
+            <span class="s2">&quot;raw_xml&quot;</span><span class="p">:</span> <span class="n">raw_xml</span><span class="p">,</span>
+            <span class="s2">&quot;ai_provider&quot;</span><span class="p">:</span> <span class="n">ai_provider</span><span class="p">,</span>
+            <span class="s2">&quot;ai_model&quot;</span><span class="p">:</span> <span class="n">ai_model</span><span class="p">,</span>
+        <span class="p">},</span>
+        <span class="n">timeout</span><span class="o">=</span><span class="n">timeout_value</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">response</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">response</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
+<span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">ex</span><span class="p">:</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Failed to enrich JUnit XML, original preserved. </span><span class="si">{</span><span class="n">ex</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">return</span>
+
+<span class="k">if</span> <span class="n">enriched_xml</span> <span class="o">:=</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;enriched_xml&quot;</span><span class="p">):</span>
+    <span class="n">xml_path</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">enriched_xml</span><span class="p">)</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;JUnit XML enriched with AI analysis: </span><span class="si">%s</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">xml_path</span><span class="p">)</span>
+</code></pre></div>
+
+<p>What to expect from <code>raw_xml</code> mode:</p>
+<ul>
+<li><code>raw_xml</code> is limited to 50,000,000 characters.</li>
+<li>Invalid XML returns <code>400</code>.</li>
+<li>If the XML contains no failures, the response still succeeds and returns the original XML in <code>enriched_xml</code>.</li>
+<li>If you use <code>failures</code> mode instead of <code>raw_xml</code>, <code>enriched_xml</code> is <code>null</code>.</li>
+</ul>
+<blockquote>
+<p><strong>Warning:</strong> Provide either <code>failures</code> or <code>raw_xml</code>, not both. Supplying both, or neither, is treated as a validation error.</p>
+</blockquote>
+<p>When XML enrichment is used, the returned <code>enriched_xml</code> is more than a copy of the original report. The code and tests show that it adds:</p>
+<ul>
+<li>a testsuite-level <code>report_url</code> property pointing back to the JJI report</li>
+<li>extra testcase properties such as <code>ai_bug_title</code> and <code>ai_bug_severity</code> for product bugs</li>
+<li>human-readable AI analysis text in <code>system-out</code></li>
+</ul>
+<h2 id="result-models">Result Models</h2>
+<h3 id="analysisresult"><code>AnalysisResult</code></h3>
+<p><code>AnalysisResult</code> is the full Jenkins-oriented result shape. Its main fields are:</p>
+<ul>
+<li><code>job_id</code></li>
+<li><code>job_name</code></li>
+<li><code>build_number</code></li>
+<li><code>jenkins_url</code></li>
+<li><code>status</code></li>
+<li><code>summary</code></li>
+<li><code>ai_provider</code></li>
+<li><code>ai_model</code></li>
+<li><code>failures</code></li>
+<li><code>child_job_analyses</code></li>
+</ul>
+<p><code>status</code> can be <code>pending</code>, <code>waiting</code>, <code>running</code>, <code>completed</code>, or <code>failed</code>.</p>
+<p>The updated model and tests explicitly allow the <code>waiting</code> state for Jenkins jobs that have been queued but are still waiting for the Jenkins build to finish:</p>
+<div class="highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="n">AnalysisResult</span><span class="p">(</span>
+    <span class="n">job_id</span><span class="o">=</span><span class="s2">&quot;test-id&quot;</span><span class="p">,</span>
+    <span class="n">status</span><span class="o">=</span><span class="s2">&quot;waiting&quot;</span><span class="p">,</span>
+    <span class="n">summary</span><span class="o">=</span><span class="s2">&quot;Waiting for Jenkins job to complete&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<h3 id="failureanalysisresult"><code>FailureAnalysisResult</code></h3>
+<p><code>FailureAnalysisResult</code> is the direct-failures response shape returned by <code>POST /analyze-failures</code>. Its main fields are:</p>
+<ul>
+<li><code>job_id</code></li>
+<li><code>status</code></li>
+<li><code>summary</code></li>
+<li><code>ai_provider</code></li>
+<li><code>ai_model</code></li>
+<li><code>failures</code></li>
+<li><code>enriched_xml</code></li>
+</ul>
+<p>Here, <code>status</code> is only <code>completed</code> or <code>failed</code>, because this endpoint runs synchronously.</p>
+<h3 id="side-by-side-comparison">Side-by-side comparison</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th><code>AnalysisResult</code></th>
+<th><code>FailureAnalysisResult</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>job_id</code></td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>pending</code>, <code>waiting</code>, <code>running</code>, <code>completed</code>, <code>failed</code></td>
+<td><code>completed</code>, <code>failed</code></td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>ai_provider</code>, <code>ai_model</code></td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>failures</code></td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>job_name</code>, <code>build_number</code>, <code>jenkins_url</code></td>
+<td>Yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>child_job_analyses</code></td>
+<td>Yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>enriched_xml</code></td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Note:</strong> The HTTP layer also adds <code>base_url</code> and <code>result_url</code>. Those are helpful API response fields, but they are not fields on the Pydantic model classes themselves. <code>base_url</code> is only populated when <code>PUBLIC_BASE_URL</code> is configured; otherwise it is empty and <code>result_url</code> is relative.</p>
+<p><strong>Tip:</strong> Treat <code>summary</code> as display text for humans. If you are automating against the API, use structured fields like <code>failures</code>, <code>analysis.classification</code>, <code>code_fix</code>, <code>product_bug_report</code>, and <code>jira_matches</code> instead.</p>
+</blockquote>
+<h2 id="failureanalysis"><code>FailureAnalysis</code></h2>
+<p><code>FailureAnalysis</code> is the most important model in the whole system. Every analyzed failure, whether it came from Jenkins or from a direct XML upload, ends up here.</p>
+<p>Its fields are:</p>
+<ul>
+<li><code>test_name</code>: the failed test</li>
+<li><code>error</code>: the result-side error message or exception text</li>
+<li><code>analysis</code>: the structured AI output</li>
+<li><code>error_signature</code>: a SHA-256 hash of the error plus stack trace, used for deduplication</li>
+</ul>
+<p>A small but useful naming detail: request-side failure inputs use <code>error_message</code>, but result-side failure outputs use <code>error</code>.</p>
+<p>Inside <code>analysis</code>, the service returns an <code>AnalysisDetail</code> object with:</p>
+<ul>
+<li><code>classification</code></li>
+<li><code>affected_tests</code></li>
+<li><code>details</code></li>
+<li><code>artifacts_evidence</code></li>
+<li>exactly one of <code>code_fix</code> or <code>product_bug_report</code></li>
+</ul>
+<p>In practice, the expected classifications are <code>CODE ISSUE</code> and <code>PRODUCT BUG</code>.</p>
+<p>A real <code>CODE ISSUE</code> example from the tests:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">code_issue_failure</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">FailureAnalysis</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;A CODE ISSUE failure with a code fix.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">FailureAnalysis</span><span class="p">(</span>
+        <span class="n">test_name</span><span class="o">=</span><span class="s2">&quot;tests.auth.test_login.TestLogin.test_valid_credentials&quot;</span><span class="p">,</span>
+        <span class="n">error</span><span class="o">=</span><span class="s2">&quot;AssertionError: Expected status 200, got 500&quot;</span><span class="p">,</span>
+        <span class="n">error_signature</span><span class="o">=</span><span class="s2">&quot;abc123def456&quot;</span><span class="p">,</span>  <span class="c1"># pragma: allowlist secret</span>
+        <span class="n">analysis</span><span class="o">=</span><span class="n">AnalysisDetail</span><span class="p">(</span>
+            <span class="n">classification</span><span class="o">=</span><span class="s2">&quot;CODE ISSUE&quot;</span><span class="p">,</span>
+            <span class="n">affected_tests</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;tests.auth.test_login.TestLogin.test_valid_credentials&quot;</span><span class="p">],</span>
+            <span class="n">details</span><span class="o">=</span><span class="s2">&quot;The test fails because the login endpoint handler does not catch ValueError from the password validator.&quot;</span><span class="p">,</span>
+            <span class="n">code_fix</span><span class="o">=</span><span class="n">CodeFix</span><span class="p">(</span>
+                <span class="n">file</span><span class="o">=</span><span class="s2">&quot;src/auth/handlers.py&quot;</span><span class="p">,</span>
+                <span class="n">line</span><span class="o">=</span><span class="s2">&quot;42&quot;</span><span class="p">,</span>
+                <span class="n">change</span><span class="o">=</span><span class="s2">&quot;Add try/except around password_validator.validate(password)&quot;</span><span class="p">,</span>
+            <span class="p">),</span>
+        <span class="p">),</span>
+    <span class="p">)</span>
+</code></pre></div>
+
+<p>A real <code>PRODUCT BUG</code> example from the tests:</p>
+<div class="highlight"><pre><span></span><code><span class="k">return</span> <span class="n">FailureAnalysis</span><span class="p">(</span>
+    <span class="n">test_name</span><span class="o">=</span><span class="s2">&quot;tests.network.test_dns.TestDNS.test_resolve&quot;</span><span class="p">,</span>
+    <span class="n">error</span><span class="o">=</span><span class="s2">&quot;TimeoutError: DNS resolution timed out after 30s&quot;</span><span class="p">,</span>
+    <span class="n">error_signature</span><span class="o">=</span><span class="s2">&quot;xyz789ghi012&quot;</span><span class="p">,</span>
+    <span class="n">analysis</span><span class="o">=</span><span class="n">AnalysisDetail</span><span class="p">(</span>
+        <span class="n">classification</span><span class="o">=</span><span class="s2">&quot;PRODUCT BUG&quot;</span><span class="p">,</span>
+        <span class="n">affected_tests</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;tests.network.test_dns.TestDNS.test_resolve&quot;</span><span class="p">],</span>
+        <span class="n">details</span><span class="o">=</span><span class="s2">&quot;DNS resolution is failing intermittently on the internal resolver.&quot;</span><span class="p">,</span>
+        <span class="n">product_bug_report</span><span class="o">=</span><span class="n">ProductBugReport</span><span class="p">(</span>
+            <span class="n">title</span><span class="o">=</span><span class="s2">&quot;DNS resolution timeout on internal resolver&quot;</span><span class="p">,</span>
+            <span class="n">severity</span><span class="o">=</span><span class="s2">&quot;high&quot;</span><span class="p">,</span>
+            <span class="n">component</span><span class="o">=</span><span class="s2">&quot;networking&quot;</span><span class="p">,</span>
+            <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Internal DNS resolver fails to resolve hostnames within 30s&quot;</span><span class="p">,</span>
+            <span class="n">evidence</span><span class="o">=</span><span class="s2">&quot;TimeoutError at dns_client.py:88 - socket.timeout after 30000ms&quot;</span><span class="p">,</span>
+            <span class="n">jira_search_keywords</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;DNS&quot;</span><span class="p">,</span> <span class="s2">&quot;timeout&quot;</span><span class="p">,</span> <span class="s2">&quot;resolver&quot;</span><span class="p">],</span>
+        <span class="p">),</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>What those nested models mean:</p>
+<table>
+<thead>
+<tr>
+<th>Nested model</th>
+<th>Fields</th>
+<th>When you see it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CodeFix</code></td>
+<td><code>file</code>, <code>line</code>, <code>change</code></td>
+<td>When the failure is classified as <code>CODE ISSUE</code></td>
+</tr>
+<tr>
+<td><code>ProductBugReport</code></td>
+<td><code>title</code>, <code>severity</code>, <code>component</code>, <code>description</code>, <code>evidence</code>, <code>jira_search_keywords</code>, <code>jira_matches</code></td>
+<td>When the failure is classified as <code>PRODUCT BUG</code></td>
+</tr>
+</tbody>
+</table>
+<p>A few practical notes about <code>AnalysisDetail</code>:</p>
+<ul>
+<li><code>artifacts_evidence</code> is intended to hold verbatim supporting lines from build artifacts, not a reworded summary.</li>
+<li><code>code_fix</code> and <code>product_bug_report</code> are mutually exclusive.</li>
+<li>When one branch is empty, it is omitted from serialized output rather than emitted as <code>false</code>.</li>
+</ul>
+<blockquote>
+<p><strong>Tip:</strong> <code>error_signature</code> is not just metadata. The system uses it to deduplicate identical failures, connect matching historical failures, and keep related comments or overrides aligned across the same underlying error.</p>
+</blockquote>
+<h2 id="jiramatch"><code>JiraMatch</code></h2>
+<p><code>JiraMatch</code> appears inside <code>ProductBugReport.jira_matches</code>. It represents a Jira issue that may already track the same problem.</p>
+<p>Its fields are:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>key</code></td>
+<td>Jira issue key such as <code>PROJ-123</code></td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td>Issue title</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>Jira workflow status</td>
+</tr>
+<tr>
+<td><code>priority</code></td>
+<td>Jira priority</td>
+</tr>
+<tr>
+<td><code>url</code></td>
+<td>Full Jira URL</td>
+</tr>
+<tr>
+<td><code>score</code></td>
+<td>Relevance score for the match</td>
+</tr>
+</tbody>
+</table>
+<p>A real example from the tests:</p>
+<div class="highlight"><pre><span></span><code><span class="n">match</span> <span class="o">=</span> <span class="n">JiraMatch</span><span class="p">(</span>
+    <span class="n">key</span><span class="o">=</span><span class="s2">&quot;PROJ-456&quot;</span><span class="p">,</span>
+    <span class="n">summary</span><span class="o">=</span><span class="s2">&quot;Login fails&quot;</span><span class="p">,</span>
+    <span class="n">status</span><span class="o">=</span><span class="s2">&quot;Open&quot;</span><span class="p">,</span>
+    <span class="n">priority</span><span class="o">=</span><span class="s2">&quot;High&quot;</span><span class="p">,</span>
+    <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://jira.example.com/browse/PROJ-456&quot;</span><span class="p">,</span>
+    <span class="n">score</span><span class="o">=</span><span class="mf">0.85</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p><code>score</code> is used as a relevance signal. In practice, higher scores mean a more convincing match.</p>
+<p><code>JiraMatch</code> is tied to <code>ProductBugReport</code> in two steps:</p>
+<ul>
+<li>the AI first produces <code>jira_search_keywords</code></li>
+<li>post-processing then searches Jira and attaches the filtered <code>jira_matches</code></li>
+</ul>
+<blockquote>
+<p><strong>Note:</strong> <code>jira_matches</code> is best-effort enrichment. It only appears when a failure is classified as <code>PRODUCT BUG</code> and Jira is both enabled and correctly configured.</p>
+</blockquote>
+<h2 id="childjobanalysis"><code>ChildJobAnalysis</code></h2>
+<p><code>ChildJobAnalysis</code> is how <code>jenkins-job-insight</code> represents failures from downstream jobs in a pipeline.</p>
+<p>Each child analysis can have:</p>
+<ul>
+<li><code>job_name</code></li>
+<li><code>build_number</code></li>
+<li><code>jenkins_url</code></li>
+<li><code>summary</code></li>
+<li><code>failures</code></li>
+<li><code>failed_children</code></li>
+<li><code>note</code></li>
+</ul>
+<p>The important part is that <code>failed_children</code> is recursive. A child job can itself have nested failed children.</p>
+<p>The recursion shows up directly in the analyzer when a job fails because downstream jobs failed:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="n">failed_children</span><span class="p">:</span>
+    <span class="c1"># Recursively analyze failed children IN PARALLEL with bounded concurrency</span>
+    <span class="n">child_tasks</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">analyze_child_job</span><span class="p">(</span>
+            <span class="n">child_name</span><span class="p">,</span>
+            <span class="n">child_num</span><span class="p">,</span>
+            <span class="n">jenkins_client</span><span class="p">,</span>
+            <span class="n">jenkins_base_url</span><span class="p">,</span>
+            <span class="n">depth</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
+            <span class="n">max_depth</span><span class="p">,</span>
+            <span class="n">repo_path</span><span class="p">,</span>
+            <span class="n">ai_provider</span><span class="p">,</span>
+            <span class="n">ai_model</span><span class="p">,</span>
+            <span class="n">ai_cli_timeout</span><span class="p">,</span>
+            <span class="n">custom_prompt</span><span class="p">,</span>
+            <span class="n">artifacts_context</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+            <span class="n">server_url</span><span class="o">=</span><span class="n">server_url</span><span class="p">,</span>
+            <span class="n">job_id</span><span class="o">=</span><span class="n">job_id</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">for</span> <span class="n">child_name</span><span class="p">,</span> <span class="n">child_num</span> <span class="ow">in</span> <span class="n">failed_children</span>
+    <span class="p">]</span>
+    <span class="n">child_results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">run_parallel_with_limit</span><span class="p">(</span><span class="n">child_tasks</span><span class="p">)</span>
+
+    <span class="c1"># Handle exceptions in results</span>
+    <span class="n">child_analyses</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">result</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">child_results</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="ne">Exception</span><span class="p">):</span>
+            <span class="n">child_name</span><span class="p">,</span> <span class="n">child_num</span> <span class="o">=</span> <span class="n">failed_children</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+            <span class="n">child_analyses</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">ChildJobAnalysis</span><span class="p">(</span>
+                    <span class="n">job_name</span><span class="o">=</span><span class="n">child_name</span><span class="p">,</span>
+                    <span class="n">build_number</span><span class="o">=</span><span class="n">child_num</span><span class="p">,</span>
+                    <span class="n">jenkins_url</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                    <span class="n">note</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Analysis failed: </span><span class="si">{</span><span class="n">format_exception_with_type</span><span class="p">(</span><span class="n">result</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">child_analyses</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+
+    <span class="c1"># This job failed because children failed - skip Claude CLI analysis</span>
+    <span class="c1"># Count failures from child analyses</span>
+    <span class="n">total_failures</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">failures</span><span class="p">)</span> <span class="k">for</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">child_analyses</span><span class="p">)</span>
+    <span class="n">summary</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;Pipeline failed due to </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">child_analyses</span><span class="p">)</span><span class="si">}</span><span class="s2"> child job(s).&quot;</span>
+    <span class="k">if</span> <span class="n">total_failures</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">summary</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">&quot; Total: </span><span class="si">{</span><span class="n">total_failures</span><span class="si">}</span><span class="s2"> failure(s) analyzed. See child analyses below.&quot;</span>
+
+    <span class="k">return</span> <span class="n">ChildJobAnalysis</span><span class="p">(</span>
+        <span class="n">job_name</span><span class="o">=</span><span class="n">job_name</span><span class="p">,</span>
+        <span class="n">build_number</span><span class="o">=</span><span class="n">build_number</span><span class="p">,</span>
+        <span class="n">jenkins_url</span><span class="o">=</span><span class="n">jenkins_url</span><span class="p">,</span>
+        <span class="n">summary</span><span class="o">=</span><span class="n">summary</span><span class="p">,</span>
+        <span class="n">failures</span><span class="o">=</span><span class="p">[],</span>  <span class="c1"># Pipeline has no direct failures</span>
+        <span class="n">failed_children</span><span class="o">=</span><span class="n">child_analyses</span><span class="p">,</span>
+    <span class="p">)</span>
+</code></pre></div>
+
+<p>This means a top-level <code>AnalysisResult</code> can contain:</p>
+<ul>
+<li>failures from the parent job in <code>failures</code></li>
+<li>failures from downstream jobs in <code>child_job_analyses</code></li>
+<li>failures from deeper descendants in each child’s <code>failed_children</code></li>
+</ul>
+<blockquote>
+<p><strong>Tip:</strong> If you are building a report or integration for pipeline jobs, walk <code>child_job_analyses</code> recursively. Looking only at the top-level <code>failures</code> array will miss downstream failures.</p>
+</blockquote>
+<h2 id="configuration-and-defaults">Configuration and Defaults</h2>
+<p>The server-side <code>Settings</code> model still provides defaults for many request fields. Important built-in defaults now include:</p>
+<ul>
+<li><code>jenkins_ssl_verify = true</code></li>
+<li><code>jira_ssl_verify = true</code></li>
+<li><code>jira_max_results = 5</code></li>
+<li><code>ai_cli_timeout = 10</code></li>
+<li><code>jenkins_artifacts_max_size_mb = 500</code></li>
+<li><code>jenkins_artifacts_context_lines = 200</code></li>
+<li><code>get_job_artifacts = true</code></li>
+<li><code>wait_for_completion = true</code></li>
+<li><code>poll_interval_minutes = 2</code></li>
+<li><code>max_wait_minutes = 0</code></li>
+</ul>
+<p>A few configuration rules to remember:</p>
+<ul>
+<li>Server-level Jenkins settings can be left blank and supplied per request through <code>AnalyzeRequest</code>.</li>
+<li><code>tests_repo_url</code> is validated as a URL in request payloads.</li>
+<li><code>ai_cli_timeout</code>, <code>jira_max_results</code>, <code>jenkins_artifacts_max_size_mb</code>, <code>jenkins_artifacts_context_lines</code>, and <code>poll_interval_minutes</code> must be positive.</li>
+<li><code>max_wait_minutes</code> accepts <code>0</code>, which means "wait indefinitely".</li>
+<li><code>jira_api_token</code> and <code>jira_pat</code> now represent different Jira auth paths: use <code>jira_api_token</code> with <code>jira_email</code> for Jira Cloud, and <code>jira_pat</code> for Jira Server/Data Center.</li>
+<li><code>PUBLIC_BASE_URL</code> affects only the HTTP helper links such as <code>base_url</code> and <code>result_url</code>; it is not part of any Pydantic response model.</li>
+<li><code>github_token</code> is a request field on the main analysis models, but <code>enable_github_issues</code> lives in server configuration rather than in <code>BaseAnalysisRequest</code>.</li>
+<li>Jira enrichment now needs the full Jira configuration: <code>JIRA_URL</code>, valid credentials, and a <code>JIRA_PROJECT_KEY</code>.</li>
+</ul>
+<blockquote>
+<p><strong>Note:</strong> Sensitive request override fields such as <code>jenkins_user</code>, <code>jenkins_password</code>, <code>jira_email</code>, <code>jira_api_token</code>, <code>jira_pat</code>, and <code>github_token</code> are encrypted at rest when stored for waiting-job resumption and stripped from API responses before result data is returned to clients.</p>
+<p><strong>Warning:</strong> Setting <code>enable_jira: true</code> in a request does not enable Jira by itself. Jira enrichment only turns on when the server also has <code>JIRA_URL</code>, a <code>JIRA_PROJECT_KEY</code>, and valid credentials available.</p>
+</blockquote>
+                </div>
+            </article>
+            <nav class="page-nav">
+
+                <a href="api-results-and-dashboard.html" class="page-nav-link page-nav-prev">
+                    <span class="page-nav-label">Previous</span>
+                    <span class="page-nav-title">Results, Reports, and Dashboard Endpoints</span>
+                </a>
+
+
+                <a href="storage-and-result-lifecycle.html" class="page-nav-link page-nav-next">
+                    <span class="page-nav-label">Next</span>
+                    <span class="page-nav-title">Storage and Result Lifecycle</span>
+                </a>
+
+            </nav>
+
+            <aside class="toc-sidebar">
+                <div class="toc-container">
+                    <h3>On this page</h3>
+                    <div class="toc">
+<ul>
+<li><a href="#shared-request-fields">Shared Request Fields</a></li>
+<li><a href="#analyzerequest">AnalyzeRequest</a></li>
+<li><a href="#analyzefailuresrequest">AnalyzeFailuresRequest</a></li>
+<li><a href="#result-models">Result Models</a><ul>
+<li><a href="#analysisresult">AnalysisResult</a></li>
+<li><a href="#failureanalysisresult">FailureAnalysisResult</a></li>
+<li><a href="#side-by-side-comparison">Side-by-side comparison</a></li>
+</ul>
+</li>
+<li><a href="#failureanalysis">FailureAnalysis</a></li>
+<li><a href="#jiramatch">JiraMatch</a></li>
+<li><a href="#childjobanalysis">ChildJobAnalysis</a></li>
+<li><a href="#configuration-and-defaults">Configuration and Defaults</a></li>
+</ul>
+</div>
+
+                </div>
+            </aside>
+
+
+        </main>
+
+        <footer class="page-footer">
+            Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
+            <span class="footer-sep">·</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+        </footer>
+    </div>
+
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+    <script src="assets/theme.js"></script>
+    <script src="assets/search.js"></script>
+    <script src="assets/copy.js"></script>
+    <script src="assets/callouts.js"></script>
+    <script src="assets/scrollspy.js"></script>
+    <script src="assets/codelabels.js"></script>
+    <script src="assets/github.js"></script>
+    <script>
+(function() {
+    var toggle = document.getElementById('sidebar-toggle');
+    var sidebar = document.getElementById('sidebar');
+    var overlay = document.getElementById('sidebar-overlay');
+    if (toggle && sidebar) {
+        toggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
+            if (overlay) overlay.classList.toggle('open');
+            var expanded = sidebar.classList.contains('open');
+            toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        });
+    }
+    if (overlay) {
+        overlay.addEventListener('click', function() {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('open');
+            if (toggle) toggle.setAttribute('aria-expanded', 'false');
+        });
+    }
+})();
+</script>
+<script>
+(function() {
+    var sidebar = document.querySelector('.sidebar-nav') || document.querySelector('.sidebar');
+    if (!sidebar) return;
+
+    // Restore scroll position
+    var saved = sessionStorage.getItem('sidebar-scroll');
+    if (saved) sidebar.scrollTop = parseInt(saved, 10);
+
+    // Save scroll position before navigating
+    sidebar.addEventListener('scroll', function() {
+        sessionStorage.setItem('sidebar-scroll', sidebar.scrollTop.toString());
+    });
+
+    // Also scroll active link into view if no saved position
+    if (!saved) {
+        var active = sidebar.querySelector('.nav-link.active');
+        if (active) {
+            active.scrollIntoView({ block: 'center', behavior: 'instant' });
+        }
+    }
+})();
+</script>
+</body>
+</html>
