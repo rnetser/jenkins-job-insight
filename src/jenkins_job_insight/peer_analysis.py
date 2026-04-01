@@ -8,6 +8,8 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import TypedDict
+
 from ai_cli_runner import run_parallel_with_limit
 from simple_logger.logger import get_logger
 
@@ -29,6 +31,13 @@ from jenkins_job_insight.models import (
 from jenkins_job_insight.storage import update_progress_phase
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+
+
+class PeerResponseSummary(TypedDict):
+    ai_provider: str
+    ai_model: str
+    classification: str
+    reasoning: str
 
 
 async def _safe_update_progress(job_id: str | None, phase: str) -> None:
@@ -158,6 +167,7 @@ def _build_peer_review_prompt(
     orchestrator_analysis: str,
     custom_prompt: str,
     resources_section: str,
+    other_peer_responses: list[PeerResponseSummary] | None = None,
 ) -> str:
     """Build the prompt for a peer to review the orchestrator's analysis.
 
@@ -169,6 +179,9 @@ def _build_peer_review_prompt(
         orchestrator_analysis: The main AI's analysis text to review.
         custom_prompt: Additional user instructions, if any.
         resources_section: Available resources (repo, tools) for the peer.
+        other_peer_responses: Previous round responses from other peers
+            (excluding the current peer), typed as ``PeerResponseSummary``.
+            None or empty list means no prior peer input (round 1).
 
     Returns:
         Formatted peer review prompt string.
@@ -176,6 +189,21 @@ def _build_peer_review_prompt(
     custom_section = (
         f"\n\nADDITIONAL INSTRUCTIONS:\n{custom_prompt}\n" if custom_prompt else ""
     )
+
+    other_peers_section = ""
+    if other_peer_responses:
+        lines = []
+        for resp in other_peer_responses:
+            lines.append(
+                f"PEER ({resp['ai_provider']}/{resp['ai_model']}):\n"
+                f"  Classification: {resp['classification']}\n"
+                f"  Response: {resp['reasoning']}"
+            )
+        other_peers_section = (
+            "\n\nOTHER PEER RESPONSES FROM PREVIOUS ROUND:\n"
+            + "\n\n".join(lines)
+            + "\n\nConsider their perspectives but form your own independent opinion.\n"
+        )
 
     return f"""IMPORTANT: This is an AI-only conversation. Do NOT be agreeable or sycophantic. \
 Critically evaluate the analysis below and provide your honest, independent assessment. \
@@ -186,7 +214,7 @@ FAILURE SUMMARY:
 
 ORCHESTRATOR'S ANALYSIS:
 {orchestrator_analysis}
-
+{other_peers_section}
 Your task: Review the orchestrator's analysis above. Do you agree with the classification \
 and reasoning? If not, explain why and suggest corrections.
 {custom_section}{resources_section}
@@ -284,6 +312,9 @@ async def analyze_failure_group_with_peers(
     then peers review in parallel. The loop continues until consensus
     is reached or max_rounds is exhausted.
 
+    From round 2 onwards, each peer sees the other peers' responses from the
+    previous round (excluding its own), enabling richer group debate.
+
     Args:
         failures: List of test failures with the same error signature.
         console_context: Relevant console lines for context.
@@ -372,18 +403,44 @@ async def analyze_failure_group_with_peers(
             )
         )
 
-        # All peers review in parallel
-        peer_prompt = _build_peer_review_prompt(
-            failure_summary=failure_summary,
-            orchestrator_analysis=orchestrator_analysis_text,
-            custom_prompt=custom_prompt,
-            resources_section=resources_section,
-        )
+        # Collect previous round peer data for cross-peer visibility.
+        # Build a mapping from peer_ai_configs index to PeerResponseSummary
+        # (None for peers that failed).  Peer entries in all_rounds appear in
+        # the same order as peer_ai_configs because asyncio.gather preserves
+        # input order, so we can zip them by position.
+        prev_round_by_idx: dict[int, PeerResponseSummary] = {}
+        if round_num > 1:
+            prev_round_entries = [
+                r for r in all_rounds if r.round == round_num - 1 and r.role == "peer"
+            ]
+            for peer_idx, entry in enumerate(prev_round_entries):
+                if entry.agrees_with_orchestrator is not None:
+                    prev_round_by_idx[peer_idx] = PeerResponseSummary(
+                        ai_provider=entry.ai_provider,
+                        ai_model=entry.ai_model,
+                        classification=entry.classification,
+                        reasoning=entry.details,
+                    )
+
+        # Build per-peer prompts (each peer sees others' responses, excluding self by index)
+        peer_prompts: dict[int, str] = {}
+        for idx, _cfg in enumerate(peer_ai_configs):
+            other_responses: list[PeerResponseSummary] = [
+                resp for peer_idx, resp in prev_round_by_idx.items() if peer_idx != idx
+            ]
+            peer_prompts[idx] = _build_peer_review_prompt(
+                failure_summary=failure_summary,
+                orchestrator_analysis=orchestrator_analysis_text,
+                custom_prompt=custom_prompt,
+                resources_section=resources_section,
+                other_peer_responses=other_responses if other_responses else None,
+            )
 
         async def _call_peer(
+            idx: int,
             config: AiConfigEntry,
-            prompt: str = peer_prompt,
         ) -> tuple[AiConfigEntry, bool, str]:
+            prompt = peer_prompts[idx]
             ok, output = await _call_ai_cli_with_retry(
                 prompt,
                 cwd=repo_path,
@@ -394,7 +451,7 @@ async def analyze_failure_group_with_peers(
             )
             return config, ok, output
 
-        peer_tasks = [_call_peer(cfg) for cfg in peer_ai_configs]
+        peer_tasks = [_call_peer(idx, cfg) for idx, cfg in enumerate(peer_ai_configs)]
         peer_results = await run_parallel_with_limit(peer_tasks)
 
         # Process peer responses

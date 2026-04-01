@@ -25,6 +25,48 @@ def _make_failure(
     )
 
 
+async def _run_peer_analysis(
+    monkeypatch,
+    cli_side_effect,
+    peer_configs=None,
+    max_rounds=3,
+    job_id="test-job",
+    group_label="",
+):
+    """Helper to run analyze_failure_group_with_peers with mocked CLI."""
+    from unittest.mock import AsyncMock
+
+    from jenkins_job_insight.models import AiConfigEntry, TestFailure
+    from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
+
+    monkeypatch.setattr(
+        "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry", cli_side_effect
+    )
+    monkeypatch.setattr(
+        "jenkins_job_insight.analyzer._call_ai_cli_with_retry", cli_side_effect
+    )
+    monkeypatch.setattr(
+        "jenkins_job_insight.peer_analysis.update_progress_phase", AsyncMock()
+    )
+
+    if peer_configs is None:
+        peer_configs = [AiConfigEntry(ai_provider="gemini", ai_model="pro")]
+
+    return await analyze_failure_group_with_peers(
+        failures=[
+            TestFailure(test_name="test_foo", error_message="err", stack_trace="trace")
+        ],
+        console_context="console output",
+        repo_path=None,
+        main_ai_provider="claude",
+        main_ai_model="opus",
+        peer_ai_configs=peer_configs,
+        max_rounds=max_rounds,
+        job_id=job_id,
+        group_label=group_label,
+    )
+
+
 def _peer_configs() -> list[AiConfigEntry]:
     return [
         AiConfigEntry(ai_provider="gemini", ai_model="gemini-2.5-pro"),
@@ -1120,51 +1162,23 @@ class TestAnalyzeWithPeers:
         assert debate.max_rounds == 2
 
     @pytest.mark.asyncio
-    async def test_analyze_with_peers_all_peers_fail(self) -> None:
+    async def test_analyze_with_peers_all_peers_fail(self, monkeypatch) -> None:
         """All peers return unparseable responses -> falls back to main AI, consensus=False."""
-        from unittest.mock import AsyncMock
+        orchestrator_json = _make_ai_json_response(classification="CODE ISSUE")
+        call_count = 0
 
-        from jenkins_job_insight.models import AnalysisDetail
-        from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
-
-        mock_orchestrator = AsyncMock(
-            return_value=(
-                AnalysisDetail(classification="CODE ISSUE", details="Test is broken"),
-                "sig123",
-            )
-        )
-
-        async def mock_peer_call(
-            prompt,
-            *,
-            cwd=None,
-            ai_provider="",
-            ai_model="",
-            ai_cli_timeout=None,
-            cli_flags=None,
-            max_retries=3,
-        ):
+        async def cli_side_effect(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return (True, orchestrator_json)
             return (False, "CLI error: connection refused")
 
-        with (
-            patch(
-                "jenkins_job_insight.peer_analysis._run_single_ai_analysis",
-                mock_orchestrator,
-            ),
-            patch(
-                "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry",
-                side_effect=mock_peer_call,
-            ),
-        ):
-            results = await analyze_failure_group_with_peers(
-                failures=[_make_failure()],
-                console_context="console output",
-                repo_path=None,
-                main_ai_provider="claude",
-                main_ai_model="claude-sonnet-4-20250514",
-                peer_ai_configs=_peer_configs(),
-                max_rounds=3,
-            )
+        results = await _run_peer_analysis(
+            monkeypatch,
+            cli_side_effect=cli_side_effect,
+            peer_configs=_peer_configs(),
+        )
 
         assert len(results) == 1
         assert results[0].analysis.classification == "CODE ISSUE"
@@ -1607,20 +1621,11 @@ class TestAnalyzeWithPeers:
         assert len(invalid_peers) == 1
 
     @pytest.mark.asyncio
-    async def test_peer_null_classification_coerced_to_empty_string(self) -> None:
+    async def test_peer_null_classification_coerced_to_empty_string(
+        self, monkeypatch
+    ) -> None:
         """Peer returning null classification stores empty string, not None."""
-        from unittest.mock import AsyncMock
-
-        from jenkins_job_insight.models import AnalysisDetail
-        from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
-
-        mock_orchestrator = AsyncMock(
-            return_value=(
-                AnalysisDetail(classification="CODE ISSUE", details="Test is broken"),
-                "sig123",
-            )
-        )
-        # Craft raw JSON with null classification
+        orchestrator_json = _make_ai_json_response(classification="CODE ISSUE")
         null_classification_response = json.dumps(
             {
                 "agrees": True,
@@ -1629,38 +1634,21 @@ class TestAnalyzeWithPeers:
                 "suggested_changes": "",
             }
         )
+        call_count = 0
 
-        async def mock_peer_call(
-            prompt,
-            *,
-            cwd=None,
-            ai_provider="",
-            ai_model="",
-            ai_cli_timeout=None,
-            cli_flags=None,
-            max_retries=3,
-        ):
+        async def cli_side_effect(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return (True, orchestrator_json)
             return (True, null_classification_response)
 
-        with (
-            patch(
-                "jenkins_job_insight.peer_analysis._run_single_ai_analysis",
-                mock_orchestrator,
-            ),
-            patch(
-                "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry",
-                side_effect=mock_peer_call,
-            ),
-        ):
-            results = await analyze_failure_group_with_peers(
-                failures=[_make_failure()],
-                console_context="console output",
-                repo_path=None,
-                main_ai_provider="claude",
-                main_ai_model="claude-sonnet-4-20250514",
-                peer_ai_configs=_peer_configs(),
-                max_rounds=1,
-            )
+        results = await _run_peer_analysis(
+            monkeypatch,
+            cli_side_effect=cli_side_effect,
+            peer_configs=_peer_configs(),
+            max_rounds=1,
+        )
 
         debate = results[0].peer_debate
         assert debate is not None
@@ -1672,56 +1660,30 @@ class TestAnalyzeWithPeers:
             assert pr.agrees_with_orchestrator is None
 
     @pytest.mark.asyncio
-    async def test_peer_case_insensitive_classification_agreement(self) -> None:
+    async def test_peer_case_insensitive_classification_agreement(
+        self, monkeypatch
+    ) -> None:
         """Peer returning lowercase classification still reaches consensus."""
-        from unittest.mock import AsyncMock
-
-        from jenkins_job_insight.models import AnalysisDetail
-        from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
-
-        mock_orchestrator = AsyncMock(
-            return_value=(
-                AnalysisDetail(classification="CODE ISSUE", details="Test is broken"),
-                "sig123",
-            )
-        )
-        # Peer returns lowercase classification
+        orchestrator_json = _make_ai_json_response(classification="CODE ISSUE")
         peer_response = _make_peer_json_response(
             agrees=True,
             classification="code issue",  # lowercase
         )
+        call_count = 0
 
-        async def mock_peer_call(
-            prompt,
-            *,
-            cwd=None,
-            ai_provider="",
-            ai_model="",
-            ai_cli_timeout=None,
-            cli_flags=None,
-            max_retries=3,
-        ):
+        async def cli_side_effect(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return (True, orchestrator_json)
             return (True, peer_response)
 
-        with (
-            patch(
-                "jenkins_job_insight.peer_analysis._run_single_ai_analysis",
-                mock_orchestrator,
-            ),
-            patch(
-                "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry",
-                side_effect=mock_peer_call,
-            ),
-        ):
-            results = await analyze_failure_group_with_peers(
-                failures=[_make_failure()],
-                console_context="console output",
-                repo_path=None,
-                main_ai_provider="claude",
-                main_ai_model="claude-sonnet-4-20250514",
-                peer_ai_configs=_peer_configs(),
-                max_rounds=1,
-            )
+        results = await _run_peer_analysis(
+            monkeypatch,
+            cli_side_effect=cli_side_effect,
+            peer_configs=_peer_configs(),
+            max_rounds=1,
+        )
 
         debate = results[0].peer_debate
         assert debate is not None
@@ -1791,58 +1753,32 @@ class TestAnalyzeWithPeers:
         mock_update.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_suggested_changes_preserved_in_peer_round_details(self) -> None:
+    async def test_suggested_changes_preserved_in_peer_round_details(
+        self, monkeypatch
+    ) -> None:
         """Peer's suggested_changes are preserved in the PeerRound details field."""
-        from unittest.mock import AsyncMock
-
-        from jenkins_job_insight.models import AnalysisDetail
-        from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
-
+        orchestrator_json = _make_ai_json_response(classification="CODE ISSUE")
         peer_response = _make_peer_json_response(
             agrees=True,
             classification="CODE ISSUE",
             reasoning="The test assertion is wrong",
             suggested_changes="Fix the assertion on line 42",
         )
+        call_count = 0
 
-        mock_orchestrator = AsyncMock(
-            return_value=(
-                AnalysisDetail(classification="CODE ISSUE", details="Test is broken"),
-                "sig123",
-            )
-        )
-
-        async def mock_peer_call(
-            prompt,
-            *,
-            cwd=None,
-            ai_provider="",
-            ai_model="",
-            ai_cli_timeout=None,
-            cli_flags=None,
-            max_retries=3,
-        ):
+        async def cli_side_effect(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return (True, orchestrator_json)
             return (True, peer_response)
 
-        with (
-            patch(
-                "jenkins_job_insight.peer_analysis._run_single_ai_analysis",
-                mock_orchestrator,
-            ),
-            patch(
-                "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry",
-                side_effect=mock_peer_call,
-            ),
-        ):
-            results = await analyze_failure_group_with_peers(
-                failures=[_make_failure()],
-                console_context="console output",
-                repo_path=None,
-                main_ai_provider="claude",
-                main_ai_model="claude-sonnet-4-20250514",
-                peer_ai_configs=_peer_configs(),
-                max_rounds=1,
-            )
+        results = await _run_peer_analysis(
+            monkeypatch,
+            cli_side_effect=cli_side_effect,
+            peer_configs=_peer_configs(),
+            max_rounds=1,
+        )
 
         debate = results[0].peer_debate
         assert debate is not None
@@ -1852,58 +1788,30 @@ class TestAnalyzeWithPeers:
             assert "Fix the assertion on line 42" in pr.details
 
     @pytest.mark.asyncio
-    async def test_empty_suggested_changes_not_appended(self) -> None:
+    async def test_empty_suggested_changes_not_appended(self, monkeypatch) -> None:
         """When suggested_changes is empty, details contains only reasoning."""
-        from unittest.mock import AsyncMock
-
-        from jenkins_job_insight.models import AnalysisDetail
-        from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
-
+        orchestrator_json = _make_ai_json_response(classification="CODE ISSUE")
         peer_response = _make_peer_json_response(
             agrees=True,
             classification="CODE ISSUE",
             reasoning="The test assertion is wrong",
             suggested_changes="",
         )
+        call_count = 0
 
-        mock_orchestrator = AsyncMock(
-            return_value=(
-                AnalysisDetail(classification="CODE ISSUE", details="Test is broken"),
-                "sig123",
-            )
-        )
-
-        async def mock_peer_call(
-            prompt,
-            *,
-            cwd=None,
-            ai_provider="",
-            ai_model="",
-            ai_cli_timeout=None,
-            cli_flags=None,
-            max_retries=3,
-        ):
+        async def cli_side_effect(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return (True, orchestrator_json)
             return (True, peer_response)
 
-        with (
-            patch(
-                "jenkins_job_insight.peer_analysis._run_single_ai_analysis",
-                mock_orchestrator,
-            ),
-            patch(
-                "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry",
-                side_effect=mock_peer_call,
-            ),
-        ):
-            results = await analyze_failure_group_with_peers(
-                failures=[_make_failure()],
-                console_context="console output",
-                repo_path=None,
-                main_ai_provider="claude",
-                main_ai_model="claude-sonnet-4-20250514",
-                peer_ai_configs=_peer_configs(),
-                max_rounds=1,
-            )
+        results = await _run_peer_analysis(
+            monkeypatch,
+            cli_side_effect=cli_side_effect,
+            peer_configs=_peer_configs(),
+            max_rounds=1,
+        )
 
         debate = results[0].peer_debate
         assert debate is not None
@@ -1913,29 +1821,122 @@ class TestAnalyzeWithPeers:
             assert "Suggested changes" not in pr.details
 
     @pytest.mark.asyncio
-    async def test_invalid_orchestrator_classification_normalized(self) -> None:
+    async def test_invalid_orchestrator_classification_normalized(
+        self, monkeypatch
+    ) -> None:
         """Orchestrator returning an invalid classification gets normalized to empty string."""
+        # Main AI returns a malformed classification
+        orchestrator_json = _make_ai_json_response(classification="CODEISSUE")
+        peer_response = _make_peer_json_response(
+            agrees=True, classification="CODE ISSUE"
+        )
+        call_count = 0
+
+        async def cli_side_effect(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return (True, orchestrator_json)
+            return (True, peer_response)
+
+        results = await _run_peer_analysis(
+            monkeypatch,
+            cli_side_effect=cli_side_effect,
+            peer_configs=_peer_configs(),
+            max_rounds=1,
+        )
+
+        analysis = results[0].analysis
+        # Invalid "CODEISSUE" should NOT leak through as the final classification
+        assert analysis.classification != "CODEISSUE"
+
+    def test_build_peer_review_prompt_includes_other_peers(self) -> None:
+        """When other_peer_responses is provided, prompt includes their responses."""
+        from jenkins_job_insight.peer_analysis import _build_peer_review_prompt
+
+        from jenkins_job_insight.peer_analysis import PeerResponseSummary
+
+        other_responses: list[PeerResponseSummary] = [
+            PeerResponseSummary(
+                ai_provider="gemini",
+                ai_model="gemini-2.5-pro",
+                classification="PRODUCT BUG",
+                reasoning="This is clearly a product defect",
+            ),
+            PeerResponseSummary(
+                ai_provider="openai",
+                ai_model="gpt-4",
+                classification="CODE ISSUE",
+                reasoning="The test itself is wrong",
+            ),
+        ]
+        prompt = _build_peer_review_prompt(
+            failure_summary="Test failed",
+            orchestrator_analysis="Classification: CODE ISSUE",
+            custom_prompt="",
+            resources_section="",
+            other_peer_responses=other_responses,
+        )
+        assert "OTHER PEER RESPONSES FROM PREVIOUS ROUND" in prompt
+        assert "gemini/gemini-2.5-pro" in prompt
+        assert "PRODUCT BUG" in prompt
+        assert "This is clearly a product defect" in prompt
+        assert "openai/gpt-4" in prompt
+        assert "CODE ISSUE" in prompt
+        assert "The test itself is wrong" in prompt
+        assert "Consider their perspectives" in prompt
+
+    def test_build_peer_review_prompt_no_other_peers_round_1(self) -> None:
+        """When other_peer_responses is None (round 1), no other peer section appears."""
+        from jenkins_job_insight.peer_analysis import _build_peer_review_prompt
+
+        prompt = _build_peer_review_prompt(
+            failure_summary="Test failed",
+            orchestrator_analysis="Classification: CODE ISSUE",
+            custom_prompt="",
+            resources_section="",
+            other_peer_responses=None,
+        )
+        assert "OTHER PEER RESPONSES" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_peers_see_each_other_in_round_2(self) -> None:
+        """In round 2, each peer's prompt includes the other peer's round 1 response."""
         from unittest.mock import AsyncMock
 
         from jenkins_job_insight.models import AnalysisDetail
         from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
 
-        # Main AI returns a malformed classification
         mock_orchestrator = AsyncMock(
             return_value=(
-                AnalysisDetail(
-                    classification="CODEISSUE",
-                    details="Malformed classification",
-                ),
+                AnalysisDetail(classification="CODE ISSUE", details="Test is broken"),
                 "sig123",
             )
         )
 
-        peer_response = _make_peer_json_response(
-            agrees=True, classification="CODE ISSUE"
+        main_response_r2 = _make_ai_json_response(
+            classification="CODE ISSUE",
+            details="Revised analysis",
         )
 
-        async def mock_peer_call(
+        # Round 1: both peers disagree with PRODUCT BUG
+        peer1_r1 = _make_peer_json_response(
+            agrees=False,
+            classification="PRODUCT BUG",
+            reasoning="Peer1 round1 reasoning",
+        )
+        peer2_r1 = _make_peer_json_response(
+            agrees=False,
+            classification="PRODUCT BUG",
+            reasoning="Peer2 round1 reasoning",
+        )
+        # Round 2: both peers agree
+        peer_agree = _make_peer_json_response(agrees=True, classification="CODE ISSUE")
+
+        captured_prompts: list[tuple[str, str]] = []  # (ai_provider, prompt)
+        call_count = 0
+
+        async def mock_calls(
             prompt,
             *,
             cwd=None,
@@ -1945,7 +1946,21 @@ class TestAnalyzeWithPeers:
             cli_flags=None,
             max_retries=3,
         ):
-            return (True, peer_response)
+            nonlocal call_count
+            call_count += 1
+            # Calls 1-2: round 1 peers
+            if call_count == 1:
+                captured_prompts.append((ai_provider, prompt))
+                return (True, peer1_r1)
+            if call_count == 2:
+                captured_prompts.append((ai_provider, prompt))
+                return (True, peer2_r1)
+            # Call 3: revision
+            if call_count == 3:
+                return (True, main_response_r2)
+            # Calls 4-5: round 2 peers
+            captured_prompts.append((ai_provider, prompt))
+            return (True, peer_agree)
 
         with (
             patch(
@@ -1954,22 +1969,213 @@ class TestAnalyzeWithPeers:
             ),
             patch(
                 "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry",
-                side_effect=mock_peer_call,
+                side_effect=mock_calls,
             ),
         ):
-            results = await analyze_failure_group_with_peers(
+            await analyze_failure_group_with_peers(
                 failures=[_make_failure()],
                 console_context="console output",
                 repo_path=None,
                 main_ai_provider="claude",
                 main_ai_model="claude-sonnet-4-20250514",
                 peer_ai_configs=_peer_configs(),
-                max_rounds=1,
+                max_rounds=3,
             )
 
-        analysis = results[0].analysis
-        # Invalid "CODEISSUE" should NOT leak through as the final classification
-        assert analysis.classification != "CODEISSUE"
+        # Round 1 prompts (indices 0, 1) should NOT have other peer responses
+        for _, prompt in captured_prompts[:2]:
+            assert "OTHER PEER RESPONSES" not in prompt
+
+        # Round 2 prompts (indices 2, 3) SHOULD have other peer responses
+        assert len(captured_prompts) >= 4
+        for _, prompt in captured_prompts[2:4]:
+            assert "OTHER PEER RESPONSES FROM PREVIOUS ROUND" in prompt
+
+    @pytest.mark.asyncio
+    async def test_peer_excludes_own_response(self) -> None:
+        """Each peer in round 2 sees the other peer's response but NOT its own."""
+        from unittest.mock import AsyncMock
+
+        from jenkins_job_insight.models import AnalysisDetail
+        from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
+
+        mock_orchestrator = AsyncMock(
+            return_value=(
+                AnalysisDetail(classification="CODE ISSUE", details="Test is broken"),
+                "sig123",
+            )
+        )
+
+        main_response_r2 = _make_ai_json_response(
+            classification="CODE ISSUE",
+            details="Revised analysis",
+        )
+
+        # Round 1: peers disagree with distinct reasoning
+        peer1_r1 = _make_peer_json_response(
+            agrees=False,
+            classification="PRODUCT BUG",
+            reasoning="UNIQUE_PEER1_REASONING_XYZ",
+        )
+        peer2_r1 = _make_peer_json_response(
+            agrees=False,
+            classification="PRODUCT BUG",
+            reasoning="UNIQUE_PEER2_REASONING_ABC",
+        )
+        # Round 2: agree
+        peer_agree = _make_peer_json_response(agrees=True, classification="CODE ISSUE")
+
+        captured_round2: list[tuple[str, str, str]] = []  # (provider, model, prompt)
+        call_count = 0
+
+        async def mock_calls(
+            prompt,
+            *,
+            cwd=None,
+            ai_provider="",
+            ai_model="",
+            ai_cli_timeout=None,
+            cli_flags=None,
+            max_retries=3,
+        ):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return (True, peer1_r1)
+            if call_count == 2:
+                return (True, peer2_r1)
+            if call_count == 3:
+                return (True, main_response_r2)
+            # Round 2 peers
+            captured_round2.append((ai_provider, ai_model, prompt))
+            return (True, peer_agree)
+
+        with (
+            patch(
+                "jenkins_job_insight.peer_analysis._run_single_ai_analysis",
+                mock_orchestrator,
+            ),
+            patch(
+                "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry",
+                side_effect=mock_calls,
+            ),
+        ):
+            await analyze_failure_group_with_peers(
+                failures=[_make_failure()],
+                console_context="console output",
+                repo_path=None,
+                main_ai_provider="claude",
+                main_ai_model="claude-sonnet-4-20250514",
+                peer_ai_configs=_peer_configs(),
+                max_rounds=3,
+            )
+
+        # We should have 2 round-2 peer calls
+        assert len(captured_round2) == 2
+
+        # Peer 1 (gemini) should see peer 2's reasoning but NOT its own
+        peer1_call = [c for c in captured_round2 if c[0] == "gemini"]
+        assert len(peer1_call) == 1
+        peer1_prompt = peer1_call[0][2]
+        assert "UNIQUE_PEER2_REASONING_ABC" in peer1_prompt
+        assert "UNIQUE_PEER1_REASONING_XYZ" not in peer1_prompt
+
+        # Peer 2 (claude) should see peer 1's reasoning but NOT its own
+        peer2_call = [c for c in captured_round2 if c[0] == "claude"]
+        assert len(peer2_call) == 1
+        peer2_prompt = peer2_call[0][2]
+        assert "UNIQUE_PEER1_REASONING_XYZ" in peer2_prompt
+        assert "UNIQUE_PEER2_REASONING_ABC" not in peer2_prompt
+
+    @pytest.mark.asyncio
+    async def test_failed_peer_not_carried_to_next_round(self) -> None:
+        """Failed peer entries from round 1 must NOT appear in round 2 prompts."""
+        from unittest.mock import AsyncMock
+
+        from jenkins_job_insight.models import AnalysisDetail
+        from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
+
+        mock_orchestrator = AsyncMock(
+            return_value=(
+                AnalysisDetail(classification="CODE ISSUE", details="Test is broken"),
+                "sig123",
+            )
+        )
+
+        main_response_r2 = _make_ai_json_response(
+            classification="CODE ISSUE",
+            details="Revised analysis",
+        )
+
+        # Round 1: peer1 (gemini) succeeds with disagreement, peer2 (claude) fails
+        peer1_r1 = _make_peer_json_response(
+            agrees=False,
+            classification="PRODUCT BUG",
+            reasoning="VALID_PEER1_REASONING",
+        )
+        cli_error_output = "TRANSPORT_FAILURE_ERROR_XYZ"
+
+        # Round 2: both agree
+        peer_agree = _make_peer_json_response(agrees=True, classification="CODE ISSUE")
+
+        captured_round2: list[tuple[str, str, str]] = []  # (provider, model, prompt)
+        call_count = 0
+
+        async def mock_calls(
+            prompt,
+            *,
+            cwd=None,
+            ai_provider="",
+            ai_model="",
+            ai_cli_timeout=None,
+            cli_flags=None,
+            max_retries=3,
+        ):
+            nonlocal call_count
+            call_count += 1
+            # Round 1: peer1 succeeds, peer2 CLI fails
+            if call_count == 1:
+                return (True, peer1_r1)
+            if call_count == 2:
+                return (False, cli_error_output)
+            # Revision call
+            if call_count == 3:
+                return (True, main_response_r2)
+            # Round 2 peers
+            captured_round2.append((ai_provider, ai_model, prompt))
+            return (True, peer_agree)
+
+        with (
+            patch(
+                "jenkins_job_insight.peer_analysis._run_single_ai_analysis",
+                mock_orchestrator,
+            ),
+            patch(
+                "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry",
+                side_effect=mock_calls,
+            ),
+        ):
+            await analyze_failure_group_with_peers(
+                failures=[_make_failure()],
+                console_context="console output",
+                repo_path=None,
+                main_ai_provider="claude",
+                main_ai_model="claude-sonnet-4-20250514",
+                peer_ai_configs=_peer_configs(),
+                max_rounds=3,
+            )
+
+        # Should have 2 round-2 peer calls
+        assert len(captured_round2) == 2
+
+        # No round 2 prompt should contain the failed peer's error output
+        for _provider, _model, prompt in captured_round2:
+            assert cli_error_output not in prompt
+
+        # The successful peer1's reasoning SHOULD appear (for the other peer)
+        peer2_call = [c for c in captured_round2 if c[0] == "claude"]
+        assert len(peer2_call) == 1
+        assert "VALID_PEER1_REASONING" in peer2_call[0][2]
 
     @pytest.mark.asyncio
     async def test_invalid_revision_classification_keeps_prior(self) -> None:
@@ -2055,3 +2261,302 @@ class TestAnalyzeWithPeers:
         assert analysis.classification != "maybe product bug"
         # The prior valid classification should have been preserved
         assert analysis.classification == "CODE ISSUE"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_peer_configs_all_called(self) -> None:
+        """Duplicate (provider, model) peers must all be called, not deduplicated."""
+        from unittest.mock import AsyncMock
+
+        from jenkins_job_insight.models import AnalysisDetail
+        from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
+
+        mock_orchestrator = AsyncMock(
+            return_value=(
+                AnalysisDetail(classification="CODE ISSUE", details="Test is broken"),
+                "sig123",
+            )
+        )
+
+        peer_agree = _make_peer_json_response(agrees=True, classification="CODE ISSUE")
+
+        peer_call_count = 0
+
+        async def mock_peer_call(
+            prompt,
+            *,
+            cwd=None,
+            ai_provider="",
+            ai_model="",
+            ai_cli_timeout=None,
+            cli_flags=None,
+            max_retries=3,
+        ):
+            nonlocal peer_call_count
+            peer_call_count += 1
+            return (True, peer_agree)
+
+        # 3 identical peer configs -- all should be called
+        duplicate_peers = [
+            AiConfigEntry(ai_provider="gemini", ai_model="gemini-2.5-pro"),
+            AiConfigEntry(ai_provider="gemini", ai_model="gemini-2.5-pro"),
+            AiConfigEntry(ai_provider="gemini", ai_model="gemini-2.5-pro"),
+        ]
+
+        with (
+            patch(
+                "jenkins_job_insight.peer_analysis._run_single_ai_analysis",
+                mock_orchestrator,
+            ),
+            patch(
+                "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry",
+                side_effect=mock_peer_call,
+            ),
+        ):
+            results = await analyze_failure_group_with_peers(
+                failures=[_make_failure()],
+                console_context="console output",
+                repo_path=None,
+                main_ai_provider="claude",
+                main_ai_model="claude-sonnet-4-20250514",
+                peer_ai_configs=duplicate_peers,
+                max_rounds=1,
+            )
+
+        # All 3 peers should have been called
+        assert peer_call_count == 3
+        debate = results[0].peer_debate
+        assert debate is not None
+        assert debate.consensus_reached is True
+        # Should have 3 peer rounds + 1 orchestrator round
+        peer_rounds = [r for r in debate.rounds if r.role == "peer"]
+        assert len(peer_rounds) == 3
+        # All 3 peer configs should be in ai_configs
+        assert len(debate.ai_configs) == 4  # 1 main + 3 peers
+
+    @pytest.mark.asyncio
+    async def test_cross_peer_visibility_with_failed_peer(self) -> None:
+        """When a peer fails in round 1, round 2 must still correctly map
+        each surviving peer's response to the right peer index so that
+        self-exclusion works properly.
+
+        With 3 peers where peer 1 fails:
+        - Peer 0 should see peer 2's response (not its own)
+        - Peer 1 (which failed) should see both peer 0 and peer 2's responses
+        - Peer 2 should see peer 0's response (not its own)
+        """
+        from unittest.mock import AsyncMock
+
+        from jenkins_job_insight.models import AnalysisDetail
+        from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
+
+        mock_orchestrator = AsyncMock(
+            return_value=(
+                AnalysisDetail(classification="CODE ISSUE", details="Test is broken"),
+                "sig123",
+            )
+        )
+
+        main_response_r2 = _make_ai_json_response(
+            classification="CODE ISSUE",
+            details="Revised analysis",
+        )
+
+        # Round 1: peer0 succeeds, peer1 fails, peer2 succeeds
+        peer0_r1 = _make_peer_json_response(
+            agrees=False,
+            classification="PRODUCT BUG",
+            reasoning="UNIQUE_PEER0_REASONING_AAA",
+        )
+        peer2_r1 = _make_peer_json_response(
+            agrees=False,
+            classification="PRODUCT BUG",
+            reasoning="UNIQUE_PEER2_REASONING_CCC",
+        )
+        peer_agree = _make_peer_json_response(agrees=True, classification="CODE ISSUE")
+
+        three_peers = [
+            AiConfigEntry(ai_provider="gemini", ai_model="gemini-pro"),
+            AiConfigEntry(ai_provider="cursor", ai_model="cursor-fast"),
+            AiConfigEntry(ai_provider="claude", ai_model="sonnet"),
+        ]
+
+        captured_round2: list[tuple[str, str, str]] = []  # (provider, model, prompt)
+        call_count = 0
+
+        async def mock_calls(
+            prompt,
+            *,
+            cwd=None,
+            ai_provider="",
+            ai_model="",
+            ai_cli_timeout=None,
+            cli_flags=None,
+            max_retries=3,
+        ):
+            nonlocal call_count
+            call_count += 1
+            # Round 1: peer0 succeeds, peer1 fails, peer2 succeeds
+            if call_count == 1:
+                return (True, peer0_r1)
+            if call_count == 2:
+                return (False, "CLI_FAILURE_OUTPUT")
+            if call_count == 3:
+                return (True, peer2_r1)
+            # Call 4: revision
+            if call_count == 4:
+                return (True, main_response_r2)
+            # Calls 5-7: round 2 peers
+            captured_round2.append((ai_provider, ai_model, prompt))
+            return (True, peer_agree)
+
+        with (
+            patch(
+                "jenkins_job_insight.peer_analysis._run_single_ai_analysis",
+                mock_orchestrator,
+            ),
+            patch(
+                "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry",
+                side_effect=mock_calls,
+            ),
+        ):
+            await analyze_failure_group_with_peers(
+                failures=[_make_failure()],
+                console_context="console output",
+                repo_path=None,
+                main_ai_provider="claude",
+                main_ai_model="claude-sonnet-4-20250514",
+                peer_ai_configs=three_peers,
+                max_rounds=3,
+            )
+
+        assert len(captured_round2) == 3
+
+        # Peer 0 (gemini): should see peer 2's reasoning, NOT its own
+        peer0_call = [c for c in captured_round2 if c[0] == "gemini"]
+        assert len(peer0_call) == 1
+        assert "UNIQUE_PEER2_REASONING_CCC" in peer0_call[0][2]
+        assert "UNIQUE_PEER0_REASONING_AAA" not in peer0_call[0][2]
+
+        # Peer 1 (cursor, which failed in R1): should see BOTH peers' responses
+        peer1_call = [c for c in captured_round2 if c[0] == "cursor"]
+        assert len(peer1_call) == 1
+        assert "UNIQUE_PEER0_REASONING_AAA" in peer1_call[0][2]
+        assert "UNIQUE_PEER2_REASONING_CCC" in peer1_call[0][2]
+
+        # Peer 2 (claude): should see peer 0's reasoning, NOT its own
+        peer2_call = [c for c in captured_round2 if c[0] == "claude"]
+        assert len(peer2_call) == 1
+        assert "UNIQUE_PEER0_REASONING_AAA" in peer2_call[0][2]
+        assert "UNIQUE_PEER2_REASONING_CCC" not in peer2_call[0][2]
+
+        # No round 2 prompt should contain the failed peer's error output
+        for _, _, prompt in captured_round2:
+            assert "CLI_FAILURE_OUTPUT" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_duplicate_peers_index_based_self_exclusion(self) -> None:
+        """In round 2, duplicate-model peers exclude only their own response by index,
+        not all responses from the same provider+model."""
+        from unittest.mock import AsyncMock
+
+        from jenkins_job_insight.models import AnalysisDetail
+        from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
+
+        mock_orchestrator = AsyncMock(
+            return_value=(
+                AnalysisDetail(classification="CODE ISSUE", details="Test is broken"),
+                "sig123",
+            )
+        )
+
+        main_response_r2 = _make_ai_json_response(
+            classification="CODE ISSUE",
+            details="Revised analysis",
+        )
+
+        # Round 1: 3 identical-model peers disagree with distinct reasoning
+        peer_r1_responses = [
+            _make_peer_json_response(
+                agrees=False,
+                classification="PRODUCT BUG",
+                reasoning="UNIQUE_PEER_0_REASONING",
+            ),
+            _make_peer_json_response(
+                agrees=False,
+                classification="PRODUCT BUG",
+                reasoning="UNIQUE_PEER_1_REASONING",
+            ),
+            _make_peer_json_response(
+                agrees=False,
+                classification="PRODUCT BUG",
+                reasoning="UNIQUE_PEER_2_REASONING",
+            ),
+        ]
+        peer_agree = _make_peer_json_response(agrees=True, classification="CODE ISSUE")
+
+        captured_round2: list[tuple[int, str]] = []  # (call_index, prompt)
+        call_count = 0
+
+        async def mock_calls(
+            prompt,
+            *,
+            cwd=None,
+            ai_provider="",
+            ai_model="",
+            ai_cli_timeout=None,
+            cli_flags=None,
+            max_retries=3,
+        ):
+            nonlocal call_count
+            call_count += 1
+            # Calls 1-3: round 1 peers
+            if call_count <= 3:
+                return (True, peer_r1_responses[call_count - 1])
+            # Call 4: revision
+            if call_count == 4:
+                return (True, main_response_r2)
+            # Calls 5-7: round 2 peers
+            captured_round2.append((call_count - 5, prompt))
+            return (True, peer_agree)
+
+        duplicate_peers = [
+            AiConfigEntry(ai_provider="gemini", ai_model="gemini-2.5-pro"),
+            AiConfigEntry(ai_provider="gemini", ai_model="gemini-2.5-pro"),
+            AiConfigEntry(ai_provider="gemini", ai_model="gemini-2.5-pro"),
+        ]
+
+        with (
+            patch(
+                "jenkins_job_insight.peer_analysis._run_single_ai_analysis",
+                mock_orchestrator,
+            ),
+            patch(
+                "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry",
+                side_effect=mock_calls,
+            ),
+        ):
+            await analyze_failure_group_with_peers(
+                failures=[_make_failure()],
+                console_context="console output",
+                repo_path=None,
+                main_ai_provider="claude",
+                main_ai_model="claude-sonnet-4-20250514",
+                peer_ai_configs=duplicate_peers,
+                max_rounds=3,
+            )
+
+        assert len(captured_round2) == 3
+
+        # Each peer at index i should see the OTHER two peers' reasoning
+        # but NOT its own (by index, not by provider+model)
+        for idx, prompt in captured_round2:
+            # Should see the other 2 peers' reasoning
+            for other_idx in range(3):
+                if other_idx != idx:
+                    assert f"UNIQUE_PEER_{other_idx}_REASONING" in prompt, (
+                        f"Peer {idx} should see UNIQUE_PEER_{other_idx}_REASONING"
+                    )
+            # Should NOT see its own reasoning
+            assert f"UNIQUE_PEER_{idx}_REASONING" not in prompt, (
+                f"Peer {idx} should NOT see its own UNIQUE_PEER_{idx}_REASONING"
+            )
