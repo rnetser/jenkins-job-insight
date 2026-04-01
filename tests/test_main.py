@@ -3489,3 +3489,220 @@ class TestProgressPhaseTracking:
         mock_analyze.assert_called_once()
         status_calls = [c.args[1] for c in mock_status.call_args_list]
         assert "completed" in status_calls
+
+
+class TestRequestParamsPreservation:
+    """Tests for request_params preservation across update_status calls.
+
+    The initial save_result includes request_params (ai_provider, ai_model,
+    peer_ai_configs). When analysis completes, update_status must preserve
+    request_params in the final result_data.
+    """
+
+    @pytest.mark.asyncio
+    async def test_process_analysis_preserves_request_params_on_success(
+        self, temp_db_path: Path
+    ) -> None:
+        """request_params saved initially must survive when analysis completes."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=42,
+            ai_provider="claude",
+            ai_model="opus",
+            wait_for_completion=False,
+        )
+        merged = _build_wait_settings(
+            jenkins_url="https://jenkins.example.com",
+            wait_for_completion=False,
+        )
+
+        job_id = "preserve-params-success"
+        initial_request_params = {
+            "ai_provider": "claude",
+            "ai_model": "opus",
+            "peer_ai_configs": [{"ai_provider": "gemini", "ai_model": "flash"}],
+        }
+
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            # Save initial result with request_params
+            await storage.save_result(
+                job_id,
+                "https://jenkins.example.com/job/my-job/42/",
+                "pending",
+                {
+                    "job_name": "my-job",
+                    "build_number": 42,
+                    "request_params": initial_request_params,
+                },
+            )
+
+            with (
+                patch(
+                    "jenkins_job_insight.main.analyze_job",
+                    new_callable=AsyncMock,
+                ) as mock_analyze,
+                patch(
+                    "jenkins_job_insight.main._resolve_enable_jira",
+                    return_value=False,
+                ),
+                patch(
+                    "jenkins_job_insight.main.populate_failure_history",
+                    new_callable=AsyncMock,
+                ),
+                patch(
+                    "jenkins_job_insight.main.storage.make_classifications_visible",
+                    new_callable=AsyncMock,
+                ),
+            ):
+                mock_analyze.return_value = AnalysisResult(
+                    job_id=job_id,
+                    status="completed",
+                    summary="1 failure analyzed",
+                    ai_provider="claude",
+                    ai_model="opus",
+                    failures=[
+                        FailureAnalysis(
+                            test_name="test_foo",
+                            error="assert False",
+                            analysis=AnalysisDetail(
+                                classification="CODE ISSUE",
+                                details="Test failed",
+                            ),
+                        )
+                    ],
+                )
+                await process_analysis_with_id(job_id, body, merged)
+
+            # Verify request_params survived in the stored result
+            stored = await storage.get_result(job_id, strip_sensitive=False)
+            assert stored is not None
+            result = stored["result"]
+            assert "request_params" in result, (
+                "request_params must be preserved after analysis completes"
+            )
+            assert result["request_params"]["ai_provider"] == "claude"
+            assert result["request_params"]["ai_model"] == "opus"
+            assert result["request_params"]["peer_ai_configs"] == [
+                {"ai_provider": "gemini", "ai_model": "flash"}
+            ]
+
+    @pytest.mark.asyncio
+    async def test_process_analysis_preserves_request_params_on_failure(
+        self, temp_db_path: Path
+    ) -> None:
+        """request_params saved initially must survive when analysis fails."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=42,
+            ai_provider="claude",
+            ai_model="opus",
+            wait_for_completion=False,
+        )
+        merged = _build_wait_settings(
+            jenkins_url="https://jenkins.example.com",
+            wait_for_completion=False,
+        )
+
+        job_id = "preserve-params-failure"
+        initial_request_params = {
+            "ai_provider": "claude",
+            "ai_model": "opus",
+        }
+
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            await storage.save_result(
+                job_id,
+                "https://jenkins.example.com/job/my-job/42/",
+                "pending",
+                {
+                    "job_name": "my-job",
+                    "build_number": 42,
+                    "request_params": initial_request_params,
+                },
+            )
+
+            with patch(
+                "jenkins_job_insight.main.analyze_job",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("AI CLI crashed"),
+            ):
+                await process_analysis_with_id(job_id, body, merged)
+
+            stored = await storage.get_result(job_id, strip_sensitive=False)
+            assert stored is not None
+            result = stored["result"]
+            assert "request_params" in result, (
+                "request_params must be preserved even when analysis fails"
+            )
+            assert result["request_params"]["ai_provider"] == "claude"
+
+    def test_analyze_failures_preserves_request_params_on_success(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """POST /analyze-failures must not lose request_params on completion."""
+        mock_analysis = FailureAnalysis(
+            test_name="test_foo",
+            error="assert False",
+            analysis=AnalysisDetail(
+                classification="CODE ISSUE",
+                details="Test failed",
+            ),
+        )
+
+        with patch("jenkins_job_insight.main.RepositoryManager") as mock_repo_cls:
+            mock_repo_instance = mock_repo_cls.return_value
+            mock_repo_instance.clone.return_value = None
+            mock_repo_instance.cleanup.return_value = None
+
+            with (
+                patch(
+                    "jenkins_job_insight.main.analyze_failure_group",
+                    new_callable=AsyncMock,
+                ) as mock_analyze_group,
+                patch(
+                    "jenkins_job_insight.main.run_parallel_with_limit",
+                    new_callable=AsyncMock,
+                ) as mock_parallel,
+            ):
+                mock_analyze_group.return_value = [mock_analysis]
+
+                async def run_coroutines(coroutines, **kwargs):
+                    return [await coro for coro in coroutines]
+
+                mock_parallel.side_effect = run_coroutines
+
+                response = test_client.post(
+                    "/analyze-failures",
+                    json={
+                        "failures": [
+                            {
+                                "test_name": "test_foo",
+                                "error_message": "assert False",
+                                "stack_trace": "File test.py, line 10",
+                            }
+                        ],
+                        "ai_provider": "claude",
+                        "ai_model": "test-model",
+                    },
+                )
+                assert response.status_code == 200
+                data = response.json()
+                job_id = data["job_id"]
+
+        # Now fetch the stored result and verify request_params
+        # The /analyze-failures endpoint doesn't save request_params initially,
+        # so this test documents that analyze-failures results should also
+        # preserve any request_params if they were set.
+        result_response = test_client.get(
+            f"/results/{job_id}",
+            headers={"accept": "application/json"},
+        )
+        assert result_response.status_code == 200

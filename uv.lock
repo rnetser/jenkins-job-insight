@@ -4,12 +4,12 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "ai-cli-runner"
-version = "0.1.1"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "python-simple-logger" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bb/a6/c30fe4051c28ef4effdcac5b81b22a320f89b5670a3ce24e5452b8c68f83/ai_cli_runner-0.1.1.tar.gz", hash = "sha256:ca5931893277d5491504435067b81c49216c1238a44a1cc1006fafd1c0950c0d", size = 22063, upload-time = "2026-03-24T13:23:00.567Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b3/68/ffd15f466d1647851c41806797084a93beee07de52695715e7a95e0997ca/ai_cli_runner-0.1.2.tar.gz", hash = "sha256:30e849333b1aaee44de634922ad9be6781727d24c44dfdd300a9b1df4e7507bf", size = 21945, upload-time = "2026-04-01T20:30:05.769Z" }
 
 [[package]]
 name = "aiosqlite"

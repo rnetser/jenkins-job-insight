@@ -299,6 +299,25 @@ def _reconstruct_from_params(
 _background_tasks: set[asyncio.Task] = set()
 
 
+async def _preserve_request_params(job_id: str, result_data: dict) -> None:
+    """Copy ``request_params`` from the stored result into *result_data*.
+
+    The initial ``save_result`` persists ``request_params`` (ai_provider,
+    ai_model, peer_ai_configs, etc.) but the ``AnalysisResult`` model dump
+    produced when analysis finishes does not include that key.  Without this
+    merge the params would be silently lost when ``update_status`` overwrites
+    ``result_json``.
+
+    Args:
+        job_id: The analysis job identifier.
+        result_data: Mutable dict that will be written to ``result_json``.
+            Modified in place to add ``request_params`` when available.
+    """
+    stored = await get_result(job_id, strip_sensitive=False)
+    if stored and stored.get("result") and "request_params" in stored["result"]:
+        result_data["request_params"] = stored["result"]["request_params"]
+
+
 async def _fail_resumed_waiting_job(job_id: str, result_data: dict, error: str) -> None:
     """Mark a resumed waiting job as failed with a standard payload.
 
@@ -888,6 +907,7 @@ async def process_analysis_with_id(
             f"process_analysis_with_id: saving completed result, job_id={job_id}"
         )
         result_data = result.model_dump(mode="json")
+        await _preserve_request_params(job_id, result_data)
 
         # Save to storage — do NOT persist base_url / result_url as they are
         # request-derived and re-generated on every GET to avoid host-header
@@ -915,15 +935,13 @@ async def process_analysis_with_id(
     except Exception as e:
         logger.exception(f"Analysis failed for job {job_id}")
         error_detail = format_exception_with_type(e)
-        await update_status(
-            job_id,
-            "failed",
-            {
-                "job_name": body.job_name,
-                "build_number": body.build_number,
-                "error": error_detail,
-            },
-        )
+        fail_data: dict = {
+            "job_name": body.job_name,
+            "build_number": body.build_number,
+            "error": error_detail,
+        }
+        await _preserve_request_params(job_id, fail_data)
+        await update_status(job_id, "failed", fail_data)
 
 
 def _build_request_params(
@@ -1224,6 +1242,7 @@ async def analyze_failures(
         )
 
         result_data = analysis_result.model_dump(mode="json")
+        await _preserve_request_params(job_id, result_data)
         await update_status(job_id, "completed", result_data)
 
         # Populate failure history
@@ -1251,7 +1270,9 @@ async def analyze_failures(
             ai_provider=ai_provider,
             ai_model=ai_model,
         )
-        await update_status(job_id, "failed", analysis_result.model_dump(mode="json"))
+        fail_data = analysis_result.model_dump(mode="json")
+        await _preserve_request_params(job_id, fail_data)
+        await update_status(job_id, "failed", fail_data)
         content = analysis_result.model_dump(mode="json")
         return JSONResponse(content=_attach_result_links(content, base_url, job_id))
 
