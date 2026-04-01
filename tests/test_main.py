@@ -191,6 +191,35 @@ class TestAnalyzeEndpoint:
         assert response.status_code == 400
         assert "AI provider" in response.json()["detail"]
 
+    def test_analyze_always_saves_request_params(self, test_client) -> None:
+        """request_params is persisted even when wait_for_completion is False.
+
+        The status page needs AI provider/model and peer configs from
+        request_params regardless of whether the job is resumable.
+        """
+        with patch("jenkins_job_insight.main.process_analysis_with_id"):
+            response = test_client.post(
+                "/analyze",
+                json={
+                    "job_name": "test-job",
+                    "build_number": 42,
+                    "ai_provider": "claude",
+                    "ai_model": "opus",
+                    "wait_for_completion": False,
+                },
+            )
+            assert response.status_code == 202
+            job_id = response.json()["job_id"]
+
+            result_resp = test_client.get(f"/results/{job_id}")
+            assert result_resp.status_code in (200, 202)
+            result_data = result_resp.json()["result"]
+            assert "request_params" in result_data, (
+                "request_params must always be saved, not only for waiting jobs"
+            )
+            assert result_data["request_params"]["ai_provider"] == "claude"
+            assert result_data["request_params"]["ai_model"] == "opus"
+
 
 class TestBaseUrlDetection:
     """Tests for base URL detection using PUBLIC_BASE_URL and header fallbacks."""

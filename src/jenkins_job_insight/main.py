@@ -1028,22 +1028,21 @@ async def analyze(
         merged.jenkins_url, body.job_name, body.build_number
     )
     # Save initial pending state before queueing background task.
-    # Only persist request_params for waiting jobs (wait_for_completion),
-    # since those are the only ones that need resumption after restart.
-    # This avoids storing encrypted secrets with no operational use.
+    # request_params is always persisted so the status page can display
+    # AI provider/model and peer configs, and waiting jobs can resume
+    # after a server restart.
     initial_result: dict = {
         "job_name": body.job_name,
         "build_number": body.build_number,
-    }
-    can_resume_wait = merged.wait_for_completion and bool(merged.jenkins_url)
-    if can_resume_wait:
-        initial_result["request_params"] = _build_request_params(
+        "request_params": _build_request_params(
             body,
             merged,
             body.ai_provider or AI_PROVIDER,
             body.ai_model or AI_MODEL,
             peer_ai_configs_resolved=resolved_peers,
-        )
+        ),
+    }
+    can_resume_wait = merged.wait_for_completion and bool(merged.jenkins_url)
     await save_result(
         job_id,
         jenkins_url,
