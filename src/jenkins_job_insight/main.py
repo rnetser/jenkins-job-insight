@@ -944,6 +944,45 @@ async def process_analysis_with_id(
         await update_status(job_id, "failed", fail_data)
 
 
+def _build_base_request_params(
+    body: BaseAnalysisRequest,
+    ai_provider: str,
+    ai_model: str,
+    peer_ai_configs_resolved: list | None = None,
+) -> dict:
+    """Serialize the common request parameters shared by all analysis endpoints.
+
+    Captures the AI configuration, peer configs, tests repo, and additional
+    repos — everything that ``BaseAnalysisRequest`` carries.
+
+    Args:
+        body: The original analysis request (any subclass of BaseAnalysisRequest).
+        ai_provider: Resolved AI provider name.
+        ai_model: Resolved AI model name.
+        peer_ai_configs_resolved: Resolved peer AI configs (already validated).
+
+    Returns:
+        Dict of serializable base request parameters.
+    """
+    return {
+        "ai_provider": ai_provider,
+        "ai_model": ai_model,
+        "peer_ai_configs": [
+            c.model_dump() if hasattr(c, "model_dump") else c
+            for c in (peer_ai_configs_resolved or [])
+        ],
+        "additional_repos": [
+            ar.model_dump(mode="json") if hasattr(ar, "model_dump") else ar
+            for ar in body.additional_repos
+        ]
+        if body.additional_repos is not None
+        else None,
+        "tests_repo_url": (
+            str(body.tests_repo_url) if body.tests_repo_url is not None else ""
+        ),
+    }
+
+
 def _build_request_params(
     body: AnalyzeRequest,
     merged: Settings,
@@ -965,56 +1004,50 @@ def _build_request_params(
     Returns:
         Dict of serializable request parameters.
     """
-    params = {
-        "ai_provider": ai_provider,
-        "ai_model": ai_model,
-        "jenkins_url": merged.jenkins_url,
-        "jenkins_user": merged.jenkins_user,
-        "jenkins_password": merged.jenkins_password,
-        "jenkins_ssl_verify": merged.jenkins_ssl_verify,
-        "tests_repo_url": (
-            str(body.tests_repo_url)
-            if body.tests_repo_url is not None
-            else str(merged.tests_repo_url)
-            if merged.tests_repo_url
-            else ""
-        ),
-        "wait_for_completion": merged.wait_for_completion,
-        "poll_interval_minutes": merged.poll_interval_minutes,
-        "max_wait_minutes": merged.max_wait_minutes,
-        "enable_jira": body.enable_jira
-        if body.enable_jira is not None
-        else merged.enable_jira,
-        "jira_url": merged.jira_url or "",
-        "jira_email": merged.jira_email or "",
-        "jira_api_token": merged.jira_api_token.get_secret_value()
-        if merged.jira_api_token
-        else "",
-        "jira_pat": merged.jira_pat.get_secret_value() if merged.jira_pat else "",
-        "jira_project_key": merged.jira_project_key or "",
-        "jira_ssl_verify": merged.jira_ssl_verify,
-        "jira_max_results": merged.jira_max_results,
-        "github_token": merged.github_token.get_secret_value()
-        if merged.github_token
-        else "",
-        "ai_cli_timeout": merged.ai_cli_timeout,
-        "jenkins_artifacts_max_size_mb": merged.jenkins_artifacts_max_size_mb,
-        "jenkins_artifacts_context_lines": merged.jenkins_artifacts_context_lines,
-        "get_job_artifacts": merged.get_job_artifacts,
-        "raw_prompt": body.raw_prompt or "",
-        "peer_ai_configs": [
-            c.model_dump() if hasattr(c, "model_dump") else c
-            for c in (peer_ai_configs_resolved or [])
-        ],
-        "peer_analysis_max_rounds": merged.peer_analysis_max_rounds,
-        "additional_repos": [
-            ar.model_dump(mode="json") if hasattr(ar, "model_dump") else ar
-            for ar in body.additional_repos
-        ]
-        if body.additional_repos is not None
-        else None,
-        "wait_started_at": _time.time(),
-    }
+    params = _build_base_request_params(
+        body, ai_provider, ai_model, peer_ai_configs_resolved
+    )
+    # Override tests_repo_url: fall back to merged settings for /analyze
+    params["tests_repo_url"] = (
+        str(body.tests_repo_url)
+        if body.tests_repo_url is not None
+        else str(merged.tests_repo_url)
+        if merged.tests_repo_url
+        else ""
+    )
+    params.update(
+        {
+            "jenkins_url": merged.jenkins_url,
+            "jenkins_user": merged.jenkins_user,
+            "jenkins_password": merged.jenkins_password,
+            "jenkins_ssl_verify": merged.jenkins_ssl_verify,
+            "wait_for_completion": merged.wait_for_completion,
+            "poll_interval_minutes": merged.poll_interval_minutes,
+            "max_wait_minutes": merged.max_wait_minutes,
+            "enable_jira": body.enable_jira
+            if body.enable_jira is not None
+            else merged.enable_jira,
+            "jira_url": merged.jira_url or "",
+            "jira_email": merged.jira_email or "",
+            "jira_api_token": merged.jira_api_token.get_secret_value()
+            if merged.jira_api_token
+            else "",
+            "jira_pat": merged.jira_pat.get_secret_value() if merged.jira_pat else "",
+            "jira_project_key": merged.jira_project_key or "",
+            "jira_ssl_verify": merged.jira_ssl_verify,
+            "jira_max_results": merged.jira_max_results,
+            "github_token": merged.github_token.get_secret_value()
+            if merged.github_token
+            else "",
+            "ai_cli_timeout": merged.ai_cli_timeout,
+            "jenkins_artifacts_max_size_mb": merged.jenkins_artifacts_max_size_mb,
+            "jenkins_artifacts_context_lines": merged.jenkins_artifacts_context_lines,
+            "get_job_artifacts": merged.get_job_artifacts,
+            "raw_prompt": body.raw_prompt or "",
+            "peer_analysis_max_rounds": merged.peer_analysis_max_rounds,
+            "wait_started_at": _time.time(),
+        }
+    )
     return encrypt_sensitive_fields(params)
 
 
@@ -1136,22 +1169,9 @@ async def analyze_failures(
     # Save initial pending state with request_params so GET /results/{job_id}
     # works immediately and _preserve_request_params can find them later.
     initial_result: dict = {
-        "request_params": {
-            "ai_provider": ai_provider,
-            "ai_model": ai_model,
-            "peer_ai_configs": [
-                c.model_dump(mode="json") if hasattr(c, "model_dump") else c
-                for c in (peer_ai_configs or [])
-            ]
-            if peer_ai_configs
-            else [],
-            "additional_repos": [
-                ar.model_dump(mode="json") if hasattr(ar, "model_dump") else ar
-                for ar in body.additional_repos
-            ]
-            if body.additional_repos is not None
-            else None,
-        },
+        "request_params": _build_base_request_params(
+            body, ai_provider, ai_model, peer_ai_configs
+        ),
     }
     await save_result(job_id, "", "pending", initial_result)
 

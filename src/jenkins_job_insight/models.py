@@ -50,6 +50,8 @@ class AdditionalRepo(BaseModel):
             raise ValueError("name must not contain path separators ('/' or '\\')")
         if ".." in v:
             raise ValueError("name must not contain '..'")
+        if v.startswith("."):
+            raise ValueError("name must not start with '.'")
         if v in RESERVED_REPO_NAMES:
             raise ValueError(f"name '{v}' is reserved and cannot be used")
         return v

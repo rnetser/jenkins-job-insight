@@ -859,6 +859,21 @@ class TestAdditionalRepo:
         with pytest.raises(ValidationError):
             AdditionalRepo(name="foo\\bar", url="https://github.com/org/repo")
 
+    def test_dot_prefixed_name_rejected(self) -> None:
+        """Dot-prefixed names like '.hidden' must be rejected."""
+        with pytest.raises(ValidationError):
+            AdditionalRepo(name=".hidden", url="https://github.com/org/repo")
+
+    def test_dot_name_rejected(self) -> None:
+        """Single dot '.' name must be rejected."""
+        with pytest.raises(ValidationError):
+            AdditionalRepo(name=".", url="https://github.com/org/repo")
+
+    def test_dotgit_name_rejected(self) -> None:
+        """'.git' name must be rejected."""
+        with pytest.raises(ValidationError):
+            AdditionalRepo(name=".git", url="https://github.com/org/repo")
+
     def test_reserved_name_rejected(self) -> None:
         """Reserved name 'build-artifacts' must be rejected."""
         with pytest.raises(ValidationError):

@@ -1390,54 +1390,101 @@ class TestBuildResourcesSectionAdditionalRepos:
 
     def test_additional_repos_git_repos(self, tmp_path) -> None:
         """Test that additional git repos are advertised in resources section."""
-        repo = tmp_path / "main-repo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
 
         additional = {
             "infra": tmp_path / "infra",
             "product": tmp_path / "product",
         }
-        for name, path in additional.items():
+        for _name, path in additional.items():
             path.mkdir()
             (path / ".git").mkdir()
 
-        result = _build_resources_section(repo, additional_repos=additional)
+        result = _build_resources_section(workspace, additional_repos=additional)
         assert "infra" in result
         assert "product" in result
-        assert "Additional repository" in result
+        assert "Repository" in result
 
     def test_additional_repos_non_git(self, tmp_path) -> None:
-        """Test that additional non-git dirs are advertised as workspaces."""
-        repo = tmp_path / "main-repo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
+        """Test that additional non-git dirs are advertised as directories."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
 
         additional = {"data": tmp_path / "data"}
         additional["data"].mkdir()
 
-        result = _build_resources_section(repo, additional_repos=additional)
+        result = _build_resources_section(workspace, additional_repos=additional)
         assert "data" in result
-        assert "Additional workspace" in result
+        assert "Directory" in result
 
     def test_no_additional_repos(self, tmp_path) -> None:
         """Test that section works without additional repos."""
-        repo = tmp_path / "main-repo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
 
-        result = _build_resources_section(repo, additional_repos=None)
-        assert "Additional repository" not in result
-        assert "Additional workspace" not in result
+        result = _build_resources_section(workspace, additional_repos=None)
+        assert "Repository" not in result
+        assert "Directory" not in result
 
     def test_empty_additional_repos(self, tmp_path) -> None:
-        """Test that empty dict produces no additional repos section."""
-        repo = tmp_path / "main-repo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
+        """Test that empty dict produces no repo entries."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
 
-        result = _build_resources_section(repo, additional_repos={})
-        assert "Additional repository" not in result
+        result = _build_resources_section(workspace, additional_repos={})
+        assert "Repository" not in result
+
+    def test_job_insight_prompt_in_repo(self, tmp_path) -> None:
+        """Test that JOB_INSIGHT_PROMPT.md in a cloned repo is advertised."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        repo_path = tmp_path / "my-repo"
+        repo_path.mkdir()
+        (repo_path / ".git").mkdir()
+        (repo_path / "JOB_INSIGHT_PROMPT.md").write_text("custom instructions")
+
+        additional = {"my-repo": repo_path}
+        result = _build_resources_section(workspace, additional_repos=additional)
+        assert "JOB_INSIGHT_PROMPT.md" in result
+        assert "Project-specific analysis instructions" in result
+
+    def test_history_prompt_in_repo(self, tmp_path) -> None:
+        """Test that history prompt in a cloned repo is advertised when history enabled."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        repo_path = tmp_path / "my-repo"
+        repo_path.mkdir()
+        (repo_path / ".git").mkdir()
+        (repo_path / "JOB_INSIGHT_FAILURE_HISTORY_ANALYSIS_PROMPT.md").write_text(
+            "history instructions"
+        )
+
+        additional = {"my-repo": repo_path}
+        result = _build_resources_section(
+            workspace, additional_repos=additional, history_enabled=True
+        )
+        assert "history analysis instructions" in result
+
+    def test_history_prompt_not_shown_when_disabled(self, tmp_path) -> None:
+        """Test that history prompt is not shown when history is disabled."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        repo_path = tmp_path / "my-repo"
+        repo_path.mkdir()
+        (repo_path / ".git").mkdir()
+        (repo_path / "JOB_INSIGHT_FAILURE_HISTORY_ANALYSIS_PROMPT.md").write_text(
+            "history instructions"
+        )
+
+        additional = {"my-repo": repo_path}
+        result = _build_resources_section(
+            workspace, additional_repos=additional, history_enabled=False
+        )
+        assert "history analysis instructions" not in result
 
 
 class TestAnalyzeJobWorkspacePattern:
@@ -2045,6 +2092,10 @@ class TestAnalyzeFailuresWorkspacePattern:
             "jenkins_job_insight.main.storage.make_classifications_visible",
             AsyncMock(),
         )
+        monkeypatch.setattr(
+            "jenkins_job_insight.main._preserve_request_params",
+            AsyncMock(),
+        )
 
         async def fake_to_thread(func, *args, **kwargs):
             return func(*args, **kwargs)
@@ -2231,6 +2282,10 @@ class TestWorkspaceAlwaysCreated:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.main.storage.make_classifications_visible",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.main._preserve_request_params",
             AsyncMock(),
         )
 

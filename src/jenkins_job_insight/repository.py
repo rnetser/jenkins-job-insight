@@ -22,6 +22,19 @@ logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 RESERVED_REPO_NAMES = frozenset({"build-artifacts"})
 
 
+def _redact_url(url: str) -> str:
+    """Remove userinfo (credentials) from a URL for safe logging."""
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(url)
+    if parsed.username or parsed.password:
+        redacted = parsed._replace(
+            netloc=f"***@{parsed.hostname}" + (f":{parsed.port}" if parsed.port else "")
+        )
+        return urlunparse(redacted)
+    return url
+
+
 def repo_name_from_url(repo_url: str | HttpUrl) -> str:
     """Extract repository name from a URL for use as a directory name.
 
@@ -34,7 +47,8 @@ def repo_name_from_url(repo_url: str | HttpUrl) -> str:
     Returns:
         Repository name suitable for use as a subdirectory name.
     """
-    return str(repo_url).rstrip("/").split("/")[-1].replace(".git", "")
+    name = str(repo_url).rstrip("/").split("/")[-1]
+    return name[:-4] if name.endswith(".git") else name
 
 
 def derive_test_repo_name(
@@ -105,7 +119,7 @@ def _clone_with_ssl_retry(repo_url: str, clone_dir: Path, depth: int) -> None:
             or "server verification failed" in stderr
         ):
             logger.warning(
-                f"SSL certificate verification failed for {repo_url}, "
+                f"SSL certificate verification failed for {_redact_url(str(repo_url))}, "
                 "retrying with SSL verification disabled (GIT_SSL_NO_VERIFY=1)"
             )
             # Clean up partial clone before retry

@@ -718,6 +718,12 @@ class TestServerConfigAdditionalRepos:
         cfg = _server_config_from_dict(data)
         assert cfg.additional_repos == "infra:https://github.com/org/infra"
 
+    def test_additional_repos_non_string_raises(self) -> None:
+        """Non-string additional_repos value raises ValueError."""
+        data = {"url": "http://test", "additional_repos": 42}
+        with pytest.raises(ValueError, match=r"additional_repos.*must be a string"):
+            _server_config_from_dict(data)
+
 
 class TestServerConfigFromDictTypeValidation:
     """Type validation for peer-analysis fields in _server_config_from_dict."""

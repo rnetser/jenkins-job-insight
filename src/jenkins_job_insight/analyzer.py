@@ -826,19 +826,25 @@ def _build_prompt_sections(
             f"Pointing AI to FAILURE_HISTORY_ANALYSIS.md with server_url={server_url}"
         )
         repo_history_prompt = ""
-        if repo_path:
-            repo_history_path = repo_path / JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME
-            logger.debug(
-                f"Repo history analysis prompt exists: {repo_history_path.exists()}"
-            )
-            if repo_history_path.exists():
-                logger.info(
-                    f"Found repo-level history analysis prompt at {repo_history_path}"
+        # Scan cloned repos (not workspace root) for history prompt
+        if additional_repos:
+            for _name, _path in additional_repos.items():
+                repo_history_path = _path / JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME
+                logger.debug(
+                    f"Repo history analysis prompt exists at {_path}: {repo_history_path.exists()}"
                 )
-                repo_history_prompt = f"""
+                if repo_history_path.exists():
+                    logger.info(
+                        f"Found repo-level history analysis prompt at {repo_history_path}"
+                    )
+                    repo_history_prompt += f"""
 Also read and follow the project-specific history analysis instructions at {repo_history_path}.
 These instructions complement (do not replace) the main instructions above.
 """
+        elif repo_path:
+            logger.debug(
+                "No additional repos provided, skipping repo history prompt check"
+            )
         else:
             logger.debug("No repo path provided, skipping repo history prompt check")
 
@@ -865,7 +871,8 @@ def _build_resources_section(
     AI what tools and files are available so it can access them on its own.
 
     Args:
-        repo_path: Path to cloned test repository, or None.
+        repo_path: Path to workspace root (all repos are subdirectories), or None.
+        additional_repos: Mapping of repo name to cloned path.
         history_enabled: Whether failure history analysis is active.
             When False, the history prompt file is not advertised.
 
@@ -875,39 +882,35 @@ def _build_resources_section(
     if not repo_path:
         return ""
 
-    is_git_repo = (repo_path / ".git").exists()
     resources: list[str] = []
-    if is_git_repo:
-        resources.append(
-            f"- Git repository at {repo_path} — you can run git commands (git log, git diff, etc.)"
-        )
-    else:
-        resources.append(
-            f"- Workspace at {repo_path} — inspect files directly; git commands are not available here"
-        )
 
-    job_insight_prompt = repo_path / JOB_INSIGHT_PROMPT_FILENAME
-    if job_insight_prompt.exists():
-        resources.append(
-            f"- Project-specific analysis instructions at {job_insight_prompt} — read and follow them"
-        )
+    # Workspace directory
+    resources.append(
+        f"- Workspace at {repo_path} — all repositories are cloned as subdirectories here"
+    )
 
-    repo_history_prompt = repo_path / JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME
-    if history_enabled and repo_history_prompt.exists():
-        resources.append(
-            f"- Project-specific history analysis instructions at {repo_history_prompt} — read and follow alongside the main history analysis instructions"
-        )
-
+    # Advertise each cloned repo
     if additional_repos:
         for name, path in additional_repos.items():
             is_git = (path / ".git").exists()
             if is_git:
                 resources.append(
-                    f"- Additional repository '{name}' at {path} — explore source code, run git commands"
+                    f"- Repository '{name}' at {path} — explore source code, run git commands"
                 )
             else:
                 resources.append(
-                    f"- Additional workspace '{name}' at {path} — inspect files directly"
+                    f"- Directory '{name}' at {path} — inspect files directly"
+                )
+            # Check for project-specific instructions in each repo
+            job_insight_prompt = path / JOB_INSIGHT_PROMPT_FILENAME
+            if job_insight_prompt.exists():
+                resources.append(
+                    f"- Project-specific analysis instructions at {job_insight_prompt} — read and follow them"
+                )
+            repo_history_prompt = path / JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME
+            if history_enabled and repo_history_prompt.exists():
+                resources.append(
+                    f"- Project-specific history analysis instructions at {repo_history_prompt} — read and follow alongside the main history analysis instructions"
                 )
 
     if resources:

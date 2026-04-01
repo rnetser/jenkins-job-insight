@@ -350,6 +350,19 @@ class TestRepoNameFromUrl:
         """Extract from git:// URL."""
         assert repo_name_from_url("git://github.com/org/my-repo.git") == "my-repo"
 
+    def test_preserves_git_in_middle(self) -> None:
+        """Preserve .git when it appears in the middle of the name."""
+        assert (
+            repo_name_from_url("https://github.com/org/my.git-tools.git")
+            == "my.git-tools"
+        )
+
+    def test_preserves_git_in_middle_no_suffix(self) -> None:
+        """Preserve .git in middle when there is no trailing .git suffix."""
+        assert (
+            repo_name_from_url("https://github.com/org/my.git-tools") == "my.git-tools"
+        )
+
     def test_pydantic_httpurl(self) -> None:
         """Works with pydantic HttpUrl objects."""
         from pydantic import HttpUrl
@@ -497,3 +510,46 @@ class TestCloneWithSslRetryCleanup:
         assert not partial_file.exists()
         # Target dir should still exist (recreated for the retry)
         assert target.exists()
+
+
+class TestRedactUrl:
+    """Tests for _redact_url credential stripping."""
+
+    def test_no_credentials(self) -> None:
+        """URL without credentials is returned unchanged."""
+        from jenkins_job_insight.repository import _redact_url
+
+        assert (
+            _redact_url("https://github.com/org/repo") == "https://github.com/org/repo"
+        )
+
+    def test_username_and_password_redacted(self) -> None:
+        """Username and password are replaced with ***."""
+        from jenkins_job_insight.repository import _redact_url
+
+        result = _redact_url("https://user:pass@github.com/org/repo")
+        assert "user" not in result
+        assert "pass" not in result
+        assert "***@github.com" in result
+
+    def test_username_only_redacted(self) -> None:
+        """Username-only auth is redacted."""
+        from jenkins_job_insight.repository import _redact_url
+
+        result = _redact_url("https://token@github.com/org/repo")
+        assert "token" not in result
+        assert "***@github.com" in result
+
+    def test_preserves_port(self) -> None:
+        """Port is preserved when credentials are redacted."""
+        from jenkins_job_insight.repository import _redact_url
+
+        result = _redact_url("https://user:pass@github.com:8443/org/repo")
+        assert ":8443" in result
+        assert "user" not in result
+
+    def test_git_protocol(self) -> None:
+        """git:// URLs without credentials are unchanged."""
+        from jenkins_job_insight.repository import _redact_url
+
+        assert _redact_url("git://github.com/org/repo") == "git://github.com/org/repo"

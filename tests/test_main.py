@@ -2387,6 +2387,10 @@ class TestProcessAnalysisWaiting:
                 "jenkins_job_insight.main.storage.make_classifications_visible",
                 new_callable=AsyncMock,
             ),
+            patch(
+                "jenkins_job_insight.main._preserve_request_params",
+                new_callable=AsyncMock,
+            ),
         ):
             mock_analyze.return_value = AnalysisResult(
                 job_id="test-id",
@@ -2441,6 +2445,10 @@ class TestProcessAnalysisWaiting:
             ),
             patch(
                 "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main._preserve_request_params",
                 new_callable=AsyncMock,
             ),
         ):
@@ -2554,6 +2562,10 @@ class TestProcessAnalysisWaiting:
             ),
             patch(
                 "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main._preserve_request_params",
                 new_callable=AsyncMock,
             ),
         ):
@@ -3314,6 +3326,10 @@ class TestProgressPhaseTracking:
                 "jenkins_job_insight.main.storage.make_classifications_visible",
                 new_callable=AsyncMock,
             ),
+            patch(
+                "jenkins_job_insight.main._preserve_request_params",
+                new_callable=AsyncMock,
+            ),
         ):
             mock_analyze.return_value = AnalysisResult(
                 job_id="test-id",
@@ -3367,6 +3383,10 @@ class TestProgressPhaseTracking:
             ),
             patch(
                 "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main._preserve_request_params",
                 new_callable=AsyncMock,
             ),
         ):
@@ -3426,6 +3446,10 @@ class TestProgressPhaseTracking:
                 "jenkins_job_insight.main.storage.make_classifications_visible",
                 new_callable=AsyncMock,
             ),
+            patch(
+                "jenkins_job_insight.main._preserve_request_params",
+                new_callable=AsyncMock,
+            ),
         ):
             mock_analyze.return_value = AnalysisResult(
                 job_id="test-id",
@@ -3476,6 +3500,10 @@ class TestProgressPhaseTracking:
                 "jenkins_job_insight.main.storage.make_classifications_visible",
                 new_callable=AsyncMock,
             ),
+            patch(
+                "jenkins_job_insight.main._preserve_request_params",
+                new_callable=AsyncMock,
+            ),
         ):
             mock_analyze.return_value = AnalysisResult(
                 job_id="test-id",
@@ -3524,6 +3552,10 @@ class TestRequestParamsPreservation:
             "ai_provider": "claude",
             "ai_model": "opus",
             "peer_ai_configs": [{"ai_provider": "gemini", "ai_model": "flash"}],
+            "tests_repo_url": "https://github.com/org/tests",
+            "additional_repos": [
+                {"name": "infra", "url": "https://github.com/org/infra"}
+            ],
         }
 
         with patch.object(storage, "DB_PATH", temp_db_path):
@@ -3588,6 +3620,13 @@ class TestRequestParamsPreservation:
             assert result["request_params"]["ai_model"] == "opus"
             assert result["request_params"]["peer_ai_configs"] == [
                 {"ai_provider": "gemini", "ai_model": "flash"}
+            ]
+            assert (
+                result["request_params"]["tests_repo_url"]
+                == "https://github.com/org/tests"
+            )
+            assert result["request_params"]["additional_repos"] == [
+                {"name": "infra", "url": "https://github.com/org/infra"}
             ]
 
     @pytest.mark.asyncio
