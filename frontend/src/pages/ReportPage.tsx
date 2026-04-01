@@ -11,10 +11,11 @@ import { ChildJobSection } from './report/ChildJobSection'
 import { PeerAnalysisSummary } from './report/PeerAnalysisSummary'
 import { collectChildExpandKeys } from '@/lib/childJobHash'
 import { Badge } from '@/components/ui/badge'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusChip } from '@/components/shared/StatusChip'
 import { ExpandCollapseButtons } from '@/components/shared/ExpandCollapseButtons'
-import { ExternalLink, CheckCircle2, Clock, Calendar, Cpu, Timer } from 'lucide-react'
+import { ExternalLink, CheckCircle2, Clock, Calendar, Cpu, Timer, FolderGit2 } from 'lucide-react'
 import { reviewKey } from './report/ReportContext'
 import type { ChildJobAnalysis } from '@/types'
 
@@ -392,39 +393,74 @@ function ReportContent() {
       </div>
 
       {/* ---- Metadata detail row ---- */}
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-text-tertiary animate-slide-up">
-        {state.createdAt && (
-          <span className="inline-flex items-center gap-1">
-            <Calendar className="h-3 w-3" />
-            {formatTimestamp(state.createdAt)}
-          </span>
-        )}
-        {state.completedAt && (state.analysisStartedAt || state.createdAt) && (
-          (() => {
-            const start = parseApiTimestamp(state.analysisStartedAt || state.createdAt)
-            const end = parseApiTimestamp(state.completedAt)
-            if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null
+      <TooltipProvider delayDuration={200}>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-text-tertiary animate-slide-up">
+          {state.createdAt && (
+            <span className="inline-flex items-center gap-1">
+              <Calendar className="h-3 w-3" />
+              {formatTimestamp(state.createdAt)}
+            </span>
+          )}
+          {state.completedAt && (state.analysisStartedAt || state.createdAt) && (
+            (() => {
+              const start = parseApiTimestamp(state.analysisStartedAt || state.createdAt)
+              const end = parseApiTimestamp(state.completedAt)
+              if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null
+              return (
+                <span className="inline-flex items-center gap-1">
+                  <Timer className="h-3 w-3" />
+                  {formatDuration(start, end)}
+                </span>
+              )
+            })()
+          )}
+          {result.ai_provider && (
+            <span className="inline-flex items-center gap-1">
+              <Cpu className="h-3 w-3" />
+              {formatAiLabel(result.ai_provider, result.ai_model)}
+            </span>
+          )}
+          {(() => {
+            const allRepos: Array<{name: string; url: string}> = []
+            const testsUrl = result.request_params?.tests_repo_url
+            if (testsUrl) {
+              const name = String(testsUrl).replace(/\/$/, '').split('/').pop()?.replace(/\.git$/, '') || 'tests'
+              allRepos.push({ name, url: String(testsUrl) })
+            }
+            const additional = result.request_params?.additional_repos as Array<{name: string; url: string}> | undefined
+            if (additional) {
+              allRepos.push(...additional)
+            }
+            if (allRepos.length === 0) return null
             return (
-              <span className="inline-flex items-center gap-1">
-                <Timer className="h-3 w-3" />
-                {formatDuration(start, end)}
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center gap-1 cursor-default">
+                    <FolderGit2 className="h-3 w-3" />
+                    {allRepos.length} repo{allRepos.length !== 1 ? 's' : ''}: {allRepos.map(r => r.name).join(', ')}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-sm">
+                  <div className="flex flex-col gap-1">
+                    {allRepos.map((r, i) => (
+                      <div key={i} className="flex flex-col">
+                        <span className="font-medium">{r.name}</span>
+                        <span className="text-text-tertiary break-all">{r.url}</span>
+                      </div>
+                    ))}
+                  </div>
+                </TooltipContent>
+              </Tooltip>
             )
-          })()
-        )}
-        {result.ai_provider && (
-          <span className="inline-flex items-center gap-1">
-            <Cpu className="h-3 w-3" />
-            {formatAiLabel(result.ai_provider, result.ai_model)}
-          </span>
-        )}
-        {state.completedAt && (
-          <span className="inline-flex items-center gap-1">
-            <Clock className="h-3 w-3" />
-            Completed {formatTimestamp(state.completedAt)}
-          </span>
-        )}
-      </div>
+          })()}
+          {state.completedAt && (
+            <span className="inline-flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              Completed {formatTimestamp(state.completedAt)}
+            </span>
+          )}
+        </div>
+      </TooltipProvider>
 
       {/* ---- Key takeaway ---- */}
       {result.summary && (
