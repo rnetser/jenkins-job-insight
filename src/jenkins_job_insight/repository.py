@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Self
 
 from git import Repo
+from git.exc import GitCommandError
 from pydantic import HttpUrl
 from simple_logger.logger import get_logger
 
@@ -21,6 +22,30 @@ def _validate_repo_url(repo_url: str | HttpUrl) -> None:
         raise ValueError(
             f"Invalid repository URL scheme. Only https:// and git:// are allowed, got: {repo_url}"
         )
+
+
+def _clone_with_ssl_retry(repo_url: str, clone_dir: Path, depth: int) -> None:
+    """Clone a repo, retrying without SSL verification on cert errors."""
+    try:
+        Repo.clone_from(repo_url, clone_dir, depth=depth)
+    except GitCommandError as exc:
+        stderr = str(exc)
+        if (
+            "SSL" in stderr
+            or "certificate" in stderr
+            or "server verification failed" in stderr
+        ):
+            logger.warning(
+                f"SSL certificate verification failed for {repo_url}, retrying without verification"
+            )
+            Repo.clone_from(
+                repo_url,
+                clone_dir,
+                depth=depth,
+                env={"GIT_SSL_NO_VERIFY": "1"},
+            )
+        else:
+            raise
 
 
 class RepositoryManager:
@@ -54,7 +79,7 @@ class RepositoryManager:
         clone_dir.mkdir(parents=True, exist_ok=True)
         self.temp_dirs.append(clone_dir)
         logger.info(f"Cloning repository to {clone_dir}")
-        Repo.clone_from(str(repo_url), clone_dir, depth=depth)
+        _clone_with_ssl_retry(str(repo_url), clone_dir, depth)
         return clone_dir
 
     def clone_into(
@@ -80,8 +105,21 @@ class RepositoryManager:
         _validate_repo_url(repo_url)
         target_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Cloning repository into {target_dir}")
-        Repo.clone_from(str(repo_url), target_dir, depth=depth)
+        _clone_with_ssl_retry(str(repo_url), target_dir, depth)
         return target_dir
+
+    def create_workspace(self) -> Path:
+        """Create an empty workspace directory for additional repos.
+
+        Returns:
+            Path to the created workspace directory.
+        """
+        workspace_id = str(uuid.uuid4())[:8]
+        workspace_dir = self.base_path / f"workspace-{workspace_id}"
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        self.temp_dirs.append(workspace_dir)
+        logger.info(f"Created workspace directory: {workspace_dir}")
+        return workspace_dir
 
     def cleanup(self) -> None:
         """Remove all cloned repositories."""

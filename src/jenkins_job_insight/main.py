@@ -1130,22 +1130,41 @@ async def analyze_failures(
 
     # Optionally clone repo for AI code context
     repo_manager = RepositoryManager()
-    repo_path = None
+    repo_path: Path | None = None
     custom_prompt = ""
     tests_repo_url = body.tests_repo_url or merged.tests_repo_url
+    cloned_repos: dict[str, Path] = {}
     try:
         await update_status(job_id, "running")
 
+        # Resolve additional repos list early so we know if a workspace is needed
+        additional_repos_list = resolve_additional_repos(body, merged)
+
+        if tests_repo_url or additional_repos_list:
+            repo_path = repo_manager.create_workspace()
+
         if tests_repo_url:
-            repo_path = await asyncio.to_thread(repo_manager.clone, str(tests_repo_url))
+            assert (
+                repo_path is not None
+            )  # guaranteed by tests_repo_url or additional_repos_list check above
+            repo_name = (
+                str(tests_repo_url).rstrip("/").split("/")[-1].replace(".git", "")
+            )
+            logger.info(f"Cloning test repository: {tests_repo_url}")
+            await asyncio.to_thread(
+                repo_manager.clone_into,
+                str(tests_repo_url),
+                repo_path / repo_name,
+                depth=50,
+            )
+            cloned_repos[repo_name] = repo_path / repo_name
 
         # Clone additional repositories for AI context
-        additional_repos_cloned: dict[str, Path] = {}
-        additional_repos_list = resolve_additional_repos(body, merged)
         if additional_repos_list:
             additional_repos_cloned, repo_path = await clone_additional_repos(
                 repo_manager, additional_repos_list, repo_path
             )
+            cloned_repos.update(additional_repos_cloned)
 
         custom_prompt = (body.raw_prompt or "").strip()
 
@@ -1165,7 +1184,7 @@ async def analyze_failures(
                 job_id=job_id,
                 peer_ai_configs=peer_ai_configs,
                 peer_analysis_max_rounds=merged.peer_analysis_max_rounds,
-                additional_repos=additional_repos_cloned or None,
+                additional_repos=cloned_repos or None,
             )
             for group_failures in groups.values()
         ]

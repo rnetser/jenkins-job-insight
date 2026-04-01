@@ -69,7 +69,8 @@ async def clone_additional_repos(
     """Clone additional repositories for AI analysis context.
 
     When repo_path exists, clones as subdirectories.
-    When repo_path is None, uses the first repo as base workspace.
+    When repo_path is None, creates a workspace directory first,
+    then clones ALL repos into it as subdirectories.
 
     Args:
         repo_manager: Repository manager for cloning.
@@ -81,9 +82,11 @@ async def clone_additional_repos(
     """
     cloned: dict[str, Path] = {}
 
-    async def _clone_into_subdir(ar: AdditionalRepo, parent: Path) -> None:
-        """Clone a single repo as a subdirectory. Failures are logged, not raised."""
-        target = parent / ar.name
+    if not repo_path:
+        repo_path = repo_manager.create_workspace()
+
+    async def _clone_into_subdir(ar: AdditionalRepo) -> None:
+        target = repo_path / ar.name
         try:
             await asyncio.to_thread(
                 repo_manager.clone_into, str(ar.url), target, depth=1
@@ -93,30 +96,7 @@ async def clone_additional_repos(
         except Exception as e:
             logger.warning(f"Failed to clone additional repo '{ar.name}': {e}")
 
-    if repo_path:
-        # Clone all as subdirectories in parallel
-        await asyncio.gather(
-            *[_clone_into_subdir(ar, repo_path) for ar in additional_repos_list]
-        )
-    else:
-        # No main repo -- use first additional repo as base workspace
-        first = additional_repos_list[0]
-        try:
-            repo_path = await asyncio.to_thread(
-                repo_manager.clone, str(first.url), depth=1
-            )
-            cloned[first.name] = repo_path
-            logger.info(
-                f"Cloned first additional repo '{first.name}' as workspace: {repo_path}"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to clone additional repo '{first.name}': {e}")
-
-        # Clone remaining as subdirectories in parallel
-        if repo_path and len(additional_repos_list) > 1:
-            await asyncio.gather(
-                *[_clone_into_subdir(ar, repo_path) for ar in additional_repos_list[1:]]
-            )
+    await asyncio.gather(*[_clone_into_subdir(ar) for ar in additional_repos_list])
 
     return cloned, repo_path
 
@@ -1547,16 +1527,38 @@ async def analyze_job(
 
         # Use RepositoryManager context for entire analysis (child jobs and main job)
         repo_manager: RepositoryManager | None = None
+        cloned_repos: dict[str, Path] = {}
         async with contextlib.AsyncExitStack() as stack:
-            if tests_repo_url:
+            # Resolve additional repos list early so we know if a workspace is needed
+            additional_repos_list = resolve_additional_repos(request, settings)
+
+            if tests_repo_url or additional_repos_list:
                 repo_manager = RepositoryManager()
                 stack.enter_context(repo_manager)
+                repo_path = repo_manager.create_workspace()
+
+            if tests_repo_url:
+                assert (
+                    repo_manager is not None
+                )  # guaranteed by tests_repo_url or additional_repos_list check above
+                assert repo_path is not None
                 try:
-                    logger.info(f"Cloning repository: {tests_repo_url}")
-                    repo_path = await asyncio.to_thread(
-                        repo_manager.clone, str(tests_repo_url)
+                    # Derive subdir name from URL
+                    repo_name = (
+                        str(tests_repo_url)
+                        .rstrip("/")
+                        .split("/")[-1]
+                        .replace(".git", "")
                     )
-                    repo_context = f"\nRepository cloned from: {tests_repo_url}"
+                    logger.info(f"Cloning test repository: {tests_repo_url}")
+                    await asyncio.to_thread(
+                        repo_manager.clone_into,
+                        str(tests_repo_url),
+                        repo_path / repo_name,
+                        depth=50,
+                    )
+                    cloned_repos[repo_name] = repo_path / repo_name
+                    repo_context = f"\nTest repository cloned from: {tests_repo_url} (at {repo_name}/)"
                 except Exception as e:
                     logger.warning(f"Failed to clone repository: {e}")
                     repo_context = f"\nFailed to clone repo: {e}"
@@ -1566,7 +1568,7 @@ async def analyze_job(
             # Make artifacts accessible in the AI working directory
             if extract_path:
                 if repo_path:
-                    # Symlink artifacts into the repo dir so AI can access them
+                    # Symlink artifacts into the workspace so AI can access them
                     artifacts_link = repo_path / "build-artifacts"
                     try:
                         artifacts_link.symlink_to(extract_path)
@@ -1583,15 +1585,14 @@ async def analyze_job(
                     logger.info(f"Using artifacts dir as AI workspace: {repo_path}")
 
             # Clone additional repositories for AI context
-            additional_repos_cloned: dict[str, Path] = {}
-            additional_repos_list = resolve_additional_repos(request, settings)
             if additional_repos_list:
-                if repo_manager is None:
-                    repo_manager = RepositoryManager()
-                    stack.enter_context(repo_manager)
+                assert (
+                    repo_manager is not None
+                )  # guaranteed by tests_repo_url or additional_repos_list check above
                 additional_repos_cloned, repo_path = await clone_additional_repos(
                     repo_manager, additional_repos_list, repo_path
                 )
+                cloned_repos.update(additional_repos_cloned)
 
             # Pre-flight: verify AI CLI is reachable before spawning parallel tasks
             ok, err = await check_ai_cli_available(
@@ -1631,7 +1632,7 @@ async def analyze_job(
                         job_id=job_id,
                         peer_ai_configs=peer_ai_configs,
                         peer_analysis_max_rounds=peer_analysis_max_rounds,
-                        additional_repos=additional_repos_cloned or None,
+                        additional_repos=cloned_repos or None,
                     )
                     for child_name, child_num in failed_child_jobs
                 ]
@@ -1726,7 +1727,7 @@ async def analyze_job(
                             group_label=f"{group_idx}/{total_groups}"
                             if total_groups > 1
                             else "",
-                            additional_repos=additional_repos_cloned or None,
+                            additional_repos=cloned_repos or None,
                         )
                     )
                 group_results = await run_parallel_with_limit(failure_tasks)
@@ -1768,7 +1769,7 @@ async def analyze_job(
                     repo_path,
                     server_url,
                     job_id,
-                    additional_repos=additional_repos_cloned or None,
+                    additional_repos=cloned_repos or None,
                 )
 
                 prompt = f"""{query_section}

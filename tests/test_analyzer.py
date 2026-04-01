@@ -1146,52 +1146,21 @@ class TestCloneAdditionalRepos:
         assert cloned["product"] == repo_path / "product"
 
     @pytest.mark.asyncio
-    async def test_first_repo_becomes_base_when_no_repo_path(self, tmp_path) -> None:
-        """When repo_path is None, first repo becomes the workspace."""
+    async def test_workspace_created_when_no_repo_path(self, tmp_path) -> None:
+        """When repo_path is None, a workspace dir is created and repo is a subdirectory."""
         from jenkins_job_insight.analyzer import clone_additional_repos
         from jenkins_job_insight.models import AdditionalRepo
         from jenkins_job_insight.repository import RepositoryManager
 
-        clone_dir = tmp_path / "cloned"
-        clone_dir.mkdir()
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
 
         repos = [
             AdditionalRepo(name="main-code", url="https://github.com/org/main"),
         ]
 
         manager = MagicMock(spec=RepositoryManager)
-        manager.clone = MagicMock(return_value=clone_dir)
-
-        async def fake_to_thread(fn, *args, **kwargs):
-            return fn(*args, **kwargs)
-
-        with patch(
-            "jenkins_job_insight.analyzer.asyncio.to_thread",
-            side_effect=fake_to_thread,
-        ):
-            cloned, result_path = await clone_additional_repos(manager, repos, None)
-
-        assert result_path == clone_dir
-        assert "main-code" in cloned
-        manager.clone.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_remaining_repos_cloned_when_no_repo_path(self, tmp_path) -> None:
-        """When repo_path is None, remaining repos are cloned as subdirectories."""
-        from jenkins_job_insight.analyzer import clone_additional_repos
-        from jenkins_job_insight.models import AdditionalRepo
-        from jenkins_job_insight.repository import RepositoryManager
-
-        base_dir = tmp_path / "base"
-        base_dir.mkdir()
-
-        repos = [
-            AdditionalRepo(name="first", url="https://github.com/org/first"),
-            AdditionalRepo(name="second", url="https://github.com/org/second"),
-        ]
-
-        manager = MagicMock(spec=RepositoryManager)
-        manager.clone = MagicMock(return_value=base_dir)
+        manager.create_workspace = MagicMock(return_value=workspace_dir)
 
         def fake_clone_into(url, target, depth=1):
             target.mkdir(parents=True, exist_ok=True)
@@ -1208,11 +1177,51 @@ class TestCloneAdditionalRepos:
         ):
             cloned, result_path = await clone_additional_repos(manager, repos, None)
 
-        assert result_path == base_dir
+        assert result_path == workspace_dir
+        assert "main-code" in cloned
+        assert cloned["main-code"] == workspace_dir / "main-code"
+        manager.create_workspace.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_all_repos_are_subdirs_when_no_repo_path(self, tmp_path) -> None:
+        """When repo_path is None, ALL repos are cloned as subdirectories of workspace."""
+        from jenkins_job_insight.analyzer import clone_additional_repos
+        from jenkins_job_insight.models import AdditionalRepo
+        from jenkins_job_insight.repository import RepositoryManager
+
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+
+        repos = [
+            AdditionalRepo(name="first", url="https://github.com/org/first"),
+            AdditionalRepo(name="second", url="https://github.com/org/second"),
+        ]
+
+        manager = MagicMock(spec=RepositoryManager)
+        manager.create_workspace = MagicMock(return_value=workspace_dir)
+
+        def fake_clone_into(url, target, depth=1):
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+
+        manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with patch(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            side_effect=fake_to_thread,
+        ):
+            cloned, result_path = await clone_additional_repos(manager, repos, None)
+
+        assert result_path == workspace_dir
         assert "first" in cloned
         assert "second" in cloned
-        manager.clone.assert_called_once()
-        manager.clone_into.assert_called_once()
+        assert cloned["first"] == workspace_dir / "first"
+        assert cloned["second"] == workspace_dir / "second"
+        # All repos cloned via clone_into, no manager.clone call
+        assert manager.clone_into.call_count == 2
 
     @pytest.mark.asyncio
     async def test_clone_failure_is_graceful(self, tmp_path) -> None:
@@ -1297,16 +1306,16 @@ class TestCloneAdditionalRepos:
         assert len(cloned) == 3
 
     @pytest.mark.asyncio
-    async def test_remaining_repos_use_asyncio_gather_when_no_repo_path(
+    async def test_all_repos_use_asyncio_gather_when_no_repo_path(
         self, tmp_path
     ) -> None:
-        """When repo_path is None, remaining repos after the first are cloned in parallel via asyncio.gather."""
+        """When repo_path is None, ALL repos are cloned in parallel via asyncio.gather."""
         from jenkins_job_insight.analyzer import clone_additional_repos
         from jenkins_job_insight.models import AdditionalRepo
         from jenkins_job_insight.repository import RepositoryManager
 
-        base_dir = tmp_path / "base"
-        base_dir.mkdir()
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
 
         repos = [
             AdditionalRepo(name="first", url="https://github.com/org/first"),
@@ -1315,7 +1324,7 @@ class TestCloneAdditionalRepos:
         ]
 
         manager = MagicMock(spec=RepositoryManager)
-        manager.clone = MagicMock(return_value=base_dir)
+        manager.create_workspace = MagicMock(return_value=workspace_dir)
 
         def fake_clone_into(url, target, depth=1):
             target.mkdir(parents=True, exist_ok=True)
@@ -1338,16 +1347,14 @@ class TestCloneAdditionalRepos:
         ):
             cloned, result_path = await clone_additional_repos(manager, repos, None)
 
-        # asyncio.gather must have been called for the remaining repos
         assert mock_gather.called
-        assert result_path == base_dir
-        # First repo cloned via manager.clone, remaining two via gather
+        assert result_path == workspace_dir
         assert len(cloned) == 3
         assert "first" in cloned
         assert "second" in cloned
         assert "third" in cloned
-        manager.clone.assert_called_once()
-        assert manager.clone_into.call_count == 2
+        # All repos via clone_into, no manager.clone
+        assert manager.clone_into.call_count == 3
 
 
 class TestBuildResourcesSectionAdditionalRepos:
@@ -1403,3 +1410,636 @@ class TestBuildResourcesSectionAdditionalRepos:
 
         result = _build_resources_section(repo, additional_repos={})
         assert "Additional repository" not in result
+
+
+class TestAnalyzeJobWorkspacePattern:
+    """Tests that analyze_job creates a workspace and clones test repo as subdirectory."""
+
+    @pytest.mark.asyncio
+    async def test_test_repo_cloned_into_workspace_subdirectory(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """When tests_repo_url is set, test repo is cloned as subdirectory of workspace."""
+        from jenkins_job_insight.analyzer import analyze_job
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=123,
+            tests_repo_url="https://github.com/RedHatQE/mtv-api-tests",
+        )
+        settings = Settings()
+        settings_data = settings.model_dump(mode="python")
+        settings_data["jenkins_url"] = "https://jenkins.example.com"
+        settings_data["jenkins_user"] = "user"
+        settings_data["jenkins_password"] = _FAKE_JENKINS_PASSWORD
+        merged = Settings.model_validate(settings_data)
+
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+
+        mock_client = MagicMock()
+        mock_client.get_build_info_safe.return_value = {
+            "result": "FAILURE",
+            "building": False,
+        }
+        mock_client.get_build_console.return_value = "Build failed"
+        mock_client.get_test_report.return_value = None
+        mock_client.session = MagicMock()
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.JenkinsClient",
+            lambda **kwargs: mock_client,
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            fake_to_thread,
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.check_ai_cli_available",
+            AsyncMock(return_value=(True, "")),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
+            AsyncMock(
+                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+            ),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.update_progress_phase",
+            AsyncMock(),
+        )
+
+        # Track RepositoryManager calls
+        clone_into_calls = []
+
+        mock_repo_manager = MagicMock()
+        mock_repo_manager.create_workspace.return_value = workspace_dir
+
+        def fake_clone_into(url, target, depth=1):
+            clone_into_calls.append({"url": url, "target": target, "depth": depth})
+            target.mkdir(parents=True, exist_ok=True)
+            # Create .git to simulate a real clone
+            (target / ".git").mkdir(exist_ok=True)
+            return target
+
+        mock_repo_manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.RepositoryManager",
+            lambda: mock_repo_manager,
+        )
+
+        await analyze_job(
+            body,
+            merged,
+            ai_provider="claude",
+            ai_model="test-model",
+            job_id="test-job-id",
+        )
+
+        # Verify workspace was created
+        mock_repo_manager.create_workspace.assert_called_once()
+
+        # Verify test repo was cloned INTO workspace as subdirectory
+        assert len(clone_into_calls) == 1
+        call = clone_into_calls[0]
+        assert call["url"] == "https://github.com/RedHatQE/mtv-api-tests"
+        assert call["target"] == workspace_dir / "mtv-api-tests"
+        assert call["depth"] == 50  # Test repo uses depth=50 for git history
+
+    @pytest.mark.asyncio
+    async def test_test_repo_name_derived_from_url(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Repo name is extracted from URL, stripping .git suffix and trailing slashes."""
+        from jenkins_job_insight.analyzer import analyze_job
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=123,
+            tests_repo_url="https://github.com/org/my-tests.git",
+        )
+        settings = Settings()
+        settings_data = settings.model_dump(mode="python")
+        settings_data["jenkins_url"] = "https://jenkins.example.com"
+        settings_data["jenkins_user"] = "user"
+        settings_data["jenkins_password"] = _FAKE_JENKINS_PASSWORD
+        merged = Settings.model_validate(settings_data)
+
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+
+        mock_client = MagicMock()
+        mock_client.get_build_info_safe.return_value = {
+            "result": "FAILURE",
+            "building": False,
+        }
+        mock_client.get_build_console.return_value = "Build failed"
+        mock_client.get_test_report.return_value = None
+        mock_client.session = MagicMock()
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.JenkinsClient",
+            lambda **kwargs: mock_client,
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            fake_to_thread,
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.check_ai_cli_available",
+            AsyncMock(return_value=(True, "")),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
+            AsyncMock(
+                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+            ),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.update_progress_phase",
+            AsyncMock(),
+        )
+
+        clone_into_calls = []
+        mock_repo_manager = MagicMock()
+        mock_repo_manager.create_workspace.return_value = workspace_dir
+
+        def fake_clone_into(url, target, depth=1):
+            clone_into_calls.append({"url": url, "target": target, "depth": depth})
+            target.mkdir(parents=True, exist_ok=True)
+            (target / ".git").mkdir(exist_ok=True)
+            return target
+
+        mock_repo_manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.RepositoryManager",
+            lambda: mock_repo_manager,
+        )
+
+        await analyze_job(
+            body,
+            merged,
+            ai_provider="claude",
+            ai_model="test-model",
+            job_id="test-job-id",
+        )
+
+        # Verify .git suffix is stripped from repo name
+        assert clone_into_calls[0]["target"] == workspace_dir / "my-tests"
+
+    @pytest.mark.asyncio
+    async def test_workspace_created_for_additional_repos_only(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """When no test repo but additional repos exist, workspace is still created."""
+        from jenkins_job_insight.analyzer import analyze_job
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=123,
+            additional_repos=[
+                {"name": "infra", "url": "https://github.com/org/infra"},
+            ],
+        )
+        settings = Settings()
+        settings_data = settings.model_dump(mode="python")
+        settings_data["jenkins_url"] = "https://jenkins.example.com"
+        settings_data["jenkins_user"] = "user"
+        settings_data["jenkins_password"] = _FAKE_JENKINS_PASSWORD
+        merged = Settings.model_validate(settings_data)
+
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+
+        mock_client = MagicMock()
+        mock_client.get_build_info_safe.return_value = {
+            "result": "FAILURE",
+            "building": False,
+        }
+        mock_client.get_build_console.return_value = "Build failed"
+        mock_client.get_test_report.return_value = None
+        mock_client.session = MagicMock()
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.JenkinsClient",
+            lambda **kwargs: mock_client,
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            fake_to_thread,
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.check_ai_cli_available",
+            AsyncMock(return_value=(True, "")),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
+            AsyncMock(
+                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+            ),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.update_progress_phase",
+            AsyncMock(),
+        )
+
+        mock_repo_manager = MagicMock()
+        mock_repo_manager.create_workspace.return_value = workspace_dir
+
+        def fake_clone_into(url, target, depth=1):
+            target.mkdir(parents=True, exist_ok=True)
+            (target / ".git").mkdir(exist_ok=True)
+            return target
+
+        mock_repo_manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.RepositoryManager",
+            lambda: mock_repo_manager,
+        )
+
+        # Mock clone_additional_repos to track calls
+        clone_additional_calls = []
+
+        async def mock_clone_additional(manager, repos, path):
+            clone_additional_calls.append({"manager": manager, "path": path})
+            return {"infra": workspace_dir / "infra"}, path or workspace_dir
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.clone_additional_repos",
+            mock_clone_additional,
+        )
+
+        await analyze_job(
+            body,
+            merged,
+            ai_provider="claude",
+            ai_model="test-model",
+            job_id="test-job-id",
+        )
+
+        # Verify additional repos got a workspace path (not None)
+        assert len(clone_additional_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_test_repo_and_additional_repos_share_workspace(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Test repo and additional repos are both in the same workspace."""
+        from jenkins_job_insight.analyzer import analyze_job
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=123,
+            tests_repo_url="https://github.com/org/test-repo",
+            additional_repos=[
+                {"name": "infra", "url": "https://github.com/org/infra"},
+            ],
+        )
+        settings = Settings()
+        settings_data = settings.model_dump(mode="python")
+        settings_data["jenkins_url"] = "https://jenkins.example.com"
+        settings_data["jenkins_user"] = "user"
+        settings_data["jenkins_password"] = _FAKE_JENKINS_PASSWORD
+        merged = Settings.model_validate(settings_data)
+
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+
+        mock_client = MagicMock()
+        mock_client.get_build_info_safe.return_value = {
+            "result": "FAILURE",
+            "building": False,
+        }
+        mock_client.get_build_console.return_value = "Build failed"
+        mock_client.get_test_report.return_value = None
+        mock_client.session = MagicMock()
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.JenkinsClient",
+            lambda **kwargs: mock_client,
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            fake_to_thread,
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.check_ai_cli_available",
+            AsyncMock(return_value=(True, "")),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
+            AsyncMock(
+                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+            ),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.update_progress_phase",
+            AsyncMock(),
+        )
+
+        clone_into_calls = []
+        mock_repo_manager = MagicMock()
+        mock_repo_manager.create_workspace.return_value = workspace_dir
+
+        def fake_clone_into(url, target, depth=1):
+            clone_into_calls.append({"url": url, "target": target, "depth": depth})
+            target.mkdir(parents=True, exist_ok=True)
+            (target / ".git").mkdir(exist_ok=True)
+            return target
+
+        mock_repo_manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.RepositoryManager",
+            lambda: mock_repo_manager,
+        )
+
+        # Track what clone_additional_repos receives as repo_path
+        clone_additional_repo_paths = []
+
+        async def mock_clone_additional(manager, repos, path):
+            clone_additional_repo_paths.append(path)
+            return {"infra": workspace_dir / "infra"}, path
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.clone_additional_repos",
+            mock_clone_additional,
+        )
+
+        await analyze_job(
+            body,
+            merged,
+            ai_provider="claude",
+            ai_model="test-model",
+            job_id="test-job-id",
+        )
+
+        # Test repo cloned into workspace
+        assert len(clone_into_calls) == 1
+        assert clone_into_calls[0]["target"] == workspace_dir / "test-repo"
+
+        # Additional repos received the same workspace path
+        assert len(clone_additional_repo_paths) == 1
+        assert clone_additional_repo_paths[0] == workspace_dir
+
+    @pytest.mark.asyncio
+    async def test_test_repo_included_in_cloned_repos_dict(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Test repo is added to the cloned_repos dict passed to analysis functions."""
+        from jenkins_job_insight.analyzer import analyze_job
+        from jenkins_job_insight.models import (
+            AnalysisDetail,
+            AnalyzeRequest,
+            FailureAnalysis,
+        )
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=123,
+            tests_repo_url="https://github.com/org/test-repo",
+        )
+        settings = Settings()
+        settings_data = settings.model_dump(mode="python")
+        settings_data["jenkins_url"] = "https://jenkins.example.com"
+        settings_data["jenkins_user"] = "user"
+        settings_data["jenkins_password"] = _FAKE_JENKINS_PASSWORD
+        merged = Settings.model_validate(settings_data)
+
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+
+        mock_client = MagicMock()
+        mock_client.get_build_info_safe.return_value = {
+            "result": "FAILURE",
+            "building": False,
+        }
+        mock_client.get_build_console.return_value = "Build failed"
+        mock_client.get_test_report.return_value = {
+            "suites": [
+                {
+                    "cases": [
+                        {
+                            "className": "com.example",
+                            "name": "test_foo",
+                            "status": "FAILED",
+                            "errorDetails": "AssertionError",
+                            "errorStackTrace": "at line 42",
+                        }
+                    ]
+                }
+            ]
+        }
+        mock_client.session = MagicMock()
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.JenkinsClient",
+            lambda **kwargs: mock_client,
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            fake_to_thread,
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.check_ai_cli_available",
+            AsyncMock(return_value=(True, "")),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.update_progress_phase",
+            AsyncMock(),
+        )
+
+        mock_repo_manager = MagicMock()
+        mock_repo_manager.create_workspace.return_value = workspace_dir
+
+        def fake_clone_into(url, target, depth=1):
+            target.mkdir(parents=True, exist_ok=True)
+            (target / ".git").mkdir(exist_ok=True)
+            return target
+
+        mock_repo_manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.RepositoryManager",
+            lambda: mock_repo_manager,
+        )
+
+        # Track additional_repos passed to analyze_failure_group
+        captured_additional_repos = []
+
+        mock_failure = FailureAnalysis(
+            test_name="com.example.test_foo",
+            error="AssertionError",
+            analysis=AnalysisDetail(
+                classification="CODE ISSUE", details="broken assertion"
+            ),
+            error_signature="sig123",
+        )
+
+        async def mock_analyze_group(*args, **kwargs):
+            captured_additional_repos.append(kwargs.get("additional_repos"))
+            return [mock_failure]
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.analyze_failure_group",
+            mock_analyze_group,
+        )
+
+        async def run_coroutines(coroutines, **kwargs):
+            return [await coro for coro in coroutines]
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.run_parallel_with_limit",
+            AsyncMock(side_effect=run_coroutines),
+        )
+
+        await analyze_job(
+            body,
+            merged,
+            ai_provider="claude",
+            ai_model="test-model",
+            job_id="test-job-id",
+        )
+
+        # The test repo should be included in additional_repos dict
+        assert len(captured_additional_repos) == 1
+        repos = captured_additional_repos[0]
+        assert repos is not None
+        assert "test-repo" in repos
+        assert repos["test-repo"] == workspace_dir / "test-repo"
+
+
+class TestAnalyzeFailuresWorkspacePattern:
+    """Tests that analyze_failures endpoint creates a workspace and clones test repo as subdirectory."""
+
+    @pytest.mark.asyncio
+    async def test_analyze_failures_workspace_via_http(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """POST /analyze-failures with tests_repo_url creates workspace pattern."""
+        from jenkins_job_insight.models import (
+            AnalysisDetail,
+            FailureAnalysis,
+        )
+        from starlette.testclient import TestClient
+        from jenkins_job_insight.main import app
+
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+
+        clone_into_calls = []
+        mock_repo_manager = MagicMock()
+        mock_repo_manager.create_workspace.return_value = workspace_dir
+        mock_repo_manager.cleanup.return_value = None
+
+        def fake_clone_into(url, target, depth=1):
+            clone_into_calls.append({"url": url, "target": target, "depth": depth})
+            target.mkdir(parents=True, exist_ok=True)
+            (target / ".git").mkdir(exist_ok=True)
+            return target
+
+        mock_repo_manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.RepositoryManager",
+            lambda: mock_repo_manager,
+        )
+
+        mock_failure = FailureAnalysis(
+            test_name="test_foo",
+            error="assert False",
+            analysis=AnalysisDetail(classification="CODE ISSUE", details="d"),
+            error_signature="sig",
+        )
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.analyze_failure_group",
+            AsyncMock(return_value=[mock_failure]),
+        )
+
+        async def run_coroutines(coroutines, **kwargs):
+            return [await coro for coro in coroutines]
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.run_parallel_with_limit",
+            AsyncMock(side_effect=run_coroutines),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.save_result",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.update_status",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.populate_failure_history",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.storage.make_classifications_visible",
+            AsyncMock(),
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.asyncio.to_thread",
+            fake_to_thread,
+        )
+
+        test_client = TestClient(app)
+        response = test_client.post(
+            "/analyze-failures",
+            json={
+                "failures": [
+                    {
+                        "test_name": "test_foo",
+                        "error_message": "assert False",
+                        "stack_trace": "line 10",
+                    }
+                ],
+                "ai_provider": "claude",
+                "ai_model": "test-model",
+                "tests_repo_url": "https://github.com/org/my-tests",
+            },
+        )
+        assert response.status_code == 200
+
+        # Verify workspace was created
+        mock_repo_manager.create_workspace.assert_called_once()
+
+        # Verify test repo was cloned INTO workspace as subdirectory
+        assert len(clone_into_calls) == 1
+        call = clone_into_calls[0]
+        assert call["url"] == "https://github.com/org/my-tests"
+        assert call["target"] == workspace_dir / "my-tests"
+        assert call["depth"] == 50  # Test repo uses depth=50

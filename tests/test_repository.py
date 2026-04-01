@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import git.exc
 import pytest
+from git.exc import GitCommandError
 
 from jenkins_job_insight.repository import RepositoryManager
 
@@ -213,3 +214,114 @@ class TestCloneInto:
         manager = RepositoryManager()
         with pytest.raises(ValueError, match="Only https:// and git://"):
             manager.clone_into("ssh://git@github.com/org/repo", Path("/tmp/test"))
+
+
+class TestCloneWithSslRetry:
+    """Tests for SSL certificate retry logic."""
+
+    def test_clone_into_retries_on_ssl_error(self, tmp_path) -> None:
+        """clone_into retries with GIT_SSL_NO_VERIFY on cert failure."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = [
+                GitCommandError(
+                    "git clone",
+                    128,
+                    stderr="server verification failed: certificate signer not trusted",
+                ),
+                MagicMock(),
+            ]
+            target = tmp_path / "repo"
+            target.mkdir()
+            manager.clone_into("https://example.com/repo", target)
+            assert mock_clone.call_count == 2
+            _, kwargs = mock_clone.call_args
+            assert kwargs.get("env", {}).get("GIT_SSL_NO_VERIFY") == "1"
+
+    def test_clone_into_does_not_retry_on_other_errors(self, tmp_path) -> None:
+        """Non-SSL errors are not retried."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = GitCommandError(
+                "git clone", 128, stderr="repository not found"
+            )
+            with pytest.raises(GitCommandError):
+                manager.clone_into("https://example.com/repo", tmp_path / "repo")
+            assert mock_clone.call_count == 1
+
+    def test_clone_into_succeeds_without_retry(self, tmp_path) -> None:
+        """Successful clone doesn't trigger retry."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.return_value = MagicMock()
+            target = tmp_path / "repo"
+            target.mkdir()
+            manager.clone_into("https://example.com/repo", target)
+            assert mock_clone.call_count == 1
+
+    def test_clone_retries_on_ssl_error(self, tmp_path) -> None:
+        """clone() retries with GIT_SSL_NO_VERIFY on SSL cert failure."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = [
+                GitCommandError(
+                    "git clone",
+                    128,
+                    stderr="SSL certificate problem: unable to get local issuer certificate",
+                ),
+                MagicMock(),
+            ]
+            manager.clone("https://example.com/repo")
+            assert mock_clone.call_count == 2
+            _, kwargs = mock_clone.call_args
+            assert kwargs.get("env", {}).get("GIT_SSL_NO_VERIFY") == "1"
+        manager.cleanup()
+
+    def test_clone_does_not_retry_on_other_errors(self) -> None:
+        """clone() non-SSL errors are not retried."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = GitCommandError(
+                "git clone", 128, stderr="repository not found"
+            )
+            with pytest.raises(GitCommandError):
+                manager.clone("https://example.com/repo")
+            assert mock_clone.call_count == 1
+        manager.cleanup()
+
+    def test_clone_retries_on_certificate_keyword(self) -> None:
+        """clone() retries when stderr contains 'certificate'."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = [
+                GitCommandError(
+                    "git clone",
+                    128,
+                    stderr="fatal: unable to access: certificate verify failed",
+                ),
+                MagicMock(),
+            ]
+            manager.clone("https://example.com/repo")
+            assert mock_clone.call_count == 2
+        manager.cleanup()
+
+
+class TestCreateWorkspace:
+    """Tests for RepositoryManager.create_workspace."""
+
+    def test_create_workspace_returns_path(self) -> None:
+        """create_workspace returns a Path under base_path."""
+        manager = RepositoryManager()
+        workspace = manager.create_workspace()
+        assert workspace.exists()
+        assert workspace.parent == manager.base_path
+        assert "workspace-" in workspace.name
+        manager.cleanup()
+
+    def test_create_workspace_tracked_for_cleanup(self) -> None:
+        """create_workspace adds path to temp_dirs."""
+        manager = RepositoryManager()
+        workspace = manager.create_workspace()
+        assert workspace in manager.temp_dirs
+        manager.cleanup()
+        assert not workspace.exists()
