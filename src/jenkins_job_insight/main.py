@@ -1133,8 +1133,27 @@ async def analyze_failures(
         f"Direct failure analysis request received with {len(test_failures)} failures (job_id: {job_id})"
     )
 
-    # Save initial pending state so GET /results/{job_id} works immediately
-    await save_result(job_id, "", "pending", None)
+    # Save initial pending state with request_params so GET /results/{job_id}
+    # works immediately and _preserve_request_params can find them later.
+    initial_result: dict = {
+        "request_params": {
+            "ai_provider": ai_provider,
+            "ai_model": ai_model,
+            "peer_ai_configs": [
+                c.model_dump(mode="json") if hasattr(c, "model_dump") else c
+                for c in (peer_ai_configs or [])
+            ]
+            if peer_ai_configs
+            else [],
+            "additional_repos": [
+                ar.model_dump(mode="json") if hasattr(ar, "model_dump") else ar
+                for ar in body.additional_repos
+            ]
+            if body.additional_repos is not None
+            else None,
+        },
+    }
+    await save_result(job_id, "", "pending", initial_result)
 
     # Group failures by error signature for deduplication
     groups: dict[str, list] = defaultdict(list)
@@ -1273,8 +1292,7 @@ async def analyze_failures(
         fail_data = analysis_result.model_dump(mode="json")
         await _preserve_request_params(job_id, fail_data)
         await update_status(job_id, "failed", fail_data)
-        content = analysis_result.model_dump(mode="json")
-        return JSONResponse(content=_attach_result_links(content, base_url, job_id))
+        return JSONResponse(content=_attach_result_links(fail_data, base_url, job_id))
 
     finally:
         repo_manager.cleanup()

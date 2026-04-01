@@ -3647,7 +3647,7 @@ class TestRequestParamsPreservation:
     def test_analyze_failures_preserves_request_params_on_success(
         self, test_client, temp_db_path: Path
     ) -> None:
-        """POST /analyze-failures must not lose request_params on completion."""
+        """POST /analyze-failures must seed and preserve request_params."""
         mock_analysis = FailureAnalysis(
             test_name="test_foo",
             error="assert False",
@@ -3689,7 +3689,7 @@ class TestRequestParamsPreservation:
                                 "stack_trace": "File test.py, line 10",
                             }
                         ],
-                        "ai_provider": "claude",
+                        "ai_provider": "cursor",
                         "ai_model": "test-model",
                     },
                 )
@@ -3697,12 +3697,18 @@ class TestRequestParamsPreservation:
                 data = response.json()
                 job_id = data["job_id"]
 
-        # Now fetch the stored result and verify request_params
-        # The /analyze-failures endpoint doesn't save request_params initially,
-        # so this test documents that analyze-failures results should also
-        # preserve any request_params if they were set.
+        # Fetch the stored result and verify request_params survived
         result_response = test_client.get(
             f"/results/{job_id}",
             headers={"accept": "application/json"},
         )
         assert result_response.status_code == 200
+        result_data = result_response.json()
+        assert "result" in result_data
+        result = result_data["result"]
+        assert "request_params" in result, (
+            "request_params must be preserved after analyze-failures completes"
+        )
+        rp = result["request_params"]
+        assert rp["ai_provider"] == "cursor"
+        assert rp["ai_model"] == "test-model"
