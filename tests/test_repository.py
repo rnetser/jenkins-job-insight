@@ -6,7 +6,7 @@ import git.exc
 import pytest
 from git.exc import GitCommandError
 
-from jenkins_job_insight.repository import RepositoryManager
+from jenkins_job_insight.repository import RepositoryManager, repo_name_from_url
 
 
 class TestRepositoryManager:
@@ -325,3 +325,63 @@ class TestCreateWorkspace:
         assert workspace in manager.temp_dirs
         manager.cleanup()
         assert not workspace.exists()
+
+
+class TestRepoNameFromUrl:
+    """Tests for the repo_name_from_url utility function."""
+
+    def test_https_url_with_git_suffix(self) -> None:
+        """Extract repo name from HTTPS URL ending in .git."""
+        assert repo_name_from_url("https://github.com/org/my-repo.git") == "my-repo"
+
+    def test_https_url_without_git_suffix(self) -> None:
+        """Extract repo name from HTTPS URL without .git."""
+        assert repo_name_from_url("https://github.com/org/my-repo") == "my-repo"
+
+    def test_url_with_trailing_slash(self) -> None:
+        """Strip trailing slash before extracting."""
+        assert repo_name_from_url("https://github.com/org/my-repo/") == "my-repo"
+
+    def test_url_with_trailing_slash_and_git(self) -> None:
+        """Strip trailing slash and .git."""
+        assert repo_name_from_url("https://github.com/org/my-repo.git/") == "my-repo"
+
+    def test_git_protocol_url(self) -> None:
+        """Extract from git:// URL."""
+        assert repo_name_from_url("git://github.com/org/my-repo.git") == "my-repo"
+
+    def test_pydantic_httpurl(self) -> None:
+        """Works with pydantic HttpUrl objects."""
+        from pydantic import HttpUrl
+
+        url = HttpUrl("https://github.com/org/my-repo.git")
+        assert repo_name_from_url(url) == "my-repo"
+
+
+class TestCloneWithSslRetryCleanup:
+    """Tests for Finding 2: partial clone cleanup before SSL retry."""
+
+    def test_partial_clone_cleaned_before_retry(self, tmp_path) -> None:
+        """After a failed SSL clone, the target dir is cleaned before retry."""
+        manager = RepositoryManager()
+        target = tmp_path / "repo"
+        target.mkdir()
+        # Create a partial file in the target to simulate partial clone
+        partial_file = target / "partial-object"
+        partial_file.write_text("partial data")
+
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = [
+                GitCommandError(
+                    "git clone",
+                    128,
+                    stderr="server verification failed: certificate signer not trusted",
+                ),
+                MagicMock(),
+            ]
+            manager.clone_into("https://example.com/repo", target)
+
+        # The partial file should have been removed before the retry
+        assert not partial_file.exists()
+        # Target dir should still exist (recreated for the retry)
+        assert target.exists()

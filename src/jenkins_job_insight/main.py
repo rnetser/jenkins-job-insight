@@ -20,6 +20,7 @@ from simple_logger.logger import get_logger
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
+    derive_test_repo_name,
     clone_additional_repos,
     resolve_additional_repos,
     analyze_failure_group,
@@ -1147,17 +1148,20 @@ async def analyze_failures(
             assert (
                 repo_path is not None
             )  # guaranteed by tests_repo_url or additional_repos_list check above
-            repo_name = (
-                str(tests_repo_url).rstrip("/").split("/")[-1].replace(".git", "")
-            )
-            logger.info(f"Cloning test repository: {tests_repo_url}")
-            await asyncio.to_thread(
-                repo_manager.clone_into,
-                str(tests_repo_url),
-                repo_path / repo_name,
-                depth=50,
-            )
-            cloned_repos[repo_name] = repo_path / repo_name
+            try:
+                repo_name = derive_test_repo_name(
+                    str(tests_repo_url), additional_repos_list
+                )
+                logger.info(f"Cloning test repository: {tests_repo_url}")
+                await asyncio.to_thread(
+                    repo_manager.clone_into,
+                    str(tests_repo_url),
+                    repo_path / repo_name,
+                    depth=50,
+                )
+                cloned_repos[repo_name] = repo_path / repo_name
+            except Exception as e:
+                logger.warning(f"Failed to clone test repository: {e}")
 
         # Clone additional repositories for AI context
         if additional_repos_list:

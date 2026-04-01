@@ -15,6 +15,21 @@ from simple_logger.logger import get_logger
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 
+def repo_name_from_url(repo_url: str | HttpUrl) -> str:
+    """Extract repository name from a URL for use as a directory name.
+
+    Takes the last path segment and strips the '.git' suffix.
+    E.g., 'https://github.com/org/my-repo.git' -> 'my-repo'
+
+    Args:
+        repo_url: Repository URL (string or HttpUrl).
+
+    Returns:
+        Repository name suitable for use as a subdirectory name.
+    """
+    return str(repo_url).rstrip("/").split("/")[-1].replace(".git", "")
+
+
 def _validate_repo_url(repo_url: str | HttpUrl) -> None:
     """Validate repository URL scheme to prevent SSRF."""
     url_str = str(repo_url).lower()
@@ -36,8 +51,13 @@ def _clone_with_ssl_retry(repo_url: str, clone_dir: Path, depth: int) -> None:
             or "server verification failed" in stderr
         ):
             logger.warning(
-                f"SSL certificate verification failed for {repo_url}, retrying without verification"
+                f"SSL certificate verification failed for {repo_url}, "
+                "retrying with SSL verification disabled (GIT_SSL_NO_VERIFY=1)"
             )
+            # Clean up partial clone before retry
+            if clone_dir.exists():
+                shutil.rmtree(clone_dir)
+                clone_dir.mkdir(parents=True, exist_ok=True)
             Repo.clone_from(
                 repo_url,
                 clone_dir,
@@ -74,7 +94,7 @@ class RepositoryManager:
         """
         _validate_repo_url(repo_url)
         clone_id = str(uuid.uuid4())[:8]
-        repo_name = str(repo_url).rstrip("/").split("/")[-1].replace(".git", "")
+        repo_name = repo_name_from_url(repo_url)
         clone_dir = self.base_path / f"{repo_name}-{clone_id}"
         clone_dir.mkdir(parents=True, exist_ok=True)
         self.temp_dirs.append(clone_dir)
@@ -88,8 +108,9 @@ class RepositoryManager:
         """Clone repository into a specific target directory.
 
         Unlike clone(), this places the repo at an explicit path instead
-        of auto-generating one.  The target directory is NOT tracked for
-        cleanup -- its parent is expected to manage lifecycle.
+        of auto-generating one.  The target directory is NOT individually
+        tracked for cleanup -- it is expected to live under a workspace
+        directory whose lifecycle is managed by the caller.
 
         Args:
             repo_url: URL of the git repository to clone.
@@ -109,7 +130,10 @@ class RepositoryManager:
         return target_dir
 
     def create_workspace(self) -> Path:
-        """Create an empty workspace directory for additional repos.
+        """Create a workspace directory for repository clones.
+
+        Both the test repository and additional repositories are cloned
+        as subdirectories of this workspace.
 
         Returns:
             Path to the created workspace directory.

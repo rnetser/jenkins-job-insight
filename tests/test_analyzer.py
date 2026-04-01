@@ -2043,3 +2043,64 @@ class TestAnalyzeFailuresWorkspacePattern:
         assert call["url"] == "https://github.com/org/my-tests"
         assert call["target"] == workspace_dir / "my-tests"
         assert call["depth"] == 50  # Test repo uses depth=50
+
+
+class TestDeriveTestRepoName:
+    """Tests for derive_test_repo_name: name collision detection (Finding 3)."""
+
+    def test_no_collision(self) -> None:
+        """When no additional repos, returns derived name from URL."""
+        from jenkins_job_insight.analyzer import derive_test_repo_name
+
+        name = derive_test_repo_name("https://github.com/org/my-tests.git", [])
+        assert name == "my-tests"
+
+    def test_collision_falls_back(self) -> None:
+        """When derived name collides with an additional repo, returns 'tests-repo-1'."""
+        from jenkins_job_insight.analyzer import derive_test_repo_name
+        from jenkins_job_insight.models import AdditionalRepo
+
+        additional = [
+            AdditionalRepo(name="my-tests", url="https://github.com/org/my-tests"),
+        ]
+        name = derive_test_repo_name("https://github.com/org/my-tests.git", additional)
+        assert name == "tests-repo-1"
+
+    def test_no_collision_different_name(self) -> None:
+        """No collision when additional repo has a different name."""
+        from jenkins_job_insight.analyzer import derive_test_repo_name
+        from jenkins_job_insight.models import AdditionalRepo
+
+        additional = [
+            AdditionalRepo(name="infra", url="https://github.com/org/infra"),
+        ]
+        name = derive_test_repo_name("https://github.com/org/my-tests.git", additional)
+        assert name == "my-tests"
+
+    def test_empty_additional_repos(self) -> None:
+        """Empty additional repos list causes no collision."""
+        from jenkins_job_insight.analyzer import derive_test_repo_name
+
+        name = derive_test_repo_name("https://github.com/org/repo", [])
+        assert name == "repo"
+
+    def test_none_additional_repos(self) -> None:
+        """None additional repos list causes no collision."""
+        from jenkins_job_insight.analyzer import derive_test_repo_name
+
+        name = derive_test_repo_name("https://github.com/org/repo", None)
+        assert name == "repo"
+
+    def test_fallback_also_avoids_collision(self) -> None:
+        """Fallback name avoids collision with 'tests-repo-1' too."""
+        from jenkins_job_insight.analyzer import derive_test_repo_name
+        from jenkins_job_insight.models import AdditionalRepo
+
+        repos = [
+            AdditionalRepo(name="my-repo", url="https://github.com/org/my-repo"),
+            AdditionalRepo(name="tests-repo-1", url="https://github.com/org/other"),
+        ]
+        result = derive_test_repo_name("https://github.com/org/my-repo", repos)
+        assert result != "my-repo"
+        assert result != "tests-repo-1"
+        assert result.startswith("tests-repo-")
