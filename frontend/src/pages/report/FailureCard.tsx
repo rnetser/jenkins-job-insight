@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ClassificationBadge } from '@/components/shared/ClassificationBadge'
+import { PeerDebateSection } from './PeerDebateSection'
 import { ReviewToggle } from './ReviewToggle'
 import { CommentsSection } from './CommentsSection'
 import { ClassificationSelect } from './ClassificationSelect'
@@ -338,6 +339,9 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                 </div>
               </div>
             )}
+
+            {/* Peer debate trail */}
+            {rep.peer_debate && <PeerDebateSection debate={rep.peer_debate} />}
 
             {/* Actions: classification + AI selector + bug creation */}
             <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-border-muted">

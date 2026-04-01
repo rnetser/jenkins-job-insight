@@ -5,7 +5,12 @@ from unittest.mock import patch
 
 import pytest
 
-from jenkins_job_insight.config import Settings, _resolve_jira_auth, get_settings
+from jenkins_job_insight.config import (
+    Settings,
+    _resolve_jira_auth,
+    get_settings,
+    parse_peer_configs,
+)
 
 
 def _build_env(**overrides: str) -> dict[str, str]:
@@ -278,3 +283,78 @@ class TestGitHubIssuesSettings:
         with patch.dict(os.environ, env, clear=True):
             settings = Settings(_env_file=None)
             assert not settings.github_issues_enabled
+
+
+class TestParsePeerConfigs:
+    """Tests for the parse_peer_configs helper."""
+
+    def test_parse_peer_configs_valid(self) -> None:
+        """Valid 'provider:model' pairs produce correct dicts."""
+        result = parse_peer_configs("claude:opus,cursor:gpt")
+        assert result == [
+            {"ai_provider": "claude", "ai_model": "opus"},
+            {"ai_provider": "cursor", "ai_model": "gpt"},
+        ]
+
+    def test_parse_peer_configs_empty(self) -> None:
+        """Empty string returns empty list."""
+        assert parse_peer_configs("") == []
+
+    def test_parse_peer_configs_whitespace(self) -> None:
+        """Whitespace-only string returns empty list."""
+        assert parse_peer_configs("  ") == []
+
+    def test_parse_peer_configs_invalid_no_colon(self) -> None:
+        """Entry without colon raises ValueError."""
+        with pytest.raises(ValueError, match="expected 'provider:model'"):
+            parse_peer_configs("claude-opus")
+
+    def test_parse_peer_configs_empty_provider(self) -> None:
+        """':model' raises ValueError for empty provider."""
+        with pytest.raises(ValueError, match="Empty provider"):
+            parse_peer_configs(":model")
+
+    def test_parse_peer_configs_empty_model(self) -> None:
+        """'claude:' raises ValueError for empty model."""
+        with pytest.raises(ValueError, match="Empty model"):
+            parse_peer_configs("claude:")
+
+    def test_parse_peer_configs_invalid_provider(self) -> None:
+        """Unsupported provider raises ValueError."""
+        with pytest.raises(ValueError, match="Unsupported provider 'openai'"):
+            parse_peer_configs("openai:gpt")
+
+    def test_parse_peer_configs_trailing_comma(self) -> None:
+        """Trailing comma results in empty entry ValueError."""
+        with pytest.raises(ValueError, match="Empty entry"):
+            parse_peer_configs("claude:opus,")
+
+
+class TestPeerSettingsFields:
+    """Tests for peer_ai_configs and peer_analysis_max_rounds Settings fields."""
+
+    def test_peer_ai_configs_defaults_to_empty(self) -> None:
+        """peer_ai_configs defaults to empty string."""
+        with patch.dict(os.environ, _build_env(), clear=True):
+            settings = Settings(_env_file=None)
+            assert settings.peer_ai_configs == ""
+
+    def test_peer_ai_configs_from_env(self) -> None:
+        """peer_ai_configs is loaded from PEER_AI_CONFIGS env var."""
+        env = _build_env(PEER_AI_CONFIGS="claude:opus,gemini:pro")
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings(_env_file=None)
+            assert settings.peer_ai_configs == "claude:opus,gemini:pro"
+
+    def test_peer_analysis_max_rounds_default(self) -> None:
+        """peer_analysis_max_rounds defaults to 3."""
+        with patch.dict(os.environ, _build_env(), clear=True):
+            settings = Settings(_env_file=None)
+            assert settings.peer_analysis_max_rounds == 3
+
+    def test_peer_analysis_max_rounds_from_env(self) -> None:
+        """peer_analysis_max_rounds is loaded from PEER_ANALYSIS_MAX_ROUNDS env var."""
+        env = _build_env(PEER_ANALYSIS_MAX_ROUNDS="5")
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings(_env_file=None)
+            assert settings.peer_analysis_max_rounds == 5

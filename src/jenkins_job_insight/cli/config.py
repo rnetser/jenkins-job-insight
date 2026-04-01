@@ -44,6 +44,9 @@ class ServerConfig:
     enable_jira: bool | None = None
     # GitHub
     github_token: str = ""
+    # Peer analysis
+    peers: str = ""  # "provider:model,provider:model" format
+    peer_analysis_max_rounds: int = 0  # 0 = not set, use server default
     # Jenkins job monitoring
     wait_for_completion: bool | None = None
     poll_interval_minutes: int = 0  # 0 means use server default
@@ -149,6 +152,34 @@ def get_default_server_name(config: dict | None = None) -> str:
     return config.get("default", {}).get("server", "")
 
 
+def _validated_str(data: dict, key: str) -> str:
+    """Extract a string value from *data*, raising on type mismatch.
+
+    ``None`` is treated as the empty-string default so that explicit
+    ``key = None`` in TOML doesn't crash downstream code.
+    """
+    value = data.get(key, "")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid config: '{key}' must be a string")
+    return value
+
+
+def _validated_int(data: dict, key: str) -> int:
+    """Extract an integer value from *data*, raising on type mismatch.
+
+    ``None`` is treated as ``0`` (server default).  Booleans are rejected
+    even though ``bool`` is a subclass of ``int`` in Python.
+    """
+    value = data.get(key, 0)
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Invalid config: '{key}' must be an integer")
+    return value
+
+
 def _server_config_from_dict(data: dict) -> ServerConfig:
     """Build a ServerConfig from a TOML server dict.
 
@@ -173,6 +204,9 @@ def _server_config_from_dict(data: dict) -> ServerConfig:
         ai_provider=data.get("ai_provider", ""),
         ai_model=data.get("ai_model", ""),
         ai_cli_timeout=data.get("ai_cli_timeout", 0),
+        # Peer analysis
+        peers=_validated_str(data, "peers"),
+        peer_analysis_max_rounds=_validated_int(data, "peer_analysis_max_rounds"),
         # Jira
         jira_url=data.get("jira_url", ""),
         jira_email=data.get("jira_email", ""),

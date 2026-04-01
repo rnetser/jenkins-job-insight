@@ -727,6 +727,30 @@ class TestJJIClientAnalyzeExtras:
         )
         assert result["status"] == "queued"
 
+    def test_analyze_with_peer_ai_configs(self):
+        """peer_ai_configs kwargs should be included in the POST body."""
+
+        def handler(request):
+            body = _parse_analyze_request(request)
+            assert body["peer_ai_configs"] == [
+                {"ai_provider": "cursor", "ai_model": "gpt-5"},
+                {"ai_provider": "gemini", "ai_model": "2.5-pro"},
+            ]
+            assert body["peer_analysis_max_rounds"] == 5
+            return httpx.Response(202, json={"status": "queued", "job_id": "x"})
+
+        client = _make_client(handler)
+        result = client.analyze(
+            "my-job",
+            1,
+            peer_ai_configs=[
+                {"ai_provider": "cursor", "ai_model": "gpt-5"},
+                {"ai_provider": "gemini", "ai_model": "2.5-pro"},
+            ],
+            peer_analysis_max_rounds=5,
+        )
+        assert result["status"] == "queued"
+
     def test_analyze_without_extras_sends_minimal_body(self):
         """Without extras, only job_name and build_number should be in the body."""
 

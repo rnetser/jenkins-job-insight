@@ -625,6 +625,53 @@ async def update_status(
         await db.commit()
 
 
+def _make_progress_phase_patcher(phase: str) -> Callable[[dict], None]:
+    """Create a patch function that sets ``progress_phase`` and appends to ``progress_log``.
+
+    This is a convenience wrapper for :func:`patch_result_json` so callers
+    can update the progress phase without writing a lambda each time.
+
+    Each call appends a ``{"phase": ..., "timestamp": ...}`` entry to the
+    ``progress_log`` list so the full phase history is persisted server-side
+    and survives page refreshes.
+
+    Args:
+        phase: The progress phase string to set.
+
+    Returns:
+        A callable that mutates a dict in place, suitable for ``patch_result_json``.
+    """
+    import time
+
+    def _patcher(d: dict) -> None:
+        d["progress_phase"] = phase
+        progress_log = d.get("progress_log")
+        if not isinstance(progress_log, list):
+            progress_log = []
+            d["progress_log"] = progress_log
+        progress_log.append(
+            {
+                "phase": phase,
+                "timestamp": time.time(),
+            }
+        )
+
+    return _patcher
+
+
+async def update_progress_phase(job_id: str, phase: str) -> None:
+    """Update the ``progress_phase`` field in the stored result JSON.
+
+    Convenience wrapper around :func:`patch_result_json` for the common
+    pattern of setting a single progress phase string.
+
+    Args:
+        job_id: The analysis job identifier.
+        phase: The progress phase string to set (e.g. ``"analyzing"``).
+    """
+    await patch_result_json(job_id, _make_progress_phase_patcher(phase))
+
+
 async def patch_result_json(
     job_id: str,
     patch_fn: Callable[[dict], None],

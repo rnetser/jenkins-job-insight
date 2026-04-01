@@ -1556,6 +1556,317 @@ class TestAnalyzeConfigDefaults:
         assert kwargs["max_wait_minutes"] == 90
 
 
+class TestAnalyzePeerFlags:
+    """Tests for --peers and --peer-analysis-max-rounds CLI flags."""
+
+    _ANALYZE_RESPONSE = MappingProxyType({"status": "queued", "job_id": "j1"})
+
+    def test_peers_flag_parsed_and_sent(self, mock_client):
+        """--peers should parse and send peer_ai_configs list in request body."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--peers",
+                "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs["peer_ai_configs"] == [
+            {"ai_provider": "cursor", "ai_model": "gpt-5.4-xhigh"},
+            {"ai_provider": "gemini", "ai_model": "gemini-2.5-pro"},
+        ]
+
+    def test_peers_flag_invalid_format_exits(self, mock_client):
+        """--peers with invalid format should print error and exit 1."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--peers",
+                "invalid-no-colon",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "invalid" in result.output.lower() or "Error" in result.output
+
+    def test_peer_analysis_max_rounds_sent(self, mock_client):
+        """--peer-analysis-max-rounds should send peer_analysis_max_rounds in body."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--peers",
+                "cursor:gpt-5,gemini:2.5-pro",
+                "--peer-analysis-max-rounds",
+                "5",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs["peer_analysis_max_rounds"] == 5
+
+    def test_no_peers_flag_omits_peer_ai_configs(self, mock_client):
+        """When --peers is not given and config has no peers, peer_ai_configs is not sent."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        with patch.dict(os.environ, _env_without_analyze_bindings(), clear=True):
+            result = runner.invoke(
+                app,
+                ["analyze", "--job-name", "my-job", "--build-number", "1"],
+            )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert "peer_ai_configs" not in kwargs
+
+    def test_whitespace_only_peers_config_omits_peer_ai_configs(self):
+        """Whitespace-only config peers should be treated as 'unset', not 'disable'."""
+        cfg = ServerConfig(
+            url="http://localhost:8000",
+            peers="   ",
+        )
+        with (
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=cfg,
+            ),
+            patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            client = MagicMock()
+            client.analyze.return_value = self._ANALYZE_RESPONSE
+            mock_client_fn.return_value = client
+            result = runner.invoke(
+                app,
+                ["analyze", "--job-name", "my-job", "--build-number", "1"],
+            )
+            assert result.exit_code == 0
+            kwargs = client.analyze.call_args[1]
+            assert "peer_ai_configs" not in kwargs
+
+    def test_peers_from_config_used_as_default(self):
+        """Config peers should be used when --peers is not given on CLI."""
+        cfg = ServerConfig(
+            url="http://localhost:8000",
+            peers="cursor:gpt-5,gemini:2.5-pro",
+        )
+        with (
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=cfg,
+            ),
+            patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            client = MagicMock()
+            client.analyze.return_value = self._ANALYZE_RESPONSE
+            mock_client_fn.return_value = client
+            result = runner.invoke(
+                app,
+                ["analyze", "--job-name", "my-job", "--build-number", "1"],
+            )
+            assert result.exit_code == 0
+            kwargs = client.analyze.call_args[1]
+            assert kwargs["peer_ai_configs"] == [
+                {"ai_provider": "cursor", "ai_model": "gpt-5"},
+                {"ai_provider": "gemini", "ai_model": "2.5-pro"},
+            ]
+
+    def test_cli_peers_overrides_config_peers(self):
+        """CLI --peers should override config peers value."""
+        cfg = ServerConfig(
+            url="http://localhost:8000",
+            peers="cursor:gpt-5,gemini:2.5-pro",
+        )
+        with (
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=cfg,
+            ),
+            patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            client = MagicMock()
+            client.analyze.return_value = self._ANALYZE_RESPONSE
+            mock_client_fn.return_value = client
+            result = runner.invoke(
+                app,
+                [
+                    "analyze",
+                    "--job-name",
+                    "my-job",
+                    "--build-number",
+                    "1",
+                    "--peers",
+                    "claude:opus-4",
+                ],
+            )
+            assert result.exit_code == 0
+            kwargs = client.analyze.call_args[1]
+            assert kwargs["peer_ai_configs"] == [
+                {"ai_provider": "claude", "ai_model": "opus-4"},
+            ]
+
+    def test_whitespace_only_cli_peers_falls_through_to_config(self):
+        """CLI --peers with only whitespace should fall through to config default."""
+        cfg = ServerConfig(
+            url="http://localhost:8000",
+            peers="cursor:gpt-5,gemini:2.5-pro",
+        )
+        with (
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=cfg,
+            ),
+            patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            client = MagicMock()
+            client.analyze.return_value = self._ANALYZE_RESPONSE
+            mock_client_fn.return_value = client
+            result = runner.invoke(
+                app,
+                [
+                    "analyze",
+                    "--job-name",
+                    "my-job",
+                    "--build-number",
+                    "1",
+                    "--peers",
+                    "   ",
+                ],
+            )
+            assert result.exit_code == 0
+            kwargs = client.analyze.call_args[1]
+            # Whitespace-only --peers should not block config fallback
+            assert kwargs["peer_ai_configs"] == [
+                {"ai_provider": "cursor", "ai_model": "gpt-5"},
+                {"ai_provider": "gemini", "ai_model": "2.5-pro"},
+            ]
+
+    def test_peer_analysis_max_rounds_from_config(self):
+        """Config peer_analysis_max_rounds should be used when CLI flag is absent."""
+        cfg = ServerConfig(
+            url="http://localhost:8000",
+            peer_analysis_max_rounds=7,
+        )
+        with (
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=cfg,
+            ),
+            patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            client = MagicMock()
+            client.analyze.return_value = self._ANALYZE_RESPONSE
+            mock_client_fn.return_value = client
+            result = runner.invoke(
+                app,
+                ["analyze", "--job-name", "my-job", "--build-number", "1"],
+            )
+            assert result.exit_code == 0
+            kwargs = client.analyze.call_args[1]
+            assert kwargs["peer_analysis_max_rounds"] == 7
+
+    def test_peer_analysis_max_rounds_cli_too_low(self, mock_client):
+        """--peer-analysis-max-rounds below 1 should exit with error."""
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--peer-analysis-max-rounds",
+                "0",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "must be between 1 and 10" in result.output
+
+    def test_peer_analysis_max_rounds_cli_too_high(self, mock_client):
+        """--peer-analysis-max-rounds above 10 should exit with error."""
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--peer-analysis-max-rounds",
+                "11",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "must be between 1 and 10" in result.output
+
+    def test_peer_analysis_max_rounds_config_too_low(self):
+        """Config peer_analysis_max_rounds below 1 should exit with error."""
+        cfg = ServerConfig(
+            url="http://localhost:8000",
+            peer_analysis_max_rounds=-1,
+        )
+        with (
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=cfg,
+            ),
+            patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            client = MagicMock()
+            client.analyze.return_value = self._ANALYZE_RESPONSE
+            mock_client_fn.return_value = client
+            result = runner.invoke(
+                app,
+                ["analyze", "--job-name", "my-job", "--build-number", "1"],
+            )
+            assert result.exit_code == 1
+            assert "must be between 1 and 10" in result.output
+
+    def test_peer_analysis_max_rounds_config_too_high(self):
+        """Config peer_analysis_max_rounds above 10 should exit with error."""
+        cfg = ServerConfig(
+            url="http://localhost:8000",
+            peer_analysis_max_rounds=11,
+        )
+        with (
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=cfg,
+            ),
+            patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            client = MagicMock()
+            client.analyze.return_value = self._ANALYZE_RESPONSE
+            mock_client_fn.return_value = client
+            result = runner.invoke(
+                app,
+                ["analyze", "--job-name", "my-job", "--build-number", "1"],
+            )
+            assert result.exit_code == 1
+            assert "must be between 1 and 10" in result.output
+
+
 class TestAnalyzeWaitFlags:
     """Tests for --wait/--no-wait, --poll-interval, --max-wait CLI flags."""
 

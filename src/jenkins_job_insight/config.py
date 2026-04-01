@@ -3,11 +3,42 @@
 import os
 from functools import lru_cache
 
+from ai_cli_runner import VALID_AI_PROVIDERS
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from simple_logger.logger import get_logger
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+
+
+def parse_peer_configs(raw: str) -> list[dict]:
+    """Parse 'provider:model,provider:model' into list of dicts.
+
+    Raises ValueError on malformed input. Empty string returns [].
+    """
+    if not raw or not raw.strip():
+        return []
+    result = []
+    for i, entry in enumerate(raw.split(",")):
+        entry = entry.strip()
+        if not entry:
+            raise ValueError(f"Empty entry at position {i + 1} in peer config: '{raw}'")
+        if ":" not in entry:
+            raise ValueError(
+                f"Invalid peer config at position {i + 1}: '{entry}' (expected 'provider:model')"
+            )
+        provider, model = entry.split(":", 1)
+        provider, model = provider.strip(), model.strip()
+        if not provider:
+            raise ValueError(f"Empty provider at position {i + 1}: '{entry}'")
+        if not model:
+            raise ValueError(f"Empty model at position {i + 1}: '{entry}'")
+        if provider not in VALID_AI_PROVIDERS:
+            raise ValueError(
+                f"Unsupported provider '{provider}' at position {i + 1}. Valid: {', '.join(sorted(VALID_AI_PROVIDERS))}"
+            )
+        result.append({"ai_provider": provider, "ai_model": model})
+    return result
 
 
 class Settings(BaseSettings):
@@ -54,6 +85,10 @@ class Settings(BaseSettings):
 
     # AI CLI timeout in minutes
     ai_cli_timeout: int = Field(default=10, gt=0)
+
+    # Peer analysis configuration
+    peer_ai_configs: str = ""  # "provider:model,provider:model" format
+    peer_analysis_max_rounds: int = Field(default=3, ge=1, le=10)
 
     # Jenkins artifacts configuration
     jenkins_artifacts_max_size_mb: int = Field(default=500, gt=0)

@@ -11,6 +11,7 @@ import pytest
 from jenkins_job_insight import storage
 from jenkins_job_insight.config import Settings
 from jenkins_job_insight.models import (
+    AiConfigEntry,
     AnalysisDetail,
     AnalysisResult,
     FailureAnalysis,
@@ -2342,6 +2343,10 @@ class TestProcessAnalysisWaiting:
             ) as mock_wait,
             patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
             patch(
+                "jenkins_job_insight.main.update_progress_phase",
+                new_callable=AsyncMock,
+            ),
+            patch(
                 "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
             ) as mock_analyze,
             patch("jenkins_job_insight.main._resolve_enable_jira", return_value=False),
@@ -2393,6 +2398,10 @@ class TestProcessAnalysisWaiting:
                 new_callable=AsyncMock,
             ) as mock_wait,
             patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
+            patch(
+                "jenkins_job_insight.main.update_progress_phase",
+                new_callable=AsyncMock,
+            ),
             patch(
                 "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
             ) as mock_analyze,
@@ -2455,6 +2464,10 @@ class TestProcessAnalysisWaiting:
             ),
             patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
             patch(
+                "jenkins_job_insight.main.update_progress_phase",
+                new_callable=AsyncMock,
+            ),
+            patch(
                 "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
             ) as mock_analyze,
         ):
@@ -2498,6 +2511,10 @@ class TestProcessAnalysisWaiting:
                 new_callable=AsyncMock,
             ) as mock_wait,
             patch("jenkins_job_insight.main.update_status", side_effect=capture_status),
+            patch(
+                "jenkins_job_insight.main.update_progress_phase",
+                new_callable=AsyncMock,
+            ),
             patch(
                 "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
             ) as mock_analyze,
@@ -2847,3 +2864,599 @@ class TestLifespanResumesWaitingJobs:
             conn.close()
             assert p1["status"] == "failed"
             assert r1["status"] == "failed"
+
+
+class TestPeerAnalysisParams:
+    """Tests for peer analysis parameter pass-through."""
+
+    def test_analyze_with_peer_ai_configs_in_body(self, test_client) -> None:
+        """POST /analyze with peer_ai_configs passes them to process_analysis_with_id."""
+        with patch("jenkins_job_insight.main.process_analysis_with_id") as mock_process:
+            response = test_client.post(
+                "/analyze",
+                json={
+                    "job_name": "test",
+                    "build_number": 123,
+                    "ai_provider": "claude",
+                    "ai_model": "test-model",
+                    "peer_ai_configs": [
+                        {"ai_provider": "gemini", "ai_model": "pro"},
+                    ],
+                    "peer_analysis_max_rounds": 5,
+                },
+            )
+            assert response.status_code == 202
+            # Verify process_analysis_with_id was called
+            assert mock_process.called
+            # The body arg should have peer fields set
+            call_args = mock_process.call_args
+            body_arg = call_args[0][1]  # second positional arg
+            assert body_arg.peer_ai_configs == [
+                AiConfigEntry(ai_provider="gemini", ai_model="pro"),
+            ]
+            assert body_arg.peer_analysis_max_rounds == 5
+
+    def test_analyze_without_peers_backward_compatible(self, test_client) -> None:
+        """POST /analyze without peer fields works unchanged."""
+        with patch("jenkins_job_insight.main.process_analysis_with_id") as mock_process:
+            response = test_client.post(
+                "/analyze",
+                json={
+                    "job_name": "test",
+                    "build_number": 123,
+                    "ai_provider": "claude",
+                    "ai_model": "test-model",
+                },
+            )
+            assert response.status_code == 202
+            assert mock_process.called
+            body_arg = mock_process.call_args[0][1]
+            assert body_arg.peer_ai_configs is None
+            assert body_arg.peer_analysis_max_rounds == 3  # default
+
+    def test_analyze_merge_settings_peer_analysis_max_rounds(self, test_client) -> None:
+        """peer_analysis_max_rounds in request body overrides env default via _merge_settings."""
+        from jenkins_job_insight.main import _merge_settings
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="test",
+            build_number=1,
+            ai_provider="claude",
+            ai_model="test-model",
+            peer_analysis_max_rounds=7,
+        )
+        settings = Settings()
+        merged = _merge_settings(body, settings)
+        assert merged.peer_analysis_max_rounds == 7
+
+    def test_merge_settings_preserves_server_peer_analysis_max_rounds_when_omitted(
+        self,
+    ) -> None:
+        """Omitted peer_analysis_max_rounds in request preserves non-default server setting."""
+        from jenkins_job_insight.main import _merge_settings
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="test",
+            build_number=1,
+            ai_provider="claude",
+            ai_model="test-model",
+        )
+        settings_data = Settings().model_dump(mode="python")
+        settings_data["peer_analysis_max_rounds"] = 9
+        merged = _merge_settings(body, Settings.model_validate(settings_data))
+
+        assert merged.peer_analysis_max_rounds == 9
+
+    def test_resolve_peer_ai_configs_none_uses_env(self, test_client) -> None:
+        """When peer_ai_configs is None in request, _resolve_peer_ai_configs falls back to env default."""
+        from jenkins_job_insight.main import _merge_settings, _resolve_peer_ai_configs
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="test",
+            build_number=1,
+            ai_provider="claude",
+            ai_model="test-model",
+        )
+        settings = Settings()
+        merged = _merge_settings(body, settings)
+        # Default env is "", so _resolve_peer_ai_configs returns None
+        result = _resolve_peer_ai_configs(body, merged)
+        assert result is None
+
+    def test_resolve_peer_ai_configs_uses_env_when_set(self, test_client) -> None:
+        """When PEER_AI_CONFIGS env var is set and request omits peer_ai_configs, env default is used."""
+        from jenkins_job_insight.main import _resolve_peer_ai_configs
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="test",
+            build_number=1,
+            ai_provider="claude",
+            ai_model="test-model",
+        )
+        settings_data = Settings().model_dump(mode="python")
+        settings_data["peer_ai_configs"] = "gemini:pro"
+        merged = Settings.model_validate(settings_data)
+        result = _resolve_peer_ai_configs(body, merged)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["ai_provider"] == "gemini"
+        assert result[0]["ai_model"] == "pro"
+
+    def test_resolve_peer_ai_configs_explicit_empty_disables_peers(self) -> None:
+        """Explicit peer_ai_configs=[] disables peers even when PEER_AI_CONFIGS env var is set."""
+        from jenkins_job_insight.main import _resolve_peer_ai_configs
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="test",
+            build_number=1,
+            ai_provider="claude",
+            ai_model="test-model",
+            peer_ai_configs=[],
+        )
+        settings_data = Settings().model_dump(mode="python")
+        settings_data["peer_ai_configs"] = "gemini:pro"
+        merged = Settings.model_validate(settings_data)
+        result = _resolve_peer_ai_configs(body, merged)
+        assert result is None
+
+    def test_build_reconstruct_roundtrip_peer_params(self, mock_settings) -> None:
+        """peer_ai_configs and peer_analysis_max_rounds round-trip through build/reconstruct."""
+        from jenkins_job_insight.config import get_settings
+        from jenkins_job_insight.main import (
+            _build_request_params,
+            _merge_settings,
+            _reconstruct_from_params,
+        )
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        settings = get_settings()
+        peer_configs = [
+            AiConfigEntry(ai_provider="gemini", ai_model="pro"),
+        ]
+        body_in = AnalyzeRequest(
+            job_name="my-job",
+            build_number=42,
+            ai_provider="claude",
+            ai_model="opus",
+            peer_ai_configs=peer_configs,
+            peer_analysis_max_rounds=5,
+        )
+        merged_in = _merge_settings(body_in, settings)
+        request_params = _build_request_params(
+            body_in,
+            merged_in,
+            "claude",
+            "opus",
+            peer_ai_configs_resolved=peer_configs,
+        )
+        result_data = {
+            "job_name": "my-job",
+            "build_number": 42,
+            "request_params": request_params,
+        }
+        body_out, merged_out = _reconstruct_from_params(result_data)
+        assert body_out.peer_ai_configs == [
+            AiConfigEntry(ai_provider="gemini", ai_model="pro"),
+        ]
+        assert body_out.peer_analysis_max_rounds == 5
+        assert merged_out.peer_analysis_max_rounds == 5
+
+    def test_analyze_failures_with_peer_ai_configs(self, test_client) -> None:
+        """POST /analyze-failures with peer_ai_configs passes them to analyze_failure_group."""
+        mock_analysis = FailureAnalysis(
+            test_name="test_foo",
+            error="assert False",
+            analysis=AnalysisDetail(
+                classification="CODE ISSUE",
+                details="Test assertion failed",
+            ),
+        )
+
+        with patch("jenkins_job_insight.main.RepositoryManager") as mock_repo_cls:
+            mock_repo_instance = mock_repo_cls.return_value
+            mock_repo_instance.clone.return_value = None
+            mock_repo_instance.cleanup.return_value = None
+
+            with patch(
+                "jenkins_job_insight.main.analyze_failure_group",
+                new_callable=AsyncMock,
+            ) as mock_analyze_group:
+                mock_analyze_group.return_value = [mock_analysis]
+
+                with patch(
+                    "jenkins_job_insight.main.run_parallel_with_limit",
+                    new_callable=AsyncMock,
+                ) as mock_parallel:
+
+                    async def run_coroutines(coroutines, **kwargs):
+                        return [await coro for coro in coroutines]
+
+                    mock_parallel.side_effect = run_coroutines
+
+                    response = test_client.post(
+                        "/analyze-failures",
+                        json={
+                            "failures": [
+                                {
+                                    "test_name": "test_foo",
+                                    "error_message": "assert False",
+                                    "stack_trace": "File test.py, line 10",
+                                }
+                            ],
+                            "ai_provider": "claude",
+                            "ai_model": "test-model",
+                            "peer_ai_configs": [
+                                {"ai_provider": "gemini", "ai_model": "pro"},
+                            ],
+                            "peer_analysis_max_rounds": 7,
+                        },
+                    )
+                    assert response.status_code == 200
+                    # Verify analyze_failure_group was called with peer params
+                    call_kwargs = mock_analyze_group.call_args[1]
+                    passed_peers = call_kwargs["peer_ai_configs"]
+                    assert len(passed_peers) == 1
+                    # Normalize to dict for comparison (may be AiConfigEntry or dict)
+                    peer = (
+                        passed_peers[0]
+                        if isinstance(passed_peers[0], dict)
+                        else passed_peers[0].model_dump()
+                    )
+                    assert peer == {"ai_provider": "gemini", "ai_model": "pro"}
+                    assert call_kwargs["peer_analysis_max_rounds"] == 7
+
+    def test_build_request_params_stores_resolved_peer_configs(
+        self, mock_settings
+    ) -> None:
+        """_build_request_params stores the resolved peer configs, not raw body."""
+        from jenkins_job_insight.main import _build_request_params
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        # Body has peer_ai_configs=None (not provided by caller)
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            ai_provider="claude",
+            ai_model="opus",
+            # peer_ai_configs is None (not provided)
+        )
+        settings = Settings()
+        resolved = [
+            AiConfigEntry(ai_provider="gemini", ai_model="pro"),
+        ]
+        params = _build_request_params(
+            body, settings, "claude", "opus", peer_ai_configs_resolved=resolved
+        )
+        # Stored value should be the resolved list, not the raw body value
+        assert len(params["peer_ai_configs"]) == 1
+        stored = params["peer_ai_configs"][0]
+        if isinstance(stored, dict):
+            assert stored["ai_provider"] == "gemini"
+            assert stored["ai_model"] == "pro"
+        else:
+            assert stored.ai_provider == "gemini"
+
+    def test_reconstruct_uses_stored_peer_configs_directly(self, mock_settings) -> None:
+        """_reconstruct_from_params uses stored peer_ai_configs without re-resolving from env."""
+        from jenkins_job_insight.main import (
+            _build_request_params,
+            _merge_settings,
+            _reconstruct_from_params,
+        )
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        settings = Settings()
+        body_in = AnalyzeRequest(
+            job_name="my-job",
+            build_number=42,
+            ai_provider="claude",
+            ai_model="opus",
+            # peer_ai_configs=None in original request
+        )
+        merged = _merge_settings(body_in, settings)
+        resolved = [
+            AiConfigEntry(ai_provider="gemini", ai_model="pro"),
+        ]
+        request_params = _build_request_params(
+            body_in, merged, "claude", "opus", peer_ai_configs_resolved=resolved
+        )
+        result_data = {
+            "job_name": "my-job",
+            "build_number": 42,
+            "request_params": request_params,
+        }
+        body_out, _ = _reconstruct_from_params(result_data)
+        # Reconstructed body should have the resolved peer configs
+        assert body_out.peer_ai_configs is not None
+        assert len(body_out.peer_ai_configs) == 1
+        assert body_out.peer_ai_configs[0].ai_provider == "gemini"
+
+    def test_reconstruct_empty_peer_configs_preserved(self, mock_settings) -> None:
+        """When peer_ai_configs was explicitly disabled ([]), reconstruction preserves empty list."""
+        from jenkins_job_insight.main import (
+            _build_request_params,
+            _merge_settings,
+            _reconstruct_from_params,
+        )
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        settings = Settings()
+        body_in = AnalyzeRequest(
+            job_name="my-job",
+            build_number=42,
+            ai_provider="claude",
+            ai_model="opus",
+            peer_ai_configs=[],  # Explicitly disabled
+        )
+        merged = _merge_settings(body_in, settings)
+        # Resolved is None because [] means explicitly disabled
+        request_params = _build_request_params(
+            body_in, merged, "claude", "opus", peer_ai_configs_resolved=None
+        )
+        result_data = {
+            "job_name": "my-job",
+            "build_number": 42,
+            "request_params": request_params,
+        }
+        body_out, _ = _reconstruct_from_params(result_data)
+        # peer_ai_configs should be [] (explicitly disabled, preserved on resume)
+        assert body_out.peer_ai_configs == []
+
+    def test_reconstruct_legacy_job_missing_peer_key(self, mock_settings) -> None:
+        """Legacy waiting jobs without peer_ai_configs key get [] (disabled), not None."""
+        from jenkins_job_insight.main import _reconstruct_from_params
+
+        # Simulate a legacy stored job that predates the peer analysis feature
+        legacy_params = {
+            "ai_provider": "claude",
+            "ai_model": "opus",
+            "wait_for_completion": True,
+            "poll_interval_minutes": 2,
+            "max_wait_minutes": 0,
+            # No peer_ai_configs key at all — legacy job
+        }
+        result_data = {
+            "job_name": "legacy-job",
+            "build_number": 99,
+            "request_params": legacy_params,
+        }
+        body_out, _ = _reconstruct_from_params(result_data)
+        # Must be [] (disable peers), not None (which would use server default)
+        assert body_out.peer_ai_configs == []
+
+
+class TestProgressPhaseTracking:
+    """Tests for progress_phase updates during process_analysis_with_id."""
+
+    @pytest.mark.asyncio
+    async def test_progress_phases_with_jenkins_wait(self) -> None:
+        """When waiting for Jenkins, progress phases include waiting_for_jenkins and analyzing."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=True,
+            poll_interval_minutes=1,
+            max_wait_minutes=5,
+            ai_provider="claude",
+            ai_model="test-model",
+        )
+        merged = _build_wait_settings(
+            jenkins_url="https://jenkins.example.com",
+            jenkins_user="user",
+            jenkins_password=FAKE_JENKINS_PASSWORD,
+            wait_for_completion=True,
+            poll_interval_minutes=1,
+            max_wait_minutes=5,
+        )
+
+        phases: list[str] = []
+
+        async def capture_phase(job_id, phase):
+            phases.append(phase)
+
+        with (
+            patch(
+                "jenkins_job_insight.main._wait_for_jenkins_completion",
+                new_callable=AsyncMock,
+                return_value=(True, ""),
+            ),
+            patch("jenkins_job_insight.main.update_status", new_callable=AsyncMock),
+            patch(
+                "jenkins_job_insight.main.update_progress_phase",
+                side_effect=capture_phase,
+            ),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+            patch("jenkins_job_insight.main._resolve_enable_jira", return_value=False),
+            patch(
+                "jenkins_job_insight.main.populate_failure_history",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_analyze.return_value = AnalysisResult(
+                job_id="test-id",
+                status="completed",
+                summary="ok",
+            )
+            await process_analysis_with_id("test-id", body, merged)
+
+        assert "waiting_for_jenkins" in phases
+        assert "analyzing" in phases
+        assert "saving" in phases
+        # waiting_for_jenkins comes before analyzing
+        assert phases.index("waiting_for_jenkins") < phases.index("analyzing")
+
+    @pytest.mark.asyncio
+    async def test_progress_phases_without_jenkins_wait(self) -> None:
+        """When not waiting for Jenkins, phases skip waiting_for_jenkins."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=False,
+            ai_provider="claude",
+            ai_model="test-model",
+        )
+        merged = _build_wait_settings(
+            jenkins_url="https://jenkins.example.com",
+            wait_for_completion=False,
+        )
+
+        phases: list[str] = []
+
+        async def capture_phase(job_id, phase):
+            phases.append(phase)
+
+        with (
+            patch("jenkins_job_insight.main.update_status", new_callable=AsyncMock),
+            patch(
+                "jenkins_job_insight.main.update_progress_phase",
+                side_effect=capture_phase,
+            ),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+            patch("jenkins_job_insight.main._resolve_enable_jira", return_value=False),
+            patch(
+                "jenkins_job_insight.main.populate_failure_history",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_analyze.return_value = AnalysisResult(
+                job_id="test-id",
+                status="completed",
+                summary="ok",
+            )
+            await process_analysis_with_id("test-id", body, merged)
+
+        assert "waiting_for_jenkins" not in phases
+        assert "analyzing" in phases
+        assert "saving" in phases
+
+    @pytest.mark.asyncio
+    async def test_progress_phases_with_jira_enrichment(self) -> None:
+        """When Jira enrichment is enabled, progress includes enriching_jira phase."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=False,
+            ai_provider="claude",
+            ai_model="test-model",
+        )
+        merged = _build_wait_settings(
+            jenkins_url="https://jenkins.example.com",
+            wait_for_completion=False,
+        )
+
+        phases: list[str] = []
+
+        async def capture_phase(job_id, phase):
+            phases.append(phase)
+
+        with (
+            patch("jenkins_job_insight.main.update_status", new_callable=AsyncMock),
+            patch(
+                "jenkins_job_insight.main.update_progress_phase",
+                side_effect=capture_phase,
+            ),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+            patch("jenkins_job_insight.main._resolve_enable_jira", return_value=True),
+            patch(
+                "jenkins_job_insight.main._enrich_result_with_jira",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main.populate_failure_history",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_analyze.return_value = AnalysisResult(
+                job_id="test-id",
+                status="completed",
+                summary="ok",
+            )
+            await process_analysis_with_id("test-id", body, merged)
+
+        assert "enriching_jira" in phases
+        assert "saving" in phases
+        assert phases.index("enriching_jira") < phases.index("saving")
+
+    @pytest.mark.asyncio
+    async def test_progress_phase_exception_does_not_crash_analysis(self) -> None:
+        """update_progress_phase raising an exception must not abort the analysis."""
+        from jenkins_job_insight.main import process_analysis_with_id
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=1,
+            wait_for_completion=False,
+            ai_provider="claude",
+            ai_model="test-model",
+        )
+        merged = _build_wait_settings(
+            jenkins_url="https://jenkins.example.com",
+            wait_for_completion=False,
+        )
+
+        with (
+            patch(
+                "jenkins_job_insight.main.update_status", new_callable=AsyncMock
+            ) as mock_status,
+            patch(
+                "jenkins_job_insight.main.update_progress_phase",
+                side_effect=RuntimeError("DB connection lost"),
+            ),
+            patch(
+                "jenkins_job_insight.main.analyze_job", new_callable=AsyncMock
+            ) as mock_analyze,
+            patch("jenkins_job_insight.main._resolve_enable_jira", return_value=False),
+            patch(
+                "jenkins_job_insight.main.populate_failure_history",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "jenkins_job_insight.main.storage.make_classifications_visible",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_analyze.return_value = AnalysisResult(
+                job_id="test-id",
+                status="completed",
+                summary="ok",
+            )
+            # Should complete without raising despite update_progress_phase failing
+            await process_analysis_with_id("test-id", body, merged)
+
+        # Analysis completed: update_status was called with the completed result
+        mock_analyze.assert_called_once()
+        status_calls = [c.args[1] for c in mock_status.call_args_list]
+        assert "completed" in status_calls

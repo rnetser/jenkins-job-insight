@@ -3,6 +3,7 @@
 import typer
 
 from jenkins_job_insight.cli.client import JJIClient, JJIError
+from jenkins_job_insight.config import parse_peer_configs
 from jenkins_job_insight.cli.config import (
     CONFIG_FILE,
     ServerConfig,
@@ -509,6 +510,16 @@ def analyze(
     raw_prompt: str = typer.Option(
         "", "--raw-prompt", help="Raw prompt to append as additional AI instructions."
     ),
+    peers: str = typer.Option(
+        "",
+        "--peers",
+        help='Peer AI configs as "provider:model,provider:model" (e.g. "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro").',
+    ),
+    peer_analysis_max_rounds: int | None = typer.Option(
+        None,
+        "--peer-analysis-max-rounds",
+        help="Maximum debate rounds (1-10, default: 3).",
+    ),
     wait_for_completion: bool | None = typer.Option(
         None,
         "--wait/--no-wait",
@@ -651,6 +662,30 @@ def analyze(
     for key, value in _bool_fields.items():
         if value is not None:
             extras[key] = value
+
+    # Peer analysis: CLI flag overrides config, parse into list of dicts.
+    peers_raw = (peers.strip() if peers else "") or (cfg.peers if cfg else "")
+    if peers_raw and peers_raw.strip():
+        try:
+            extras["peer_ai_configs"] = parse_peer_configs(peers_raw)
+        except ValueError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from None
+    if peer_analysis_max_rounds is not None:
+        if not 1 <= peer_analysis_max_rounds <= 10:
+            typer.echo(
+                "Error: --peer-analysis-max-rounds must be between 1 and 10.", err=True
+            )
+            raise typer.Exit(1) from None
+        extras["peer_analysis_max_rounds"] = peer_analysis_max_rounds
+    elif cfg and cfg.peer_analysis_max_rounds:
+        if not 1 <= cfg.peer_analysis_max_rounds <= 10:
+            typer.echo(
+                "Error: config peer_analysis_max_rounds must be between 1 and 10.",
+                err=True,
+            )
+            raise typer.Exit(1) from None
+        extras["peer_analysis_max_rounds"] = cfg.peer_analysis_max_rounds
 
     try:
         client = _get_client()

@@ -8,6 +8,7 @@ import type { ResultResponse, CommentsAndReviews, AiConfig } from '@/types'
 import { ReportProvider, useReportState, useReportDispatch, useRefreshEnrichments } from './report/ReportContext'
 import { FailureCard } from './report/FailureCard'
 import { ChildJobSection } from './report/ChildJobSection'
+import { PeerAnalysisSummary } from './report/PeerAnalysisSummary'
 import { collectChildExpandKeys } from '@/lib/childJobHash'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -432,6 +433,12 @@ function ReportContent() {
           <p className="text-sm text-text-secondary whitespace-pre-wrap">{result.summary}</p>
         </div>
       )}
+
+      {/* ---- Peer analysis summary ---- */}
+      <PeerAnalysisSummary
+        failures={result.failures ?? []}
+        childJobAnalyses={result.child_job_analyses ?? []}
+      />
 
       {/* ---- Top-level failures ---- */}
       {groups.length > 0 && (

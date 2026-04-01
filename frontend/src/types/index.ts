@@ -49,11 +49,30 @@ export interface AnalysisDetail {
   product_bug_report?: ProductBugReport
 }
 
+export interface PeerRound {
+  round: number
+  ai_provider: string
+  ai_model: string
+  role: 'orchestrator' | 'peer'
+  classification: string
+  details: string
+  agrees_with_orchestrator: boolean | null
+}
+
+export interface PeerDebate {
+  consensus_reached: boolean
+  rounds_used: number
+  max_rounds: number
+  ai_configs: AiConfig[]
+  rounds: PeerRound[]
+}
+
 export interface FailureAnalysis {
   test_name: string
   error: string
   analysis: AnalysisDetail
   error_signature: string
+  peer_debate?: PeerDebate | null
 }
 
 export interface ChildJobAnalysis {
@@ -78,6 +97,15 @@ export interface AnalysisResult {
   failures: FailureAnalysis[]
   child_job_analyses: ChildJobAnalysis[]
   error?: string
+  progress_log?: Array<{ phase: string; timestamp: number }>
+  progress_phase?: string
+  request_params?: {
+    ai_provider: string
+    ai_model: string
+    peer_ai_configs?: AiConfig[]
+    peer_analysis_max_rounds?: number
+    [key: string]: unknown
+  }
 }
 
 // -- Dashboard ------------------------------------------------------
