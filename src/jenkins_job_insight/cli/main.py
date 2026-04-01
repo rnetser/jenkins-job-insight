@@ -3,7 +3,7 @@
 import typer
 
 from jenkins_job_insight.cli.client import JJIClient, JJIError
-from jenkins_job_insight.config import parse_peer_configs
+from jenkins_job_insight.config import parse_additional_repos, parse_peer_configs
 from jenkins_job_insight.cli.config import (
     CONFIG_FILE,
     ServerConfig,
@@ -520,6 +520,11 @@ def analyze(
         "--peer-analysis-max-rounds",
         help="Maximum debate rounds (1-10, default: 3).",
     ),
+    additional_repos: str = typer.Option(
+        "",
+        "--additional-repos",
+        help='Additional repos for AI context as "name:url,name:url" (e.g. "infra:https://github.com/org/infra,product:https://github.com/org/product").',
+    ),
     wait_for_completion: bool | None = typer.Option(
         None,
         "--wait/--no-wait",
@@ -686,6 +691,17 @@ def analyze(
             )
             raise typer.Exit(1) from None
         extras["peer_analysis_max_rounds"] = cfg.peer_analysis_max_rounds
+
+    # Additional repos: CLI flag overrides config, parse into list of dicts.
+    additional_repos_raw = (additional_repos.strip() if additional_repos else "") or (
+        cfg.additional_repos if cfg else ""
+    )
+    if additional_repos_raw and additional_repos_raw.strip():
+        try:
+            extras["additional_repos"] = parse_additional_repos(additional_repos_raw)
+        except ValueError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from None
 
     try:
         client = _get_client()

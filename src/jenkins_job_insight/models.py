@@ -30,6 +30,27 @@ class AiConfigEntry(BaseModel):
         return v
 
 
+class AdditionalRepo(BaseModel):
+    """A named additional repository for AI analysis context."""
+
+    name: str = Field(
+        min_length=1, description="Descriptive name (used as cloned directory name)"
+    )
+    url: HttpUrl = Field(description="Repository URL to clone")
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        if "/" in v or "\\" in v:
+            raise ValueError("name must not contain path separators ('/' or '\\')")
+        if ".." in v:
+            raise ValueError("name must not contain '..'")
+        return v
+
+
 class BaseAnalysisRequest(BaseModel):
     """Shared fields for all analysis request types."""
 
@@ -103,6 +124,14 @@ class BaseAnalysisRequest(BaseModel):
     peer_analysis_max_rounds: Annotated[int, Field(ge=1, le=10)] = Field(
         default=3,
         description="Maximum debate rounds for peer analysis",
+    )
+    additional_repos: list[AdditionalRepo] | None = Field(
+        default=None,
+        description=(
+            "Additional repository URLs for AI analysis context. "
+            "Each entry has a name (used as subdirectory name) and URL. "
+            "Omit to inherit the server default; send [] to disable."
+        ),
     )
 
 

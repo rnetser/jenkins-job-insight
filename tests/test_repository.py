@@ -147,6 +147,20 @@ class TestRepositoryManager:
         manager.cleanup()
 
     @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_rejects_file_url(self, _mock_repo: MagicMock) -> None:
+        """Test that clone rejects file:// URLs."""
+        manager = RepositoryManager()
+        with pytest.raises(ValueError, match="Only https:// and git://"):
+            manager.clone("file:///etc/passwd")
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_rejects_ssh_url(self, _mock_repo: MagicMock) -> None:
+        """Test that clone rejects ssh:// URLs."""
+        manager = RepositoryManager()
+        with pytest.raises(ValueError, match="Only https:// and git://"):
+            manager.clone("ssh://git@github.com/org/repo")
+
+    @patch("jenkins_job_insight.repository.Repo")
     def test_clone_real_failure_handling(self, mock_repo: MagicMock) -> None:
         """Test that clone raises error for invalid repository."""
         mock_repo.clone_from.side_effect = git.exc.GitCommandError("clone", 128)
@@ -157,3 +171,45 @@ class TestRepositoryManager:
 
         # Even on failure, cleanup should work
         manager.cleanup()
+
+
+class TestCloneInto:
+    """Tests for RepositoryManager.clone_into."""
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_into_creates_directory(self, mock_repo: MagicMock, tmp_path) -> None:
+        """Test that clone_into creates the target directory and clones."""
+        manager = RepositoryManager()
+        target = tmp_path / "my-repo"
+        result = manager.clone_into("https://github.com/org/repo", target, depth=1)
+        assert result == target
+        assert target.exists()
+        mock_repo.clone_from.assert_called_once_with(
+            "https://github.com/org/repo", target, depth=1
+        )
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_into_not_tracked_for_cleanup(
+        self, _mock_repo: MagicMock, tmp_path
+    ) -> None:
+        """Test that clone_into does NOT add directory to temp_dirs."""
+        manager = RepositoryManager()
+        target = tmp_path / "my-repo"
+        manager.clone_into("https://github.com/org/repo", target)
+        assert target not in manager.temp_dirs
+
+    def test_clone_into_rejects_file_url(self) -> None:
+        """Test that clone_into rejects file:// URLs."""
+        from pathlib import Path
+
+        manager = RepositoryManager()
+        with pytest.raises(ValueError, match="Only https:// and git://"):
+            manager.clone_into("file:///etc/passwd", Path("/tmp/test"))
+
+    def test_clone_into_rejects_ssh_url(self) -> None:
+        """Test that clone_into rejects ssh:// URLs."""
+        from pathlib import Path
+
+        manager = RepositoryManager()
+        with pytest.raises(ValueError, match="Only https:// and git://"):
+            manager.clone_into("ssh://git@github.com/org/repo", Path("/tmp/test"))

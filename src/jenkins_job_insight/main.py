@@ -20,6 +20,8 @@ from simple_logger.logger import get_logger
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
+    clone_additional_repos,
+    resolve_additional_repos,
     analyze_failure_group,
     analyze_job,
     format_exception_with_type,
@@ -238,6 +240,9 @@ def _reconstruct_from_params(
             params["peer_ai_configs"] if "peer_ai_configs" in params else []
         ),
         peer_analysis_max_rounds=params.get("peer_analysis_max_rounds", 3),
+        additional_repos=(
+            params["additional_repos"] if "additional_repos" in params else None
+        ),
     )
     # Build Settings from env defaults, then layer stored overrides
     base_settings = get_settings()
@@ -587,6 +592,7 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
     #   tests_repo_url   - HttpUrl vs str type mismatch; resolved in endpoint code
     #   ai_provider      - resolved + validated by _resolve_ai_config()
     #   ai_model         - resolved + validated by _resolve_ai_config()
+    #   additional_repos - list vs str type mismatch; resolved by resolve_additional_repos()
     direct_fields = [
         "jira_url",
         "jira_email",
@@ -982,6 +988,12 @@ def _build_request_params(
             for c in (peer_ai_configs_resolved or [])
         ],
         "peer_analysis_max_rounds": merged.peer_analysis_max_rounds,
+        "additional_repos": [
+            ar.model_dump(mode="json") if hasattr(ar, "model_dump") else ar
+            for ar in body.additional_repos
+        ]
+        if body.additional_repos is not None
+        else None,
         "wait_started_at": _time.time(),
     }
     return encrypt_sensitive_fields(params)
@@ -1127,6 +1139,14 @@ async def analyze_failures(
         if tests_repo_url:
             repo_path = await asyncio.to_thread(repo_manager.clone, str(tests_repo_url))
 
+        # Clone additional repositories for AI context
+        additional_repos_cloned: dict[str, Path] = {}
+        additional_repos_list = resolve_additional_repos(body, merged)
+        if additional_repos_list:
+            additional_repos_cloned, repo_path = await clone_additional_repos(
+                repo_manager, additional_repos_list, repo_path
+            )
+
         custom_prompt = (body.raw_prompt or "").strip()
 
         server_url = _build_internal_server_url()
@@ -1145,6 +1165,7 @@ async def analyze_failures(
                 job_id=job_id,
                 peer_ai_configs=peer_ai_configs,
                 peer_analysis_max_rounds=merged.peer_analysis_max_rounds,
+                additional_repos=additional_repos_cloned or None,
             )
             for group_failures in groups.values()
         ]

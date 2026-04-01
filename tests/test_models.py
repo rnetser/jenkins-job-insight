@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from jenkins_job_insight.models import (
+    AdditionalRepo,
     AiConfigEntry,
     AnalysisDetail,
     AnalysisResult,
@@ -820,6 +821,68 @@ class TestFailureAnalysisPeerDebate:
         )
         data = fa.model_dump(mode="json")
         assert data["peer_debate"]["consensus_reached"] is True
+
+
+class TestAdditionalRepo:
+    """Tests for AdditionalRepo model."""
+
+    def test_valid_additional_repo(self) -> None:
+        repo = AdditionalRepo(name="infra", url="https://github.com/org/infra")
+        assert repo.name == "infra"
+        assert str(repo.url) == "https://github.com/org/infra"
+
+    def test_blank_name_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            AdditionalRepo(name="  ", url="https://github.com/org/infra")
+
+    def test_empty_name_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            AdditionalRepo(name="", url="https://github.com/org/infra")
+
+    def test_invalid_url_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            AdditionalRepo(name="infra", url="not-a-url")
+
+    def test_name_stripped(self) -> None:
+        repo = AdditionalRepo(name="  infra  ", url="https://github.com/org/infra")
+        assert repo.name == "infra"
+
+    def test_path_traversal_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            AdditionalRepo(name="../evil", url="https://github.com/org/repo")
+
+    def test_slash_in_name_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            AdditionalRepo(name="foo/bar", url="https://github.com/org/repo")
+
+    def test_backslash_in_name_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            AdditionalRepo(name="foo\\bar", url="https://github.com/org/repo")
+
+
+class TestAdditionalReposOnRequest:
+    """Tests for additional_repos field on BaseAnalysisRequest."""
+
+    def test_additional_repos_default_none(self) -> None:
+        request = AnalyzeRequest(job_name="test", build_number=1)
+        assert request.additional_repos is None
+
+    def test_additional_repos_with_valid_entries(self) -> None:
+        request = AnalyzeRequest(
+            job_name="test",
+            build_number=1,
+            additional_repos=[
+                {"name": "infra", "url": "https://github.com/org/infra"},
+                {"name": "product", "url": "https://github.com/org/product"},
+            ],
+        )
+        assert request.additional_repos is not None
+        assert len(request.additional_repos) == 2
+        assert request.additional_repos[0].name == "infra"
+
+    def test_additional_repos_empty_list(self) -> None:
+        request = AnalyzeRequest(job_name="test", build_number=1, additional_repos=[])
+        assert request.additional_repos == []
 
 
 class TestBaseAnalysisRequestPeerFields:

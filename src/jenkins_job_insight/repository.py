@@ -14,6 +14,15 @@ from simple_logger.logger import get_logger
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 
+def _validate_repo_url(repo_url: str | HttpUrl) -> None:
+    """Validate repository URL scheme to prevent SSRF."""
+    url_str = str(repo_url).lower()
+    if not url_str.startswith(("https://", "git://")):
+        raise ValueError(
+            f"Invalid repository URL scheme. Only https:// and git:// are allowed, got: {repo_url}"
+        )
+
+
 class RepositoryManager:
     """Manages temporary git repository clones."""
 
@@ -38,12 +47,7 @@ class RepositoryManager:
         Raises:
             ValueError: If repo_url uses an unsafe scheme (not https:// or git://).
         """
-        # Validate URL scheme to prevent SSRF and local file access
-        url_str = str(repo_url).lower()
-        if not url_str.startswith(("https://", "git://")):
-            raise ValueError(
-                f"Invalid repository URL scheme. Only https:// and git:// are allowed, got: {repo_url}"
-            )
+        _validate_repo_url(repo_url)
         clone_id = str(uuid.uuid4())[:8]
         repo_name = str(repo_url).rstrip("/").split("/")[-1].replace(".git", "")
         clone_dir = self.base_path / f"{repo_name}-{clone_id}"
@@ -52,6 +56,32 @@ class RepositoryManager:
         logger.info(f"Cloning repository to {clone_dir}")
         Repo.clone_from(str(repo_url), clone_dir, depth=depth)
         return clone_dir
+
+    def clone_into(
+        self, repo_url: str | HttpUrl, target_dir: Path, depth: int = 1
+    ) -> Path:
+        """Clone repository into a specific target directory.
+
+        Unlike clone(), this places the repo at an explicit path instead
+        of auto-generating one.  The target directory is NOT tracked for
+        cleanup -- its parent is expected to manage lifecycle.
+
+        Args:
+            repo_url: URL of the git repository to clone.
+            target_dir: Exact directory to clone into.
+            depth: Number of commits to fetch (default 1 for shallow).
+
+        Returns:
+            Path to the cloned repository (same as target_dir).
+
+        Raises:
+            ValueError: If repo_url uses an unsafe scheme.
+        """
+        _validate_repo_url(repo_url)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Cloning repository into {target_dir}")
+        Repo.clone_from(str(repo_url), target_dir, depth=depth)
+        return target_dir
 
     def cleanup(self) -> None:
         """Remove all cloned repositories."""

@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from jenkins_job_insight.analyzer import (
+    _build_resources_section,
     _call_ai_cli_with_retry,
     handle_jenkins_exception,
 )
@@ -1042,3 +1043,114 @@ class TestAnalyzeJobProgressPhases:
         )
 
         mock_update.assert_not_called()
+
+
+class TestResolveAdditionalRepos:
+    """Tests for resolve_additional_repos."""
+
+    def test_request_value_takes_priority(self) -> None:
+        """Request additional_repos overrides settings."""
+        from jenkins_job_insight.models import AnalyzeRequest
+        from jenkins_job_insight.analyzer import resolve_additional_repos
+
+        request = AnalyzeRequest(
+            job_name="test",
+            build_number=1,
+            additional_repos=[
+                {"name": "infra", "url": "https://github.com/org/infra"},
+            ],
+        )
+        settings = MagicMock()
+        settings.additional_repos = "other:https://github.com/org/other"
+        result = resolve_additional_repos(request, settings)
+        assert len(result) == 1
+        assert result[0].name == "infra"
+
+    def test_falls_back_to_settings(self) -> None:
+        """Falls back to settings when request is None."""
+        from jenkins_job_insight.models import AnalyzeRequest
+        from jenkins_job_insight.analyzer import resolve_additional_repos
+
+        request = AnalyzeRequest(job_name="test", build_number=1)
+        settings = MagicMock()
+        settings.additional_repos = "infra:https://github.com/org/infra"
+        result = resolve_additional_repos(request, settings)
+        assert len(result) == 1
+        assert result[0].name == "infra"
+
+    def test_empty_settings_returns_empty(self) -> None:
+        """Returns empty list when both request and settings are empty."""
+        from jenkins_job_insight.models import AnalyzeRequest
+        from jenkins_job_insight.analyzer import resolve_additional_repos
+
+        request = AnalyzeRequest(job_name="test", build_number=1)
+        settings = MagicMock()
+        settings.additional_repos = ""
+        result = resolve_additional_repos(request, settings)
+        assert result == []
+
+    def test_explicit_empty_list_overrides_settings(self) -> None:
+        """Explicit [] in request disables additional repos."""
+        from jenkins_job_insight.models import AnalyzeRequest
+        from jenkins_job_insight.analyzer import resolve_additional_repos
+
+        request = AnalyzeRequest(job_name="test", build_number=1, additional_repos=[])
+        settings = MagicMock()
+        settings.additional_repos = "infra:https://github.com/org/infra"
+        result = resolve_additional_repos(request, settings)
+        assert result == []
+
+
+class TestBuildResourcesSectionAdditionalRepos:
+    """Tests for _build_resources_section with additional_repos."""
+
+    def test_additional_repos_git_repos(self, tmp_path) -> None:
+        """Test that additional git repos are advertised in resources section."""
+        repo = tmp_path / "main-repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        additional = {
+            "infra": tmp_path / "infra",
+            "product": tmp_path / "product",
+        }
+        for name, path in additional.items():
+            path.mkdir()
+            (path / ".git").mkdir()
+
+        result = _build_resources_section(repo, additional_repos=additional)
+        assert "infra" in result
+        assert "product" in result
+        assert "Additional repository" in result
+
+    def test_additional_repos_non_git(self, tmp_path) -> None:
+        """Test that additional non-git dirs are advertised as workspaces."""
+        repo = tmp_path / "main-repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        additional = {"data": tmp_path / "data"}
+        additional["data"].mkdir()
+
+        result = _build_resources_section(repo, additional_repos=additional)
+        assert "data" in result
+        assert "Additional workspace" in result
+
+    def test_no_additional_repos(self, tmp_path) -> None:
+        """Test that section works without additional repos."""
+        repo = tmp_path / "main-repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        result = _build_resources_section(repo, additional_repos=None)
+        assert "Additional repository" not in result
+        assert "Additional workspace" not in result
+
+    def test_empty_additional_repos(self, tmp_path) -> None:
+        """Test that empty dict produces no additional repos section."""
+        repo = tmp_path / "main-repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        result = _build_resources_section(repo, additional_repos={})
+        assert "Additional repository" not in result

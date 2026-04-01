@@ -19,7 +19,7 @@ import jenkins
 from fastapi import HTTPException
 from simple_logger.logger import get_logger
 
-from jenkins_job_insight.config import Settings
+from jenkins_job_insight.config import Settings, parse_additional_repos
 from jenkins_job_insight.jenkins_artifacts import (
     ERROR_PATTERN,
     cleanup_extract_dir,
@@ -29,9 +29,11 @@ from jenkins_job_insight.jenkins import JenkinsClient
 from pydantic import HttpUrl
 
 from jenkins_job_insight.models import (
+    AdditionalRepo,
     AnalysisDetail,
     AnalysisResult,
     AnalyzeRequest,
+    BaseAnalysisRequest,
     ChildJobAnalysis,
     CodeFix,
     FailureAnalysis,
@@ -42,6 +44,81 @@ from jenkins_job_insight.repository import RepositoryManager
 from jenkins_job_insight.storage import update_progress_phase
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+
+
+def resolve_additional_repos(
+    request: BaseAnalysisRequest, settings: Settings
+) -> list[AdditionalRepo]:
+    """Resolve additional repos from request or settings.
+
+    Request value takes priority over settings env var.
+    Returns list of AdditionalRepo objects, or empty list.
+    """
+    if request.additional_repos is not None:
+        return request.additional_repos
+
+    parsed = parse_additional_repos(settings.additional_repos)
+    return [AdditionalRepo(**r) for r in parsed] if parsed else []
+
+
+async def clone_additional_repos(
+    repo_manager: RepositoryManager,
+    additional_repos_list: list[AdditionalRepo],
+    repo_path: Path | None,
+) -> tuple[dict[str, Path], Path | None]:
+    """Clone additional repositories for AI analysis context.
+
+    When repo_path exists, clones as subdirectories.
+    When repo_path is None, uses the first repo as base workspace.
+
+    Args:
+        repo_manager: Repository manager for cloning.
+        additional_repos_list: List of AdditionalRepo objects.
+        repo_path: Existing workspace path, or None.
+
+    Returns:
+        Tuple of (cloned repos dict mapping name to path, updated repo_path).
+    """
+    cloned: dict[str, Path] = {}
+    if repo_path:
+        for ar in additional_repos_list:
+            try:
+                target = repo_path / ar.name
+                await asyncio.to_thread(
+                    repo_manager.clone_into, str(ar.url), target, depth=1
+                )
+                cloned[ar.name] = target
+                logger.info(f"Cloned additional repo '{ar.name}' into {target}")
+            except Exception as e:
+                logger.warning(f"Failed to clone additional repo '{ar.name}': {e}")
+    else:
+        # No main repo -- use first additional repo as base workspace
+        first = additional_repos_list[0]
+        try:
+            repo_path = await asyncio.to_thread(
+                repo_manager.clone, str(first.url), depth=1
+            )
+            cloned[first.name] = repo_path
+            logger.info(
+                f"Cloned first additional repo '{first.name}' as workspace: {repo_path}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to clone additional repo '{first.name}': {e}")
+
+        # Clone remaining as subdirectories
+        if repo_path:
+            for ar in additional_repos_list[1:]:
+                try:
+                    target = repo_path / ar.name
+                    await asyncio.to_thread(
+                        repo_manager.clone_into, str(ar.url), target, depth=1
+                    )
+                    cloned[ar.name] = target
+                    logger.info(f"Cloned additional repo '{ar.name}' into {target}")
+                except Exception as e:
+                    logger.warning(f"Failed to clone additional repo '{ar.name}': {e}")
+
+    return cloned, repo_path
 
 
 async def _safe_update_progress(job_id: str | None, phase: str) -> None:
@@ -733,6 +810,8 @@ def _build_prompt_sections(
     repo_path: Path | None,
     server_url: str,
     job_id: str,
+    *,
+    additional_repos: dict[str, Path] | None = None,
 ) -> tuple[str, str, str, str]:
     """Build common prompt sections used across all analysis flows.
 
@@ -746,7 +825,7 @@ def _build_prompt_sections(
     artifacts_section = _build_artifacts_section(artifacts_context)
     history_enabled = bool(server_url and job_id and _QUERY_MD_PATH.exists())
     resources_section = _build_resources_section(
-        repo_path, history_enabled=history_enabled
+        repo_path, additional_repos=additional_repos, history_enabled=history_enabled
     )
 
     if not _QUERY_MD_PATH.exists():
@@ -797,7 +876,10 @@ These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
 
 
 def _build_resources_section(
-    repo_path: Path | None, *, history_enabled: bool = False
+    repo_path: Path | None,
+    *,
+    additional_repos: dict[str, Path] | None = None,
+    history_enabled: bool = False,
 ) -> str:
     """Build a section telling the AI about available resources.
 
@@ -838,6 +920,18 @@ def _build_resources_section(
             f"- Project-specific history analysis instructions at {repo_history_prompt} — read and follow alongside the main history analysis instructions"
         )
 
+    if additional_repos:
+        for name, path in additional_repos.items():
+            is_git = (path / ".git").exists()
+            if is_git:
+                resources.append(
+                    f"- Additional repository '{name}' at {path} — explore source code, run git commands"
+                )
+            else:
+                resources.append(
+                    f"- Additional workspace '{name}' at {path} — inspect files directly"
+                )
+
     if resources:
         return "\n\nAVAILABLE RESOURCES:\n" + "\n".join(resources) + "\n"
 
@@ -856,6 +950,7 @@ async def _run_single_ai_analysis(
     artifacts_context: str,
     server_url: str,
     job_id: str,
+    additional_repos: dict[str, Path] | None = None,
 ) -> tuple[AnalysisDetail, str]:
     """Run single-AI analysis on a failure group. Returns (parsed_analysis, error_signature).
 
@@ -883,7 +978,12 @@ async def _run_single_ai_analysis(
 
     custom_prompt_section, artifacts_section, resources_section, query_section = (
         _build_prompt_sections(
-            custom_prompt, artifacts_context, repo_path, server_url, job_id
+            custom_prompt,
+            artifacts_context,
+            repo_path,
+            server_url,
+            job_id,
+            additional_repos=additional_repos,
         )
     )
 
@@ -958,6 +1058,7 @@ async def analyze_failure_group(
     peer_ai_configs: list | None = None,
     peer_analysis_max_rounds: int = 3,
     group_label: str = "",
+    additional_repos: dict[str, Path] | None = None,
 ) -> list[FailureAnalysis]:
     """Analyze a group of failures with the same error signature.
 
@@ -1007,6 +1108,7 @@ async def analyze_failure_group(
             server_url=server_url,
             job_id=job_id,
             group_label=group_label,
+            additional_repos=additional_repos,
         )
 
     parsed, error_signature = await _run_single_ai_analysis(
@@ -1020,6 +1122,7 @@ async def analyze_failure_group(
         artifacts_context=artifacts_context,
         server_url=server_url,
         job_id=job_id,
+        additional_repos=additional_repos,
     )
 
     # Apply the same analysis to all failures in the group.
@@ -1053,6 +1156,7 @@ async def analyze_child_job(
     job_id: str = "",
     peer_ai_configs: list | None = None,
     peer_analysis_max_rounds: int = 3,
+    additional_repos: dict[str, Path] | None = None,
 ) -> ChildJobAnalysis:
     """Analyze a single child job, recursively analyzing its failed children.
 
@@ -1143,6 +1247,7 @@ async def analyze_child_job(
                 job_id=job_id,
                 peer_ai_configs=peer_ai_configs,
                 peer_analysis_max_rounds=peer_analysis_max_rounds,
+                additional_repos=additional_repos,
             )
             for child_name, child_num in failed_children
         ]
@@ -1227,6 +1332,7 @@ async def analyze_child_job(
                     group_label=f"{job_name}:{group_idx}/{total_groups}"
                     if total_groups > 1
                     else "",
+                    additional_repos=additional_repos,
                 )
             )
         group_results = await run_parallel_with_limit(tasks)
@@ -1280,7 +1386,12 @@ async def analyze_child_job(
 
     custom_prompt_section, artifacts_section, resources_section, query_section = (
         _build_prompt_sections(
-            custom_prompt, artifacts_context, repo_path, server_url, job_id
+            custom_prompt,
+            artifacts_context,
+            repo_path,
+            server_url,
+            job_id,
+            additional_repos=additional_repos,
         )
     )
 
@@ -1435,6 +1546,7 @@ async def analyze_job(
         custom_prompt = ""
 
         # Use RepositoryManager context for entire analysis (child jobs and main job)
+        repo_manager: RepositoryManager | None = None
         async with contextlib.AsyncExitStack() as stack:
             if tests_repo_url:
                 repo_manager = RepositoryManager()
@@ -1469,6 +1581,17 @@ async def analyze_job(
                     # No repo — use artifacts dir as the AI working directory
                     repo_path = extract_path
                     logger.info(f"Using artifacts dir as AI workspace: {repo_path}")
+
+            # Clone additional repositories for AI context
+            additional_repos_cloned: dict[str, Path] = {}
+            additional_repos_list = resolve_additional_repos(request, settings)
+            if additional_repos_list:
+                if repo_manager is None:
+                    repo_manager = RepositoryManager()
+                    stack.enter_context(repo_manager)
+                additional_repos_cloned, repo_path = await clone_additional_repos(
+                    repo_manager, additional_repos_list, repo_path
+                )
 
             # Pre-flight: verify AI CLI is reachable before spawning parallel tasks
             ok, err = await check_ai_cli_available(
@@ -1508,6 +1631,7 @@ async def analyze_job(
                         job_id=job_id,
                         peer_ai_configs=peer_ai_configs,
                         peer_analysis_max_rounds=peer_analysis_max_rounds,
+                        additional_repos=additional_repos_cloned or None,
                     )
                     for child_name, child_num in failed_child_jobs
                 ]
@@ -1602,6 +1726,7 @@ async def analyze_job(
                             group_label=f"{group_idx}/{total_groups}"
                             if total_groups > 1
                             else "",
+                            additional_repos=additional_repos_cloned or None,
                         )
                     )
                 group_results = await run_parallel_with_limit(failure_tasks)
@@ -1638,7 +1763,12 @@ async def analyze_job(
                     resources_section,
                     query_section,
                 ) = _build_prompt_sections(
-                    custom_prompt, artifacts_context, repo_path, server_url, job_id
+                    custom_prompt,
+                    artifacts_context,
+                    repo_path,
+                    server_url,
+                    job_id,
+                    additional_repos=additional_repos_cloned or None,
                 )
 
                 prompt = f"""{query_section}
