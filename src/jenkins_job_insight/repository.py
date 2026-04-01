@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
+RESERVED_REPO_NAMES = frozenset({"build-artifacts"})
+
 
 def repo_name_from_url(repo_url: str | HttpUrl) -> str:
     """Extract repository name from a URL for use as a directory name.
@@ -55,16 +57,18 @@ def derive_test_repo_name(
     """
     name = repo_name_from_url(tests_repo_url)
     if not additional_repos_list:
-        return name
+        additional_repos_list = []
 
     additional_names = {ar.name for ar in additional_repos_list}
-    if name not in additional_names:
+    # Also treat reserved names as collisions
+    reserved = additional_names | RESERVED_REPO_NAMES
+    if name not in reserved:
         return name
 
     # Collision -- find a unique fallback
     for suffix in range(1, 100):
         candidate = f"tests-repo-{suffix}"
-        if candidate not in additional_names:
+        if candidate not in reserved:
             logger.warning(
                 f"Test repo directory name '{name}' collides with additional repo name. "
                 f"Using '{candidate}' as fallback."
@@ -72,7 +76,12 @@ def derive_test_repo_name(
             return candidate
 
     # Should never reach here with <100 additional repos
-    return f"tests-repo-{uuid.uuid4().hex[:8]}"
+    fallback = f"tests-repo-{uuid.uuid4().hex[:8]}"
+    logger.warning(
+        f"Test repo directory name '{name}' collides with additional repo names. "
+        f"All numeric fallbacks exhausted. Using '{fallback}'."
+    )
+    return fallback
 
 
 def _validate_repo_url(repo_url: str | HttpUrl) -> None:

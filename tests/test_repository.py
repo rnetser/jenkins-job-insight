@@ -358,6 +358,118 @@ class TestRepoNameFromUrl:
         assert repo_name_from_url(url) == "my-repo"
 
 
+class TestDeriveTestRepoName:
+    """Tests for derive_test_repo_name: name collision detection."""
+
+    def test_no_collision(self) -> None:
+        """When no additional repos, returns derived name from URL."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+
+        name = derive_test_repo_name("https://github.com/org/my-tests.git", [])
+        assert name == "my-tests"
+
+    def test_collision_falls_back(self) -> None:
+        """When derived name collides with an additional repo, returns 'tests-repo-1'."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+        from jenkins_job_insight.models import AdditionalRepo
+
+        additional = [
+            AdditionalRepo.model_validate(
+                {"name": "my-tests", "url": "https://github.com/org/my-tests"}
+            ),
+        ]
+        name = derive_test_repo_name("https://github.com/org/my-tests.git", additional)
+        assert name == "tests-repo-1"
+
+    def test_no_collision_different_name(self) -> None:
+        """No collision when additional repo has a different name."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+        from jenkins_job_insight.models import AdditionalRepo
+
+        additional = [
+            AdditionalRepo.model_validate(
+                {"name": "infra", "url": "https://github.com/org/infra"}
+            ),
+        ]
+        name = derive_test_repo_name("https://github.com/org/my-tests.git", additional)
+        assert name == "my-tests"
+
+    def test_empty_additional_repos(self) -> None:
+        """Empty additional repos list causes no collision."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+
+        name = derive_test_repo_name("https://github.com/org/repo", [])
+        assert name == "repo"
+
+    def test_none_additional_repos(self) -> None:
+        """None additional repos list causes no collision."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+
+        name = derive_test_repo_name("https://github.com/org/repo", None)
+        assert name == "repo"
+
+    def test_fallback_also_avoids_collision(self) -> None:
+        """Fallback name avoids collision with 'tests-repo-1' too."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+        from jenkins_job_insight.models import AdditionalRepo
+
+        repos = [
+            AdditionalRepo.model_validate(
+                {"name": "my-repo", "url": "https://github.com/org/my-repo"}
+            ),
+            AdditionalRepo.model_validate(
+                {"name": "tests-repo-1", "url": "https://github.com/org/other"}
+            ),
+        ]
+        result = derive_test_repo_name("https://github.com/org/my-repo", repos)
+        assert result != "my-repo"
+        assert result != "tests-repo-1"
+        assert result.startswith("tests-repo-")
+
+    def test_reserved_name_falls_back(self) -> None:
+        """Test repo URL with reserved basename gets a fallback name."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+
+        result = derive_test_repo_name("https://github.com/org/build-artifacts", [])
+        assert result != "build-artifacts"
+        assert result.startswith("tests-repo-")
+
+    def test_reserved_name_falls_back_with_none_additional(self) -> None:
+        """Reserved name is blocked even when additional_repos is None."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+
+        result = derive_test_repo_name("https://github.com/org/build-artifacts", None)
+        assert result != "build-artifacts"
+        assert result.startswith("tests-repo-")
+
+    def test_uuid_fallback_logs_warning(self) -> None:
+        """When all 99 numeric candidates are taken, UUID fallback logs a warning."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+        from jenkins_job_insight.models import AdditionalRepo
+
+        # Create additional repos that collide with the base name and all 99 numeric fallbacks
+        repos = [
+            AdditionalRepo.model_validate(
+                {"name": "my-repo", "url": "https://github.com/org/my-repo"}
+            ),
+        ]
+        for i in range(1, 100):
+            repos.append(
+                AdditionalRepo.model_validate(
+                    {"name": f"tests-repo-{i}", "url": f"https://github.com/org/r{i}"}
+                ),
+            )
+
+        with patch("jenkins_job_insight.repository.logger") as mock_logger:
+            result = derive_test_repo_name("https://github.com/org/my-repo", repos)
+
+        assert result.startswith("tests-repo-")
+        # Should NOT match tests-repo-N where N is 1..99
+        assert result not in {f"tests-repo-{i}" for i in range(1, 100)}
+        mock_logger.warning.assert_called_once()
+        assert "exhausted" in mock_logger.warning.call_args[0][0].lower()
+
+
 class TestCloneWithSslRetryCleanup:
     """Tests for Finding 2: partial clone cleanup before SSL retry."""
 

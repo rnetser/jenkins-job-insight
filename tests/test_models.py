@@ -859,6 +859,11 @@ class TestAdditionalRepo:
         with pytest.raises(ValidationError):
             AdditionalRepo(name="foo\\bar", url="https://github.com/org/repo")
 
+    def test_reserved_name_rejected(self) -> None:
+        """Reserved name 'build-artifacts' must be rejected."""
+        with pytest.raises(ValidationError):
+            AdditionalRepo(name="build-artifacts", url="https://github.com/org/repo")
+
 
 class TestAdditionalReposDuplicateNames:
     """Tests for duplicate name rejection in additional_repos."""
