@@ -55,6 +55,11 @@ export function parseApiTimestamp(ts: string): Date {
   return new Date(normalized)
 }
 
+/** Extract a human-readable repository name from a Git URL. */
+export function repoNameFromUrl(url: string): string {
+  return url.replace(/\/$/, '').split('/').pop()?.replace(/\.git$/, '') || 'repo'
+}
+
 /** Safely format a timestamp string for display, returning a dash for invalid values. */
 export function formatTimestamp(ts: string | null | undefined): string {
   if (!ts) return INVALID_DATE_FALLBACK

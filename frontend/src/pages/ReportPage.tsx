@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
-import { parseApiTimestamp, isAnalysisTimeout, formatDuration, formatTimestamp } from '@/lib/utils'
+import { parseApiTimestamp, isAnalysisTimeout, formatDuration, formatTimestamp, repoNameFromUrl } from '@/lib/utils'
 import { groupFailures } from '@/lib/grouping'
 import { useExpandCollapseAll } from '@/lib/useExpandCollapseAll'
 import type { ResultResponse, CommentsAndReviews, AiConfig } from '@/types'
@@ -424,10 +424,10 @@ function ReportContent() {
             const allRepos: Array<{name: string; url: string}> = []
             const testsUrl = result.request_params?.tests_repo_url
             if (testsUrl) {
-              const name = String(testsUrl).replace(/\/$/, '').split('/').pop()?.replace(/\.git$/, '') || 'tests'
+              const name = repoNameFromUrl(String(testsUrl))
               allRepos.push({ name, url: String(testsUrl) })
             }
-            const additional = result.request_params?.additional_repos as Array<{name: string; url: string}> | undefined
+            const additional = result.request_params?.additional_repos
             if (additional) {
               allRepos.push(...additional)
             }
@@ -442,8 +442,8 @@ function ReportContent() {
                 </TooltipTrigger>
                 <TooltipContent className="max-w-sm">
                   <div className="flex flex-col gap-1">
-                    {allRepos.map((r, i) => (
-                      <div key={i} className="flex flex-col">
+                    {allRepos.map((r) => (
+                      <div key={`${r.name}::${r.url}`} className="flex flex-col">
                         <span className="font-medium">{r.name}</span>
                         <span className="text-text-tertiary break-all">{r.url}</span>
                       </div>
