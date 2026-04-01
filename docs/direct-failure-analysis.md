@@ -124,7 +124,7 @@ A successful `POST /analyze-failures` response includes:
 - `status`
 - `summary`
 - `ai_provider` and `ai_model`
-- `failures`
+- `failures`, with optional `peer_debate` data inside each item when peer analysis is enabled
 - `base_url` and `result_url`
 - `enriched_xml` only when `raw_xml` was supplied
 
@@ -209,6 +209,8 @@ This makes `enriched_xml` useful in two ways:
 - machines can read the added XML properties
 - humans can open the same JUnit report and read the AI summary in `system-out`
 
+> **Note:** If peer analysis is enabled, `enriched_xml` still contains only the final `analysis` fields. The peer debate trail is returned in JSON under `failures[].peer_debate`, not written into the XML.
+
 > **Note:** `report_url` is added to the first `testsuite` element, not every suite.
 
 > **Note:** If `PUBLIC_BASE_URL` is set, `report_url` is absolute. Otherwise it is a relative path like `/results/{job_id}`.
@@ -234,12 +236,45 @@ Useful per-request overrides for `POST /analyze-failures` are:
 - `tests_repo_url`: clone the tests repository and let the AI inspect real code
 - `raw_prompt`: append extra instructions to the AI prompt
 - `ai_cli_timeout`: override the AI CLI timeout in minutes
+- `peer_ai_configs`: JSON array of `{ai_provider, ai_model}` peer reviewers for consensus analysis. Omit it to inherit the server default from `PEER_AI_CONFIGS`; send `[]` to disable peer analysis for just this request
+- `peer_analysis_max_rounds`: maximum peer-review rounds for this request. Valid values are `1` through `10`. If you do not send it, JJI keeps the server default; the built-in default is `3`
 - `enable_jira`: turn Jira matching on or off for this request
 - `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, `jira_max_results`: override Jira settings for this request
 
+The test suite includes a direct `POST /analyze-failures` example with peer reviewers:
+
+```3081:3097:tests/test_main.py
+response = test_client.post(
+    "/analyze-failures",
+    json={
+        "failures": [
+            {
+                "test_name": "test_foo",
+                "error_message": "assert False",
+                "stack_trace": "File test.py, line 10",
+            }
+        ],
+        "ai_provider": "claude",
+        "ai_model": "test-model",
+        "peer_ai_configs": [
+            {"ai_provider": "gemini", "ai_model": "pro"},
+        ],
+        "peer_analysis_max_rounds": 7,
+    },
+)
+```
+
 Relevant optional config from `.env.example` includes:
 
-```62:93:.env.example
+```52:57:.env.example
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
+```
+
+```69:100:.env.example
 # TESTS_REPO_URL=https://github.com/org/test-repo
 
 # JIRA_URL=https://your-org.atlassian.net

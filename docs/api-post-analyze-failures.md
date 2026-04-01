@@ -95,6 +95,8 @@ These shared request fields are available in both modes:
 | `tests_repo_url` | URL | If set, the service clones the repo and lets the AI inspect the code |
 | `raw_prompt` | string | Extra instructions appended to the AI prompt |
 | `ai_cli_timeout` | positive integer | Timeout in minutes for AI CLI calls |
+| `peer_ai_configs` | array of objects | Optional peer reviewers for consensus analysis. Each item must include `ai_provider` and `ai_model`; valid peer providers are `claude`, `gemini`, and `cursor`. Omit the field to inherit the server default from `PEER_AI_CONFIGS`; send `[]` to disable peer analysis for this request. |
+| `peer_analysis_max_rounds` | integer `1-10` | Maximum debate rounds when peer analysis is enabled. Model default is `3`; when omitted, the server may use `PEER_ANALYSIS_MAX_ROUNDS` instead. |
 | `enable_jira` | boolean | Enables or disables Jira matching for this request |
 | `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, `jira_max_results` | various | Per-request Jira overrides that take precedence over environment defaults |
 
@@ -107,6 +109,17 @@ AI_PROVIDER=claude
 # AI model to use (required, applies to any provider)
 # Can also be set per-request in webhook body
 AI_MODEL=your-model-name
+```
+
+Peer-analysis defaults can also come from `.env.example`:
+
+```52:57:.env.example
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
 If you want repository context or Jira enrichment by default, the same `.env.example` also defines `TESTS_REPO_URL` and the `JIRA_*` variables. If you want absolute links in responses and enriched XML, also set `PUBLIC_BASE_URL`.
@@ -122,6 +135,8 @@ If you want repository context or Jira enrichment by default, the same `.env.exa
 | Both `failures` and `raw_xml` provided | `422` | Request is rejected by validation |
 | Neither `failures` nor `raw_xml` provided | `422` | Request is rejected by validation |
 | `failures: []` | `422` | Treated as missing input and rejected |
+| Invalid `peer_ai_configs` entry | `422` | Each entry must include a supported `ai_provider` and a non-empty `ai_model` |
+| `peer_analysis_max_rounds` outside `1-10` | `422` | Request body validation fails |
 | Invalid `tests_repo_url` or other field types | `422` | Request body validation fails |
 
 > **Warning:** `failures` and `raw_xml` are mutually exclusive. Send one or the other, never both.
@@ -147,7 +162,7 @@ A successful run returns `200` with these top-level fields:
 | Field | Meaning |
 | --- | --- |
 | `job_id` | Unique ID for this analysis |
-| `status` | Always `completed` in this shape |
+| `status` | `completed` in this shape |
 | `summary` | High-level summary, including total failures and unique error count |
 | `ai_provider` | The provider used for analysis |
 | `ai_model` | The model used for analysis |
@@ -155,6 +170,8 @@ A successful run returns `200` with these top-level fields:
 | `enriched_xml` | String when `raw_xml` was sent, `null` when `failures` was sent |
 | `base_url` | Trusted public base URL from `PUBLIC_BASE_URL`, or `""` when no public base URL is configured |
 | `result_url` | Canonical stored-result URL (`/results/{job_id}`). API clients get JSON from this path, and browsers use the same path for the report UI |
+
+> **Note:** `status: completed` means the request finished. If some unique error groups analyze successfully and others fail, the response can still be `completed`; use `summary` and the `failures` array to see how many analyses succeeded.
 
 Each item in `failures` contains:
 
@@ -169,8 +186,19 @@ Each item in `failures` contains:
 | `analysis.artifacts_evidence` | Evidence text when the AI returns it |
 | `analysis.code_fix` | Present for `CODE ISSUE` results |
 | `analysis.product_bug_report` | Present for `PRODUCT BUG` results |
+| `peer_debate` | Peer-review consensus trail when peer analysis was enabled |
 
 `analysis.code_fix` and `analysis.product_bug_report` are mutually exclusive.
+
+When peer analysis runs, `peer_debate` adds:
+
+- `consensus_reached`
+- `rounds_used`
+- `max_rounds`
+- `ai_configs`
+- `rounds`
+
+Each `rounds` entry records the round number, provider/model, participant role (`orchestrator` or `peer`), that round's classification and details, and `agrees_with_orchestrator` when a peer vote counted toward consensus.
 
 A structured `PRODUCT BUG` analysis looks like this in the test fixtures:
 
@@ -275,6 +303,8 @@ for testsuite in root.iter("testsuite"):
     assert len(report_props) == 1
     assert report_props[0].get("value") == "http://server/results/job-1"
 ```
+
+> **Note:** Peer-analysis metadata is not written into XML. Even when `failures[].peer_debate` is present in the JSON response, `enriched_xml` still contains only the final analysis properties listed above.
 
 In `failures` mode, none of this XML enrichment happens, so `enriched_xml` is `null`.
 

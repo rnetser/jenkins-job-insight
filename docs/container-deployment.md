@@ -225,9 +225,20 @@ GEMINI_API_KEY=your-gemini-api-key
 # CURSOR_API_KEY=your-cursor-api-key
 ```
 
-Optional tracker credentials are now part of the sample environment too:
+Optional peer-analysis and tracker settings are now part of the sample environment too. If you use the default `env_file: .env` workflow, add these keys to `.env` even though the commented inline `environment:` example only shows a subset of variables:
 
-```95:103:.env.example
+```52:57:.env.example
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
+```
+
+Each peer entry uses `provider:model` format. The primary analysis still uses `AI_PROVIDER` and `AI_MODEL`; `PEER_AI_CONFIGS` adds secondary providers and models that review the main analysis.
+
+```102:110:.env.example
 # ===================
 # GitHub Integration (Optional)
 # ===================
@@ -246,6 +257,7 @@ For day-to-day container deployments, these are the most important choices:
 - `JENKINS_URL`, `JENKINS_USER`, and `JENKINS_PASSWORD` are optional defaults for Jenkins-backed `/analyze` requests.
 - `JENKINS_SSL_VERIFY=false` is useful if your Jenkins uses a self-signed certificate.
 - `AI_CLI_TIMEOUT` and `LOG_LEVEL` are useful operational settings once the service is running.
+- If you want multi-AI consensus, set `PEER_AI_CONFIGS` to a comma-separated list of additional `provider:model` pairs. Use `PEER_ANALYSIS_MAX_ROUNDS` to limit how many peer debate rounds the service will run. Every provider you list there must also have working credentials in the container.
 - If you want GitHub issue creation from the report UI, set `TESTS_REPO_URL` and `GITHUB_TOKEN`. Use `ENABLE_GITHUB_ISSUES` only when you want to force the feature on or off instead of relying on auto-detection.
 - If you want Jira bug search or Jira bug creation, set `JIRA_URL` and `JIRA_PROJECT_KEY`, then use either `JIRA_EMAIL` + `JIRA_API_TOKEN` for Jira Cloud or `JIRA_PAT` for Jira Server/Data Center.
 

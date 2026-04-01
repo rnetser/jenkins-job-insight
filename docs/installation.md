@@ -5,7 +5,7 @@
 ```1:27:pyproject.toml
 [project]
 name = "jenkins-job-insight"
-version = "1.0.0"
+version = "2.0.0"
 description = "Jenkins job insight and analysis tool"
 requires-python = ">=3.12"
 dependencies = [
@@ -94,7 +94,7 @@ Use the provider you plan to run:
 - `gemini`: authenticate with `GEMINI_API_KEY`, or run `gemini auth login`.
 - `cursor`: `.env.example` documents `CURSOR_API_KEY` as the local auth variable.
 
-> **Note:** The application expects the selected AI CLI to already be installed and authenticated before you start analyzing jobs.
+> **Note:** The application expects the selected AI CLI to already be installed and authenticated before you start analyzing jobs. For provider-specific setup steps, see [AI Provider Setup](https://myk-org.github.io/jenkins-job-insight/ai-provider-setup.html).
 
 ## Configure Your Environment
 
@@ -110,7 +110,7 @@ model_config = SettingsConfigDict(
 
 A practical starting point is the repository’s `.env.example` file:
 
-```6:45:.env.example
+```6:57:.env.example
 JENKINS_URL=https://jenkins.example.com
 JENKINS_USER=your-username
 JENKINS_PASSWORD=your-api-token
@@ -150,6 +150,19 @@ GEMINI_API_KEY=your-gemini-api-key
 
 # API key
 # CURSOR_API_KEY=your-cursor-api-key
+
+# --- AI CLI Timeout ---
+
+# Timeout for AI CLI calls in minutes (default: 10)
+# Increase for slower models like gpt-5.2
+# AI_CLI_TIMEOUT=10
+
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
 Fill in at least these values before you start the server:
@@ -179,7 +192,7 @@ DB_PATH = Path(os.getenv("DB_PATH", "/data/results.db"))
 REPORTS_DIR = DB_PATH.parent / "reports"
 ```
 
-> **Note:** Jira, GitHub issue creation, and test-repository settings are optional. You only need the AI configuration to install and start the service, plus Jenkins settings if you plan to analyze Jenkins jobs.
+> **Note:** Jira, GitHub issue creation, peer analysis, and test-repository settings are optional. You only need the primary AI configuration to install and start the service, plus Jenkins settings if you plan to analyze Jenkins jobs.
 
 ## Install The Package Locally
 
@@ -266,6 +279,19 @@ Once the server is running, open `http://localhost:8000/health`. A healthy serve
 ## Verify The CLI
 
 The bundled `jji` CLI talks to the running server. It reads `JJI_SERVER` by default. `--server` accepts either a full URL or a named config profile, and `--user` sets the name shown in comments and reviews.
+
+If you prefer named profiles, copy `config.example.toml` to `$XDG_CONFIG_HOME/jji/config.toml` (usually `~/.config/jji/config.toml`). Under `[defaults]`, the sample config can store shared AI settings, CLI timeout, and optional peer-analysis settings:
+
+```22:27:config.example.toml
+ai_provider = "claude"
+ai_model = "claude-opus-4-6[1m]"
+ai_cli_timeout = 10
+# Peer analysis (multi-AI consensus)
+# peers = "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro"
+# peer_analysis_max_rounds = 3
+```
+
+Once that file is in place, `--server dev` or `--server prod` can use the named server entries from the same config file instead of a raw URL.
 
 ```167:204:src/jenkins_job_insight/cli/main.py
 @app.callback()

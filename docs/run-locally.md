@@ -2,25 +2,26 @@ I’ve got the pieces I need. The final page will explain the safest local start
 
 You can bring `jenkins-job-insight` up locally in two ways: by using the package's console entrypoint or by running `uvicorn` directly. For an API-level smoke test, you only need Python 3.12+, `uv`, and a writable database path. If you also want browser-based checks that can redirect to `/register`, build the frontend once with Node.js and npm. You do **not** need Jenkins or AI credentials just to verify `/health`, `/docs`, and `/openapi.json`.
 
-```1:23:pyproject.toml
+```1:24:pyproject.toml
 [project]
 name = "jenkins-job-insight"
-version = "1.0.0"
+version = "2.0.0"
 description = "Jenkins job insight and analysis tool"
 requires-python = ">=3.12"
 dependencies = [
-    "ai-cli-runner>=0.1.0",
-    "aiosqlite",
-    "defusedxml>=0.7.1",
-    "fastapi",
-    "gitpython",
-    "httpx",
-    "pydantic-settings",
-    "python-jenkins",
-    "python-multipart",
-    "python-simple-logger",
-    "typer>=0.9.0",
-    "uvicorn",
+  "ai-cli-runner>=0.1.1",
+  "aiosqlite",
+  "cryptography>=46.0.5",
+  "defusedxml>=0.7.1",
+  "fastapi",
+  "gitpython",
+  "httpx",
+  "pydantic-settings",
+  "python-jenkins",
+  "python-multipart",
+  "python-simple-logger",
+  "typer>=0.9.0",
+  "uvicorn",
 ]
 
 [project.scripts]
@@ -72,7 +73,7 @@ If you leave `PORT` unset, the app uses `8000`.
 
 The installed `jenkins-job-insight` command is the package entrypoint for the service. It calls the app's `run()` function, which starts `uvicorn` on `0.0.0.0` using the `PORT` environment variable.
 
-```1952:1959:src/jenkins_job_insight/main.py
+```2386:2393:src/jenkins_job_insight/main.py
 def run() -> None:
     """Entry point for the CLI."""
     import uvicorn
@@ -105,7 +106,7 @@ This is the most direct way to run the service if you already work with ASGI app
 
 The health endpoint returns a minimal JSON payload:
 
-```1936:1939:src/jenkins_job_insight/main.py
+```2344:2347:src/jenkins_job_insight/main.py
 @app.get("/health")
 async def health_check() -> dict:
     """Health check endpoint."""
@@ -132,7 +133,7 @@ curl -s "http://localhost:$PORT/openapi.json" | python -m json.tool
 
 The test suite confirms that the generated schema exposes the expected title and version, and that `/docs` is available:
 
-```1306:1317:tests/test_main.py
+```933:944:tests/test_main.py
 def test_openapi_schema_available(self, test_client) -> None:
     """Test that OpenAPI schema is available."""
     response = test_client.get("/openapi.json")
@@ -144,6 +145,7 @@ def test_openapi_schema_available(self, test_client) -> None:
 def test_docs_available(self, test_client) -> None:
     """Test that docs endpoint is available."""
     response = test_client.get("/docs")
+    assert response.status_code == 200
 ```
 
 When the service is running, you should see `"title": "Jenkins Job Insight"` and `"version": "0.1.0"` in the schema output.
@@ -154,7 +156,7 @@ Open `http://localhost:$PORT/docs` in your browser.
 
 > **Note:** Browser requests without a `jji_username` cookie are still redirected to `/register`. That route is served by the React frontend, so if the browser lands on `Frontend not built`, run the frontend build commands above. Once the register page loads, enter any username and then reopen `/docs`.
 
-```434:457:src/jenkins_job_insight/main.py
+```440:463:src/jenkins_job_insight/main.py
 class UsernameMiddleware(BaseHTTPMiddleware):
     """Middleware that checks for jji_username cookie and redirects to /register if missing."""
 
@@ -181,7 +183,7 @@ class UsernameMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 ```
 
-```2282:2287:src/jenkins_job_insight/main.py
+```2360:2365:src/jenkins_job_insight/main.py
 def _serve_spa() -> HTMLResponse:
     """Read and serve the React SPA index.html."""
     index_file = _FRONTEND_DIR / "index.html"
@@ -194,7 +196,7 @@ def _serve_spa() -> HTMLResponse:
 
 ## When You Move Past Smoke Testing
 
-You can start the service without Jenkins or AI credentials, but you will need them before you call analysis endpoints such as `/analyze`. The repository's env template shows the expected values:
+You can start the service without Jenkins or AI credentials, but before you call analysis endpoints such as `/analyze`, install and authenticate one supported AI provider CLI: Claude, Gemini, or Cursor. You will also need the matching provider settings in your environment. The repository's env template shows the expected values:
 
 ```4:19:.env.example
 # Jenkins Configuration (Required)

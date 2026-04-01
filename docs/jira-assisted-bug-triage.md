@@ -63,35 +63,57 @@ Jira support is optional, but Jira matching now turns on only when the service h
 
 In practice:
 - Use `JIRA_URL` to point at your Jira instance.
-- Use `JIRA_EMAIL` plus `JIRA_API_TOKEN` for Jira Cloud.
-- Use `JIRA_PAT` for Jira Server/Data Center.
-- Use `JIRA_PROJECT_KEY` whenever you want Jira matching. It is now required, not just recommended.
-- Use `JIRA_MAX_RESULTS` to change how many Jira candidates are returned. The default is `5`.
+- Use `JIRA_PROJECT_KEY` whenever you want Jira matching. It is required, and enabled searches are always scoped to that project.
+- For Jira Cloud, set `JIRA_EMAIL` plus `JIRA_API_TOKEN`.
+- For Jira Server/Data Center, set `JIRA_PAT`.
+- If you are on Server/Data Center and do not have a PAT, `JIRA_API_TOKEN` can still work as a fallback only when `JIRA_EMAIL` is not set.
+- Use `JIRA_MAX_RESULTS` to change how many Jira candidates are returned before relevance filtering. The default is `5`.
 - Use `JIRA_SSL_VERIFY` if you need to control TLS verification. The default is `true`.
 
-> **Note:** Cloud mode is selected only when `JIRA_EMAIL` and `JIRA_API_TOKEN` are both set. `JIRA_EMAIL` plus `JIRA_PAT` stays on the Server/Data Center auth path.
+If you prefer saved CLI defaults, the example config file includes the same Jira settings:
 
-If you use the CLI, the `analyze` command now exposes `--jira` and `--no-jira` as explicit overrides:
+```15:40:config.example.toml
+[defaults]
+# ... shared defaults above ...
 
-```426:438:src/jenkins_job_insight/cli/main.py
-@app.command()
-def analyze(
-    job_name: str = typer.Option(..., "--job-name", "-j", help="Jenkins job name."),
-    build_number: int = typer.Option(
-        ..., "--build-number", "-b", help="Build number to analyze."
-    ),
-    provider: str = typer.Option(
-        "", "--provider", help="AI provider (e.g. claude, gemini, cursor)."
-    ),
-    model: str = typer.Option("", "--model", help="AI model to use."),
-    jira: bool | None = typer.Option(
-        None, "--jira/--no-jira", help="Enable/disable Jira integration."
-    ),
+# Jira
+jira_url = "https://your-jira.atlassian.net"
+jira_email = "you@example.com"
+jira_api_token = "your-jira-token"
+jira_pat = ""
+jira_project_key = "PROJ"
+jira_ssl_verify = true
+jira_max_results = 50
+enable_jira = true
 ```
 
-Use `jji analyze --job-name my-job --build-number 27 --jira` to force Jira on for one run, or `--no-jira` to skip it even when the server is configured. If you leave both flags off, the request falls back to the server's configured default.
+> **Note:** Cloud mode is selected only when `JIRA_EMAIL` and `JIRA_API_TOKEN` are both set. `JIRA_EMAIL` plus `JIRA_PAT` stays on the Server/Data Center auth path, and Server/Data Center falls back to `JIRA_API_TOKEN` only when `JIRA_EMAIL` is not set.
 
-The same toggle exists in API requests as `enable_jira`, and it still lives on the shared analysis request model, so it works for both `/analyze` and `/analyze-failures`. Send `true` to force Jira on for one request, `false` to skip it, or omit it to auto-detect from configured Jira settings. The request model also still supports per-request Jira overrides such as `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, and `jira_max_results`.
+If you use the CLI, `jji analyze` still exposes `--jira` and `--no-jira`, and it can also forward `enable_jira` from `~/.config/jji/config.toml`:
+
+```555:622:src/jenkins_job_insight/cli/main.py
+# Start from config defaults (lowest priority), then overlay CLI flags.
+extras: dict = {}
+cfg = _state.get("server_config")
+if cfg:
+    # ...
+    if cfg.enable_jira is not None:
+        extras["enable_jira"] = cfg.enable_jira
+
+# CLI flags override config (highest priority).
+if provider:
+    extras["ai_provider"] = provider
+if model:
+    extras["ai_model"] = model
+if jira is not None:
+    extras["enable_jira"] = jira
+```
+
+Use `jji analyze --job-name my-job --build-number 27 --jira` to force Jira on for one run, or `--no-jira` to skip it even when the selected CLI profile enables it. If you leave both flags off, `jji` uses any `enable_jira` value from its config file; otherwise the server falls back to its own default or auto-detection.
+
+The same toggle exists in API requests as `enable_jira`, and it still lives on the shared analysis request model, so it works for both `/analyze` and `/analyze-failures`. Send `true` to force Jira on for one request, `false` to skip it, or omit it to follow the merged server setting, which may be an explicit `ENABLE_JIRA` choice or auto-detection from complete Jira config.
+
+> **Note:** Per-request Jira overrides such as `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, and `jira_max_results` apply to analysis requests. Jira bug preview and creation use the server's configured Jira connection, not caller-supplied per-analysis credentials.
 
 > **Warning:** `enable_jira` still does not bypass missing configuration. If `JIRA_URL`, Jira credentials, or `JIRA_PROJECT_KEY` are missing, Jira matching stays off.
 
@@ -126,9 +148,9 @@ jira_search_keywords rules:
 - Think: "what would someone title a Jira bug for this exact issue?"
 ```
 
-Then the server turns those keywords into a Jira search that only looks for `Bug` issues and optionally scopes the search to your Jira project:
+Then the server turns those keywords into a Jira search that only looks for `Bug` issues and scopes the search to your configured Jira project:
 
-```125:139:src/jenkins_job_insight/jira.py
+```120:163:src/jenkins_job_insight/jira.py
 # Build JQL: summary ~ "kw1" OR summary ~ "kw2" ...
 text_clauses = " OR ".join(
     f'summary ~ "{_sanitize_jql_keyword(kw)}"' for kw in keywords
@@ -144,11 +166,20 @@ params = {
     "maxResults": self._max_results,
     "fields": "summary,description,status,priority",
 }
+
+# ... Jira response parsing ...
+
+desc = fields.get("description") or ""
+# Cloud API v3 returns description as ADF (Atlassian Document Format)
+if isinstance(desc, dict):
+    desc = _extract_text_from_adf(desc)
 ```
 
 A few details matter here:
+- Because Jira matching now requires `JIRA_PROJECT_KEY`, enabled searches are scoped to that project.
 - The initial Jira query searches issue summaries, not full-text descriptions.
 - The returned candidates still include description, status, priority, and browse URL for review.
+- Jira Cloud descriptions returned as Atlassian Document Format are flattened to plain text before later relevance filtering.
 - The search is ordered by `updated DESC`, so fresher bug reports are preferred.
 
 If several failures point to the same root cause, `jenkins-job-insight` avoids duplicate Jira work by deduplicating on keyword sets and reusing the same search result across all of those reports:
@@ -207,10 +238,12 @@ for kw_tuple, candidates in zip(keyword_to_reports, search_results):
         report.jira_matches = matches
 ```
 
-This gives you three useful outcomes:
+This gives you five useful outcomes:
 - Repeated failures with the same root cause do not trigger repeated Jira searches.
 - Related failures get the same attached Jira matches, which makes team triage more consistent.
-- Jira lookup is best-effort. A Jira outage should not break the main analysis pipeline.
+- When AI relevance filtering succeeds, only candidates marked relevant are kept and then sorted highest-first by `score`.
+- If no AI provider and model are available for that filtering step, the raw Jira candidates are still attached as `jira_matches` with `score` set to `0.0`.
+- Jira lookup and AI filtering are both best-effort. If Jira is unreachable or the filtering step fails, the overall analysis still completes, and that keyword set may simply end up with no attached matches.
 
 > **Note:** If a `PRODUCT BUG` report has no `jira_search_keywords`, Jira lookup is skipped for that failure.
 

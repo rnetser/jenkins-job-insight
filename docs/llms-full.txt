@@ -54,46 +54,46 @@ A Jenkins analysis request can include monitoring controls like this:
 }
 ```
 
-A direct failure analysis request looks like this:
+A direct failure analysis request can also enable peer analysis. The API tests use this request shape:
 
-```python
+```json
 {
-    "failures": [
-        {
-            "test_name": "test_foo",
-            "error_message": "assert False",
-            "stack_trace": "File test.py, line 10",
-        }
-    ],
-    "ai_provider": "claude",
-    "ai_model": "test-model",
+  "failures": [
+    {
+      "test_name": "test_foo",
+      "error_message": "assert False",
+      "stack_trace": "File test.py, line 10"
+    }
+  ],
+  "ai_provider": "claude",
+  "ai_model": "test-model",
+  "peer_ai_configs": [
+    { "ai_provider": "gemini", "ai_model": "pro" }
+  ],
+  "peer_analysis_max_rounds": 7
 }
 ```
 
-> **Note:** Most analysis settings can be defined globally with environment variables and overridden per request. That includes the AI provider and model, Jira settings, AI timeouts, artifact handling, Jenkins monitoring controls, and the optional test repository URL. Jenkins connection settings can also be supplied per request instead of at server startup.
+> **Note:** Most analysis settings can be defined globally with environment variables and overridden per request. That includes the AI provider and model, peer analysis settings, Jira settings, AI timeouts, artifact handling, Jenkins monitoring controls, and the optional test repository URL. Jenkins connection settings can also be supplied per request instead of at server startup.
 
 ## Main outputs
 
 Every analysis gets a `job_id` and is stored for later retrieval. For Jenkins jobs, `POST /analyze` returns a queued response by default and includes a canonical `result_url` pointing at `/results/{job_id}`. That same route serves JSON to API clients and the React report UI to browsers. Jobs move through `waiting`, `pending`, `running`, `completed`, or `failed`.
 
-The core result is structured rather than free-form text. The main failure analysis model in `src/jenkins_job_insight/models.py` is:
+The core result is structured rather than free-form text. Each failure still carries structured `analysis`, and when peer analysis is enabled it can also include the debate trail from the participating AIs. The current model in `src/jenkins_job_insight/models.py` is:
 
 ```python
-class AnalysisDetail(BaseModel):
-    classification: str = Field(default="", description="CODE ISSUE or PRODUCT BUG")
-    affected_tests: list[str] = Field(
-        default_factory=list, description="List of affected test names"
-    )
-    details: str = Field(default="", description="Detailed analysis text")
-    artifacts_evidence: str = Field(
+class FailureAnalysis(BaseModel):
+    test_name: str = Field(description="Name of the failed test")
+    error: str = Field(description="Error message or exception")
+    analysis: AnalysisDetail = Field(description="Structured AI analysis output")
+    error_signature: str = Field(
         default="",
-        description="Verbatim log lines from build artifacts supporting the analysis (not a summary)",
+        description="SHA-256 hash of error + stack trace for deduplication",
     )
-    code_fix: CodeFix | bool | None = Field(
-        default=False, description="Code fix (if CODE ISSUE)"
-    )
-    product_bug_report: ProductBugReport | bool | None = Field(
-        default=False, description="Bug report (if PRODUCT BUG)"
+    peer_debate: PeerDebate | None = Field(
+        default=None,
+        description="Peer debate trail (present only when peer analysis was used)",
     )
 ```
 
@@ -105,6 +105,7 @@ In practice, that means a result can include:
 - A `code_fix` suggestion for code issues
 - A structured `product_bug_report` for product bugs
 - An `error_signature` used to group identical failures
+- A `peer_debate` trail with participating AI configs, round-by-round feedback, and `consensus_reached`
 - `child_job_analyses` when a pipeline failed because child jobs failed
 
 For direct JUnit XML analysis, the service can also return the XML with AI data added back into it:
@@ -137,13 +138,13 @@ The service supports three providers:
 - `gemini`
 - `cursor`
 
-The provider and model can be configured globally with environment variables or passed in the request body. The environment template in `.env.example` includes:
+The provider and model can be configured globally with environment variables or passed in the request body. Optional peer analysis uses the same provider names for additional reviewer models. Relevant lines from `.env.example` now include:
 
 ```bash
-# Choose AI provider (required): "claude", "gemini", or "cursor"
 AI_PROVIDER=claude
 
 # AI model to use (required, applies to any provider)
+# Can also be set per-request in webhook body
 AI_MODEL=your-model-name
 
 # --- Claude CLI Options ---
@@ -166,9 +167,26 @@ GEMINI_API_KEY=your-gemini-api-key
 
 # --- Cursor Agent CLI Options ---
 
+# Choose ONE of the following authentication methods:
+
 # API key
 # CURSOR_API_KEY=your-cursor-api-key
+
+# --- AI CLI Timeout ---
+
+# Timeout for AI CLI calls in minutes (default: 10)
+# Increase for slower models like gpt-5.2
+# AI_CLI_TIMEOUT=10
+
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
+
+For server-wide peer defaults, use `PEER_AI_CONFIGS` as a comma-separated `provider:model` list. For per-request overrides, send `peer_ai_configs` as a JSON array and `peer_analysis_max_rounds` as an integer.
 
 Jira is optional and supports both Cloud and Server/DC:
 
@@ -235,6 +253,20 @@ pytest --junitxml=report.xml --analyze-with-ai
 ```
 
 > **Tip:** If your CI already produces JUnit XML, `raw_xml` mode is the easiest way to add AI analysis without changing how your tests run.
+
+### Add peer analysis when you want consensus
+
+Single-AI analysis remains the default. When you want a second opinion, you can add peer providers to either `POST /analyze` or `POST /analyze-failures`. The main AI analyzes first, peer AIs review that result in parallel, and the service records whether consensus was reached within the configured number of rounds.
+
+The CLI exposes the same workflow:
+
+```shell
+jji analyze --job-name my-job --build-number 1 --peers cursor:gpt-5,gemini:2.5-pro --peer-analysis-max-rounds 5
+```
+
+In stored results, each affected failure can include `peer_debate`, and the report UI shows both a Peer Analysis summary and a per-failure round-by-round timeline. While a Jenkins-backed run is still processing, the status page also shows peer-review and main-AI revision phases as they happen.
+
+> **Note:** Peer analysis runs on grouped failures when structured test data is available. Console-only fallback analysis does not use peer review.
 
 ### Review, comment, classify, and search
 
@@ -311,37 +343,40 @@ Source: architecture-and-project-structure.md
 
 # Architecture and Project Structure
 
-`jenkins-job-insight` is a single application that combines a FastAPI backend, a React web UI, a REST-backed CLI, and a SQLite persistence layer. A typical run starts with a Jenkins build or raw JUnit XML, passes through the analyzer and optional tracker automation, and ends up as a stored result that powers the HTML report, history views, comments, reviews, and CLI output.
+`jenkins-job-insight` is a single application that combines a FastAPI backend, a React web UI, a REST-backed CLI, and a SQLite persistence layer. A typical run starts with a Jenkins build or raw JUnit XML, passes through the analyzer, optional peer-analysis consensus, and optional tracker automation, and ends up as a stored result that powers the HTML report, live status views, history pages, comments, reviews, and CLI output.
 
 ## Repository map
 
-- `src/jenkins_job_insight/main.py`: FastAPI app, startup lifecycle, API routes, SPA hosting, status polling, comments/reviews, history, and issue preview/create endpoints.
-- `src/jenkins_job_insight/models.py`: request and response models such as `AnalyzeRequest`, `AnalyzeFailuresRequest`, `FailureAnalysis`, `ChildJobAnalysis`, and `AnalysisResult`.
-- `src/jenkins_job_insight/analyzer.py`: the core orchestration layer that talks to Jenkins, groups failures, builds AI prompts, and assembles final analysis results.
+- `src/jenkins_job_insight/main.py`: FastAPI app, startup lifecycle, request override merging, progress-phase tracking, API routes, SPA hosting, status polling, comments/reviews, history, and issue preview/create endpoints.
+- `src/jenkins_job_insight/models.py`: request and response models such as `AnalyzeRequest`, `AnalyzeFailuresRequest`, `AiConfigEntry`, `FailureAnalysis`, `PeerRound`, `PeerDebate`, `ChildJobAnalysis`, and `AnalysisResult`.
+- `src/jenkins_job_insight/analyzer.py`: the core orchestration layer that talks to Jenkins, groups failures, builds AI prompts, delegates to peer analysis when configured, and assembles final analysis results.
+- `src/jenkins_job_insight/peer_analysis.py`: multi-AI consensus orchestration where the main AI acts as the orchestrator, peers review in parallel, revision rounds continue until consensus or the configured limit, and the full debate trail is attached to each failure group.
+- `src/jenkins_job_insight/config.py`: environment-backed settings, request-override defaults, and parsing for `PEER_AI_CONFIGS`.
 - `src/jenkins_job_insight/jenkins.py`: thin `python-jenkins` wrapper with helper methods for build info, console output, test reports, and URL parsing.
 - `src/jenkins_job_insight/jenkins_artifacts.py`: artifact download, safe archive extraction, and artifact-context generation for AI analysis.
 - `src/jenkins_job_insight/jira.py`: Jira candidate search plus AI-based relevance filtering for `PRODUCT BUG` matches.
 - `src/jenkins_job_insight/bug_creation.py`: preview, duplicate lookup, and creation helpers for GitHub issues and Jira bugs.
 - `src/jenkins_job_insight/comment_enrichment.py`: detects GitHub/Jira references in comments and fetches live status information.
-- `src/jenkins_job_insight/storage.py`: SQLite schema, migrations, result persistence, failure history, comments, reviews, and classification overrides.
+- `src/jenkins_job_insight/storage.py`: SQLite schema, migrations, result persistence, atomic result patching for progress updates, failure history, comments, reviews, and classification overrides.
 - `src/jenkins_job_insight/encryption.py`: encryption-at-rest for stored sensitive request parameters.
 - `src/jenkins_job_insight/repository.py`: temporary clone management for the optional tests repository context.
-- `src/jenkins_job_insight/cli/`: the `jji` CLI, including HTTP client, config loader, and terminal output formatting.
-- `frontend/src/`: React + TypeScript UI for dashboard, live status, HTML report, failure history, and test history pages.
+- `src/jenkins_job_insight/cli/`: the `jji` CLI, including the HTTP client, config loader, profile validation, and peer-analysis flag handling.
+- `frontend/src/`: React + TypeScript UI for dashboard, live status, HTML report, peer-analysis summaries and debates, failure history, and test history pages.
 - `examples/pytest-junitxml/`: a drop-in pytest/JUnit example that sends failed test XML to JJI and writes enriched XML back.
-- `tests/`: backend, storage, Jira, bug-creation, Jenkins, and CLI tests.
+- `tests/`: backend, peer-analysis, storage, config, models, frontend, and CLI tests.
 - `tox.toml`, `.pre-commit-config.yaml`, `Dockerfile`, `docker-compose.yaml`, and `entrypoint.sh`: local validation and runtime packaging.
 
 ## End-to-end flow
 
 1. A client submits a Jenkins build to `POST /analyze`, or raw failures/XML to `POST /analyze-failures`.
-2. `main.py` creates a `job_id`, saves an initial SQLite row, and either queues background work or runs direct analysis immediately.
+2. `main.py` resolves the effective settings for that request, validates the main AI plus any peer AI configs, creates a `job_id`, saves the initial SQLite row, and either queues background work or runs direct analysis immediately.
 3. `analyzer.py` pulls Jenkins build data, structured test reports, console logs, and optional build artifacts. If `tests_repo_url` is configured, it also clones the test repository into a temporary workspace so the AI can inspect real code.
-4. Failures are grouped by signature so repeated failures only produce one AI call per unique root cause.
-5. The final result is enriched with Jira matches when the failure is classified as a product bug.
-6. `storage.py` persists the result, flattens failures into history tables, and exposes the same data to the React UI, REST API, and CLI.
+4. Failures are grouped by signature so repeated failures only produce one analysis workflow per unique root cause.
+5. When `peer_ai_configs` is enabled, `src/jenkins_job_insight/peer_analysis.py` runs a debate for each unique failure group: the main AI analyzes first, peers review in parallel, and the orchestrator can revise until consensus or `peer_analysis_max_rounds` is reached.
+6. The final result is enriched with Jira matches when the failure is classified as a product bug.
+7. `storage.py` persists the result, flattens failures into history tables, and exposes the same data to the React UI, REST API, and CLI.
 
-The asynchronous Jenkins entry point is deliberately queue-oriented: it creates the record first, then lets the client poll by `job_id`.
+The asynchronous Jenkins entry point is still deliberately queue-oriented: it creates the record first, then lets the client poll by `job_id`. Peer-analysis settings are validated before JJI returns `202`, and resolved peer settings are stored with resumable waiting jobs so a restart does not silently drop the debate configuration.
 
 ```921:976:src/jenkins_job_insight/main.py
 @app.post("/analyze", status_code=202, response_model=None)
@@ -402,7 +437,7 @@ async def analyze(
     return _attach_result_links(response, base_url, job_id)
 ```
 
-The analyzer’s most important scaling feature is failure deduplication. It uses one representative failure to build the prompt, then applies the same structured result to every test in the signature group.
+The analyzer’s most important scaling feature is still failure deduplication. The code example below shows the single-AI representative-failure path; when `peer_ai_configs` is present, that same failure-group boundary is first handed to `src/jenkins_job_insight/peer_analysis.py` so one unique error can produce one main analysis plus one `peer_debate` transcript that is reused for every sibling failure with the same `error_signature`. The same group-level path is reused by `POST /analyze-failures`, so raw failures and Jenkins-backed runs behave the same way.
 
 ```872:947:src/jenkins_job_insight/analyzer.py
 # Use the first failure as representative
@@ -490,6 +525,8 @@ return [
 - Initializes the database in the FastAPI lifespan hook.
 - Marks stale `pending` and `running` jobs as failed on startup.
 - Resumes `waiting` jobs that were monitoring Jenkins when the service restarted.
+- Resolves request-level overrides for analysis settings, including peer AI configs and debate-round limits.
+- Writes `progress_phase` and `progress_log` updates into stored results so the live status page survives refreshes.
 - Serves the built React app and its static assets.
 - Hosts JSON API endpoints for analysis, results, history, comments, reviews, classification, Jira/GitHub preview/create flows, and health checks.
 
@@ -502,7 +539,7 @@ The API surface is organized around a few core areas:
 - Automation: preview/create tracker issues and enrich comment links
 - Capability discovery: `GET /api/capabilities`, `GET /ai-configs`, `GET /health`
 
-`src/jenkins_job_insight/models.py` keeps those interfaces explicit. That file is where to look when you want the canonical request/response shapes for things like `AnalyzeRequest`, `AnalyzeFailuresRequest`, `FailureAnalysis`, `ChildJobAnalysis`, and `AnalysisResult`.
+`src/jenkins_job_insight/models.py` keeps those interfaces explicit. It now also defines the peer-analysis contract: `peer_ai_configs` can inherit the server default, override it, or use `[]` to disable peers for one run, `peer_analysis_max_rounds` caps the debate loop, and `FailureAnalysis.peer_debate` carries the round-by-round transcript back to the UI.
 
 > **Tip:** Set `PUBLIC_BASE_URL` when JJI runs behind a reverse proxy or external hostname. Link generation intentionally uses that trusted setting instead of request headers, which avoids host-header problems but means the app will otherwise return relative URLs.
 
@@ -510,7 +547,7 @@ The API surface is organized around a few core areas:
 
 `src/jenkins_job_insight/analyzer.py` is the real engine room.
 
-One deliberate design choice is that JJI talks to AI providers through their command-line tools, not through vendor SDKs. In practice that means the analyzer is responsible for prompt construction, workspace setup, retries, and structured-response parsing, while authentication stays with the provider CLI itself.
+One deliberate design choice is that JJI talks to AI providers through their command-line tools, not through vendor SDKs. In practice that means the analyzer is responsible for prompt construction, workspace setup, retries, structured-response parsing, and deciding whether a failure group should stay on the single-AI path or hand off to peer consensus.
 
 For Jenkins-backed analysis, the analyzer does the following:
 
@@ -521,6 +558,12 @@ For Jenkins-backed analysis, the analyzer does the following:
 - Optionally downloads and extracts build artifacts with `src/jenkins_job_insight/jenkins_artifacts.py`, then exposes them as `build-artifacts/` inside the AI working directory.
 
 That artifact layer is more than a convenience. It includes archive size limits, path traversal protection, and safe tar/zip extraction before the AI ever sees the files. If your Jenkins jobs produce diagnostic logs, events, or YAML/JSON status dumps, this is where that context is turned into something the analyzer can use.
+
+When peer analysis is enabled, `src/jenkins_job_insight/peer_analysis.py` becomes the debate coordinator for each deduplicated failure group. The main AI runs first using the same `_run_single_ai_analysis()` helper as the single-AI path, peers review that result in parallel, and the orchestrator can revise its answer until all valid peers agree or the configured round limit is reached.
+
+The debate output is stored as `PeerDebate` and `PeerRound` data on each grouped `FailureAnalysis`. Because the discussion happens once per `error_signature`, every sibling test with the same root cause gets the same final structured analysis and the same debate transcript.
+
+> **Warning:** Peer analysis is only used for structured test failures. If a job falls back to console-only analysis because no test report exists, JJI logs a warning and uses the single-AI path instead.
 
 The analyzer also has a history-aware path. When it has a local server URL and a current `job_id`, it points the AI at `src/jenkins_job_insight/ai-prompts/FAILURE_HISTORY_ANALYSIS.md` and lets the AI query JJI’s own history endpoints. That keeps the main prompt smaller and makes history lookup a first-class tool instead of an enormous prompt appendix.
 
@@ -563,9 +606,11 @@ A few storage behaviors matter when you are reasoning about the system:
 - Completed results are flattened into `failure_history` after analysis, so history queries do not have to repeatedly parse nested JSON blobs.
 - User overrides are mirrored back into both `failure_history` and the stored result JSON, so page refreshes and history filters stay in sync.
 - Startup recovery treats stale jobs differently: orphaned `pending` and `running` jobs are failed immediately, while `waiting` jobs can be resumed if their stored request parameters are still usable.
+- Waiting-job request parameters now include peer-analysis settings, so resumed jobs keep the same peer roster and `peer_analysis_max_rounds` they were queued with.
+- `progress_phase` and `progress_log` are patched into the stored result JSON as analysis advances, so the status page survives refreshes and resumes from server state rather than browser-only state.
 - Sensitive request fields are encrypted before they are stored for wait/resume behavior, and they are stripped back out before API responses are returned.
 
-> **Warning:** Waiting-job resumption depends on encrypted stored request parameters. If you change `JJI_ENCRYPTION_KEY`, old waiting jobs may no longer be decryptable and will not resume cleanly.
+> **Warning:** Waiting-job resumption depends on encrypted stored request parameters. If you change `JJI_ENCRYPTION_KEY`, old waiting jobs may no longer be decryptable, and any queued peer-analysis settings stored with them will not resume cleanly.
 
 > **Note:** `failure_history` records failure events, not every passing run. That is why some history views show estimated pass rates, and why some statistics only become meaningful when you scope them to a specific job.
 
@@ -625,13 +670,17 @@ export default function App() {
 
 The important UI pieces are:
 
-- `frontend/src/pages/DashboardPage.tsx`: recent analyses, failure counts, review/comment counts, delete action, and polling refresh.
-- `frontend/src/pages/StatusPage.tsx`: live polling screen for `waiting`, `pending`, and `running` jobs.
-- `frontend/src/pages/ReportPage.tsx`: the main HTML report view for one analysis.
-- `frontend/src/pages/report/`: report-specific building blocks such as `FailureCard`, `ChildJobSection`, `CommentsSection`, `ClassificationSelect`, `BugCreationDialog`, and `ReviewToggle`.
+- `frontend/src/pages/DashboardPage.tsx`: recent analyses, sortable metric columns, delete action, polling refresh, and session-persisted table sort state.
+- `frontend/src/pages/StatusPage.tsx`: live polling screen for `waiting`, `pending`, and `running` jobs; it renders persisted `progress_phase` / `progress_log` entries and shows main AI plus peer AI metadata while a run is in flight.
+- `frontend/src/pages/ReportPage.tsx`: the main HTML report view for one analysis, including the top-level peer-analysis summary.
+- `frontend/src/pages/report/`: report-specific building blocks such as `FailureCard`, `ChildJobSection`, `CommentsSection`, `ClassificationSelect`, `BugCreationDialog`, `ReviewToggle`, `PeerAnalysisSummary`, and `PeerDebateSection`.
+- `frontend/src/components/shared/PeerRoundEntry.tsx`: shared rendering for individual orchestrator and peer round entries in both compact and expanded debate views.
+- `frontend/src/components/shared/SortableHeader.tsx` and `frontend/src/lib/useTableSort.ts`: shared table-sorting primitives used by dashboard and history pages.
+- `frontend/src/lib/useSessionState.ts`: sessionStorage-backed UI state reused by expand/collapse panels and table sort preferences.
 - `frontend/src/pages/report/ReportContext.tsx`: page-scoped `useReducer` state for results, comments, review state, enrichments, AI configs, and manual overrides.
 - `frontend/src/pages/HistoryPage.tsx` and `frontend/src/pages/TestHistoryPage.tsx`: flattened failure history and per-test drill-down pages.
-- `frontend/src/lib/grouping.ts`: mirrors backend failure grouping logic so the UI can present deduplicated cards that line up with backend error-signature grouping.
+- `frontend/src/lib/grouping.ts` and `frontend/src/lib/peerDebate.ts`: client-side helpers that keep grouped failure cards and peer-debate timelines aligned with the backend’s `error_signature` and round structure.
+- `frontend/src/types/index.ts`: the handwritten frontend contract for backend response shapes, including `PeerDebate`, `PeerRound`, `progress_log`, and peer request params.
 - `frontend/src/lib/api.ts`: the centralized fetch wrapper used by the whole frontend.
 
 > **Note:** The `jji_username` cookie is used for attribution and collaboration in the UI. It is a convenience mechanism, not a full authentication system.
@@ -640,9 +689,9 @@ The important UI pieces are:
 
 JJI ships two entry points from `pyproject.toml`: the server entry point `jenkins-job-insight` and the CLI entry point `jji`. The CLI lives under `src/jenkins_job_insight/cli/` and is intentionally thin: `JJIClient` is just an HTTP client that maps commands to the same REST endpoints the web UI uses.
 
-The sample CLI/server-profile config is in `config.example.toml`. It is structured around shared defaults plus named servers, so you can reuse the same CLI against local, staging, and production environments without changing commands.
+The sample CLI/server-profile config is in `config.example.toml`. It is structured around shared defaults plus named servers, and peer analysis follows the same override chain as the rest of the system: server env defaults (`PEER_AI_CONFIGS`, `PEER_ANALYSIS_MAX_ROUNDS`), request JSON (`peer_ai_configs`, `peer_analysis_max_rounds`), and CLI/profile settings (`--peers`, `--peer-analysis-max-rounds`, plus `peers` / `peer_analysis_max_rounds` in `config.toml`).
 
-```12:23:config.example.toml
+```12:27:config.example.toml
 [default]
 server = "dev"  # Default server name
 
@@ -655,9 +704,13 @@ jenkins_ssl_verify = true
 tests_repo_url = "https://github.com/your-org/your-tests"
 ai_provider = "claude"
 ai_model = "claude-opus-4-6[1m]"
+ai_cli_timeout = 10
+# Peer analysis (multi-AI consensus)
+# peers = "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro"
+# peer_analysis_max_rounds = 3
 ```
 
-The rest of that file defines per-environment profiles such as `[servers.dev]`, `[servers.staging]`, and `[servers.prod]`, each with its own URL, username, SSL setting, and optional overrides.
+The rest of that file defines per-environment profiles such as `[servers.dev]`, `[servers.staging]`, and `[servers.prod]`, each with its own URL, username, SSL setting, and optional overrides. `src/jenkins_job_insight/cli/config.py` validates those values on load, and `src/jenkins_job_insight/cli/main.py` forwards them to the same REST endpoints the web UI uses.
 
 `docker-compose.yaml` shows the intended packaging model: one container, one public port, and a persistent `/data` mount for SQLite.
 
@@ -730,14 +783,16 @@ def pytest_sessionfinish(session, exitstatus):
 
 The test suite is broad and maps closely to the main architecture:
 
-- `tests/test_main.py`: FastAPI routes, async job queuing, XML analysis mode, waiting/resume behavior, dashboard/history endpoints, comments/reviews, issue preview/create flows, and SPA behavior.
-- `tests/test_storage.py`: schema initialization, persistence, classification overrides, result recovery, and stale-job handling.
-- `tests/test_analyzer.py`: Jenkins exception translation and AI CLI retry behavior.
+- `tests/test_main.py`: FastAPI routes, async job queuing, XML analysis mode, waiting/resume behavior, dashboard/history endpoints, comments/reviews, issue preview/create flows, SPA behavior, and peer-analysis request merging.
+- `tests/test_storage.py`: schema initialization, persistence, progress-log patching, classification overrides, result recovery, and stale-job handling.
+- `tests/test_analyzer.py`: Jenkins exception translation, AI CLI retry behavior, and delegation to `peer_analysis.py` when peers are configured.
+- `tests/test_peer_analysis.py`: consensus rules, peer response parsing, revision rounds, progress updates, and `peer_debate` attachment.
+- `tests/test_models.py` and `tests/test_config.py`: validation for peer request fields, model shapes, and environment-driven defaults.
+- `tests/test_cli_main.py`, `tests/test_cli_client.py`, and `tests/test_cli_config.py`: CLI parity, peer-analysis flag handling, config validation, and HTTP client request mapping.
 - `tests/test_jira.py`: Jira Cloud vs Server/DC auth detection, search, candidate handling, and AI relevance filtering.
 - `tests/test_bug_creation.py`: issue text generation, fallback behavior, duplicate lookup, and issue creation helpers.
 - `tests/test_jenkins.py`: Jenkins URL parsing edge cases.
-- `tests/test_cli_main.py` and `tests/test_cli_client.py`: CLI parity, flag handling, config behavior, and HTTP client request mapping.
-- `frontend/src/**/__tests__`: frontend API wrapper, grouping logic, cookies, and report-context helpers.
+- `frontend/src/**/__tests__`: frontend API wrapper, grouping logic, cookies, report-context helpers, and peer-debate round grouping.
 
 The repo’s top-level validation entry point is `tox.toml`, which runs both backend and frontend checks:
 
@@ -782,13 +837,15 @@ If you are onboarding to the codebase, this order gives the fastest payoff:
 
 1. `src/jenkins_job_insight/main.py`
 2. `src/jenkins_job_insight/analyzer.py`
-3. `src/jenkins_job_insight/storage.py`
-4. `frontend/src/App.tsx` and `frontend/src/pages/ReportPage.tsx`
-5. `src/jenkins_job_insight/jira.py` and `src/jenkins_job_insight/bug_creation.py`
-6. `examples/pytest-junitxml/`
-7. `tests/test_main.py`, `tests/test_storage.py`, and `tests/test_cli_main.py`
+3. `src/jenkins_job_insight/peer_analysis.py`
+4. `src/jenkins_job_insight/storage.py`
+5. `frontend/src/App.tsx` and `frontend/src/pages/ReportPage.tsx`
+6. `frontend/src/pages/report/PeerAnalysisSummary.tsx` and `frontend/src/pages/report/PeerDebateSection.tsx`
+7. `src/jenkins_job_insight/jira.py` and `src/jenkins_job_insight/bug_creation.py`
+8. `examples/pytest-junitxml/`
+9. `tests/test_main.py`, `tests/test_peer_analysis.py`, and `tests/test_cli_main.py`
 
-That path takes you from request entry, to analysis orchestration, to persistence, to HTML reporting, to tracker automation, and finally to the tests that describe the expected behavior.
+That path takes you from request entry, to analysis orchestration, to the multi-AI debate layer, to persistence, to HTML reporting, to tracker automation, and finally to the tests that describe the expected behavior.
 
 
 ---
@@ -802,7 +859,7 @@ Source: installation.md
 ```1:27:pyproject.toml
 [project]
 name = "jenkins-job-insight"
-version = "1.0.0"
+version = "2.0.0"
 description = "Jenkins job insight and analysis tool"
 requires-python = ">=3.12"
 dependencies = [
@@ -891,7 +948,7 @@ Use the provider you plan to run:
 - `gemini`: authenticate with `GEMINI_API_KEY`, or run `gemini auth login`.
 - `cursor`: `.env.example` documents `CURSOR_API_KEY` as the local auth variable.
 
-> **Note:** The application expects the selected AI CLI to already be installed and authenticated before you start analyzing jobs.
+> **Note:** The application expects the selected AI CLI to already be installed and authenticated before you start analyzing jobs. For provider-specific setup steps, see [AI Provider Setup](https://myk-org.github.io/jenkins-job-insight/ai-provider-setup.html).
 
 ## Configure Your Environment
 
@@ -907,7 +964,7 @@ model_config = SettingsConfigDict(
 
 A practical starting point is the repository’s `.env.example` file:
 
-```6:45:.env.example
+```6:57:.env.example
 JENKINS_URL=https://jenkins.example.com
 JENKINS_USER=your-username
 JENKINS_PASSWORD=your-api-token
@@ -947,6 +1004,19 @@ GEMINI_API_KEY=your-gemini-api-key
 
 # API key
 # CURSOR_API_KEY=your-cursor-api-key
+
+# --- AI CLI Timeout ---
+
+# Timeout for AI CLI calls in minutes (default: 10)
+# Increase for slower models like gpt-5.2
+# AI_CLI_TIMEOUT=10
+
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
 Fill in at least these values before you start the server:
@@ -976,7 +1046,7 @@ DB_PATH = Path(os.getenv("DB_PATH", "/data/results.db"))
 REPORTS_DIR = DB_PATH.parent / "reports"
 ```
 
-> **Note:** Jira, GitHub issue creation, and test-repository settings are optional. You only need the AI configuration to install and start the service, plus Jenkins settings if you plan to analyze Jenkins jobs.
+> **Note:** Jira, GitHub issue creation, peer analysis, and test-repository settings are optional. You only need the primary AI configuration to install and start the service, plus Jenkins settings if you plan to analyze Jenkins jobs.
 
 ## Install The Package Locally
 
@@ -1064,6 +1134,19 @@ Once the server is running, open `http://localhost:8000/health`. A healthy serve
 
 The bundled `jji` CLI talks to the running server. It reads `JJI_SERVER` by default. `--server` accepts either a full URL or a named config profile, and `--user` sets the name shown in comments and reviews.
 
+If you prefer named profiles, copy `config.example.toml` to `$XDG_CONFIG_HOME/jji/config.toml` (usually `~/.config/jji/config.toml`). Under `[defaults]`, the sample config can store shared AI settings, CLI timeout, and optional peer-analysis settings:
+
+```22:27:config.example.toml
+ai_provider = "claude"
+ai_model = "claude-opus-4-6[1m]"
+ai_cli_timeout = 10
+# Peer analysis (multi-AI consensus)
+# peers = "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro"
+# peer_analysis_max_rounds = 3
+```
+
+Once that file is in place, `--server dev` or `--server prod` can use the named server entries from the same config file instead of a raw URL.
+
 ```167:204:src/jenkins_job_insight/cli/main.py
 @app.callback()
 def main_callback(
@@ -1116,25 +1199,26 @@ I’ve got the pieces I need. The final page will explain the safest local start
 
 You can bring `jenkins-job-insight` up locally in two ways: by using the package's console entrypoint or by running `uvicorn` directly. For an API-level smoke test, you only need Python 3.12+, `uv`, and a writable database path. If you also want browser-based checks that can redirect to `/register`, build the frontend once with Node.js and npm. You do **not** need Jenkins or AI credentials just to verify `/health`, `/docs`, and `/openapi.json`.
 
-```1:23:pyproject.toml
+```1:24:pyproject.toml
 [project]
 name = "jenkins-job-insight"
-version = "1.0.0"
+version = "2.0.0"
 description = "Jenkins job insight and analysis tool"
 requires-python = ">=3.12"
 dependencies = [
-    "ai-cli-runner>=0.1.0",
-    "aiosqlite",
-    "defusedxml>=0.7.1",
-    "fastapi",
-    "gitpython",
-    "httpx",
-    "pydantic-settings",
-    "python-jenkins",
-    "python-multipart",
-    "python-simple-logger",
-    "typer>=0.9.0",
-    "uvicorn",
+  "ai-cli-runner>=0.1.1",
+  "aiosqlite",
+  "cryptography>=46.0.5",
+  "defusedxml>=0.7.1",
+  "fastapi",
+  "gitpython",
+  "httpx",
+  "pydantic-settings",
+  "python-jenkins",
+  "python-multipart",
+  "python-simple-logger",
+  "typer>=0.9.0",
+  "uvicorn",
 ]
 
 [project.scripts]
@@ -1186,7 +1270,7 @@ If you leave `PORT` unset, the app uses `8000`.
 
 The installed `jenkins-job-insight` command is the package entrypoint for the service. It calls the app's `run()` function, which starts `uvicorn` on `0.0.0.0` using the `PORT` environment variable.
 
-```1952:1959:src/jenkins_job_insight/main.py
+```2386:2393:src/jenkins_job_insight/main.py
 def run() -> None:
     """Entry point for the CLI."""
     import uvicorn
@@ -1219,7 +1303,7 @@ This is the most direct way to run the service if you already work with ASGI app
 
 The health endpoint returns a minimal JSON payload:
 
-```1936:1939:src/jenkins_job_insight/main.py
+```2344:2347:src/jenkins_job_insight/main.py
 @app.get("/health")
 async def health_check() -> dict:
     """Health check endpoint."""
@@ -1246,7 +1330,7 @@ curl -s "http://localhost:$PORT/openapi.json" | python -m json.tool
 
 The test suite confirms that the generated schema exposes the expected title and version, and that `/docs` is available:
 
-```1306:1317:tests/test_main.py
+```933:944:tests/test_main.py
 def test_openapi_schema_available(self, test_client) -> None:
     """Test that OpenAPI schema is available."""
     response = test_client.get("/openapi.json")
@@ -1258,6 +1342,7 @@ def test_openapi_schema_available(self, test_client) -> None:
 def test_docs_available(self, test_client) -> None:
     """Test that docs endpoint is available."""
     response = test_client.get("/docs")
+    assert response.status_code == 200
 ```
 
 When the service is running, you should see `"title": "Jenkins Job Insight"` and `"version": "0.1.0"` in the schema output.
@@ -1268,7 +1353,7 @@ Open `http://localhost:$PORT/docs` in your browser.
 
 > **Note:** Browser requests without a `jji_username` cookie are still redirected to `/register`. That route is served by the React frontend, so if the browser lands on `Frontend not built`, run the frontend build commands above. Once the register page loads, enter any username and then reopen `/docs`.
 
-```434:457:src/jenkins_job_insight/main.py
+```440:463:src/jenkins_job_insight/main.py
 class UsernameMiddleware(BaseHTTPMiddleware):
     """Middleware that checks for jji_username cookie and redirects to /register if missing."""
 
@@ -1295,7 +1380,7 @@ class UsernameMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 ```
 
-```2282:2287:src/jenkins_job_insight/main.py
+```2360:2365:src/jenkins_job_insight/main.py
 def _serve_spa() -> HTMLResponse:
     """Read and serve the React SPA index.html."""
     index_file = _FRONTEND_DIR / "index.html"
@@ -1308,7 +1393,7 @@ def _serve_spa() -> HTMLResponse:
 
 ## When You Move Past Smoke Testing
 
-You can start the service without Jenkins or AI credentials, but you will need them before you call analysis endpoints such as `/analyze`. The repository's env template shows the expected values:
+You can start the service without Jenkins or AI credentials, but before you call analysis endpoints such as `/analyze`, install and authenticate one supported AI provider CLI: Claude, Gemini, or Cursor. You will also need the matching provider settings in your environment. The repository's env template shows the expected values:
 
 ```4:19:.env.example
 # Jenkins Configuration (Required)
@@ -1562,9 +1647,20 @@ GEMINI_API_KEY=your-gemini-api-key
 # CURSOR_API_KEY=your-cursor-api-key
 ```
 
-Optional tracker credentials are now part of the sample environment too:
+Optional peer-analysis and tracker settings are now part of the sample environment too. If you use the default `env_file: .env` workflow, add these keys to `.env` even though the commented inline `environment:` example only shows a subset of variables:
 
-```95:103:.env.example
+```52:57:.env.example
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
+```
+
+Each peer entry uses `provider:model` format. The primary analysis still uses `AI_PROVIDER` and `AI_MODEL`; `PEER_AI_CONFIGS` adds secondary providers and models that review the main analysis.
+
+```102:110:.env.example
 # ===================
 # GitHub Integration (Optional)
 # ===================
@@ -1583,6 +1679,7 @@ For day-to-day container deployments, these are the most important choices:
 - `JENKINS_URL`, `JENKINS_USER`, and `JENKINS_PASSWORD` are optional defaults for Jenkins-backed `/analyze` requests.
 - `JENKINS_SSL_VERIFY=false` is useful if your Jenkins uses a self-signed certificate.
 - `AI_CLI_TIMEOUT` and `LOG_LEVEL` are useful operational settings once the service is running.
+- If you want multi-AI consensus, set `PEER_AI_CONFIGS` to a comma-separated list of additional `provider:model` pairs. Use `PEER_ANALYSIS_MAX_ROUNDS` to limit how many peer debate rounds the service will run. Every provider you list there must also have working credentials in the container.
 - If you want GitHub issue creation from the report UI, set `TESTS_REPO_URL` and `GITHUB_TOKEN`. Use `ENABLE_GITHUB_ISSUES` only when you want to force the feature on or off instead of relying on auto-detection.
 - If you want Jira bug search or Jira bug creation, set `JIRA_URL` and `JIRA_PROJECT_KEY`, then use either `JIRA_EMAIL` + `JIRA_API_TOKEN` for Jira Cloud or `JIRA_PAT` for Jira Server/Data Center.
 
@@ -1744,6 +1841,13 @@ AI_MODEL=your-model-name
 
 # Option 1: Direct API key (simplest)
 ANTHROPIC_API_KEY=your-anthropic-api-key
+
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
 ```bash
@@ -1778,6 +1882,26 @@ This request shape is used directly in the tests:
   "tests_repo_url": "https://github.com/example/repo"
 }
 ```
+
+If you want optional multi-AI consensus on that same request, add `peer_ai_configs` and, if you want something other than the default, `peer_analysis_max_rounds`:
+
+```json
+{
+  "job_name": "test",
+  "build_number": 123,
+  "ai_provider": "claude",
+  "ai_model": "test-model",
+  "peer_ai_configs": [
+    {
+      "ai_provider": "gemini",
+      "ai_model": "pro"
+    }
+  ],
+  "peer_analysis_max_rounds": 5
+}
+```
+
+> **Tip:** `peer_ai_configs` is optional. Omit it for the normal single-AI flow. When you do use peers, `peer_analysis_max_rounds` defaults to `3` and accepts `1` through `10`.
 
 Send it to `POST /analyze`:
 
@@ -1874,6 +1998,7 @@ The fields most people read first are:
 - `failures[].analysis.code_fix`: present for `CODE ISSUE` results.
 - `failures[].analysis.product_bug_report`: present for `PRODUCT BUG` results.
 - `failures[].error_signature`: the deduplication key used to group identical failures.
+- `failures[].peer_debate`: present when peer analysis was used; it records whether the peer AIs reached consensus, how many rounds were used, which AI configs participated, and the round-by-round debate trail.
 - `child_job_analyses`: present when a pipeline failed because child jobs failed.
 
 If the summary says something like `2 failure(s) analyzed (1 unique error type(s))`, multiple failing tests shared the same underlying error and were analyzed as one root cause.
@@ -1923,6 +2048,7 @@ Once the analysis is complete, the report page shows:
 
 - the job name, build number, status, AI provider/model, and failure counts
 - grouped failures and child-job analyses
+- a `Peer Analysis` summary and round-by-round debate trail when peer analysis is enabled
 - comments and reviewed toggles
 - classification overrides
 - `Open GitHub Issue` or `Open Jira Bug` actions when those integrations are configured
@@ -1945,7 +2071,11 @@ Queue an analysis:
 
 ```bash
 jji analyze --job-name test --build-number 123
+
+jji analyze --job-name test --build-number 123 --peers "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro" --peer-analysis-max-rounds 5
 ```
+
+> **Tip:** `--peers` uses the same `provider:model,provider:model` format as `PEER_AI_CONFIGS`.
 
 Check its status:
 
@@ -1959,7 +2089,7 @@ Show the stored result as JSON:
 jji results show <job_id> --full --json
 ```
 
-If Jenkins is not configured on the server, add `--jenkins-url`, `--jenkins-user`, and `--jenkins-password` to the `jji analyze` command. If you do not want to export `JJI_SERVER`, pass `--server http://localhost:8000` on each command instead. If you already have `~/.config/jji/config.toml`, `jji` can use the default server profile from that file.
+If Jenkins is not configured on the server, add `--jenkins-url`, `--jenkins-user`, and `--jenkins-password` to the `jji analyze` command. If you do not want to export `JJI_SERVER`, pass `--server http://localhost:8000` on each command instead. If you already have `~/.config/jji/config.toml`, `jji` can use the default server profile from that file. That config can also carry `peers` and `peer_analysis_max_rounds` defaults if you want peer consensus enabled by default.
 
 ## What a first successful run looks like
 
@@ -2002,22 +2132,22 @@ For request-tunable analysis settings, configuration resolves in this order:
 
 Deployment-only settings do not have request-body equivalents. In this page, the main examples are `PORT`, `DB_PATH`, `DEBUG`, `LOG_LEVEL`, `PUBLIC_BASE_URL`, `ENABLE_GITHUB_ISSUES`, and `JJI_ENCRYPTION_KEY`.
 
-The merge path in `src/jenkins_job_insight/main.py` applies only non-`None` request values:
+The merge path in `src/jenkins_job_insight/main.py` applies direct non-`None` request values, and it treats fields with model defaults as overrides only when the caller explicitly sends them:
 
-```532:607:src/jenkins_job_insight/main.py
-def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
-    """Create a copy of settings with per-request overrides applied."""
-    overrides: dict = {}
-    # ... direct fields omitted ...
-    for field in direct_fields:
-        value = getattr(body, field, None)
-        if value is not None:
-            overrides[field] = value
-    # ... Jenkins-specific handling omitted ...
-    if overrides:
-        merged_data = settings.model_dump(mode="python") | overrides
-        return Settings.model_validate(merged_data)
-    return settings
+```582:610:src/jenkins_job_insight/main.py
+overrides: dict = {}
+
+# Direct field mappings (request field name == settings field name).
+# ... direct fields omitted ...
+for field in direct_fields:
+    value = getattr(body, field, None)
+    if value is not None:
+        overrides[field] = value
+
+# peer_analysis_max_rounds has a non-None default in the model;
+# only apply as override when explicitly sent by the caller.
+if "peer_analysis_max_rounds" in body.model_fields_set:
+    overrides["peer_analysis_max_rounds"] = body.peer_analysis_max_rounds
 ```
 
 `enable_jira` has one extra fallback: if you do not set `enable_jira` or `ENABLE_JIRA`, the app auto-enables Jira enrichment only when Jira is fully configured, including `JIRA_PROJECT_KEY`.
@@ -2118,17 +2248,55 @@ for field in (
 
 ## AI
 
-`AI_PROVIDER`, `AI_MODEL`, and `AI_CLI_TIMEOUT` can be set globally or overridden per request on `/analyze` and `/analyze-failures`. `ai_provider` and `ai_model` are also accepted on the preview issue endpoints for generated issue text.
+`AI_PROVIDER`, `AI_MODEL`, `AI_CLI_TIMEOUT`, `PEER_AI_CONFIGS`, and `PEER_ANALYSIS_MAX_ROUNDS` can be set globally or overridden per request on `/analyze` and `/analyze-failures`. `ai_provider` and `ai_model` are also accepted on the preview issue endpoints for generated issue text.
 
 | Environment variable | Request override | Default | What it does |
 | --- | --- | --- | --- |
 | `AI_PROVIDER` | `ai_provider` | none | AI provider. Valid analysis values are `claude`, `gemini`, or `cursor`. |
 | `AI_MODEL` | `ai_model` | none | Model name passed to the chosen AI CLI. |
-| `AI_CLI_TIMEOUT` | `ai_cli_timeout` | `10` | Timeout in minutes for AI CLI calls. This also applies to AI-assisted Jira relevance filtering. |
+| `AI_CLI_TIMEOUT` | `ai_cli_timeout` | `10` | Timeout in minutes for AI CLI calls. This also applies to peer-analysis debate calls and AI-assisted Jira relevance filtering. |
+| `PEER_AI_CONFIGS` | `peer_ai_configs` | disabled | Optional peer AI reviewers for consensus analysis. The environment variable uses comma-separated `provider:model` pairs, while the request body uses a JSON array of `{ "ai_provider": "...", "ai_model": "..." }` objects. |
+| `PEER_ANALYSIS_MAX_ROUNDS` | `peer_analysis_max_rounds` | `3` | Maximum debate rounds for peer analysis. Valid values are `1` through `10`. |
 
 > **Note:** The service can start without `AI_PROVIDER` or `AI_MODEL`, but analysis endpoints return `400` until you set them in the environment or pass them in the request body.
 
 The analysis request models also support `raw_prompt` for one-off extra AI instructions. It has no matching environment-variable equivalent.
+
+### Peer Analysis
+
+Peer analysis lets additional AI models review the main analysis and try to reach consensus. Use `PEER_AI_CONFIGS` for a server default, or send `peer_ai_configs` in a single request when you want to override that default.
+
+```52:57:.env.example
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
+```
+
+Omit `peer_ai_configs` to inherit the server default. Send an empty array to disable peer analysis for one request even when `PEER_AI_CONFIGS` is configured.
+
+```518:536:src/jenkins_job_insight/main.py
+def _resolve_peer_ai_configs(
+    body: BaseAnalysisRequest, settings: Settings
+) -> list | None:
+    """Resolve peer AI configs from request body or env var default.
+
+    Priority:
+    - Request field absent (None) -> use server default from PEER_AI_CONFIGS env var
+    - Request field present and empty ([]) -> explicitly disable peers
+    - Request field present and non-empty -> use request value
+    """
+    if body.peer_ai_configs is not None:
+        return body.peer_ai_configs or None  # [] -> None (disable)
+    # Fall back to env var default (string format)
+    if settings.peer_ai_configs:
+        return parse_peer_configs(settings.peer_ai_configs) or None
+    return None
+```
+
+> **Tip:** `PEER_ANALYSIS_MAX_ROUNDS` is validated between `1` and `10`. If the request omits `peer_analysis_max_rounds`, the app keeps the server setting instead of forcing the request model's default.
 
 ### Provider Authentication
 
@@ -2272,7 +2440,7 @@ Two analysis-time controls are now user-configurable: `AI_CLI_TIMEOUT` and the J
 
 | Operation | Environment variable | Request override | Value | Notes |
 | --- | --- | --- | --- | --- |
-| AI CLI calls | `AI_CLI_TIMEOUT` | `ai_cli_timeout` | `10` minutes by default | Applies to failure analysis and AI-based Jira match filtering. |
+| AI CLI calls | `AI_CLI_TIMEOUT` | `ai_cli_timeout` | `10` minutes by default | Applies to main analysis, peer-analysis debate calls, and AI-based Jira match filtering. |
 | Jenkins wait poll interval | `POLL_INTERVAL_MINUTES` | `poll_interval_minutes` | `2` minutes by default | Delay between Jenkins status checks when waiting for a build to finish. |
 | Jenkins wait deadline | `MAX_WAIT_MINUTES` | `max_wait_minutes` | `0` minutes by default | `0` means no deadline; positive values fail the job if the build does not finish in time. |
 | Comment enrichment and GitHub duplicate search | — | — | `10` seconds | Fixed in code for GitHub PR/issue status lookups, Jira ticket status lookups, and GitHub duplicate search. |
@@ -2349,9 +2517,22 @@ GEMINI_API_KEY=your-gemini-api-key
 
 # API key
 # CURSOR_API_KEY=your-cursor-api-key
+
+# --- AI CLI Timeout ---
+
+# Timeout for AI CLI calls in minutes (default: 10)
+# Increase for slower models like gpt-5.2
+# AI_CLI_TIMEOUT=10
+
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
-> **Note:** Provider authentication is handled by the selected CLI, not by the FastAPI app itself. In `config.py`, the Claude Vertex variables are explicitly documented as being read by the `claude` CLI, not by the application.
+> **Note:** Provider authentication is handled by the selected CLI, not by the FastAPI app itself. In `config.py`, the Claude Vertex variables are explicitly documented as being read by the `claude` CLI, not by the application. If you enable `PEER_AI_CONFIGS`, every provider listed there must also be installed and authenticated in the same runtime.
 
 > **Tip:** Both `config.py` and `docker-compose.yaml` are wired to read `.env`, so one file is enough for most deployments.
 
@@ -2429,26 +2610,43 @@ That is useful when you already have working Cursor CLI credentials on a mounted
 
 ## Default provider vs per-request override
 
-Server-wide defaults come from `AI_PROVIDER` and `AI_MODEL`, but the API also lets you override both values per request. The shared request model exposes `ai_provider` and `ai_model`, and the `jji` CLI maps them to `--provider` and `--model`.
+Server-wide defaults still come from `AI_PROVIDER` and `AI_MODEL`, but provider setup now has two layers:
 
-For the CLI, the current command shape is:
+- `AI_PROVIDER` and `AI_MODEL` choose the primary AI that produces the final analysis.
+- `PEER_AI_CONFIGS` optionally adds peer reviewers, and `PEER_ANALYSIS_MAX_ROUNDS` limits how long the peer debate can continue.
 
-```bash
-jji analyze --job-name mtv-2.11-ocp-4.20-test-release-non-gate --build-number 27 --provider claude --jira
+In `.env`, peer configs use a simple `provider:model,provider:model` format:
+
+```dotenv
+AI_PROVIDER=claude
+AI_MODEL=your-model-name
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
-Use `--model` the same way when you want to override the model for a single run.
+Each peer entry uses the same provider names as the primary AI: `claude`, `gemini`, or `cursor`.
 
-The CLI can also keep provider/model defaults in `~/.config/jji/config.toml`. The bundled `config.example.toml` shows the same keys under `[defaults]` and under individual server profiles:
+On the `jji` CLI, the primary provider flags stay the same and peer analysis is opt-in per run:
+
+```bash
+jji analyze --job-name mtv-2.11-ocp-4.20-test-release-non-gate --build-number 27 --provider claude --model opus-4 --peers "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro" --peer-analysis-max-rounds 5 --jira
+```
+
+The CLI config file supports the same pattern. `config.example.toml` shows peer defaults under `[defaults]`, while individual server profiles can still override the primary provider and model:
 
 ```toml
+[defaults]
+# Peer analysis (multi-AI consensus)
+# peers = "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro"
+# peer_analysis_max_rounds = 3
+
 [servers.prod]
 # Inherits all defaults, overrides ai_provider:
 ai_provider = "cursor"
 ai_model = "gpt-5.4-xhigh"
 ```
 
-For the API, tests in the repo use request bodies like this:
+For the API, the request model still accepts `ai_provider` and `ai_model`, and it now also accepts `peer_ai_configs` and `peer_analysis_max_rounds`:
 
 ```json
 {
@@ -2456,17 +2654,24 @@ For the API, tests in the repo use request bodies like this:
   "build_number": 123,
   "tests_repo_url": "https://github.com/example/repo",
   "ai_provider": "claude",
-  "ai_model": "test-model"
+  "ai_model": "test-model",
+  "peer_ai_configs": [
+    {"ai_provider": "cursor", "ai_model": "gpt-5.4-xhigh"},
+    {"ai_provider": "gemini", "ai_model": "gemini-2.5-pro"}
+  ],
+  "peer_analysis_max_rounds": 5
 }
 ```
 
-That means you can keep a stable deployment default in `.env`, let `jji` remember its own defaults per server, and still override provider or model only for the runs where you want to try something different.
+Both the API and CLI validate `peer_analysis_max_rounds` in the `1`-to-`10` range.
+
+Omit `peer_ai_configs` when you want the server default from `PEER_AI_CONFIGS`. Send `peer_ai_configs: []` when you want to disable peer analysis for one request while keeping the server default in place.
 
 ## Provider-agnostic execution model
 
-The service does not maintain three separate analysis pipelines. Instead, it depends on `ai-cli-runner` and passes the chosen provider and model through one shared execution path. In the main analysis path, that call now goes through a small retry helper for known transient CLI failures. There are no provider-specific Python SDKs in `pyproject.toml`; the common dependency is `ai-cli-runner>=0.1.1`.
+The service still does not maintain separate Python integrations for Claude, Gemini, and Cursor. It uses `ai-cli-runner` for all of them and feeds the chosen provider/model through the same `_call_ai_cli_with_retry()` helper. There are no provider-specific Python SDKs in `pyproject.toml`; the shared dependency is still `ai-cli-runner>=0.1.1`.
 
-The current execution flow in `analyzer.py` looks like this:
+The primary analysis path in `analyzer.py` is still provider-agnostic. The only provider-specific behavior is the extra CLI flags:
 
 ```python
 PROVIDER_CLI_FLAGS: dict[str, list[str]] = {
@@ -2485,26 +2690,41 @@ success, analysis_output = await _call_ai_cli_with_retry(
 )
 ```
 
-This is the important design choice:
+Optional peer analysis reuses that same abstraction. When `peer_ai_configs` is present, `analyze_failure_group()` switches from the single-AI path to the peer-consensus path instead of introducing a second provider-specific pipeline:
 
-- The service resolves `ai_provider` and `ai_model` once.
-- It sends both through the same `call_ai_cli()` abstraction.
-- Only the provider-specific extra flags change.
+```python
+if peer_ai_configs:
+    return await analyze_failure_group_with_peers(
+        failures=failures,
+        console_context=console_context,
+        repo_path=repo_path,
+        main_ai_provider=ai_provider,
+        main_ai_model=ai_model,
+        peer_ai_configs=configs,
+        max_rounds=peer_analysis_max_rounds,
+        ai_cli_timeout=ai_cli_timeout,
+        custom_prompt=custom_prompt,
+        artifacts_context=artifacts_context,
+        server_url=server_url,
+        job_id=job_id,
+        group_label=group_label,
+    )
+```
 
-The same pattern is reused beyond main failure analysis. The repo also uses the shared runner when filtering Jira matches and when generating GitHub or Jira issue content from analysis results.
+Inside `peer_analysis.py`, peers are just additional `{ai_provider, ai_model}` entries reviewed in parallel:
 
-In practice, this means switching providers is mostly a configuration change, not a code change:
+```python
+peer_tasks = [_call_peer(cfg) for cfg in peer_ai_configs]
+peer_results = await run_parallel_with_limit(peer_tasks)
+```
 
-- The HTTP endpoints stay the same.
-- The request shape stays the same.
-- The stored result schema stays the same.
-- Only the selected CLI and model string change.
+The main AI analyzes first, peers review in parallel, and the loop stops when they reach consensus or `peer_analysis_max_rounds` is exhausted. In practice, switching the main provider is still mostly a configuration change, not a code change: the HTTP endpoints stay the same, the request body keeps the same primary `ai_provider` and `ai_model` fields, and peer analysis adds only optional `peer_ai_configs` input and `peer_debate` metadata to each failure result.
 
-> **Note:** `_call_ai_cli_with_retry()` is a thin wrapper around `call_ai_cli()`. A code comment in `analyzer.py` explains that structural flags such as Claude's `-p` and Cursor's `--print` are handled inside `ai-cli-runner`; the service only supplies the extra per-provider flags shown above.
+> **Note:** `_call_ai_cli_with_retry()` is still a thin wrapper around `call_ai_cli()`. Structural flags such as Claude's `-p` and Cursor's `--print` are handled inside `ai-cli-runner`; the service only supplies the extra per-provider flags shown above.
 
 ## Verify your setup
 
-Completed analyses store both `ai_provider` and `ai_model`. The service also exposes the distinct provider/model pairs it has already used successfully through `GET /ai-configs`, and the CLI wraps that as `jji ai-configs`.
+Completed analyses store the primary `ai_provider` and `ai_model`. The service also exposes the distinct primary provider/model pairs it has already used successfully through `GET /ai-configs`, and the CLI wraps that as `jji ai-configs`.
 
 ```bash
 jji ai-configs --json
@@ -2519,7 +2739,9 @@ The test suite shows the expected response shape:
 ]
 ```
 
-This is a simple way to confirm which provider/model combinations have already completed successfully in your environment.
+This is the quickest way to confirm which primary provider/model combinations have already completed successfully in your environment.
+
+> **Note:** `GET /ai-configs` reads the top-level `ai_provider` and `ai_model` stored on completed results. If you enable peer analysis, the peer provider/model pairs are stored inside each failure's optional `peer_debate` trail rather than being listed separately by this endpoint.
 
 ## Common setup issues
 
@@ -2586,6 +2808,15 @@ If you call the REST API directly, `/analyze` also accepts `jenkins_url`, `jenki
 - `wait_for_completion` waits for a running build to finish before analysis starts
 - `poll_interval_minutes` controls how often Jenkins is checked while waiting
 - `max_wait_minutes` sets a deadline for waiting, and `0` means no limit
+
+The sample `config.example.toml` now includes the same monitoring defaults:
+
+```28:31:config.example.toml
+# Monitoring
+wait_for_completion = true
+poll_interval_minutes = 2
+max_wait_minutes = 0  # 0 = no limit (wait forever)
+```
 
 This is useful when:
 
@@ -2773,7 +3004,7 @@ The selected mode then drives the search endpoint: Cloud uses `/rest/api/3/searc
 ## Automatic Enablement
 Jira matching is resolved in a clear priority order:
 
-```308:325:src/jenkins_job_insight/main.py
+```549:566:src/jenkins_job_insight/main.py
 def _resolve_enable_jira(body: BaseAnalysisRequest, settings: Settings) -> bool:
     """Resolve enable_jira flag from request, env var, or auto-detection.
 
@@ -2795,9 +3026,9 @@ In practice, that means:
 - `ENABLE_JIRA=false` disables Jira even if the rest of the settings are valid.
 - `ENABLE_JIRA=true` does not bypass missing configuration. Without a URL, credentials, or project key, Jira still stays off.
 
-The CLI exposes the same behavior through `jji analyze --jira` and `jji analyze --no-jira`; those flags map directly to the request field `enable_jira`.
+The CLI exposes the same behavior through `jji analyze --jira` and `jji analyze --no-jira`. It also supports Jira-specific per-run overrides such as `--jira-url`, `--jira-email`, `--jira-api-token`, `--jira-pat`, `--jira-project-key`, `--jira-ssl-verify` or `--no-jira-ssl-verify`, and `--jira-max-results`. If you keep CLI defaults in `~/.config/jji/config.toml`, the bundled `config.example.toml` shows the same Jira keys.
 
-API callers can also override Jira settings per analysis with `enable_jira`, `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, and `jira_max_results`. Those request values are merged over environment defaults before analysis begins.
+API callers can also override Jira settings per analysis with `enable_jira`, `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, and `jira_max_results`. CLI flags, config file values, and request fields are merged over server defaults before analysis begins.
 
 > **Note:** Per-request Jira overrides apply to analysis requests. Jira bug preview and creation use the server's configured Jira connection, not caller-supplied per-analysis credentials.
 
@@ -2827,7 +3058,7 @@ Jira search only runs for failures that are already classified as `PRODUCT BUG`.
 
 The AI analysis prompt explicitly tells the model to produce short, specific Jira search terms:
 
-```81:103:src/jenkins_job_insight/analyzer.py
+```168:190:src/jenkins_job_insight/analyzer.py
 If PRODUCT BUG:
 {
   "classification": "PRODUCT BUG",
@@ -2983,14 +3214,18 @@ AI_PROVIDER=claude
 AI_MODEL=your-model-name
 ```
 
-Optional defaults in `.env.example` let you add repository context for every request:
+Optional defaults in `.env.example` let you add repository context or peer analysis for every request:
 
 ```dotenv
 # Tests repository URL
 # TESTS_REPO_URL=https://github.com/org/test-repo
+
+# Peer Analysis (Optional)
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
-> **Note:** Request-body values override environment defaults. That includes `tests_repo_url`, `ai_provider`, `ai_model`, Jenkins connection settings, `wait_for_completion`, `poll_interval_minutes`, `max_wait_minutes`, artifact settings, and timeout settings. `PUBLIC_BASE_URL` is server-side only and controls whether returned `result_url` values are absolute or relative.
+> **Note:** Request-body values override environment defaults. That includes `tests_repo_url`, `ai_provider`, `ai_model`, Jenkins connection settings, `wait_for_completion`, `poll_interval_minutes`, `max_wait_minutes`, artifact settings, timeout settings, `peer_ai_configs`, and `peer_analysis_max_rounds`. `PUBLIC_BASE_URL` is server-side only and controls whether returned `result_url` values are absolute or relative.
 
 ## Request body
 
@@ -3021,6 +3256,8 @@ The most useful request fields are:
 | `jenkins_artifacts_max_size_mb` | No | Max total artifact size to process. |
 | `jenkins_artifacts_context_lines` | No | Max artifact context lines to feed into the AI prompt. |
 | `raw_prompt` | No | Extra instructions appended to the AI prompt. |
+| `peer_ai_configs` | No | Per-request peer AI list for consensus analysis. Send a JSON array such as `[{"ai_provider":"gemini","ai_model":"pro"}]`. Omit the field to use the server default from `PEER_AI_CONFIGS`, or send `[]` to disable peers for this request. |
+| `peer_analysis_max_rounds` | No | Maximum debate rounds when peer analysis is enabled. If omitted, the server uses its configured default, or `3` when unset. |
 
 If `tests_repo_url` is provided, the repository is cloned once and reused for the main build analysis and any recursively analyzed child jobs.
 
@@ -3029,6 +3266,8 @@ Validation is strict:
 - A non-numeric `build_number` returns `422`.
 - Invalid URLs such as a bad `tests_repo_url` return `422`.
 - `poll_interval_minutes` must be greater than `0`, and `max_wait_minutes` cannot be negative.
+- `peer_analysis_max_rounds` must be between `1` and `10`.
+- Each `peer_ai_configs` entry must use a supported `ai_provider` and a non-blank `ai_model`.
 
 ## Async vs Sync
 
@@ -3045,6 +3284,9 @@ _resolve_ai_config(body)
 # Generate job_id here so we can return it to the client for polling
 job_id = str(uuid.uuid4())
 merged = _merge_settings(body, settings)
+
+# Validate peer configs early -- fail fast before returning 202.
+resolved_peers = _validate_peer_configs(body, merged)
 jenkins_url = build_jenkins_url(
     merged.jenkins_url, body.job_name, body.build_number
 )
@@ -3063,6 +3305,7 @@ if can_resume_wait:
         merged,
         body.ai_provider or AI_PROVIDER,
         body.ai_model or AI_MODEL,
+        peer_ai_configs_resolved=resolved_peers,
     )
 await save_result(
     job_id,
@@ -3099,7 +3342,11 @@ After submission, the stored status progresses through:
 
 > **Note:** AI configuration is validated before the job is queued. If no AI provider or model is configured, `POST /analyze` returns `400` immediately instead of returning `202` and failing later.
 
+> **Note:** Peer-analysis settings are also resolved before queueing. If the server default `PEER_AI_CONFIGS` value is malformed, the request fails immediately instead of creating a broken background job.
+
 > **Note:** Waiting jobs persist resumable request parameters. If the server restarts while a job is in the `waiting` phase, monitoring can resume when the app comes back up.
+
+> **Warning:** `pending` and `running` jobs do not survive a restart. Because their in-process background task is gone, the server marks those rows as `failed` on startup. Only resumable `waiting` jobs are restarted automatically.
 
 ### Sync mode
 
@@ -3134,7 +3381,8 @@ return result
 
 A stored result record includes:
 - top-level job metadata such as `job_id`, `status`, `jenkins_url`, `created_at`, `analysis_started_at`, and `completed_at`
-- a nested `result` object containing the latest stored payload, such as initial job metadata, a completed analysis, or failure details
+- a nested `result` object containing the latest stored payload, such as initial job metadata, sanitized `request_params` for resumable waiting jobs, a completed analysis, or failure details
+- optional in-progress fields inside `result`, including `progress_phase` and `progress_log`
 - `base_url` and `result_url`, generated on each response
 - `capabilities`, which tells the UI whether GitHub issue creation and Jira bug creation are enabled
 
@@ -3148,6 +3396,8 @@ Status meanings:
 > **Note:** `completed` refers to the analysis job, not the Jenkins build result. A Jenkins build can fail and still produce `status: "completed"` if the analysis itself finished successfully.
 
 > **Note:** `GET /results/{job_id}` returns `202 Accepted` while the job is `waiting`, `pending`, or `running`. Once the job reaches `completed` or `failed`, the same endpoint returns `200 OK`.
+
+> **Tip:** While a job is in progress, `result.progress_phase` holds the latest server phase and `result.progress_log` stores the full timestamped history as `{"phase": "...", "timestamp": ...}` entries. Common phases include `waiting_for_jenkins`, `analyzing_child_jobs`, `analyzing_failures`, `analyzing`, `enriching_jira`, and `saving`.
 
 ### Browser flow
 
@@ -3305,9 +3555,9 @@ If the service has to fall back to console-only analysis, it creates a synthetic
 | --- | --- |
 | `202` | A `POST /analyze` request was accepted and queued, or `GET /results/{job_id}` is reporting an in-progress job with status `waiting`, `pending`, or `running`. |
 | `200` | `GET /results/{job_id}` returned a final stored result with status `completed` or `failed`. |
-| `400` | AI provider or AI model is missing when you submit `POST /analyze`. The endpoint validates AI configuration before queuing work. |
+| `400` | AI configuration cannot be resolved, or the server's `PEER_AI_CONFIGS` default is invalid. `POST /analyze` validates those settings before it queues work. |
 | `404` | A results lookup requested an unknown `job_id`. If the Jenkins build itself cannot be found, the async job later moves to `failed` and the stored result carries the error. |
-| `422` | The request body failed validation, such as a missing field, bad URL, non-numeric `build_number`, `poll_interval_minutes <= 0`, or `max_wait_minutes < 0`. |
+| `422` | The request body failed validation, such as a missing field, bad URL, non-numeric `build_number`, `poll_interval_minutes <= 0`, `max_wait_minutes < 0`, out-of-range `peer_analysis_max_rounds`, or malformed `peer_ai_configs` entries. |
 
 > **Tip:** For automation, treat `GET /results/{job_id}` as the authoritative status endpoint. The initial `202` submission response is just the handoff; the stored result is the durable source of truth.
 
@@ -3442,7 +3692,7 @@ A successful `POST /analyze-failures` response includes:
 - `status`
 - `summary`
 - `ai_provider` and `ai_model`
-- `failures`
+- `failures`, with optional `peer_debate` data inside each item when peer analysis is enabled
 - `base_url` and `result_url`
 - `enriched_xml` only when `raw_xml` was supplied
 
@@ -3527,6 +3777,8 @@ This makes `enriched_xml` useful in two ways:
 - machines can read the added XML properties
 - humans can open the same JUnit report and read the AI summary in `system-out`
 
+> **Note:** If peer analysis is enabled, `enriched_xml` still contains only the final `analysis` fields. The peer debate trail is returned in JSON under `failures[].peer_debate`, not written into the XML.
+
 > **Note:** `report_url` is added to the first `testsuite` element, not every suite.
 
 > **Note:** If `PUBLIC_BASE_URL` is set, `report_url` is absolute. Otherwise it is a relative path like `/results/{job_id}`.
@@ -3552,12 +3804,45 @@ Useful per-request overrides for `POST /analyze-failures` are:
 - `tests_repo_url`: clone the tests repository and let the AI inspect real code
 - `raw_prompt`: append extra instructions to the AI prompt
 - `ai_cli_timeout`: override the AI CLI timeout in minutes
+- `peer_ai_configs`: JSON array of `{ai_provider, ai_model}` peer reviewers for consensus analysis. Omit it to inherit the server default from `PEER_AI_CONFIGS`; send `[]` to disable peer analysis for just this request
+- `peer_analysis_max_rounds`: maximum peer-review rounds for this request. Valid values are `1` through `10`. If you do not send it, JJI keeps the server default; the built-in default is `3`
 - `enable_jira`: turn Jira matching on or off for this request
 - `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, `jira_max_results`: override Jira settings for this request
 
+The test suite includes a direct `POST /analyze-failures` example with peer reviewers:
+
+```3081:3097:tests/test_main.py
+response = test_client.post(
+    "/analyze-failures",
+    json={
+        "failures": [
+            {
+                "test_name": "test_foo",
+                "error_message": "assert False",
+                "stack_trace": "File test.py, line 10",
+            }
+        ],
+        "ai_provider": "claude",
+        "ai_model": "test-model",
+        "peer_ai_configs": [
+            {"ai_provider": "gemini", "ai_model": "pro"},
+        ],
+        "peer_analysis_max_rounds": 7,
+    },
+)
+```
+
 Relevant optional config from `.env.example` includes:
 
-```62:93:.env.example
+```52:57:.env.example
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
+```
+
+```69:100:.env.example
 # TESTS_REPO_URL=https://github.com/org/test-repo
 
 # JIRA_URL=https://your-org.atlassian.net
@@ -3645,6 +3930,19 @@ AI_PROVIDER=claude
 # Can also be set per-request in webhook body
 AI_MODEL=your-model-name
 ```
+
+If you want the same pytest-uploaded XML to use multi-AI consensus, the same template now also includes optional server-side peer-analysis defaults:
+
+```52:57:.env.example
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
+```
+
+> **Note:** When `PEER_AI_CONFIGS` is set on the server, the bundled pytest helper does not need any extra client-side peer settings. It still posts `raw_xml` to `POST /analyze-failures`, and the server applies its default peer-analysis settings.
 
 > **Warning:** The current pytest helper does not actually fall back to built-in client-side defaults for `JJI_AI_PROVIDER` or `JJI_AI_MODEL`. If either one is missing, the helper disables enrichment.
 
@@ -3770,7 +4068,24 @@ The bundled helper sends only three fields:
 
 That is enough for the standard flow, but it is deliberately minimal.
 
-> **Tip:** The `/analyze-failures` request model also supports optional fields such as `tests_repo_url`, `enable_jira`, and `raw_prompt`. If you want pytest-driven analysis to use those features, extend the JSON payload in `conftest_junit_ai_utils.py`.
+The shared request model behind `/analyze-failures` also supports optional peer-analysis overrides:
+
+```95:105:src/jenkins_job_insight/models.py
+peer_ai_configs: list[AiConfigEntry] | None = Field(
+    default=None,
+    description=(
+        "List of peer AI configs for consensus analysis. "
+        "Omit to inherit the server default; send [] to disable peer analysis "
+        "for this request. Each peer reviews the main AI's analysis."
+    ),
+)
+peer_analysis_max_rounds: Annotated[int, Field(ge=1, le=10)] = Field(
+    default=3,
+    description="Maximum debate rounds for peer analysis",
+)
+```
+
+> **Tip:** The `/analyze-failures` request model also supports optional fields such as `tests_repo_url`, `enable_jira`, `raw_prompt`, `peer_ai_configs`, and `peer_analysis_max_rounds`. If you want pytest-driven analysis to use those features, extend the JSON payload in `conftest_junit_ai_utils.py`.
 
 ## What The Server Does With The XML
 
@@ -3868,7 +4183,7 @@ The service also adds a `report_url` property to the first `<testsuite>` so the 
 
 Whether `report_url` is an absolute URL or a relative path depends on the server's `PUBLIC_BASE_URL` setting:
 
-```70:74:src/jenkins_job_insight/config.py
+```105:109:src/jenkins_job_insight/config.py
     # Trusted public base URL — used for result_url and tracker links.
     # When set, _extract_base_url() returns this value verbatim.
     # When unset, _extract_base_url() returns an empty string (relative
@@ -3984,7 +4299,7 @@ useEffect(() => {
 }, [fetchJobs])
 ```
 
-- **Status page (queued / running / failed before completion):** polls `GET /results/{job_id}` **every 10 seconds**; when status becomes `completed`, it **navigates to `/results/{jobId}`**.
+- **Status page (queued / running / failed before completion):** polls `GET /results/{job_id}` **every 10 seconds**; when status becomes `completed`, it **navigates to `/results/{jobId}`**. The page now also renders a persisted progress timeline from `result.progress_log`, so `F5` keeps the phase history instead of resetting it.
 
 ```typescript
 async function poll() {
@@ -3995,13 +4310,30 @@ async function poll() {
     if (cancelled) return
     setError('')
     setData(res)
+
     if (res.status === 'completed') {
       stopPolling()
       navigate(`/results/${jobId}`, { replace: true })
     } else if (res.status === 'failed') {
 ```
 
-- **Report page:** loads the analysis **once**; **comments / reviews** are polled on an interval (default **30 seconds** via `COMMENT_POLL_MS`, configurable with `VITE_COMMENT_POLL_MS`). Polling is skipped while a comment draft is open.
+```typescript
+// Derive stepLog from server-persisted progress_log (survives F5 refresh)
+const rawProgressLog = data?.result?.progress_log
+const progressLog = Array.isArray(rawProgressLog) ? rawProgressLog : []
+const stepLog: StepLogEntry[] = useMemo(
+  () => progressLog.map(entry => ({
+    phase: entry.phase,
+    label: getPhaseLabel(entry.phase) ?? entry.phase,
+    timestamp: new Date(entry.timestamp * 1000).toLocaleTimeString(),
+  })),
+  [progressLog],
+)
+```
+
+When peer analysis is enabled, that same timeline can also show peer-review rounds and orchestrator revision rounds while the job is still running.
+
+- **Report page:** loads the analysis **once**; **comments / reviews** are polled on an interval (default **30 seconds** via `COMMENT_POLL_MS`, configurable with `VITE_COMMENT_POLL_MS`). Polling is skipped while a comment draft is open. The page also restores the previous scroll position after a normal refresh, and expandable cards/sections keep their open state for the current tab.
 
 ```typescript
 useEffect(() => {
@@ -4018,6 +4350,32 @@ useEffect(() => {
 }, [jobId, fetchComments, state.commentDraftCount, state.error, state.result])
 ```
 
+```typescript
+useEffect(() => {
+  if (state.loading || state.error) return
+  if (window.location.hash) return
+  let saved: string | null = null
+  try {
+    saved = sessionStorage.getItem(scrollKey)
+  } catch {
+    /* storage may be blocked in privacy mode */
+  }
+  let raf1 = 0
+  let raf2 = 0
+  if (saved) {
+    // Double rAF: first lets React commit DOM, second lets browser layout
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        window.scrollTo(0, parseInt(saved, 10))
+      })
+    })
+  }
+```
+
+```typescript
+const [expanded, setExpanded] = useSessionState(expandKey, false)
+```
+
 ## Grouped failure cards
 
 The report’s **Failures** section is grouped for noisy builds: one card can represent many tests that share the same underlying error.
@@ -4031,7 +4389,9 @@ export function groupingKey(failure: FailureAnalysis): string {
 }
 ```
 
-Each grouped card typically includes the AI analysis, classification controls, affected tests, comments, and issue actions. For groups with more than one failure, the UI can **Review All** for the whole group:
+Each grouped card is a **root-cause card** for one error signature. The collapsed header shows the representative test name, the current primary classification, any mixed override badges inside the group, and a comment badge when discussion exists. Expanded cards can show the affected test list, copyable error and analysis sections, artifacts evidence, a suggested fix or bug report, comments, and a peer-analysis trail when that signature went through multi-AI review. Single-test cards can also show GitHub or Jira issue actions.
+
+For groups with more than one failure, the UI can **Review All** for the whole group:
 
 ```tsx
 {group.count > 1 && (
@@ -4048,6 +4408,13 @@ Each grouped card typically includes the AI analysis, classification controls, a
       <CheckCircle2 className="h-4 w-4" />
       {allReviewed ? 'All Reviewed' : `Review All (${reviewedCount}/${group.count})`}
     </button>
+```
+
+When peer analysis is present, the representative failure also exposes the debate timeline directly inside the card:
+
+```tsx
+{/* Peer debate trail */}
+{rep.peer_debate && <PeerDebateSection debate={rep.peer_debate} />}
 ```
 
 **Classification overrides** still update **all** failures in the same job that share the same `error_signature`, so grouped cards stay in sync:
@@ -4070,8 +4437,15 @@ Child pipeline jobs use the same grouped model under nested **Child Job** sectio
 
 A full report is laid out in the React UI with:
 
-- a **sticky header** with build context, status, AI provider/model, analysis timestamp, failure counts, and Jenkins links when available
+- a **sticky header** with build context, status, Jenkins link, the total failure count across top-level and child-job failures, and a review-progress badge
+- a lightweight **metadata row** with created time, completion time, total duration, and AI provider/model when those values are available
 - an optional **Key Takeaway** when a summary exists
+
+```tsx
+<Badge variant="destructive" className="font-mono">
+  {totalFailures} {totalFailures === 1 ? 'failure' : 'failures'}
+</Badge>
+```
 
 ```tsx
 {result.summary && (
@@ -4082,7 +4456,16 @@ A full report is laid out in the React UI with:
 )}
 ```
 
-- **Failures** — grouped cards (section title includes total failure count); this is the primary list of failing tests—there is **no** separate **All Failures** table or `Bug Ref` column tying back to HTML-era `BUG-n` labels.
+- an optional **Peer Analysis** summary when peer reviewers were configured; it rolls up one debate per unique error signature and shows which AI combinations reached consensus
+
+```tsx
+<PeerAnalysisSummary
+  failures={result.failures ?? []}
+  childJobAnalyses={result.child_job_analyses ?? []}
+/>
+```
+
+- **Failures** — grouped cards for top-level failures; this is the primary list of failing tests—there is **no** separate **All Failures** table or `Bug Ref` column tying back to HTML-era `BUG-n` labels. The section title counts top-level failures, while the sticky header badge counts **all** failures including nested child-job failures. When there are multiple groups, the page adds **Expand All / Collapse All** controls.
 
 ```tsx
 {groups.length > 0 && (
@@ -4091,9 +4474,22 @@ A full report is laid out in the React UI with:
       <h2 className="text-xs font-display uppercase tracking-widest text-text-tertiary">
         Failures ({(result.failures ?? []).length})
       </h2>
+      {groups.length >= 2 && (
+        <ExpandCollapseButtons onExpandAll={expandAllFailures} onCollapseAll={collapseAllFailures} />
+      )}
 ```
 
-- **Child job analyses** — nested sections for downstream jobs; **URL hash** targets auto-expand matching sections and scroll them into view for deep links:
+- **Child job analyses** — nested sections for downstream jobs, with their own **Expand All / Collapse All** controls. **URL hash** targets still auto-expand matching sections and scroll them into view for deep links.
+
+```tsx
+{(result.child_job_analyses ?? []).length > 0 && (
+  <section>
+    <div className="flex items-center justify-between mb-3">
+      <h2 className="text-xs font-display uppercase tracking-widest text-text-tertiary">
+        Child Jobs ({(result.child_job_analyses ?? []).length})
+      </h2>
+      <ExpandCollapseButtons onExpandAll={expandAllChildren} onCollapseAll={collapseAllChildren} />
+```
 
 ```typescript
 // Auto-expand and scroll when the URL hash targets this child job or any descendant
@@ -4112,7 +4508,7 @@ useEffect(() => {
 
 ## Dashboard search and pagination
 
-The dashboard is at **`/`** ( **`/dashboard` redirects to `/`** ). It is a **table** of recent jobs (not cards). The page loads jobs from **`GET /api/dashboard`** and **refetches every 10 seconds**.
+The dashboard is at **`/`** ( **`/dashboard` redirects to `/`** ). It is a **table** of recent jobs (not cards). The page loads jobs from **`GET /api/dashboard`**, **refetches every 10 seconds**, and each row can surface failure, review, comment, and child-job counts, a summary/error hint, and a relative creation time with a full timestamp tooltip. The dashboard failure count is the total across top-level and nested child-job failures.
 
 ```typescript
 useEffect(() => {
@@ -4122,20 +4518,27 @@ useEffect(() => {
 }, [fetchJobs])
 ```
 
-**Search** filters only **`job_name`** and **`job_id`** (case-insensitive substring match):
+**Search** still filters only **`job_name`** and **`job_id`** (case-insensitive substring match). A separate **status filter** narrows rows by `completed`, `running`, `waiting`, `pending`, `failed`, or the UI-only `timeout` label for failed AI analyses that timed out:
 
 ```typescript
 const filtered = useMemo(() => {
-  if (!search) return jobs
-  const q = search.toLowerCase()
   return jobs.filter((j) => {
-    const haystack = `${j.job_name ?? ''} ${j.job_id}`.toLowerCase()
-    return haystack.includes(q)
+    const displayStatus = isAnalysisTimeout(j.status, j.error, j.summary) ? 'timeout' : j.status
+    if (statusFilter !== STATUS_FILTER_ALL && displayStatus !== statusFilter) return false
+    if (!search) return true
+    const q = search.toLowerCase()
+    return (j.job_name ?? '').toLowerCase().includes(q) || j.job_id.toLowerCase().includes(q)
   })
-}, [jobs, search])
+}, [jobs, search, statusFilter])
 ```
 
-**Pagination** is client-side on the filtered rows. Page-size options are **10**, **20**, and **50**.
+**Sorting** is client-side. Column headers can sort by **Job**, **Status**, **Failures**, **Reviewed**, **Comments**, **Children**, and **Created**. The current sort is stored in `sessionStorage` for the active tab, and the default is **Created descending**.
+
+```typescript
+const { sortKey, sortDir, handleSort } = useTableSort('dash', 'created_at', 'desc', ['created_at'])
+```
+
+**Pagination** is client-side on the already filtered and sorted rows. Page-size options are **10**, **20**, and **50**.
 
 **Row navigation:** clicking a row goes to **`/status/{job_id}`** for `waiting`, `pending`, or `running` jobs; otherwise to **`/results/{job_id}`**.
 
@@ -4149,7 +4552,7 @@ function getJobRoute(job: DashboardJob): string {
 
 The backend default dashboard window is **`DEFAULT_DASHBOARD_LIMIT = 500`** in `storage.py`. The React dashboard has **no** “Load last” or server `limit` control in the UI—you work within that default list.
 
-> **Note:** Search and pagination apply only to jobs already returned in the dashboard list.
+> **Note:** Search, status filtering, sorting, and pagination apply only to jobs already returned in the dashboard list.
 
 > **Tip:** If a run is outside that window, use other flows (for example **`/history`**) to find it.
 
@@ -4200,52 +4603,62 @@ def get_failure_signature(failure: TestFailure) -> str:
     return hashlib.sha256(signature_text.encode()).hexdigest()
 ```
 
-That signature is then used to group failures before the AI is called. Each signature group gets one analysis, and that analysis is applied back to every failure in the group.
+That signature is then used to group failures before JJI starts any per-group investigation. Each signature group still fans back out to one `FailureAnalysis` per failed test, but the actual analysis work happens once per unique signature.
 
-```1020:1082:src/jenkins_job_insight/analyzer.py
-# If we have test failures, group by signature and analyze unique groups
-if test_failures:
-    # Group failures by signature to avoid analyzing identical errors multiple times
-    failure_groups: dict[str, list[TestFailure]] = defaultdict(list)
-    for tf in test_failures:
-        sig = get_failure_signature(tf)
-        failure_groups[sig].append(tf)
+```1573:1605:src/jenkins_job_insight/analyzer.py
+# Group failures by signature to avoid analyzing identical errors multiple times
+failure_groups: dict[str, list[TestFailure]] = defaultdict(list)
+for tf in test_failures:
+    sig = get_failure_signature(tf)
+    failure_groups[sig].append(tf)
 
-    logger.info(
-        f"Grouped {len(test_failures)} failures into {len(failure_groups)} unique error types"
+# Analyze each unique failure group in parallel
+total_groups = len(failure_groups)
+failure_tasks = []
+for group_idx, (_sig, group) in enumerate(failure_groups.items(), 1):
+    failure_tasks.append(
+        analyze_failure_group(
+            failures=group,
+            console_context=console_context,
+            repo_path=repo_path,
+            # ... other analysis args ...
+            peer_ai_configs=peer_ai_configs,
+            peer_analysis_max_rounds=peer_analysis_max_rounds,
+            group_label=f"{group_idx}/{total_groups}"
+            if total_groups > 1
+            else "",
+        )
     )
-
-    # Analyze each unique failure group in parallel
-    tasks = []
-    for sig, group in failure_groups.items():
-        tasks.append(
-            analyze_failure_group(
-                failures=group,
-                console_context=console_context,
-                repo_path=repo_path,
-                # ...
-            )
-        )
-    group_results = await run_parallel_with_limit(tasks)
-
-    # ... flatten results ...
-
-    total_failures = len(failures)
-    unique_errors = len(failure_groups)
-
-    # Include deduplication info in summary if applicable
-    if unique_errors < total_failures:
-        summary = (
-            f"{total_failures} failure(s) analyzed "
-            f"({unique_errors} unique error type(s))"
-        )
-    else:
-        summary = f"{total_failures} failure(s) analyzed"
 ```
 
-This is the core reason JJI scales better on noisy failures: ten tests with the same root cause do not trigger ten separate AI investigations.
+If peer analysis is enabled, the deduplicated group is still the unit of work. JJI just switches the group handler from the single-AI path to the peer-consensus path instead of re-analyzing each test independently.
+
+```989:1010:src/jenkins_job_insight/analyzer.py
+if peer_ai_configs:
+    from jenkins_job_insight.models import AiConfigEntry
+    from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
+
+    configs = [
+        AiConfigEntry(**c) if isinstance(c, dict) else c for c in peer_ai_configs
+    ]
+    return await analyze_failure_group_with_peers(
+        failures=failures,
+        console_context=console_context,
+        repo_path=repo_path,
+        main_ai_provider=ai_provider,
+        main_ai_model=ai_model,
+        peer_ai_configs=configs,
+        max_rounds=peer_analysis_max_rounds,
+        # ... other shared args ...
+        group_label=group_label,
+    )
+```
+
+This is the core reason JJI scales better on noisy failures: ten tests with the same root cause do not trigger ten separate investigations, even when peer consensus is enabled.
 
 > **Note:** Deduplication removes repeated analysis work, not failures from the result. Users still get one `FailureAnalysis` entry per failed test, and each entry keeps its `error_signature`.
+
+> **Note:** Peer analysis only applies when JJI has structured test failures to group. If a job falls back to console-only analysis, JJI logs a warning and runs a single console-level analysis instead of a per-signature peer debate.
 
 > **Tip:** The same signature-grouping logic is also used by `POST /analyze-failures`, so you can test deduplication without a live Jenkins job.
 
@@ -4470,7 +4883,32 @@ After analysis completes, JJI flattens failures into `failure_history`. That inc
 - the shared `error_signature`,
 - child-job context such as `child_job_name` and `child_build_number`.
 
-That flattening is what makes later history search and job statistics fast and consistent, even when the original result was a nested pipeline tree.
+That flattening still makes later history search and job statistics fast and consistent, and it now also supports startup backfill. If JJI finds completed results that do not yet have `failure_history` rows, it rebuilds those rows and preserves the original analysis timestamp so signature searches, per-job stats, and trend views keep the right chronology.
+
+```1001:1039:src/jenkins_job_insight/storage.py
+async def backfill_failure_history() -> None:
+    """Backfill failure_history from existing completed results."""
+
+    # Find completed results that are NOT yet in failure_history.
+    cursor = await db.execute(
+        "SELECT r.job_id, r.result_json, r.created_at FROM results r "
+        "LEFT JOIN failure_history fh ON r.job_id = fh.job_id "
+        "WHERE r.status = 'completed' AND r.result_json IS NOT NULL AND fh.job_id IS NULL"
+    )
+    rows = await cursor.fetchall()
+
+    # Skip completed results with zero failures — they have nothing to
+    # insert into failure_history, so without this guard the LEFT JOIN
+    # would find them "missing" on every startup and reprocess them.
+    if count_all_failures(result_data) == 0:
+        continue
+    # Use the original created_at timestamp to preserve historical chronology
+    await populate_failure_history(
+        job_id, result_data, analyzed_at=created_at or ""
+    )
+```
+
+> **Note:** Backfill only processes completed results that are missing history rows. Completed results with zero failures are skipped, so they are not reprocessed on every startup.
 
 > **Tip:** If several different tests suddenly look related, search by `error_signature` first. It is usually the fastest way to tell whether you are looking at one repeated root cause or several independent failures.
 
@@ -4491,7 +4929,7 @@ You can inspect that stored history through the web UI, the API, or the `jji` CL
 
 For Jenkins-backed `/analyze`, you need Jenkins connectivity plus an AI provider and model. Those Jenkins settings can be set as server defaults or passed per request. For `POST /analyze-failures`, you can skip Jenkins entirely and send failures or raw JUnit XML directly.
 
-```6:50:.env.example
+```6:57:.env.example
 JENKINS_URL=https://jenkins.example.com
 JENKINS_USER=your-username
 JENKINS_PASSWORD=your-api-token
@@ -4514,6 +4952,13 @@ AI_MODEL=your-model-name
 # Timeout for AI CLI calls in minutes (default: 10)
 # Increase for slower models like gpt-5.2
 # AI_CLI_TIMEOUT=10
+
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
 For `/analyze`, the request model and config defaults also support a few pipeline-focused overrides that are especially useful during pipeline investigations:
@@ -4525,15 +4970,21 @@ For `/analyze`, the request model and config defaults also support a few pipelin
 - `get_job_artifacts` controls whether build artifacts are downloaded for extra evidence.
 - `jenkins_artifacts_max_size_mb` limits how much artifact data can be downloaded.
 - `jenkins_artifacts_context_lines` controls how much artifact context is prepared for analysis.
+- `PEER_AI_CONFIGS` or `peer_ai_configs` enables optional peer review for each deduplicated failure group. Omit the request field to inherit the server default, or send `[]` to disable peers for one run.
+- `PEER_ANALYSIS_MAX_ROUNDS` or `peer_analysis_max_rounds` limits how many debate rounds peer analysis can use for a group. The default is `3`.
 
-```25:28:config.example.toml
+```23:31:config.example.toml
+ai_cli_timeout = 10
+# Peer analysis (multi-AI consensus)
+# peers = "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro"
+# peer_analysis_max_rounds = 3
 # Monitoring
 wait_for_completion = true
 poll_interval_minutes = 2
 max_wait_minutes = 0  # 0 = no limit (wait forever)
 ```
 
-> **Tip:** Wait/poll settings affect when a Jenkins-backed analysis starts. Artifact settings improve the quality of leaf-job analysis, but they do not change how signatures are computed or how child jobs are discovered.
+> **Tip:** Wait/poll settings affect when a Jenkins-backed analysis starts. Artifact settings improve the quality of leaf-job analysis. Peer settings change how each deduplicated failure group is reviewed, but they do not change how signatures are computed or how child jobs are discovered.
 
 ## What This Means In Practice
 
@@ -4616,35 +5067,57 @@ Jira support is optional, but Jira matching now turns on only when the service h
 
 In practice:
 - Use `JIRA_URL` to point at your Jira instance.
-- Use `JIRA_EMAIL` plus `JIRA_API_TOKEN` for Jira Cloud.
-- Use `JIRA_PAT` for Jira Server/Data Center.
-- Use `JIRA_PROJECT_KEY` whenever you want Jira matching. It is now required, not just recommended.
-- Use `JIRA_MAX_RESULTS` to change how many Jira candidates are returned. The default is `5`.
+- Use `JIRA_PROJECT_KEY` whenever you want Jira matching. It is required, and enabled searches are always scoped to that project.
+- For Jira Cloud, set `JIRA_EMAIL` plus `JIRA_API_TOKEN`.
+- For Jira Server/Data Center, set `JIRA_PAT`.
+- If you are on Server/Data Center and do not have a PAT, `JIRA_API_TOKEN` can still work as a fallback only when `JIRA_EMAIL` is not set.
+- Use `JIRA_MAX_RESULTS` to change how many Jira candidates are returned before relevance filtering. The default is `5`.
 - Use `JIRA_SSL_VERIFY` if you need to control TLS verification. The default is `true`.
 
-> **Note:** Cloud mode is selected only when `JIRA_EMAIL` and `JIRA_API_TOKEN` are both set. `JIRA_EMAIL` plus `JIRA_PAT` stays on the Server/Data Center auth path.
+If you prefer saved CLI defaults, the example config file includes the same Jira settings:
 
-If you use the CLI, the `analyze` command now exposes `--jira` and `--no-jira` as explicit overrides:
+```15:40:config.example.toml
+[defaults]
+# ... shared defaults above ...
 
-```426:438:src/jenkins_job_insight/cli/main.py
-@app.command()
-def analyze(
-    job_name: str = typer.Option(..., "--job-name", "-j", help="Jenkins job name."),
-    build_number: int = typer.Option(
-        ..., "--build-number", "-b", help="Build number to analyze."
-    ),
-    provider: str = typer.Option(
-        "", "--provider", help="AI provider (e.g. claude, gemini, cursor)."
-    ),
-    model: str = typer.Option("", "--model", help="AI model to use."),
-    jira: bool | None = typer.Option(
-        None, "--jira/--no-jira", help="Enable/disable Jira integration."
-    ),
+# Jira
+jira_url = "https://your-jira.atlassian.net"
+jira_email = "you@example.com"
+jira_api_token = "your-jira-token"
+jira_pat = ""
+jira_project_key = "PROJ"
+jira_ssl_verify = true
+jira_max_results = 50
+enable_jira = true
 ```
 
-Use `jji analyze --job-name my-job --build-number 27 --jira` to force Jira on for one run, or `--no-jira` to skip it even when the server is configured. If you leave both flags off, the request falls back to the server's configured default.
+> **Note:** Cloud mode is selected only when `JIRA_EMAIL` and `JIRA_API_TOKEN` are both set. `JIRA_EMAIL` plus `JIRA_PAT` stays on the Server/Data Center auth path, and Server/Data Center falls back to `JIRA_API_TOKEN` only when `JIRA_EMAIL` is not set.
 
-The same toggle exists in API requests as `enable_jira`, and it still lives on the shared analysis request model, so it works for both `/analyze` and `/analyze-failures`. Send `true` to force Jira on for one request, `false` to skip it, or omit it to auto-detect from configured Jira settings. The request model also still supports per-request Jira overrides such as `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, and `jira_max_results`.
+If you use the CLI, `jji analyze` still exposes `--jira` and `--no-jira`, and it can also forward `enable_jira` from `~/.config/jji/config.toml`:
+
+```555:622:src/jenkins_job_insight/cli/main.py
+# Start from config defaults (lowest priority), then overlay CLI flags.
+extras: dict = {}
+cfg = _state.get("server_config")
+if cfg:
+    # ...
+    if cfg.enable_jira is not None:
+        extras["enable_jira"] = cfg.enable_jira
+
+# CLI flags override config (highest priority).
+if provider:
+    extras["ai_provider"] = provider
+if model:
+    extras["ai_model"] = model
+if jira is not None:
+    extras["enable_jira"] = jira
+```
+
+Use `jji analyze --job-name my-job --build-number 27 --jira` to force Jira on for one run, or `--no-jira` to skip it even when the selected CLI profile enables it. If you leave both flags off, `jji` uses any `enable_jira` value from its config file; otherwise the server falls back to its own default or auto-detection.
+
+The same toggle exists in API requests as `enable_jira`, and it still lives on the shared analysis request model, so it works for both `/analyze` and `/analyze-failures`. Send `true` to force Jira on for one request, `false` to skip it, or omit it to follow the merged server setting, which may be an explicit `ENABLE_JIRA` choice or auto-detection from complete Jira config.
+
+> **Note:** Per-request Jira overrides such as `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, and `jira_max_results` apply to analysis requests. Jira bug preview and creation use the server's configured Jira connection, not caller-supplied per-analysis credentials.
 
 > **Warning:** `enable_jira` still does not bypass missing configuration. If `JIRA_URL`, Jira credentials, or `JIRA_PROJECT_KEY` are missing, Jira matching stays off.
 
@@ -4679,9 +5152,9 @@ jira_search_keywords rules:
 - Think: "what would someone title a Jira bug for this exact issue?"
 ```
 
-Then the server turns those keywords into a Jira search that only looks for `Bug` issues and optionally scopes the search to your Jira project:
+Then the server turns those keywords into a Jira search that only looks for `Bug` issues and scopes the search to your configured Jira project:
 
-```125:139:src/jenkins_job_insight/jira.py
+```120:163:src/jenkins_job_insight/jira.py
 # Build JQL: summary ~ "kw1" OR summary ~ "kw2" ...
 text_clauses = " OR ".join(
     f'summary ~ "{_sanitize_jql_keyword(kw)}"' for kw in keywords
@@ -4697,11 +5170,20 @@ params = {
     "maxResults": self._max_results,
     "fields": "summary,description,status,priority",
 }
+
+# ... Jira response parsing ...
+
+desc = fields.get("description") or ""
+# Cloud API v3 returns description as ADF (Atlassian Document Format)
+if isinstance(desc, dict):
+    desc = _extract_text_from_adf(desc)
 ```
 
 A few details matter here:
+- Because Jira matching now requires `JIRA_PROJECT_KEY`, enabled searches are scoped to that project.
 - The initial Jira query searches issue summaries, not full-text descriptions.
 - The returned candidates still include description, status, priority, and browse URL for review.
+- Jira Cloud descriptions returned as Atlassian Document Format are flattened to plain text before later relevance filtering.
 - The search is ordered by `updated DESC`, so fresher bug reports are preferred.
 
 If several failures point to the same root cause, `jenkins-job-insight` avoids duplicate Jira work by deduplicating on keyword sets and reusing the same search result across all of those reports:
@@ -4760,10 +5242,12 @@ for kw_tuple, candidates in zip(keyword_to_reports, search_results):
         report.jira_matches = matches
 ```
 
-This gives you three useful outcomes:
+This gives you five useful outcomes:
 - Repeated failures with the same root cause do not trigger repeated Jira searches.
 - Related failures get the same attached Jira matches, which makes team triage more consistent.
-- Jira lookup is best-effort. A Jira outage should not break the main analysis pipeline.
+- When AI relevance filtering succeeds, only candidates marked relevant are kept and then sorted highest-first by `score`.
+- If no AI provider and model are available for that filtering step, the raw Jira candidates are still attached as `jira_matches` with `score` set to `0.0`.
+- Jira lookup and AI filtering are both best-effort. If Jira is unreachable or the filtering step fails, the overall analysis still completes, and that keyword set may simply end up with no attached matches.
 
 > **Note:** If a `PRODUCT BUG` report has no `jira_search_keywords`, Jira lookup is skipped for that failure.
 
@@ -4884,7 +5368,7 @@ Most users touch four parts of the API:
 
 ## Primary Workflows
 
-Use `POST /analyze` when the service can reach Jenkins directly. Required fields are `job_name` and `build_number`, and `job_name` can include folder-style Jenkins paths such as `folder/job-name`. The endpoint is asynchronous only: it returns `202 Accepted`, a new `job_id`, and a `result_url` you can poll or open. If the target Jenkins build is still running and `wait_for_completion` stays enabled, the stored job enters `waiting` until Jenkins finishes; `poll_interval_minutes` and `max_wait_minutes` control that monitoring window.
+Use `POST /analyze` when the service can reach Jenkins directly. Required fields are `job_name` and `build_number`, and `job_name` can include folder-style Jenkins paths such as `folder/job-name`. The endpoint is asynchronous only: it returns `202 Accepted`, a new `job_id`, and a `result_url` you can poll or open. When `wait_for_completion` is enabled and Jenkins connectivity is configured, the stored job is written as `waiting` immediately so the service can monitor Jenkins and resume that monitoring after a restart; otherwise it starts as `pending`. `poll_interval_minutes` and `max_wait_minutes` still control that monitoring window.
 
 The repository’s test suite exercises that async contract directly:
 
@@ -4935,8 +5419,8 @@ assert len(data["failures"]) == 1
 
 | Endpoint | Use it for | Notes |
 | --- | --- | --- |
-| `POST /analyze` | Analyze a Jenkins job/build. | Async only. Returns `202` with `status: "queued"`. If Jenkins is still running and `wait_for_completion` is enabled, the stored job moves to `waiting` until the build finishes. |
-| `POST /analyze-failures` | Analyze raw failures or JUnit XML without Jenkins. | Synchronous only. Accepts either `failures` or `raw_xml`, not both. |
+| `POST /analyze` | Analyze a Jenkins job/build. | Async only. Returns `202` with `status: "queued"`. When `wait_for_completion` is enabled and Jenkins connectivity is configured, the stored job is written as `waiting` immediately; otherwise it starts as `pending`. Optional `peer_ai_configs` and `peer_analysis_max_rounds` enable multi-AI consensus analysis for this request. |
+| `POST /analyze-failures` | Analyze raw failures or JUnit XML without Jenkins. | Synchronous only. Accepts either `failures` or `raw_xml`, not both. Supports the same optional peer-analysis fields as `/analyze`, and returned failures can include `peer_debate` when peers are used. |
 | `GET /results/{job_id}` | Fetch the stored JSON result for a job. | JSON clients get the stored wrapper plus `base_url`, `result_url`, and `capabilities`; the response status is `202` while the job is `pending`, `waiting`, or `running`. Browser requests redirect to `/status/{job_id}` while work is in progress and otherwise load the React report UI. |
 | `GET /results` | List recent analysis jobs. | Returns recent `job_id`, `jenkins_url`, `status`, and timestamp fields. |
 | `DELETE /results/{job_id}` | Delete a job and related stored data. | Removes the job, comments, review state, history rows, and classifications. |
@@ -5009,14 +5493,38 @@ The API uses one immediate submission word and five stored job states:
 
 - `queued`: returned by `POST /analyze` to say the request was accepted and a `job_id` was allocated
 - `pending`: a result row exists, but background analysis has not started processing the job yet
-- `waiting`: the service is polling Jenkins because the target build is still running and `wait_for_completion` is enabled
+- `waiting`: the request has been accepted and the service is in the Jenkins-monitoring phase; with `wait_for_completion` enabled and Jenkins connectivity configured, `POST /analyze` writes this state immediately so the job can resume safely after a restart
 - `running`: analysis is actively in progress
 - `completed`: the final result is available
 - `failed`: the analysis did not complete successfully
 
 > **Note:** `queued` is only the immediate submission response. Stored job objects themselves use `pending`, `waiting`, `running`, `completed`, and `failed`.
 
-`POST /analyze-failures` is synchronous, so its response model only uses `completed` or `failed`. If a browser opens `GET /results/{job_id}` while a job is `pending`, `waiting`, or `running`, the server redirects to `/status/{job_id}`; once the job is done, the same route serves the React report view.
+The initial persisted state for async Jenkins analysis is chosen before the background task starts:
+
+```1021:1039:src/jenkins_job_insight/main.py
+initial_result: dict = {
+    "job_name": body.job_name,
+    "build_number": body.build_number,
+}
+can_resume_wait = merged.wait_for_completion and bool(merged.jenkins_url)
+if can_resume_wait:
+    initial_result["request_params"] = _build_request_params(
+        body,
+        merged,
+        body.ai_provider or AI_PROVIDER,
+        body.ai_model or AI_MODEL,
+        peer_ai_configs_resolved=resolved_peers,
+    )
+await save_result(
+    job_id,
+    jenkins_url,
+    "waiting" if can_resume_wait else "pending",
+    initial_result,
+)
+```
+
+`POST /analyze-failures` is synchronous, so its response model only uses `completed` or `failed`. It still persists a job row and internally follows the simpler `pending` -> `running` -> `completed` or `failed` flow. If a browser opens `GET /results/{job_id}` while a job is `pending`, `waiting`, or `running`, the server redirects to `/status/{job_id}`; once the job is done, the same route serves the React report view.
 
 ## Absolute URLs In Responses
 
@@ -5038,7 +5546,35 @@ Set `PUBLIC_BASE_URL` when you want absolute links in API responses or tracker p
 
 ## OpenAPI And Swagger
 
-You do not need to hand-maintain API docs. The app uses FastAPI’s generated schema and Swagger UI. The repository tests verify both `GET /openapi.json` and `GET /docs`, and the generated schema reports title `Jenkins Job Insight` with version `0.1.0`:
+You do not need to hand-maintain API docs. The app uses FastAPI's generated schema and Swagger UI, so new request and response fields such as `peer_ai_configs`, `peer_analysis_max_rounds`, and `peer_debate` appear in the live schema automatically:
+
+```95:105:src/jenkins_job_insight/models.py
+peer_ai_configs: list[AiConfigEntry] | None = Field(
+    default=None,
+    description=(
+        "List of peer AI configs for consensus analysis. "
+        "Omit to inherit the server default; send [] to disable peer analysis "
+        "for this request. Each peer reviews the main AI's analysis."
+    ),
+)
+peer_analysis_max_rounds: Annotated[int, Field(ge=1, le=10)] = Field(
+    default=3,
+    description="Maximum debate rounds for peer analysis",
+)
+```
+
+```278:285:src/jenkins_job_insight/models.py
+error_signature: str = Field(
+    default="",
+    description="SHA-256 hash of error + stack trace for deduplication",
+)
+peer_debate: PeerDebate | None = Field(
+    default=None,
+    description="Peer debate trail (present only when peer analysis was used)",
+)
+```
+
+The repository tests still verify both `GET /openapi.json` and `GET /docs`, and the generated schema reports title `Jenkins Job Insight` with version `0.1.0`:
 
 ```934:943:tests/test_main.py
 response = test_client.get("/openapi.json")
@@ -5053,7 +5589,31 @@ assert response.status_code == 200
 
 The browser landing page is `GET /` (with `/dashboard` as a client-side alias), not `GET /docs`. Swagger covers the FastAPI JSON endpoints only; browser routes such as `/results/{job_id}`, `/status/{job_id}`, `/history`, and `/register` are handled by the React SPA and are not listed as separate OpenAPI operations.
 
-> **Tip:** With the default local container setup, open [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger UI and [http://localhost:8000/openapi.json](http://localhost:8000/openapi.json) for the raw schema.
+> **Note:** Browser requests without a `jji_username` cookie can still be redirected to `/register` before they reach `/docs` or `/openapi.json`, because HTML-style requests pass through the same username middleware as the rest of the web UI.
+
+```443:461:src/jenkins_job_insight/main.py
+async def dispatch(self, request: Request, call_next):
+    path = request.url.path
+    # Allow register page, health check, static assets, and API paths without auth
+    if (
+        path in ("/register", "/health", "/favicon.ico", "/api")
+        or path.startswith("/register")
+        or path.startswith("/assets/")
+        or path.startswith("/api/")
+    ):
+        return await call_next(request)
+
+    username = request.cookies.get("jji_username", "")
+    request.state.username = username
+
+    # Only redirect browser (HTML) requests without auth
+    if not username:
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept:
+            return RedirectResponse(url="/register", status_code=303)
+```
+
+> **Tip:** With the default local container setup, use `curl` for a quick schema check at [http://localhost:8000/openapi.json](http://localhost:8000/openapi.json). For Swagger UI at [http://localhost:8000/docs](http://localhost:8000/docs), register any username in the web app first if your browser is redirected to `/register`.
 
 ## Configuration
 
@@ -5130,7 +5690,7 @@ This endpoint is asynchronous and returns immediately with a `job_id`. Use `wait
 
 `POST /analyze` does not use query parameters in the current API contract. Submit all options in the JSON body.
 
-> **Note:** The older `?sync=true` pattern is not part of the current `POST /analyze` schema. The endpoint always queues work and returns `202 Accepted`.
+> **Note:** The older `?sync=true` pattern is not part of the current `POST /analyze` schema. The endpoint always queues work and returns `202 Accepted`. If you need a single request/response flow, use `POST /analyze-failures` instead.
 
 ## Request Body
 
@@ -5152,7 +5712,11 @@ Only `job_name` and `build_number` are required. Everything else is optional and
 | `ai_model` | string | No | AI model for this request. |
 | `ai_cli_timeout` | integer | No | AI CLI timeout in minutes for this request. Must be greater than `0`. |
 | `raw_prompt` | string | No | Additional instructions appended to the AI analysis prompt. |
+| `peer_ai_configs` | array of objects | No | Optional peer AI reviewers for consensus analysis. Each item must include `ai_provider` and `ai_model`, using the same provider values as `ai_provider`. Omit the field to use the server default, or send `[]` to disable peer analysis for this request. |
+| `peer_analysis_max_rounds` | integer | No | Maximum debate rounds for peer analysis. Valid values are `1` through `10`. If omitted, the server default is used; when neither request nor server config overrides it, the default is `3`. |
 | `enable_jira` | boolean | No | Enable or disable Jira matching for this request. If omitted, the server uses request overrides, then environment defaults, then Jira auto-detection from configured credentials. |
+
+> **Note:** In the JSON request body, `peer_ai_configs` is an array of `{ai_provider, ai_model}` objects. The server-side `PEER_AI_CONFIGS` default uses a comma-separated string format instead.
 
 ### Callback Fields
 
@@ -5184,7 +5748,7 @@ Only `job_name` and `build_number` are required. Everything else is optional and
 | `jira_project_key` | string | No | Jira project key to scope searches. It must be configured if you want Jira matching enabled. |
 | `jira_ssl_verify` | boolean | No | Override Jira SSL verification. |
 | `jira_max_results` | integer | No | Maximum Jira matches to retrieve. Must be greater than `0`. |
-| `github_token` | string | No | GitHub token used for private-repo PR status enrichment in comments and for GitHub issue creation. |
+| `github_token` | string | No | GitHub token used for analysis-time GitHub access such as private-repo PR status enrichment in comments. GitHub issue creation still uses server-level configuration. |
 
 > **Note:** `tests_repo_url` is optional. If you omit it and the server has no default `TESTS_REPO_URL`, analysis still runs, but the AI will not have repository code context.
 
@@ -5218,12 +5782,33 @@ The examples below are taken directly from the repository's tests and README.
 
 > **Note:** The monitoring example matches the repository README and assumes AI defaults are already configured on the server. If they are not, include `ai_provider` and `ai_model` in the request body too.
 
+### Request With Peer Analysis
+
+This example matches the peer-analysis request coverage in the repository's test suite.
+
+```json
+{
+  "job_name": "test",
+  "build_number": 123,
+  "ai_provider": "claude",
+  "ai_model": "test-model",
+  "peer_ai_configs": [
+    {
+      "ai_provider": "gemini",
+      "ai_model": "pro"
+    }
+  ],
+  "peer_analysis_max_rounds": 5
+}
+```
+
 ### CLI Equivalents
 
 ```bash
 jji analyze --job-name my-job --build-number 42
 jji analyze --job-name my-job --build-number 42 --no-wait
 jji analyze --job-name my-job --build-number 27 --provider claude --model opus-4 --jira
+jji analyze --job-name my-job --build-number 1 --peers "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro" --peer-analysis-max-rounds 5
 ```
 
 ## Async Behavior
@@ -5244,6 +5829,13 @@ The lifecycle is:
 ## Background Job Behavior
 
 Async analysis still uses FastAPI background tasks inside the application process. It is simple and fast, but it is not a separate external worker queue.
+
+While a job is in progress, the nested `result` object can also carry lightweight progress metadata for the status page and API clients:
+- `progress_phase` for the latest phase
+- `progress_log` as an ordered list of `{phase, timestamp}` entries that survives refreshes
+- sanitized `request_params` for resumable `waiting` jobs
+
+Common phase names include `waiting_for_jenkins`, `analyzing`, `analyzing_child_jobs`, `analyzing_failures`, `enriching_jira`, and `saving`. Peer-analysis runs can also add phases such as `peer_review_round_1` and `orchestrator_revising_round_1`.
 
 > **Warning:** Restart behavior now depends on the in-flight status. `pending` and `running` jobs are marked `failed` on startup because their background task is gone. `waiting` jobs are resumed on startup when the stored request contains enough information to rebuild Jenkins monitoring.
 
@@ -5277,7 +5869,7 @@ This is the JSON shape you poll after submission.
 | `job_id` | string | Job identifier. |
 | `jenkins_url` | string | Jenkins build URL stored for the analysis. |
 | `status` | string | Current stored state. Possible values are `pending`, `waiting`, `running`, `completed`, and `failed`. |
-| `result` | object or `null` | Minimal stored metadata while queued, the analysis payload when available, or an error payload when the job fails. |
+| `result` | object or `null` | Minimal stored metadata while the job is in progress, sometimes including sanitized `request_params`, `progress_phase`, and `progress_log`; the analysis payload when available; or an error payload when the job fails. |
 | `created_at` | string | Timestamp when the job row was created. |
 | `analysis_started_at` | string or `null` | Timestamp when analysis execution started, if it has started. |
 | `completed_at` | string or `null` | Timestamp when the job reached `completed` or `failed`, if available. |
@@ -5318,6 +5910,7 @@ Each item in `failures` has this shape:
 | `error` | string | Error message or exception. |
 | `error_signature` | string | SHA-256 signature of the error and stack trace, used for deduplication. |
 | `analysis` | object | Structured AI analysis for this failure. |
+| `peer_debate` | object or `null` | Peer debate trail when peer analysis is enabled for the run. |
 
 ### `failures[].analysis`
 
@@ -5357,6 +5950,20 @@ Each item in `jira_matches` contains:
 
 > **Note:** `code_fix` and `product_bug_report` are mutually exclusive. A failure gets one or the other, not both.
 
+### `failures[].peer_debate`
+
+When peer analysis is used, `peer_debate` records the consensus trail for the failure group.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `consensus_reached` | boolean | Whether the peer-analysis flow reached consensus. |
+| `rounds_used` | integer | How many rounds were actually used. |
+| `max_rounds` | integer | Maximum rounds allowed for that run. |
+| `ai_configs` | array | The provider/model pairs that participated in the debate. Each item includes `ai_provider` and `ai_model`. |
+| `rounds` | array | Ordered round entries. Each entry includes `round`, `ai_provider`, `ai_model`, `role` (`orchestrator` or `peer`), `classification`, `details`, and `agrees_with_orchestrator` (`null` means the peer failed or was excluded from consensus). |
+
+> **Note:** `peer_debate` supplements the main `analysis` object. It explains how consensus was reached, but the final classification still lives in `analysis.classification`.
+
 ### `child_job_analyses[]`
 
 Pipeline jobs can return failed child jobs recursively.
@@ -5375,6 +5982,8 @@ Pipeline jobs can return failed child jobs recursively.
 
 `POST /analyze` no longer supports callback delivery fields in the request body.
 
+> **Warning:** Older `CALLBACK_URL`, `CALLBACK_HEADERS`, `callback_url`, and `callback_headers` examples are legacy material for earlier flows and do not apply to the current API.
+
 > **Note:** Use the returned `job_id` with `GET /results/{job_id}` for machine-readable polling, or open `/status/{job_id}` and `/results/{job_id}` in the web UI for human-readable progress and results.
 
 ## Configuration Snippets
@@ -5389,7 +5998,13 @@ AI_PROVIDER=claude
 # AI model to use (required, applies to any provider)
 # Can also be set per-request in webhook body
 AI_MODEL=your-model-name
+
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
+
+> **Note:** `PEER_AI_CONFIGS` and `PEER_ANALYSIS_MAX_ROUNDS` are server-side defaults. In the JSON request body, the equivalent fields are `peer_ai_configs` and `peer_analysis_max_rounds`.
 
 ### Repository Defaults From `.env.example`
 
@@ -5527,6 +6142,8 @@ These shared request fields are available in both modes:
 | `tests_repo_url` | URL | If set, the service clones the repo and lets the AI inspect the code |
 | `raw_prompt` | string | Extra instructions appended to the AI prompt |
 | `ai_cli_timeout` | positive integer | Timeout in minutes for AI CLI calls |
+| `peer_ai_configs` | array of objects | Optional peer reviewers for consensus analysis. Each item must include `ai_provider` and `ai_model`; valid peer providers are `claude`, `gemini`, and `cursor`. Omit the field to inherit the server default from `PEER_AI_CONFIGS`; send `[]` to disable peer analysis for this request. |
+| `peer_analysis_max_rounds` | integer `1-10` | Maximum debate rounds when peer analysis is enabled. Model default is `3`; when omitted, the server may use `PEER_ANALYSIS_MAX_ROUNDS` instead. |
 | `enable_jira` | boolean | Enables or disables Jira matching for this request |
 | `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, `jira_max_results` | various | Per-request Jira overrides that take precedence over environment defaults |
 
@@ -5539,6 +6156,17 @@ AI_PROVIDER=claude
 # AI model to use (required, applies to any provider)
 # Can also be set per-request in webhook body
 AI_MODEL=your-model-name
+```
+
+Peer-analysis defaults can also come from `.env.example`:
+
+```52:57:.env.example
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
 If you want repository context or Jira enrichment by default, the same `.env.example` also defines `TESTS_REPO_URL` and the `JIRA_*` variables. If you want absolute links in responses and enriched XML, also set `PUBLIC_BASE_URL`.
@@ -5554,6 +6182,8 @@ If you want repository context or Jira enrichment by default, the same `.env.exa
 | Both `failures` and `raw_xml` provided | `422` | Request is rejected by validation |
 | Neither `failures` nor `raw_xml` provided | `422` | Request is rejected by validation |
 | `failures: []` | `422` | Treated as missing input and rejected |
+| Invalid `peer_ai_configs` entry | `422` | Each entry must include a supported `ai_provider` and a non-empty `ai_model` |
+| `peer_analysis_max_rounds` outside `1-10` | `422` | Request body validation fails |
 | Invalid `tests_repo_url` or other field types | `422` | Request body validation fails |
 
 > **Warning:** `failures` and `raw_xml` are mutually exclusive. Send one or the other, never both.
@@ -5579,7 +6209,7 @@ A successful run returns `200` with these top-level fields:
 | Field | Meaning |
 | --- | --- |
 | `job_id` | Unique ID for this analysis |
-| `status` | Always `completed` in this shape |
+| `status` | `completed` in this shape |
 | `summary` | High-level summary, including total failures and unique error count |
 | `ai_provider` | The provider used for analysis |
 | `ai_model` | The model used for analysis |
@@ -5587,6 +6217,8 @@ A successful run returns `200` with these top-level fields:
 | `enriched_xml` | String when `raw_xml` was sent, `null` when `failures` was sent |
 | `base_url` | Trusted public base URL from `PUBLIC_BASE_URL`, or `""` when no public base URL is configured |
 | `result_url` | Canonical stored-result URL (`/results/{job_id}`). API clients get JSON from this path, and browsers use the same path for the report UI |
+
+> **Note:** `status: completed` means the request finished. If some unique error groups analyze successfully and others fail, the response can still be `completed`; use `summary` and the `failures` array to see how many analyses succeeded.
 
 Each item in `failures` contains:
 
@@ -5601,8 +6233,19 @@ Each item in `failures` contains:
 | `analysis.artifacts_evidence` | Evidence text when the AI returns it |
 | `analysis.code_fix` | Present for `CODE ISSUE` results |
 | `analysis.product_bug_report` | Present for `PRODUCT BUG` results |
+| `peer_debate` | Peer-review consensus trail when peer analysis was enabled |
 
 `analysis.code_fix` and `analysis.product_bug_report` are mutually exclusive.
+
+When peer analysis runs, `peer_debate` adds:
+
+- `consensus_reached`
+- `rounds_used`
+- `max_rounds`
+- `ai_configs`
+- `rounds`
+
+Each `rounds` entry records the round number, provider/model, participant role (`orchestrator` or `peer`), that round's classification and details, and `agrees_with_orchestrator` when a peer vote counted toward consensus.
 
 A structured `PRODUCT BUG` analysis looks like this in the test fixtures:
 
@@ -5707,6 +6350,8 @@ for testsuite in root.iter("testsuite"):
     assert len(report_props) == 1
     assert report_props[0].get("value") == "http://server/results/job-1"
 ```
+
+> **Note:** Peer-analysis metadata is not written into XML. Even when `failures[].peer_debate` is present in the JSON response, `enriched_xml` still contains only the final analysis properties listed above.
 
 In `failures` mode, none of this XML enrichment happens, so `enriched_xml` is `null`.
 
@@ -5912,7 +6557,35 @@ Top-level fields you should expect in the JSON response:
 | `capabilities` | Feature flags such as `github_issues` and `jira_bugs` |
 | `result` | The stored analysis payload, if one has been persisted |
 
-For Jenkins-backed analyses, `result` usually includes fields such as `job_name`, `build_number`, `summary`, `ai_provider`, `ai_model`, `failures`, and `child_job_analyses`. Direct failure analyses created through `/analyze-failures` keep a smaller payload.
+For Jenkins-backed analyses, `result` usually includes fields such as `job_name`, `build_number`, `summary`, `ai_provider`, `ai_model`, `failures`, and `child_job_analyses`. While a job is still `waiting` or `running`, the same payload can also include `request_params`, `progress_phase`, and `progress_log`. Those fields let JJI resume waiting jobs after a restart and let the status page show refresh-safe progress details.
+
+Sensitive values inside `request_params` are stripped before the response is returned. If peer analysis was used for a failure group, each affected failure can also include `peer_debate`, which records the participating AI configs, the round-by-round debate trail, and whether consensus was reached. Direct failure analyses created through `/analyze-failures` keep a smaller payload.
+
+Codebase examples:
+
+```713:740:src/jenkins_job_insight/storage.py
+async def get_result(job_id: str, *, strip_sensitive: bool = True) -> dict | None:
+    # ... existing code ...
+    parsed = parse_result_json(row["result_json"], job_id=job_id)
+    if parsed and strip_sensitive:
+        parsed = strip_sensitive_from_response(parsed)
+```
+
+```610:623:src/jenkins_job_insight/peer_analysis.py
+peer_debate = PeerDebate(
+    consensus_reached=consensus_reached,
+    rounds_used=rounds_used,
+    max_rounds=max_rounds,
+    ai_configs=[
+        AiConfigEntry(
+            ai_provider=main_ai_provider,  # type: ignore[arg-type]
+            ai_model=main_ai_model,
+        ),
+        *peer_ai_configs,
+    ],
+    rounds=all_rounds,
+)
+```
 
 Example from the current test suite:
 
@@ -5931,7 +6604,7 @@ Important behavior:
 - In-progress JSON responses return `202 Accepted`
 - Browser requests for completed or failed jobs use this same route as the report page
 - Browser requests for `waiting`, `pending`, or `running` jobs are redirected to `/status/{job_id}`
-- In a browser, the route loads the interactive report UI with grouped failures, child-job sections, comments, review toggles, classification overrides, and issue preview/create actions
+- In a browser, the route loads the interactive report UI with grouped failures, child-job sections, peer-analysis summaries and debate timelines when available, comments, review toggles, classification overrides, and issue preview/create actions
 - The response always includes `base_url` and `result_url`
 - The response also includes `capabilities` so the report UI can decide whether GitHub and Jira actions should be shown
 
@@ -5941,25 +6614,29 @@ Important behavior:
 
 Use this browser-only route when a job is still `waiting`, `pending`, or `running`. The server sends people here automatically when they open `/results/{job_id}` in a browser before analysis is finished.
 
-The status page polls the JSON result endpoint and returns to the report route as soon as analysis completes:
+The status page polls `GET /results/{job_id}` every 10 seconds, redirects to the report route when the job completes, and reads `result.progress_log`, `result.progress_phase`, and `result.request_params` from the same response so the UI can show progress, the main AI, and configured peers while the job is still in flight.
 
-```61:76:frontend/src/pages/StatusPage.tsx
-async function poll() {
-  if (inFlight || cancelled) return
-  inFlight = true
-  try {
-    const res = await api.get<ResultResponse>(`/results/${jobId}`)
-    if (cancelled) return
-    setError('')
-    setData(res)
-    if (res.status === 'completed') {
-      stopPolling()
-      navigate(`/results/${jobId}`, { replace: true })
-    } else if (res.status === 'failed') {
-      stopPolling()
-      setTerminalErrorKind('failed')
-      setError(res.result?.error ?? 'Analysis failed')
-    }
+```149:187:frontend/src/pages/StatusPage.tsx
+// Derive stepLog from server-persisted progress_log (survives F5 refresh)
+const rawProgressLog = data?.result?.progress_log
+const progressLog = Array.isArray(rawProgressLog) ? rawProgressLog : []
+const stepLog: StepLogEntry[] = useMemo(
+  () => progressLog.map(entry => ({
+    phase: entry.phase,
+    label: getPhaseLabel(entry.phase) ?? entry.phase,
+    timestamp: new Date(entry.timestamp * 1000).toLocaleTimeString(),
+  })),
+  [progressLog],
+)
+
+// ... existing code ...
+
+const params = data?.result?.request_params
+const mainAi = params?.ai_provider && params?.ai_model
+  ? `${params.ai_provider} / ${params.ai_model}`
+  : null
+const peers = params?.peer_ai_configs
+const progressPhase = data?.result?.progress_phase
 ```
 
 What the page shows in practice:
@@ -5967,7 +6644,12 @@ What the page shows in practice:
 - `waiting` when the service is polling Jenkins for build completion
 - `pending` when the job is queued for analysis
 - `running` while AI analysis is in progress
-- A terminal error view for `failed`, `404`, or `403` cases
+- A refresh-safe progress panel driven by `result.progress_log`
+- Server-reported phases such as `waiting_for_jenkins`, `analyzing`, `analyzing_failures`, `analyzing_child_jobs`, `enriching_jira`, and `saving`
+- Peer-analysis phases such as `peer_review_round_1` and `orchestrator_revising_round_1`, with group suffixes like `(group 2/3)` when multiple failure groups are being debated
+- The main AI provider/model and any configured peers when `result.request_params` is present
+- A dedicated timeout-style terminal state for AI analysis timeouts, even though the underlying API status remains `failed`
+- A terminal error view for other `failed`, `404`, or `403` cases
 - The Jenkins build link, queued timestamp, and current status badge when that data is available
 
 > **Note:** `/status/{job_id}` is a browser route served by the React app. For scripts and automation, keep polling `GET /results/{job_id}` instead.
@@ -6014,48 +6696,46 @@ Response fields from `/api/dashboard`:
 | `summary` | Stored analysis summary when available |
 | `error` | Stored terminal error message when available |
 
-The dashboard page fetches that JSON on load and refreshes it every 10 seconds:
+The dashboard page fetches that JSON on load, refreshes it every 10 seconds, and keeps sort state in `sessionStorage`, so a reload in the same browser tab keeps the selected sort column and direction.
 
-```106:132:frontend/src/pages/DashboardPage.tsx
-const fetchJobs = useCallback(async () => {
-  if (inFlightRef.current) return
-  inFlightRef.current = true
-  const thisSeq = ++fetchSeqRef.current
-  try {
-    const data = await api.get<DashboardJob[]>('/api/dashboard')
-    if (thisSeq === fetchSeqRef.current) {
-      setError(null)
-      setJobs(data)
-    }
-  } catch (err) {
-    if (thisSeq === fetchSeqRef.current) {
-      setError(err instanceof Error ? err.message : 'Failed to load dashboard')
-    }
-  } finally {
-    inFlightRef.current = false
-    if (thisSeq === fetchSeqRef.current) {
-      setLoading(false)
-    }
-  }
-}, [])
+```12:33:frontend/src/lib/useTableSort.ts
+export function useTableSort(
+  storagePrefix: string,
+  defaultKey: string,
+  defaultDir: SortDirection,
+  descDefaultKeys: string[] = [],
+) {
+  const [sortKey, setSortKey] = useSessionState(`${storagePrefix}.sortKey`, defaultKey)
+  const [sortDir, setSortDir] = useSessionState<SortDirection>(`${storagePrefix}.sortDir`, defaultDir)
 
-useEffect(() => {
-  fetchJobs()
-  const interval = setInterval(fetchJobs, 10_000)
-  return () => clearInterval(interval)
-}, [fetchJobs])
+  const handleSort = useCallback(
+    (key: string) => {
+      if (key === sortKey) {
+        setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+      } else {
+        setSortKey(key)
+        setSortDir(descDefaultKeys.includes(key) ? 'desc' : 'asc')
+      }
+    },
+    [sortKey, sortDir, setSortKey, setSortDir, descDefaultKeys],
+  )
+
+  return { sortKey, sortDir, handleSort }
+}
 ```
 
 What the browser dashboard shows:
 
-- Client-side filtering by job name or job ID
+- Client-side filtering by job name or job ID, plus a status filter with `All statuses`, `completed`, `running`, `waiting`, `pending`, `failed`, and a derived `timeout` view for failed AI timeouts; the API still returns `status: failed`
+- Sortable `Job`, `Status`, `Failures`, `Reviewed`, `Comments`, `Children`, and `Created` columns
+- Session-scoped sort persistence, so the selected sort order survives a refresh in the same browser tab
 - Client-side pagination with 10, 20, or 50 rows per page
 - Failure, review, comment, and child-job counts
-- Relative creation timestamps with full timestamps in tooltips
+- Relative creation timestamps with full timestamps in tooltips, plus analysis duration when both `analysis_started_at` and `completed_at` are available
 - Row navigation to `/status/{job_id}` for `waiting`, `pending`, and `running` jobs, or `/results/{job_id}` for terminal jobs
 - A delete action that calls `DELETE /results/{job_id}`
 
-> **Note:** The old server-side `limit` query parameter and `Load last` control are gone. `/api/dashboard` currently returns the server's default dashboard batch (`500` rows), and the React app filters and paginates that data in memory.
+> **Note:** The old server-side `limit` query parameter and `Load last` control are gone. `/api/dashboard` currently returns the server's default dashboard batch (`500` rows), and the React app filters, sorts, and paginates that data in memory.
 
 ## Supporting Endpoints for Reports and Dashboard
 
@@ -6320,6 +7000,9 @@ A useful mental model is:
 - `AnalysisDetail.code_fix` -> `CodeFix`
 - `AnalysisDetail.product_bug_report` -> `ProductBugReport`
 - `ProductBugReport.jira_matches[]` -> `JiraMatch`
+- `BaseAnalysisRequest.peer_ai_configs[]` -> `AiConfigEntry`
+- `FailureAnalysis.peer_debate` -> `PeerDebate`
+- `PeerDebate.rounds[]` -> `PeerRound`
 - `AnalysisResult.child_job_analyses[]` -> recursive `ChildJobAnalysis`
 
 ## Shared Request Fields
@@ -6329,11 +7012,35 @@ Both `AnalyzeRequest` and `AnalyzeFailuresRequest` inherit `BaseAnalysisRequest`
 | Group | Fields | What they are for |
 | --- | --- | --- |
 | AI selection | `ai_provider`, `ai_model`, `ai_cli_timeout`, `raw_prompt` | Choose the AI backend and control how analysis is generated |
+| Peer analysis | `peer_ai_configs`, `peer_analysis_max_rounds` | Ask additional AI providers to review the main analysis and control how many debate rounds are allowed |
 | Source-code context | `tests_repo_url` | Let the service clone a repository and use it as extra context |
 | Jira enrichment | `enable_jira`, `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, `jira_max_results` | Attach likely Jira matches to `PRODUCT BUG` findings |
 | GitHub access | `github_token` | Optional token used by related GitHub-aware features, especially for private repos |
 
 `ai_provider` accepts `claude`, `gemini`, or `cursor`.
+
+`peer_ai_configs` is a list of `AiConfigEntry` objects, each with `ai_provider` and `ai_model`. Each entry must use a supported provider and a non-blank model name. `peer_analysis_max_rounds` controls how many review and revision cycles are allowed, and it must be between `1` and `10`.
+
+`peer_ai_configs` has three useful modes:
+
+- omit the field to inherit the server's `PEER_AI_CONFIGS` default
+- send `[]` to disable peer analysis for that request
+- send a non-empty list to choose the peer reviewers explicitly
+
+A request example from the test suite:
+
+```840:847:tests/test_models.py
+req = AnalyzeRequest(
+    job_name="j",
+    build_number=1,
+    peer_ai_configs=[
+        AiConfigEntry(ai_provider="cursor", ai_model="gpt-5.4-xhigh"),
+        AiConfigEntry(ai_provider="gemini", ai_model="pro"),
+    ],
+)
+```
+
+Because both request models inherit `BaseAnalysisRequest`, the same peer-analysis fields are available on `AnalyzeFailuresRequest` too.
 
 > **Note:** Most of these fields are optional because the server can load defaults from environment variables. If you send a non-`null` value in the request body, that value overrides the server default for that request.
 
@@ -6533,6 +7240,7 @@ Its fields are:
 - `error`: the result-side error message or exception text
 - `analysis`: the structured AI output
 - `error_signature`: a SHA-256 hash of the error plus stack trace, used for deduplication
+- `peer_debate`: an optional multi-AI debate trail attached when peer analysis is used
 
 A small but useful naming detail: request-side failure inputs use `error_message`, but result-side failure outputs use `error`.
 
@@ -6605,6 +7313,49 @@ A few practical notes about `AnalysisDetail`:
 - When one branch is empty, it is omitted from serialized output rather than emitted as `false`.
 
 > **Tip:** `error_signature` is not just metadata. The system uses it to deduplicate identical failures, connect matching historical failures, and keep related comments or overrides aligned across the same underlying error.
+
+### `PeerDebate`, `PeerRound`, and `AiConfigEntry`
+
+When peer analysis is enabled, each `FailureAnalysis` can include `peer_debate`. This object records which models participated, how many rounds were used, and whether the group reached consensus. Like the main classification, the debate is produced once per deduplicated error signature and then attached to every matching failure in that group.
+
+| Model | Fields | When you see it |
+| --- | --- | --- |
+| `AiConfigEntry` | `ai_provider`, `ai_model` | In request-side `peer_ai_configs` lists and in `PeerDebate.ai_configs` |
+| `PeerDebate` | `consensus_reached`, `rounds_used`, `max_rounds`, `ai_configs`, `rounds` | When peer analysis was enabled for that failure group |
+| `PeerRound` | `round`, `ai_provider`, `ai_model`, `role`, `classification`, `details`, `agrees_with_orchestrator` | One debate entry from either the main AI (`orchestrator`) or a reviewing `peer`; `agrees_with_orchestrator` can be `true`, `false`, or `null` |
+
+A real `PeerDebate` example from the tests:
+
+```690:696:tests/test_models.py
+d = PeerDebate(
+    consensus_reached=True,
+    rounds_used=1,
+    max_rounds=3,
+    ai_configs=[{"ai_provider": "claude", "ai_model": "opus"}],
+    rounds=[],
+)
+```
+
+A `FailureAnalysis` attaches that debate trail through `peer_debate`:
+
+```807:820:tests/test_models.py
+debate = PeerDebate(
+    consensus_reached=True,
+    rounds_used=1,
+    max_rounds=3,
+    ai_configs=[],
+    rounds=[],
+)
+fa = FailureAnalysis(
+    test_name="t",
+    error="e",
+    analysis=AnalysisDetail(details="d"),
+    error_signature="sig",
+    peer_debate=debate,
+)
+```
+
+> **Note:** When peer analysis is not used, `peer_debate` is not populated. The test suite checks this with `data.get("peer_debate") is None`.
 
 ## `JiraMatch`
 
@@ -6734,6 +7485,8 @@ The server-side `Settings` model still provides defaults for many request fields
 - `jira_ssl_verify = true`
 - `jira_max_results = 5`
 - `ai_cli_timeout = 10`
+- `peer_ai_configs` is empty by default (no peer reviewers configured)
+- `peer_analysis_max_rounds = 3`
 - `jenkins_artifacts_max_size_mb = 500`
 - `jenkins_artifacts_context_lines = 200`
 - `get_job_artifacts = true`
@@ -6741,12 +7494,25 @@ The server-side `Settings` model still provides defaults for many request fields
 - `poll_interval_minutes = 2`
 - `max_wait_minutes = 0`
 
+Server-side peer defaults can be configured in `.env`:
+
+```53:57:.env.example
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
+```
+
 A few configuration rules to remember:
 
 - Server-level Jenkins settings can be left blank and supplied per request through `AnalyzeRequest`.
 - `tests_repo_url` is validated as a URL in request payloads.
 - `ai_cli_timeout`, `jira_max_results`, `jenkins_artifacts_max_size_mb`, `jenkins_artifacts_context_lines`, and `poll_interval_minutes` must be positive.
+- `peer_analysis_max_rounds` must be between `1` and `10`.
 - `max_wait_minutes` accepts `0`, which means "wait indefinitely".
+- At the server level, `PEER_AI_CONFIGS` uses a `provider:model,provider:model` string, but API requests use a JSON list of `AiConfigEntry` objects.
+- Omitting `peer_ai_configs` lets a request inherit `PEER_AI_CONFIGS`; sending `[]` disables peer analysis for that request.
 - `jira_api_token` and `jira_pat` now represent different Jira auth paths: use `jira_api_token` with `jira_email` for Jira Cloud, and `jira_pat` for Jira Server/Data Center.
 - `PUBLIC_BASE_URL` affects only the HTTP helper links such as `base_url` and `result_url`; it is not part of any Pydantic response model.
 - `github_token` is a request field on the main analysis models, but `enable_github_issues` lives in server configuration rather than in `BaseAnalysisRequest`.
@@ -6825,7 +7591,48 @@ Jenkins Job Insight stores more than just the final analysis summary. In practic
 
 Direct `POST /analyze-failures` runs use the same persistence layer. They are stored in the same `results` table; they just do not have a Jenkins URL.
 
-There is no separate HTML report file anymore. Browser report views are driven by the stored SQLite result at `/results/{job_id}`. For Jenkins jobs in the `waiting` state, JJI can also store encrypted `request_params` inside `result_json` so the job can resume after a restart.
+There is no separate HTML report file anymore. Browser report views are driven by the stored SQLite result at `/results/{job_id}`.
+
+For Jenkins jobs in the `waiting` state, JJI stores an encrypted `request_params` payload inside `result_json` so the background task can be reconstructed after a restart. That payload now includes the resolved peer AI configuration, the peer-analysis round limit, and a `wait_started_at` timestamp so resumed jobs keep the original wait deadline instead of starting over.
+
+```922:987:src/jenkins_job_insight/main.py
+def _build_request_params(
+    body: AnalyzeRequest,
+    merged: Settings,
+    ai_provider: str,
+    ai_model: str,
+    peer_ai_configs_resolved: list | None = None,
+) -> dict:
+    params = {
+        # ... other persisted request settings ...
+        "peer_ai_configs": [
+            c.model_dump() if hasattr(c, "model_dump") else c
+            for c in (peer_ai_configs_resolved or [])
+        ],
+        "peer_analysis_max_rounds": merged.peer_analysis_max_rounds,
+        "wait_started_at": _time.time(),
+    }
+    return encrypt_sensitive_fields(params)
+```
+
+JJI also persists `progress_phase` and a timestamped `progress_log` inside `result_json`, so the status view can restore the same in-progress timeline after a refresh.
+
+```628:659:src/jenkins_job_insight/storage.py
+def _make_progress_phase_patcher(phase: str) -> Callable[[dict], None]:
+    import time
+
+    def _patcher(d: dict) -> None:
+        d["progress_phase"] = phase
+        progress_log = d.get("progress_log")
+        if not isinstance(progress_log, list):
+            progress_log = []
+            d["progress_log"] = progress_log
+        progress_log.append(
+            {"phase": phase, "timestamp": time.time()}
+        )
+
+    return _patcher
+```
 
 ## Result State Lifecycle
 
@@ -6837,16 +7644,17 @@ For persisted jobs, the state model now includes an explicit Jenkins-monitoring 
 - `completed`: the final JSON result has been written successfully
 - `failed`: waiting or analysis ended with an error, and the stored payload contains error details
 
-For asynchronous `POST /analyze`, JJI writes the row immediately. When `WAIT_FOR_COMPLETION=true` and Jenkins connectivity is available, the initial persisted state is `waiting`; otherwise it starts as `pending`.
+For asynchronous `POST /analyze`, JJI writes the row immediately. When `WAIT_FOR_COMPLETION=true` and Jenkins connectivity is available, the initial persisted state is `waiting`; otherwise it starts as `pending`. JJI now validates and resolves peer AI settings before saving the resumable payload so a restarted job uses the same provider/model mix that was queued originally.
 
-```942:967:src/jenkins_job_insight/main.py
+```1008:1040:src/jenkins_job_insight/main.py
+job_id = str(uuid.uuid4())
+merged = _merge_settings(body, settings)
+
+# Validate peer configs early -- fail fast before returning 202.
+resolved_peers = _validate_peer_configs(body, merged)
 jenkins_url = build_jenkins_url(
     merged.jenkins_url, body.job_name, body.build_number
 )
-# Save initial pending state before queueing background task.
-# Only persist request_params for waiting jobs (wait_for_completion),
-# since those are the only ones that need resumption after restart.
-# This avoids storing encrypted secrets with no operational use.
 initial_result: dict = {
     "job_name": body.job_name,
     "build_number": body.build_number,
@@ -6858,6 +7666,7 @@ if can_resume_wait:
         merged,
         body.ai_provider or AI_PROVIDER,
         body.ai_model or AI_MODEL,
+        peer_ai_configs_resolved=resolved_peers,
     )
 await save_result(
     job_id,
@@ -6865,7 +7674,6 @@ await save_result(
     "waiting" if can_resume_wait else "pending",
     initial_result,
 )
-background_tasks.add_task(process_analysis_with_id, job_id, body, merged)
 ```
 
 Once background work begins, JJI updates the same row in place. `analysis_started_at` is stamped the first time the job reaches `running`, and `completed_at` is stamped the first time it reaches `completed`.
@@ -6897,34 +7705,74 @@ def _build_status_update_clause(
 
 Direct `POST /analyze-failures` runs use the same persistence layer, but they skip `waiting` and follow the simpler `pending` -> `running` -> `completed` or `failed` flow.
 
-> **Note:** On startup, orphaned `pending` and `running` rows are marked `failed`, while resumable `waiting` rows are kept for restart-safe resumption.
+> **Note:** On startup, orphaned `pending` and `running` rows are still marked `failed`, but `waiting` rows are resumed only when their stored payload is actually usable. A `waiting` row must have valid JSON plus `job_name`, `build_number`, and a non-empty `request_params` object; otherwise JJI marks it `failed` as unrecoverable instead of leaving it stuck in `waiting`.
 
-```2049:2077:src/jenkins_job_insight/storage.py
-async def mark_stale_results_failed() -> list[dict]:
-    """Mark orphaned pending/running jobs as failed. Return waiting jobs for resumption.
+```2096:2160:src/jenkins_job_insight/storage.py
+cursor = await db.execute(
+    "UPDATE results SET status = 'failed' "
+    "WHERE status IN ('pending', 'running')"
+)
 
-    Pending and running jobs have lost their background task and cannot recover,
-    so they are marked as failed.  Waiting jobs were polling Jenkins and can be
-    safely resumed by re-creating their background task.
-
-    Returns:
-        List of dicts with ``job_id`` and ``result_data`` for each waiting job.
-    """
-    waiting_jobs: list[dict] = []
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-
-        # Mark pending/running as failed (background task is gone)
-        cursor = await db.execute(
-            "UPDATE results SET status = 'failed' "
-            "WHERE status IN ('pending', 'running')"
+cursor = await db.execute(
+    "SELECT job_id, result_json FROM results WHERE status = 'waiting'"
+)
+rows = await cursor.fetchall()
+for row in rows:
+    if row["result_json"]:
+        result_data = parse_result_json(
+            row["result_json"], job_id=row["job_id"]
         )
-
-        # Collect waiting jobs for resumption instead of failing them
-        cursor = await db.execute(
-            "SELECT job_id, result_json FROM results WHERE status = 'waiting'"
+        stored_params = (
+            result_data.get("request_params") if result_data else None
         )
-        rows = await cursor.fetchall()
+        is_resumable = (
+            result_data is not None
+            and isinstance(stored_params, dict)
+            and bool(stored_params)
+            and "job_name" in result_data
+            and "build_number" in result_data
+        )
+        if is_resumable:
+            waiting_jobs.append(
+                {"job_id": row["job_id"], "result_data": result_data}
+            )
+        else:
+            await db.execute(
+                "UPDATE results SET status = 'failed' WHERE job_id = ?",
+                (row["job_id"],),
+            )
+```
+
+When a `waiting` job is resumed, JJI subtracts the already-elapsed wait time from `MAX_WAIT_MINUTES`. If the deadline already passed while the service was down, the resumed job is marked `failed` immediately.
+
+```349:386:src/jenkins_job_insight/main.py
+raw_wait_started_at = params.get("wait_started_at")
+wait_started_at: float | None = None
+if raw_wait_started_at is not None:
+    try:
+        wait_started_at = float(raw_wait_started_at)
+    except (TypeError, ValueError):
+        await _fail_resumed_waiting_job(
+            job["job_id"],
+            result_data,
+            f"Cannot resume: malformed wait_started_at value: {raw_wait_started_at!r}",
+        )
+        continue
+
+if merged.max_wait_minutes > 0 and wait_started_at is not None:
+    elapsed_minutes = (_time.time() - wait_started_at) / 60
+    remaining = merged.max_wait_minutes - elapsed_minutes
+    if remaining <= 0:
+        await _fail_resumed_waiting_job(
+            job["job_id"],
+            result_data,
+            (
+                f"Timed out waiting for Jenkins job "
+                f"{result_data.get('job_name')} #{result_data.get('build_number')} "
+                f"after {merged.max_wait_minutes} minutes (deadline passed during restart)"
+            ),
+        )
+        continue
 ```
 
 ## Result Route and Browser Behavior
@@ -7032,7 +7880,7 @@ The simplest production setup is:
 
 JJI no longer calculates `base_url` from `Host` or `X-Forwarded-*` request headers. The current implementation trusts only the server-side `PUBLIC_BASE_URL` setting. When that setting is unset, JJI returns an empty `base_url` and builds relative links instead of guessing from request metadata.
 
-```70:74:src/jenkins_job_insight/config.py
+```105:109:src/jenkins_job_insight/config.py
 # Trusted public base URL — used for result_url and tracker links.
 # When set, _extract_base_url() returns this value verbatim.
 # When unset, _extract_base_url() returns an empty string (relative
@@ -7040,7 +7888,7 @@ JJI no longer calculates `base_url` from `Host` or `X-Forwarded-*` request heade
 public_base_url: str | None = None
 ```
 
-```142:160:src/jenkins_job_insight/main.py
+```143:161:src/jenkins_job_insight/main.py
 def _extract_base_url() -> str:
     settings = get_settings()
     if settings.public_base_url:
@@ -7068,7 +7916,7 @@ The tests in `tests/test_main.py` cover both branches: `PUBLIC_BASE_URL` wins wh
 
 JJI now attaches only `base_url` and `result_url` to API responses. There is no separate `html_report_url` field anymore. The canonical browser/API report route is `/results/{job_id}`.
 
-```197:202:src/jenkins_job_insight/main.py
+```198:203:src/jenkins_job_insight/main.py
 def _attach_result_links(payload: dict, base_url: str, job_id: str) -> dict:
     payload["base_url"] = base_url
     result_url = f"{base_url}/results/{job_id}"
@@ -7084,7 +7932,7 @@ That gives you:
 
 Browsers and JSON clients share the same `GET /results/{job_id}` endpoint. Browsers get the React app, and in-progress jobs are redirected to `/status/{job_id}`:
 
-```1146:1169:src/jenkins_job_insight/main.py
+```1224:1247:src/jenkins_job_insight/main.py
 @app.get("/results/{job_id}", response_model=None)
 async def get_job_result(request: Request, job_id: str, response: Response):
     accept = request.headers.get("accept", "")
@@ -7103,7 +7951,7 @@ Other report links follow the same pattern:
 - otherwise the report link included in those previews falls back to `/results/{job_id}`
 - enriched JUnit XML writes a `report_url` property on the first `testsuite`
 
-```163:194:src/jenkins_job_insight/main.py
+```164:195:src/jenkins_job_insight/main.py
 def _build_report_context(
     include_links: bool,
     base_url: str,
@@ -7324,89 +8172,69 @@ Check these first:
 
 ## Missing AI Configuration
 
-There are two different failure modes here:
+There are now three common failure modes here:
 
-- The API rejects the request because no provider or model was configured.
-- The request is accepted, but the runtime AI CLI is missing, unauthenticated, or otherwise unusable.
+- The API rejects the request because no main AI provider or model was configured.
+- The API rejects the request because the provider name or peer-analysis configuration is invalid.
+- The request is accepted, but the main AI CLI is missing, unauthenticated, or otherwise unusable at runtime.
 
-The API-level validation is explicit:
+The API-level validation is explicit, and it now also rejects unsupported provider names:
 
-```288:300:src/jenkins_job_insight/main.py
+```490:508:src/jenkins_job_insight/main.py
 provider = ai_provider or AI_PROVIDER
 model = ai_model or AI_MODEL
 if not provider:
-    raise HTTPException(
-        status_code=400,
-        detail=f"No AI provider configured. Set AI_PROVIDER env var or pass ai_provider in request body. Valid providers: {', '.join(sorted(VALID_AI_PROVIDERS))}",
-    )
+    raise HTTPException(...)  # missing AI_PROVIDER / ai_provider
+if provider not in VALID_AI_PROVIDERS:
+    raise HTTPException(...)  # unsupported provider name
 if not model:
-    raise HTTPException(
-        status_code=400,
-        detail="No AI model configured. Set AI_MODEL env var or pass ai_model in request body.",
-    )
-return provider, model
+    raise HTTPException(...)  # missing AI_MODEL / ai_model
 ```
 
-Provider authentication examples in the repository look like this:
+Peer configs also have an explicit default/override rule:
 
-```21:44:.env.example
-# --- Claude CLI Options ---
+```531:535:src/jenkins_job_insight/main.py
+if body.peer_ai_configs is not None:
+    return body.peer_ai_configs or None  # [] -> None (disable)
+if settings.peer_ai_configs:
+    return parse_peer_configs(settings.peer_ai_configs) or None
+return None
+```
 
-# Option 1: Direct API key (simplest)
+Provider authentication and optional peer-analysis defaults in the repo look like this:
+
+```23:57:.env.example
 ANTHROPIC_API_KEY=your-anthropic-api-key
-
-# Option 2: Vertex AI authentication
-# CLAUDE_CODE_USE_VERTEX=1
-# CLOUD_ML_REGION=us-east5
-# ANTHROPIC_VERTEX_PROJECT_ID=your-project-id
-
-# --- Gemini CLI Options ---
-
-# Option 1: API key
 GEMINI_API_KEY=your-gemini-api-key
-
-# Option 2: OAuth (run: gemini auth login)
-# No env vars needed for OAuth
-
-# --- Cursor Agent CLI Options ---
-
-# Choose ONE of the following authentication methods:
-
-# API key
 # CURSOR_API_KEY=your-cursor-api-key
+# AI_CLI_TIMEOUT=10
+
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
-If the provider and model are present but the CLI still cannot run, the analyzer fails early and stores the pre-flight error in the job summary:
+If the main provider and model are present but the CLI still cannot run, the analyzer fails early and stores the pre-flight error in the job summary:
 
-```1279:1294:src/jenkins_job_insight/analyzer.py
-# Pre-flight: verify AI CLI is reachable before spawning parallel tasks
-ok, err = await check_ai_cli_available(
-    ai_provider, ai_model, cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, [])
-)
+```1473:1488:src/jenkins_job_insight/analyzer.py
+ok, err = await check_ai_cli_available(...)
 if not ok:
-    return AnalysisResult(
-        job_id=job_id,
-        job_name=request.job_name,
-        build_number=request.build_number,
-        jenkins_url=HttpUrl(jenkins_build_url),
-        status="failed",
-        summary=err,
-        ai_provider=ai_provider,
-        ai_model=ai_model,
-        failures=[],
-    )
+    return AnalysisResult(...)  # failed result with summary=err
 ```
 
 Use this checklist:
 
-- In Docker Compose, `AI_PROVIDER` and `AI_MODEL` are required.
-- The valid providers are `claude`, `gemini`, and `cursor`.
+- `AI_PROVIDER` and `AI_MODEL`, or request-level `ai_provider` and `ai_model`, are always required. Peer analysis does not replace the main AI.
+- Valid provider names are `claude`, `gemini`, and `cursor`. `Unsupported AI provider: ...` means the provider name itself is wrong.
+- `PEER_AI_CONFIGS` must use `provider:model,provider:model`. Invalid peer configs are rejected early with `400`.
+- Omit `peer_ai_configs` to inherit the server default from `PEER_AI_CONFIGS`. Send `peer_ai_configs: []` to disable peers for a single request.
+- `PEER_ANALYSIS_MAX_ROUNDS` and request-level `peer_analysis_max_rounds` must be between `1` and `10`. The default is `3`.
 - Provider authentication is handled by the provider CLI itself. A valid app config is not enough if the CLI is not logged in or lacks its API key.
 - If a job finishes with `status: failed`, inspect the `summary` field in `/results/<job_id>` before rerunning anything.
-- Use `jji ai-configs` to list provider/model pairs from successful analyses. If it returns nothing, no completed analysis has recorded a working pair yet.
-- You can test a one-off change without redeploying by sending `ai_provider` and `ai_model` in the request body.
+- Use `jji ai-configs` to list primary provider/model pairs from successful analyses. If it returns nothing, no completed analysis has recorded a working main AI pair yet.
+- `jji ai-configs` helps with the main AI only. It does not validate or list peer configurations.
+- You can test a one-off main or peer AI change without redeploying by sending `ai_provider`, `ai_model`, and `peer_ai_configs` in the request body.
 
-> **Tip:** If you are using a custom image instead of the provided one, make sure the provider CLI itself is installed and on `PATH`, not just the environment variables.
+> **Tip:** If you are using a custom image instead of the provided one, make sure the primary provider CLI and any peer provider CLIs are installed and on `PATH`, not just the environment variables.
 
 ## XML Parse Errors
 
@@ -7643,17 +8471,33 @@ COPY --chown=appuser:0 --from=builder /app/src /app/src
 COPY --chown=appuser:0 --from=frontend-builder /frontend/dist /app/frontend/dist
 ```
 
+Peer-analysis panels are also conditional. The summary stays hidden when no debate data exists, and console-only fallback does not produce peer debates:
+
+```91:94:frontend/src/pages/report/PeerAnalysisSummary.tsx
+const totalWithDebate = debateFailures.length
+
+// Do not render when there are no peer debates
+if (totalWithDebate === 0) return null
+```
+
+```1276:1279:src/jenkins_job_insight/analyzer.py
+if peer_ai_configs:
+    logger.warning(...)  # peer analysis is not supported for console-only failures
+```
+
 Use this checklist:
 
 - Open `/results/<job_id>` in the browser, not `/results/<job_id>.html`.
 - If the job is still `pending`, `waiting`, or `running`, the browser route redirects to `/status/<job_id>` and the JSON endpoint returns `202`.
 - `404 Frontend not built` means the runtime image does not have `frontend/dist/index.html`. Rebuild the frontend with `cd frontend && npm install && npm run build`, or use the provided Docker build that copies `frontend/dist` into the final image.
-- If the report page hides Jira or GitHub bug actions, inspect the `capabilities` object in `/results/<job_id>` or `GET /api/capabilities` before debugging the frontend.
+- If the report page hides Jira or GitHub bug actions, inspect the `capabilities` object in `/results/<job_id>`, run `jji capabilities`, or call `GET /api/capabilities` before debugging the frontend.
+- If the `Peer Analysis` summary or a per-failure peer debate section is missing, that usually means the stored result does not contain debate data for that run. Check the JSON result first.
+- Console-only analyses do not render peer debate panels, even if `PEER_AI_CONFIGS` or request-level peers were set.
 - If generated `result_url` or tracker links point to the wrong scheme or hostname behind a proxy, set `PUBLIC_BASE_URL`. When it is unset, JJI intentionally returns relative URLs instead of trusting proxy headers.
 - Pipeline jobs may still show a `Child Job Analyses` section instead of top-level failures. That is expected when the parent job failed because downstream jobs failed.
 - A report page with no failures is still valid when the stored analysis contains none.
 
-> **Tip:** If you only need the authoritative state, use `jji results show <job_id> --full` or `curl -H 'Accept: application/json' http://your-host:8000/results/<job_id>` first, then debug the browser UI second. The cached HTML stores integration availability at render time.
+> **Tip:** If you only need the authoritative state, use `jji results show <job_id> --full` or `curl -H 'Accept: application/json' http://your-host:8000/results/<job_id>` first, then debug the browser UI second. The JSON response is the source of truth for `capabilities`, failure details, and any `peer_debate` data.
 
 
 ---
@@ -7715,11 +8559,43 @@ The `pytest` suite is broad. It is not just a handful of unit tests:
 
 - `tests/test_main.py` exercises the FastAPI app, including health checks, analysis endpoints, history, comments, review state, issue preview/creation, waiting logic, OpenAPI output, and SPA routes.
 - `tests/test_cli_main.py`, `tests/test_cli_client.py`, `tests/test_cli_config.py`, and `tests/test_cli_output.py` cover the `jji` CLI end to end: command wiring, HTTP transport, config resolution, and output formatting.
+- `tests/test_analyzer.py` and `tests/test_peer_analysis.py` cover AI CLI orchestration, JSON parsing and retry behavior, plus the multi-AI debate loop and consensus rules.
 - `tests/test_storage.py`, `tests/test_history.py`, and `tests/test_comments.py` cover SQLite storage, historical aggregation, comments, and review state.
 - `tests/test_models.py`, `tests/test_config.py`, and `tests/test_encryption.py` cover validation, settings, and redaction/encryption behavior.
 - `tests/test_jira.py`, `tests/test_jenkins.py`, `tests/test_jenkins_artifacts.py`, `tests/test_bug_creation.py`, `tests/test_repository.py`, and `tests/test_xml_enrichment.py` cover integrations and supporting utilities.
 
 Most backend tests avoid live network calls. Instead, they patch external boundaries such as Jenkins clients, HTTP transport, AI CLI calls, and temporary SQLite databases. That keeps the suite fast and predictable.
+
+The peer-analysis tests use the same approach. They build `PeerRound` values directly and assert consensus behavior in-process, which keeps the debate-loop coverage fast and deterministic.
+
+```102:127:tests/test_peer_analysis.py
+    def test_check_consensus_disagreement(self) -> None:
+        """At least one peer disagrees -> False."""
+        from jenkins_job_insight.peer_analysis import _check_consensus
+        from jenkins_job_insight.models import PeerRound
+
+        rounds = [
+            PeerRound(
+                round=1,
+                ai_provider="gemini",
+                ai_model="gemini-2.5-pro",
+                role="peer",
+                classification="CODE ISSUE",
+                details="agree",
+                agrees_with_orchestrator=True,
+            ),
+            PeerRound(
+                round=1,
+                ai_provider="claude",
+                ai_model="claude-sonnet-4-20250514",
+                role="peer",
+                classification="PRODUCT BUG",
+                details="disagree",
+                agrees_with_orchestrator=False,
+            ),
+        ]
+        assert _check_consensus("CODE ISSUE", rounds) is False
+```
 
 A representative API test from `tests/test_main.py` checks the public contract instead of internal helper functions:
 
@@ -7833,7 +8709,7 @@ A typical frontend unit test looks like this:
     )
 ```
 
-Current frontend tests live close to the code they validate, especially in `frontend/src/lib/__tests__/` and `frontend/src/pages/report/__tests__/`.
+Current frontend tests live close to the code they validate, especially in `frontend/src/lib/__tests__/` and `frontend/src/pages/report/__tests__/`. For example, `frontend/src/lib/__tests__/peerDebate.test.ts` covers the helper that groups peer-analysis rounds for the report UI.
 
 ## Pre-commit, Linting, and Formatting
 
@@ -7877,7 +8753,7 @@ Current frontend tests live close to the code they validate, especially in `fron
     hooks:
       - id: eslint
         files: \.js$
-        exclude: eslint\.config\.js
+        exclude: (eslint\.config\.js|^docs/)
         args: [--fix]
         additional_dependencies:
           - eslint@9.38.0
@@ -7912,7 +8788,7 @@ per-file-ignores =
 
 For the frontend, linting lives in `frontend/package.json` and `frontend/eslint.config.js`. The checked-in ESLint config targets `**/*.{ts,tsx}`, ignores `dist/`, and layers `typescript-eslint`, React Hooks, and React Refresh rules on top of the base JavaScript rules.
 
-> **Warning:** The checked-in `eslint` pre-commit hook only matches `.js` files. Most frontend code in this repository lives in `.ts` and `.tsx`, so `pre-commit run --all-files` is not a complete frontend lint check by itself. Run `cd frontend && npm run lint` when you change React or TypeScript code.
+> **Warning:** The checked-in `eslint` pre-commit hook still only matches `.js` files, and it now explicitly skips `docs/` as well as `eslint.config.js`. Most frontend code in this repository lives in `.ts` and `.tsx`, so `pre-commit run --all-files` is not a complete frontend lint check by itself. Run `cd frontend && npm run lint` when you change React or TypeScript code. If you edit JavaScript under `docs/`, remember that this hook will not check it.
 
 To make the hooks automatic in your local clone, run this once:
 
@@ -8028,13 +8904,16 @@ The fastest way to stay productive in this repository is to treat it as a few cl
 | `frontend/src/types/` | TypeScript types mirroring backend data structures. |
 | `frontend/src/test/` | Shared frontend test setup, including `@testing-library/jest-dom`. |
 | `examples/pytest-junitxml/` | A standalone example of integrating JJI with an external `pytest` suite by enriching JUnit XML. |
+| `docs/` | The checked-in documentation site: Markdown source pages, paired generated HTML pages, search assets, and static CSS/JavaScript. |
 | Repository root | Cross-cutting project config such as `pyproject.toml`, `tox.toml`, `.pre-commit-config.yaml`, `.gitleaks.toml`, `config.example.toml`, and the container files. |
 
 A few practical navigation rules help:
 
 - Start in `tests/test_main.py` when you need to understand backend HTTP behavior.
 - Start in `tests/test_cli_main.py` and `tests/test_cli_client.py` when a CLI change is involved.
+- Start in `src/jenkins_job_insight/peer_analysis.py` and `tests/test_peer_analysis.py` when you are working on multi-AI consensus or the debate loop.
 - Start in `frontend/src/lib/` for shared browser-side logic and in `frontend/src/pages/` for route behavior.
+- Start in `docs/*.md` when you are updating documentation content; the paired `docs/*.html` pages and search assets are checked in alongside them.
 - Check `examples/pytest-junitxml/` if you want to see how this project can plug into someone else’s `pytest` workflow.
 
 > **Tip:** When you add or change an API endpoint, keep the CLI in sync. In this repository that usually means updating the backend route in `src/jenkins_job_insight/main.py`, the client in `src/jenkins_job_insight/cli/client.py`, the command in `src/jenkins_job_insight/cli/main.py`, and the matching tests in `tests/test_cli_client.py` and `tests/test_cli_main.py`.

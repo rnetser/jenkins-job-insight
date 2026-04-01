@@ -31,14 +31,18 @@ AI_PROVIDER=claude
 AI_MODEL=your-model-name
 ```
 
-Optional defaults in `.env.example` let you add repository context for every request:
+Optional defaults in `.env.example` let you add repository context or peer analysis for every request:
 
 ```dotenv
 # Tests repository URL
 # TESTS_REPO_URL=https://github.com/org/test-repo
+
+# Peer Analysis (Optional)
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
-> **Note:** Request-body values override environment defaults. That includes `tests_repo_url`, `ai_provider`, `ai_model`, Jenkins connection settings, `wait_for_completion`, `poll_interval_minutes`, `max_wait_minutes`, artifact settings, and timeout settings. `PUBLIC_BASE_URL` is server-side only and controls whether returned `result_url` values are absolute or relative.
+> **Note:** Request-body values override environment defaults. That includes `tests_repo_url`, `ai_provider`, `ai_model`, Jenkins connection settings, `wait_for_completion`, `poll_interval_minutes`, `max_wait_minutes`, artifact settings, timeout settings, `peer_ai_configs`, and `peer_analysis_max_rounds`. `PUBLIC_BASE_URL` is server-side only and controls whether returned `result_url` values are absolute or relative.
 
 ## Request body
 
@@ -69,6 +73,8 @@ The most useful request fields are:
 | `jenkins_artifacts_max_size_mb` | No | Max total artifact size to process. |
 | `jenkins_artifacts_context_lines` | No | Max artifact context lines to feed into the AI prompt. |
 | `raw_prompt` | No | Extra instructions appended to the AI prompt. |
+| `peer_ai_configs` | No | Per-request peer AI list for consensus analysis. Send a JSON array such as `[{"ai_provider":"gemini","ai_model":"pro"}]`. Omit the field to use the server default from `PEER_AI_CONFIGS`, or send `[]` to disable peers for this request. |
+| `peer_analysis_max_rounds` | No | Maximum debate rounds when peer analysis is enabled. If omitted, the server uses its configured default, or `3` when unset. |
 
 If `tests_repo_url` is provided, the repository is cloned once and reused for the main build analysis and any recursively analyzed child jobs.
 
@@ -77,6 +83,8 @@ Validation is strict:
 - A non-numeric `build_number` returns `422`.
 - Invalid URLs such as a bad `tests_repo_url` return `422`.
 - `poll_interval_minutes` must be greater than `0`, and `max_wait_minutes` cannot be negative.
+- `peer_analysis_max_rounds` must be between `1` and `10`.
+- Each `peer_ai_configs` entry must use a supported `ai_provider` and a non-blank `ai_model`.
 
 ## Async vs Sync
 
@@ -93,6 +101,9 @@ _resolve_ai_config(body)
 # Generate job_id here so we can return it to the client for polling
 job_id = str(uuid.uuid4())
 merged = _merge_settings(body, settings)
+
+# Validate peer configs early -- fail fast before returning 202.
+resolved_peers = _validate_peer_configs(body, merged)
 jenkins_url = build_jenkins_url(
     merged.jenkins_url, body.job_name, body.build_number
 )
@@ -111,6 +122,7 @@ if can_resume_wait:
         merged,
         body.ai_provider or AI_PROVIDER,
         body.ai_model or AI_MODEL,
+        peer_ai_configs_resolved=resolved_peers,
     )
 await save_result(
     job_id,
@@ -147,7 +159,11 @@ After submission, the stored status progresses through:
 
 > **Note:** AI configuration is validated before the job is queued. If no AI provider or model is configured, `POST /analyze` returns `400` immediately instead of returning `202` and failing later.
 
+> **Note:** Peer-analysis settings are also resolved before queueing. If the server default `PEER_AI_CONFIGS` value is malformed, the request fails immediately instead of creating a broken background job.
+
 > **Note:** Waiting jobs persist resumable request parameters. If the server restarts while a job is in the `waiting` phase, monitoring can resume when the app comes back up.
+
+> **Warning:** `pending` and `running` jobs do not survive a restart. Because their in-process background task is gone, the server marks those rows as `failed` on startup. Only resumable `waiting` jobs are restarted automatically.
 
 ### Sync mode
 
@@ -182,7 +198,8 @@ return result
 
 A stored result record includes:
 - top-level job metadata such as `job_id`, `status`, `jenkins_url`, `created_at`, `analysis_started_at`, and `completed_at`
-- a nested `result` object containing the latest stored payload, such as initial job metadata, a completed analysis, or failure details
+- a nested `result` object containing the latest stored payload, such as initial job metadata, sanitized `request_params` for resumable waiting jobs, a completed analysis, or failure details
+- optional in-progress fields inside `result`, including `progress_phase` and `progress_log`
 - `base_url` and `result_url`, generated on each response
 - `capabilities`, which tells the UI whether GitHub issue creation and Jira bug creation are enabled
 
@@ -196,6 +213,8 @@ Status meanings:
 > **Note:** `completed` refers to the analysis job, not the Jenkins build result. A Jenkins build can fail and still produce `status: "completed"` if the analysis itself finished successfully.
 
 > **Note:** `GET /results/{job_id}` returns `202 Accepted` while the job is `waiting`, `pending`, or `running`. Once the job reaches `completed` or `failed`, the same endpoint returns `200 OK`.
+
+> **Tip:** While a job is in progress, `result.progress_phase` holds the latest server phase and `result.progress_log` stores the full timestamped history as `{"phase": "...", "timestamp": ...}` entries. Common phases include `waiting_for_jenkins`, `analyzing_child_jobs`, `analyzing_failures`, `analyzing`, `enriching_jira`, and `saving`.
 
 ### Browser flow
 
@@ -353,8 +372,8 @@ If the service has to fall back to console-only analysis, it creates a synthetic
 | --- | --- |
 | `202` | A `POST /analyze` request was accepted and queued, or `GET /results/{job_id}` is reporting an in-progress job with status `waiting`, `pending`, or `running`. |
 | `200` | `GET /results/{job_id}` returned a final stored result with status `completed` or `failed`. |
-| `400` | AI provider or AI model is missing when you submit `POST /analyze`. The endpoint validates AI configuration before queuing work. |
+| `400` | AI configuration cannot be resolved, or the server's `PEER_AI_CONFIGS` default is invalid. `POST /analyze` validates those settings before it queues work. |
 | `404` | A results lookup requested an unknown `job_id`. If the Jenkins build itself cannot be found, the async job later moves to `failed` and the stored result carries the error. |
-| `422` | The request body failed validation, such as a missing field, bad URL, non-numeric `build_number`, `poll_interval_minutes <= 0`, or `max_wait_minutes < 0`. |
+| `422` | The request body failed validation, such as a missing field, bad URL, non-numeric `build_number`, `poll_interval_minutes <= 0`, `max_wait_minutes < 0`, out-of-range `peer_analysis_max_rounds`, or malformed `peer_ai_configs` entries. |
 
 > **Tip:** For automation, treat `GET /results/{job_id}` as the authoritative status endpoint. The initial `202` submission response is just the handoff; the stored result is the durable source of truth.

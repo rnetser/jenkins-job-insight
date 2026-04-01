@@ -11,7 +11,7 @@ Most users touch four parts of the API:
 
 ## Primary Workflows
 
-Use `POST /analyze` when the service can reach Jenkins directly. Required fields are `job_name` and `build_number`, and `job_name` can include folder-style Jenkins paths such as `folder/job-name`. The endpoint is asynchronous only: it returns `202 Accepted`, a new `job_id`, and a `result_url` you can poll or open. If the target Jenkins build is still running and `wait_for_completion` stays enabled, the stored job enters `waiting` until Jenkins finishes; `poll_interval_minutes` and `max_wait_minutes` control that monitoring window.
+Use `POST /analyze` when the service can reach Jenkins directly. Required fields are `job_name` and `build_number`, and `job_name` can include folder-style Jenkins paths such as `folder/job-name`. The endpoint is asynchronous only: it returns `202 Accepted`, a new `job_id`, and a `result_url` you can poll or open. When `wait_for_completion` is enabled and Jenkins connectivity is configured, the stored job is written as `waiting` immediately so the service can monitor Jenkins and resume that monitoring after a restart; otherwise it starts as `pending`. `poll_interval_minutes` and `max_wait_minutes` still control that monitoring window.
 
 The repository’s test suite exercises that async contract directly:
 
@@ -62,8 +62,8 @@ assert len(data["failures"]) == 1
 
 | Endpoint | Use it for | Notes |
 | --- | --- | --- |
-| `POST /analyze` | Analyze a Jenkins job/build. | Async only. Returns `202` with `status: "queued"`. If Jenkins is still running and `wait_for_completion` is enabled, the stored job moves to `waiting` until the build finishes. |
-| `POST /analyze-failures` | Analyze raw failures or JUnit XML without Jenkins. | Synchronous only. Accepts either `failures` or `raw_xml`, not both. |
+| `POST /analyze` | Analyze a Jenkins job/build. | Async only. Returns `202` with `status: "queued"`. When `wait_for_completion` is enabled and Jenkins connectivity is configured, the stored job is written as `waiting` immediately; otherwise it starts as `pending`. Optional `peer_ai_configs` and `peer_analysis_max_rounds` enable multi-AI consensus analysis for this request. |
+| `POST /analyze-failures` | Analyze raw failures or JUnit XML without Jenkins. | Synchronous only. Accepts either `failures` or `raw_xml`, not both. Supports the same optional peer-analysis fields as `/analyze`, and returned failures can include `peer_debate` when peers are used. |
 | `GET /results/{job_id}` | Fetch the stored JSON result for a job. | JSON clients get the stored wrapper plus `base_url`, `result_url`, and `capabilities`; the response status is `202` while the job is `pending`, `waiting`, or `running`. Browser requests redirect to `/status/{job_id}` while work is in progress and otherwise load the React report UI. |
 | `GET /results` | List recent analysis jobs. | Returns recent `job_id`, `jenkins_url`, `status`, and timestamp fields. |
 | `DELETE /results/{job_id}` | Delete a job and related stored data. | Removes the job, comments, review state, history rows, and classifications. |
@@ -136,14 +136,38 @@ The API uses one immediate submission word and five stored job states:
 
 - `queued`: returned by `POST /analyze` to say the request was accepted and a `job_id` was allocated
 - `pending`: a result row exists, but background analysis has not started processing the job yet
-- `waiting`: the service is polling Jenkins because the target build is still running and `wait_for_completion` is enabled
+- `waiting`: the request has been accepted and the service is in the Jenkins-monitoring phase; with `wait_for_completion` enabled and Jenkins connectivity configured, `POST /analyze` writes this state immediately so the job can resume safely after a restart
 - `running`: analysis is actively in progress
 - `completed`: the final result is available
 - `failed`: the analysis did not complete successfully
 
 > **Note:** `queued` is only the immediate submission response. Stored job objects themselves use `pending`, `waiting`, `running`, `completed`, and `failed`.
 
-`POST /analyze-failures` is synchronous, so its response model only uses `completed` or `failed`. If a browser opens `GET /results/{job_id}` while a job is `pending`, `waiting`, or `running`, the server redirects to `/status/{job_id}`; once the job is done, the same route serves the React report view.
+The initial persisted state for async Jenkins analysis is chosen before the background task starts:
+
+```1021:1039:src/jenkins_job_insight/main.py
+initial_result: dict = {
+    "job_name": body.job_name,
+    "build_number": body.build_number,
+}
+can_resume_wait = merged.wait_for_completion and bool(merged.jenkins_url)
+if can_resume_wait:
+    initial_result["request_params"] = _build_request_params(
+        body,
+        merged,
+        body.ai_provider or AI_PROVIDER,
+        body.ai_model or AI_MODEL,
+        peer_ai_configs_resolved=resolved_peers,
+    )
+await save_result(
+    job_id,
+    jenkins_url,
+    "waiting" if can_resume_wait else "pending",
+    initial_result,
+)
+```
+
+`POST /analyze-failures` is synchronous, so its response model only uses `completed` or `failed`. It still persists a job row and internally follows the simpler `pending` -> `running` -> `completed` or `failed` flow. If a browser opens `GET /results/{job_id}` while a job is `pending`, `waiting`, or `running`, the server redirects to `/status/{job_id}`; once the job is done, the same route serves the React report view.
 
 ## Absolute URLs In Responses
 
@@ -165,7 +189,35 @@ Set `PUBLIC_BASE_URL` when you want absolute links in API responses or tracker p
 
 ## OpenAPI And Swagger
 
-You do not need to hand-maintain API docs. The app uses FastAPI’s generated schema and Swagger UI. The repository tests verify both `GET /openapi.json` and `GET /docs`, and the generated schema reports title `Jenkins Job Insight` with version `0.1.0`:
+You do not need to hand-maintain API docs. The app uses FastAPI's generated schema and Swagger UI, so new request and response fields such as `peer_ai_configs`, `peer_analysis_max_rounds`, and `peer_debate` appear in the live schema automatically:
+
+```95:105:src/jenkins_job_insight/models.py
+peer_ai_configs: list[AiConfigEntry] | None = Field(
+    default=None,
+    description=(
+        "List of peer AI configs for consensus analysis. "
+        "Omit to inherit the server default; send [] to disable peer analysis "
+        "for this request. Each peer reviews the main AI's analysis."
+    ),
+)
+peer_analysis_max_rounds: Annotated[int, Field(ge=1, le=10)] = Field(
+    default=3,
+    description="Maximum debate rounds for peer analysis",
+)
+```
+
+```278:285:src/jenkins_job_insight/models.py
+error_signature: str = Field(
+    default="",
+    description="SHA-256 hash of error + stack trace for deduplication",
+)
+peer_debate: PeerDebate | None = Field(
+    default=None,
+    description="Peer debate trail (present only when peer analysis was used)",
+)
+```
+
+The repository tests still verify both `GET /openapi.json` and `GET /docs`, and the generated schema reports title `Jenkins Job Insight` with version `0.1.0`:
 
 ```934:943:tests/test_main.py
 response = test_client.get("/openapi.json")
@@ -180,7 +232,31 @@ assert response.status_code == 200
 
 The browser landing page is `GET /` (with `/dashboard` as a client-side alias), not `GET /docs`. Swagger covers the FastAPI JSON endpoints only; browser routes such as `/results/{job_id}`, `/status/{job_id}`, `/history`, and `/register` are handled by the React SPA and are not listed as separate OpenAPI operations.
 
-> **Tip:** With the default local container setup, open [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger UI and [http://localhost:8000/openapi.json](http://localhost:8000/openapi.json) for the raw schema.
+> **Note:** Browser requests without a `jji_username` cookie can still be redirected to `/register` before they reach `/docs` or `/openapi.json`, because HTML-style requests pass through the same username middleware as the rest of the web UI.
+
+```443:461:src/jenkins_job_insight/main.py
+async def dispatch(self, request: Request, call_next):
+    path = request.url.path
+    # Allow register page, health check, static assets, and API paths without auth
+    if (
+        path in ("/register", "/health", "/favicon.ico", "/api")
+        or path.startswith("/register")
+        or path.startswith("/assets/")
+        or path.startswith("/api/")
+    ):
+        return await call_next(request)
+
+    username = request.cookies.get("jji_username", "")
+    request.state.username = username
+
+    # Only redirect browser (HTML) requests without auth
+    if not username:
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept:
+            return RedirectResponse(url="/register", status_code=303)
+```
+
+> **Tip:** With the default local container setup, use `curl` for a quick schema check at [http://localhost:8000/openapi.json](http://localhost:8000/openapi.json). For Swagger UI at [http://localhost:8000/docs](http://localhost:8000/docs), register any username in the web app first if your browser is redirected to `/register`.
 
 ## Configuration
 

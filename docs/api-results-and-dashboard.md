@@ -152,7 +152,35 @@ Top-level fields you should expect in the JSON response:
 | `capabilities` | Feature flags such as `github_issues` and `jira_bugs` |
 | `result` | The stored analysis payload, if one has been persisted |
 
-For Jenkins-backed analyses, `result` usually includes fields such as `job_name`, `build_number`, `summary`, `ai_provider`, `ai_model`, `failures`, and `child_job_analyses`. Direct failure analyses created through `/analyze-failures` keep a smaller payload.
+For Jenkins-backed analyses, `result` usually includes fields such as `job_name`, `build_number`, `summary`, `ai_provider`, `ai_model`, `failures`, and `child_job_analyses`. While a job is still `waiting` or `running`, the same payload can also include `request_params`, `progress_phase`, and `progress_log`. Those fields let JJI resume waiting jobs after a restart and let the status page show refresh-safe progress details.
+
+Sensitive values inside `request_params` are stripped before the response is returned. If peer analysis was used for a failure group, each affected failure can also include `peer_debate`, which records the participating AI configs, the round-by-round debate trail, and whether consensus was reached. Direct failure analyses created through `/analyze-failures` keep a smaller payload.
+
+Codebase examples:
+
+```713:740:src/jenkins_job_insight/storage.py
+async def get_result(job_id: str, *, strip_sensitive: bool = True) -> dict | None:
+    # ... existing code ...
+    parsed = parse_result_json(row["result_json"], job_id=job_id)
+    if parsed and strip_sensitive:
+        parsed = strip_sensitive_from_response(parsed)
+```
+
+```610:623:src/jenkins_job_insight/peer_analysis.py
+peer_debate = PeerDebate(
+    consensus_reached=consensus_reached,
+    rounds_used=rounds_used,
+    max_rounds=max_rounds,
+    ai_configs=[
+        AiConfigEntry(
+            ai_provider=main_ai_provider,  # type: ignore[arg-type]
+            ai_model=main_ai_model,
+        ),
+        *peer_ai_configs,
+    ],
+    rounds=all_rounds,
+)
+```
 
 Example from the current test suite:
 
@@ -171,7 +199,7 @@ Important behavior:
 - In-progress JSON responses return `202 Accepted`
 - Browser requests for completed or failed jobs use this same route as the report page
 - Browser requests for `waiting`, `pending`, or `running` jobs are redirected to `/status/{job_id}`
-- In a browser, the route loads the interactive report UI with grouped failures, child-job sections, comments, review toggles, classification overrides, and issue preview/create actions
+- In a browser, the route loads the interactive report UI with grouped failures, child-job sections, peer-analysis summaries and debate timelines when available, comments, review toggles, classification overrides, and issue preview/create actions
 - The response always includes `base_url` and `result_url`
 - The response also includes `capabilities` so the report UI can decide whether GitHub and Jira actions should be shown
 
@@ -181,25 +209,29 @@ Important behavior:
 
 Use this browser-only route when a job is still `waiting`, `pending`, or `running`. The server sends people here automatically when they open `/results/{job_id}` in a browser before analysis is finished.
 
-The status page polls the JSON result endpoint and returns to the report route as soon as analysis completes:
+The status page polls `GET /results/{job_id}` every 10 seconds, redirects to the report route when the job completes, and reads `result.progress_log`, `result.progress_phase`, and `result.request_params` from the same response so the UI can show progress, the main AI, and configured peers while the job is still in flight.
 
-```61:76:frontend/src/pages/StatusPage.tsx
-async function poll() {
-  if (inFlight || cancelled) return
-  inFlight = true
-  try {
-    const res = await api.get<ResultResponse>(`/results/${jobId}`)
-    if (cancelled) return
-    setError('')
-    setData(res)
-    if (res.status === 'completed') {
-      stopPolling()
-      navigate(`/results/${jobId}`, { replace: true })
-    } else if (res.status === 'failed') {
-      stopPolling()
-      setTerminalErrorKind('failed')
-      setError(res.result?.error ?? 'Analysis failed')
-    }
+```149:187:frontend/src/pages/StatusPage.tsx
+// Derive stepLog from server-persisted progress_log (survives F5 refresh)
+const rawProgressLog = data?.result?.progress_log
+const progressLog = Array.isArray(rawProgressLog) ? rawProgressLog : []
+const stepLog: StepLogEntry[] = useMemo(
+  () => progressLog.map(entry => ({
+    phase: entry.phase,
+    label: getPhaseLabel(entry.phase) ?? entry.phase,
+    timestamp: new Date(entry.timestamp * 1000).toLocaleTimeString(),
+  })),
+  [progressLog],
+)
+
+// ... existing code ...
+
+const params = data?.result?.request_params
+const mainAi = params?.ai_provider && params?.ai_model
+  ? `${params.ai_provider} / ${params.ai_model}`
+  : null
+const peers = params?.peer_ai_configs
+const progressPhase = data?.result?.progress_phase
 ```
 
 What the page shows in practice:
@@ -207,7 +239,12 @@ What the page shows in practice:
 - `waiting` when the service is polling Jenkins for build completion
 - `pending` when the job is queued for analysis
 - `running` while AI analysis is in progress
-- A terminal error view for `failed`, `404`, or `403` cases
+- A refresh-safe progress panel driven by `result.progress_log`
+- Server-reported phases such as `waiting_for_jenkins`, `analyzing`, `analyzing_failures`, `analyzing_child_jobs`, `enriching_jira`, and `saving`
+- Peer-analysis phases such as `peer_review_round_1` and `orchestrator_revising_round_1`, with group suffixes like `(group 2/3)` when multiple failure groups are being debated
+- The main AI provider/model and any configured peers when `result.request_params` is present
+- A dedicated timeout-style terminal state for AI analysis timeouts, even though the underlying API status remains `failed`
+- A terminal error view for other `failed`, `404`, or `403` cases
 - The Jenkins build link, queued timestamp, and current status badge when that data is available
 
 > **Note:** `/status/{job_id}` is a browser route served by the React app. For scripts and automation, keep polling `GET /results/{job_id}` instead.
@@ -254,48 +291,46 @@ Response fields from `/api/dashboard`:
 | `summary` | Stored analysis summary when available |
 | `error` | Stored terminal error message when available |
 
-The dashboard page fetches that JSON on load and refreshes it every 10 seconds:
+The dashboard page fetches that JSON on load, refreshes it every 10 seconds, and keeps sort state in `sessionStorage`, so a reload in the same browser tab keeps the selected sort column and direction.
 
-```106:132:frontend/src/pages/DashboardPage.tsx
-const fetchJobs = useCallback(async () => {
-  if (inFlightRef.current) return
-  inFlightRef.current = true
-  const thisSeq = ++fetchSeqRef.current
-  try {
-    const data = await api.get<DashboardJob[]>('/api/dashboard')
-    if (thisSeq === fetchSeqRef.current) {
-      setError(null)
-      setJobs(data)
-    }
-  } catch (err) {
-    if (thisSeq === fetchSeqRef.current) {
-      setError(err instanceof Error ? err.message : 'Failed to load dashboard')
-    }
-  } finally {
-    inFlightRef.current = false
-    if (thisSeq === fetchSeqRef.current) {
-      setLoading(false)
-    }
-  }
-}, [])
+```12:33:frontend/src/lib/useTableSort.ts
+export function useTableSort(
+  storagePrefix: string,
+  defaultKey: string,
+  defaultDir: SortDirection,
+  descDefaultKeys: string[] = [],
+) {
+  const [sortKey, setSortKey] = useSessionState(`${storagePrefix}.sortKey`, defaultKey)
+  const [sortDir, setSortDir] = useSessionState<SortDirection>(`${storagePrefix}.sortDir`, defaultDir)
 
-useEffect(() => {
-  fetchJobs()
-  const interval = setInterval(fetchJobs, 10_000)
-  return () => clearInterval(interval)
-}, [fetchJobs])
+  const handleSort = useCallback(
+    (key: string) => {
+      if (key === sortKey) {
+        setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+      } else {
+        setSortKey(key)
+        setSortDir(descDefaultKeys.includes(key) ? 'desc' : 'asc')
+      }
+    },
+    [sortKey, sortDir, setSortKey, setSortDir, descDefaultKeys],
+  )
+
+  return { sortKey, sortDir, handleSort }
+}
 ```
 
 What the browser dashboard shows:
 
-- Client-side filtering by job name or job ID
+- Client-side filtering by job name or job ID, plus a status filter with `All statuses`, `completed`, `running`, `waiting`, `pending`, `failed`, and a derived `timeout` view for failed AI timeouts; the API still returns `status: failed`
+- Sortable `Job`, `Status`, `Failures`, `Reviewed`, `Comments`, `Children`, and `Created` columns
+- Session-scoped sort persistence, so the selected sort order survives a refresh in the same browser tab
 - Client-side pagination with 10, 20, or 50 rows per page
 - Failure, review, comment, and child-job counts
-- Relative creation timestamps with full timestamps in tooltips
+- Relative creation timestamps with full timestamps in tooltips, plus analysis duration when both `analysis_started_at` and `completed_at` are available
 - Row navigation to `/status/{job_id}` for `waiting`, `pending`, and `running` jobs, or `/results/{job_id}` for terminal jobs
 - A delete action that calls `DELETE /results/{job_id}`
 
-> **Note:** The old server-side `limit` query parameter and `Load last` control are gone. `/api/dashboard` currently returns the server's default dashboard batch (`500` rows), and the React app filters and paginates that data in memory.
+> **Note:** The old server-side `limit` query parameter and `Load last` control are gone. `/api/dashboard` currently returns the server's default dashboard batch (`500` rows), and the React app filters, sorts, and paginates that data in memory.
 
 ## Supporting Endpoints for Reports and Dashboard
 

@@ -38,52 +38,62 @@ def get_failure_signature(failure: TestFailure) -> str:
     return hashlib.sha256(signature_text.encode()).hexdigest()
 ```
 
-That signature is then used to group failures before the AI is called. Each signature group gets one analysis, and that analysis is applied back to every failure in the group.
+That signature is then used to group failures before JJI starts any per-group investigation. Each signature group still fans back out to one `FailureAnalysis` per failed test, but the actual analysis work happens once per unique signature.
 
-```1020:1082:src/jenkins_job_insight/analyzer.py
-# If we have test failures, group by signature and analyze unique groups
-if test_failures:
-    # Group failures by signature to avoid analyzing identical errors multiple times
-    failure_groups: dict[str, list[TestFailure]] = defaultdict(list)
-    for tf in test_failures:
-        sig = get_failure_signature(tf)
-        failure_groups[sig].append(tf)
+```1573:1605:src/jenkins_job_insight/analyzer.py
+# Group failures by signature to avoid analyzing identical errors multiple times
+failure_groups: dict[str, list[TestFailure]] = defaultdict(list)
+for tf in test_failures:
+    sig = get_failure_signature(tf)
+    failure_groups[sig].append(tf)
 
-    logger.info(
-        f"Grouped {len(test_failures)} failures into {len(failure_groups)} unique error types"
+# Analyze each unique failure group in parallel
+total_groups = len(failure_groups)
+failure_tasks = []
+for group_idx, (_sig, group) in enumerate(failure_groups.items(), 1):
+    failure_tasks.append(
+        analyze_failure_group(
+            failures=group,
+            console_context=console_context,
+            repo_path=repo_path,
+            # ... other analysis args ...
+            peer_ai_configs=peer_ai_configs,
+            peer_analysis_max_rounds=peer_analysis_max_rounds,
+            group_label=f"{group_idx}/{total_groups}"
+            if total_groups > 1
+            else "",
+        )
     )
-
-    # Analyze each unique failure group in parallel
-    tasks = []
-    for sig, group in failure_groups.items():
-        tasks.append(
-            analyze_failure_group(
-                failures=group,
-                console_context=console_context,
-                repo_path=repo_path,
-                # ...
-            )
-        )
-    group_results = await run_parallel_with_limit(tasks)
-
-    # ... flatten results ...
-
-    total_failures = len(failures)
-    unique_errors = len(failure_groups)
-
-    # Include deduplication info in summary if applicable
-    if unique_errors < total_failures:
-        summary = (
-            f"{total_failures} failure(s) analyzed "
-            f"({unique_errors} unique error type(s))"
-        )
-    else:
-        summary = f"{total_failures} failure(s) analyzed"
 ```
 
-This is the core reason JJI scales better on noisy failures: ten tests with the same root cause do not trigger ten separate AI investigations.
+If peer analysis is enabled, the deduplicated group is still the unit of work. JJI just switches the group handler from the single-AI path to the peer-consensus path instead of re-analyzing each test independently.
+
+```989:1010:src/jenkins_job_insight/analyzer.py
+if peer_ai_configs:
+    from jenkins_job_insight.models import AiConfigEntry
+    from jenkins_job_insight.peer_analysis import analyze_failure_group_with_peers
+
+    configs = [
+        AiConfigEntry(**c) if isinstance(c, dict) else c for c in peer_ai_configs
+    ]
+    return await analyze_failure_group_with_peers(
+        failures=failures,
+        console_context=console_context,
+        repo_path=repo_path,
+        main_ai_provider=ai_provider,
+        main_ai_model=ai_model,
+        peer_ai_configs=configs,
+        max_rounds=peer_analysis_max_rounds,
+        # ... other shared args ...
+        group_label=group_label,
+    )
+```
+
+This is the core reason JJI scales better on noisy failures: ten tests with the same root cause do not trigger ten separate investigations, even when peer consensus is enabled.
 
 > **Note:** Deduplication removes repeated analysis work, not failures from the result. Users still get one `FailureAnalysis` entry per failed test, and each entry keeps its `error_signature`.
+
+> **Note:** Peer analysis only applies when JJI has structured test failures to group. If a job falls back to console-only analysis, JJI logs a warning and runs a single console-level analysis instead of a per-signature peer debate.
 
 > **Tip:** The same signature-grouping logic is also used by `POST /analyze-failures`, so you can test deduplication without a live Jenkins job.
 
@@ -308,7 +318,32 @@ After analysis completes, JJI flattens failures into `failure_history`. That inc
 - the shared `error_signature`,
 - child-job context such as `child_job_name` and `child_build_number`.
 
-That flattening is what makes later history search and job statistics fast and consistent, even when the original result was a nested pipeline tree.
+That flattening still makes later history search and job statistics fast and consistent, and it now also supports startup backfill. If JJI finds completed results that do not yet have `failure_history` rows, it rebuilds those rows and preserves the original analysis timestamp so signature searches, per-job stats, and trend views keep the right chronology.
+
+```1001:1039:src/jenkins_job_insight/storage.py
+async def backfill_failure_history() -> None:
+    """Backfill failure_history from existing completed results."""
+
+    # Find completed results that are NOT yet in failure_history.
+    cursor = await db.execute(
+        "SELECT r.job_id, r.result_json, r.created_at FROM results r "
+        "LEFT JOIN failure_history fh ON r.job_id = fh.job_id "
+        "WHERE r.status = 'completed' AND r.result_json IS NOT NULL AND fh.job_id IS NULL"
+    )
+    rows = await cursor.fetchall()
+
+    # Skip completed results with zero failures — they have nothing to
+    # insert into failure_history, so without this guard the LEFT JOIN
+    # would find them "missing" on every startup and reprocess them.
+    if count_all_failures(result_data) == 0:
+        continue
+    # Use the original created_at timestamp to preserve historical chronology
+    await populate_failure_history(
+        job_id, result_data, analyzed_at=created_at or ""
+    )
+```
+
+> **Note:** Backfill only processes completed results that are missing history rows. Completed results with zero failures are skipped, so they are not reprocessed on every startup.
 
 > **Tip:** If several different tests suddenly look related, search by `error_signature` first. It is usually the fastest way to tell whether you are looking at one repeated root cause or several independent failures.
 
@@ -329,7 +364,7 @@ You can inspect that stored history through the web UI, the API, or the `jji` CL
 
 For Jenkins-backed `/analyze`, you need Jenkins connectivity plus an AI provider and model. Those Jenkins settings can be set as server defaults or passed per request. For `POST /analyze-failures`, you can skip Jenkins entirely and send failures or raw JUnit XML directly.
 
-```6:50:.env.example
+```6:57:.env.example
 JENKINS_URL=https://jenkins.example.com
 JENKINS_USER=your-username
 JENKINS_PASSWORD=your-api-token
@@ -352,6 +387,13 @@ AI_MODEL=your-model-name
 # Timeout for AI CLI calls in minutes (default: 10)
 # Increase for slower models like gpt-5.2
 # AI_CLI_TIMEOUT=10
+
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
 For `/analyze`, the request model and config defaults also support a few pipeline-focused overrides that are especially useful during pipeline investigations:
@@ -363,15 +405,21 @@ For `/analyze`, the request model and config defaults also support a few pipelin
 - `get_job_artifacts` controls whether build artifacts are downloaded for extra evidence.
 - `jenkins_artifacts_max_size_mb` limits how much artifact data can be downloaded.
 - `jenkins_artifacts_context_lines` controls how much artifact context is prepared for analysis.
+- `PEER_AI_CONFIGS` or `peer_ai_configs` enables optional peer review for each deduplicated failure group. Omit the request field to inherit the server default, or send `[]` to disable peers for one run.
+- `PEER_ANALYSIS_MAX_ROUNDS` or `peer_analysis_max_rounds` limits how many debate rounds peer analysis can use for a group. The default is `3`.
 
-```25:28:config.example.toml
+```23:31:config.example.toml
+ai_cli_timeout = 10
+# Peer analysis (multi-AI consensus)
+# peers = "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro"
+# peer_analysis_max_rounds = 3
 # Monitoring
 wait_for_completion = true
 poll_interval_minutes = 2
 max_wait_minutes = 0  # 0 = no limit (wait forever)
 ```
 
-> **Tip:** Wait/poll settings affect when a Jenkins-backed analysis starts. Artifact settings improve the quality of leaf-job analysis, but they do not change how signatures are computed or how child jobs are discovered.
+> **Tip:** Wait/poll settings affect when a Jenkins-backed analysis starts. Artifact settings improve the quality of leaf-job analysis. Peer settings change how each deduplicated failure group is reviewed, but they do not change how signatures are computed or how child jobs are discovered.
 
 ## What This Means In Practice
 

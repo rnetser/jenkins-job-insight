@@ -68,7 +68,7 @@ The selected mode then drives the search endpoint: Cloud uses `/rest/api/3/searc
 ## Automatic Enablement
 Jira matching is resolved in a clear priority order:
 
-```308:325:src/jenkins_job_insight/main.py
+```549:566:src/jenkins_job_insight/main.py
 def _resolve_enable_jira(body: BaseAnalysisRequest, settings: Settings) -> bool:
     """Resolve enable_jira flag from request, env var, or auto-detection.
 
@@ -90,9 +90,9 @@ In practice, that means:
 - `ENABLE_JIRA=false` disables Jira even if the rest of the settings are valid.
 - `ENABLE_JIRA=true` does not bypass missing configuration. Without a URL, credentials, or project key, Jira still stays off.
 
-The CLI exposes the same behavior through `jji analyze --jira` and `jji analyze --no-jira`; those flags map directly to the request field `enable_jira`.
+The CLI exposes the same behavior through `jji analyze --jira` and `jji analyze --no-jira`. It also supports Jira-specific per-run overrides such as `--jira-url`, `--jira-email`, `--jira-api-token`, `--jira-pat`, `--jira-project-key`, `--jira-ssl-verify` or `--no-jira-ssl-verify`, and `--jira-max-results`. If you keep CLI defaults in `~/.config/jji/config.toml`, the bundled `config.example.toml` shows the same Jira keys.
 
-API callers can also override Jira settings per analysis with `enable_jira`, `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, and `jira_max_results`. Those request values are merged over environment defaults before analysis begins.
+API callers can also override Jira settings per analysis with `enable_jira`, `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, and `jira_max_results`. CLI flags, config file values, and request fields are merged over server defaults before analysis begins.
 
 > **Note:** Per-request Jira overrides apply to analysis requests. Jira bug preview and creation use the server's configured Jira connection, not caller-supplied per-analysis credentials.
 
@@ -122,7 +122,7 @@ Jira search only runs for failures that are already classified as `PRODUCT BUG`.
 
 The AI analysis prompt explicitly tells the model to produce short, specific Jira search terms:
 
-```81:103:src/jenkins_job_insight/analyzer.py
+```168:190:src/jenkins_job_insight/analyzer.py
 If PRODUCT BUG:
 {
   "classification": "PRODUCT BUG",

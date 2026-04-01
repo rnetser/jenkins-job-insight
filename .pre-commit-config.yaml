@@ -20,7 +20,9 @@ repos:
       - id: debug-statements
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md] # Do not process Markdown files.
+        exclude: ^docs/
       - id: end-of-file-fixer
+        exclude: ^docs/
       - id: check-ast
       - id: check-builtin-literals
       - id: check-toml

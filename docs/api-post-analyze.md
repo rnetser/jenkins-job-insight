@@ -8,7 +8,7 @@ This endpoint is asynchronous and returns immediately with a `job_id`. Use `wait
 
 `POST /analyze` does not use query parameters in the current API contract. Submit all options in the JSON body.
 
-> **Note:** The older `?sync=true` pattern is not part of the current `POST /analyze` schema. The endpoint always queues work and returns `202 Accepted`.
+> **Note:** The older `?sync=true` pattern is not part of the current `POST /analyze` schema. The endpoint always queues work and returns `202 Accepted`. If you need a single request/response flow, use `POST /analyze-failures` instead.
 
 ## Request Body
 
@@ -30,7 +30,11 @@ Only `job_name` and `build_number` are required. Everything else is optional and
 | `ai_model` | string | No | AI model for this request. |
 | `ai_cli_timeout` | integer | No | AI CLI timeout in minutes for this request. Must be greater than `0`. |
 | `raw_prompt` | string | No | Additional instructions appended to the AI analysis prompt. |
+| `peer_ai_configs` | array of objects | No | Optional peer AI reviewers for consensus analysis. Each item must include `ai_provider` and `ai_model`, using the same provider values as `ai_provider`. Omit the field to use the server default, or send `[]` to disable peer analysis for this request. |
+| `peer_analysis_max_rounds` | integer | No | Maximum debate rounds for peer analysis. Valid values are `1` through `10`. If omitted, the server default is used; when neither request nor server config overrides it, the default is `3`. |
 | `enable_jira` | boolean | No | Enable or disable Jira matching for this request. If omitted, the server uses request overrides, then environment defaults, then Jira auto-detection from configured credentials. |
+
+> **Note:** In the JSON request body, `peer_ai_configs` is an array of `{ai_provider, ai_model}` objects. The server-side `PEER_AI_CONFIGS` default uses a comma-separated string format instead.
 
 ### Callback Fields
 
@@ -62,7 +66,7 @@ Only `job_name` and `build_number` are required. Everything else is optional and
 | `jira_project_key` | string | No | Jira project key to scope searches. It must be configured if you want Jira matching enabled. |
 | `jira_ssl_verify` | boolean | No | Override Jira SSL verification. |
 | `jira_max_results` | integer | No | Maximum Jira matches to retrieve. Must be greater than `0`. |
-| `github_token` | string | No | GitHub token used for private-repo PR status enrichment in comments and for GitHub issue creation. |
+| `github_token` | string | No | GitHub token used for analysis-time GitHub access such as private-repo PR status enrichment in comments. GitHub issue creation still uses server-level configuration. |
 
 > **Note:** `tests_repo_url` is optional. If you omit it and the server has no default `TESTS_REPO_URL`, analysis still runs, but the AI will not have repository code context.
 
@@ -96,12 +100,33 @@ The examples below are taken directly from the repository's tests and README.
 
 > **Note:** The monitoring example matches the repository README and assumes AI defaults are already configured on the server. If they are not, include `ai_provider` and `ai_model` in the request body too.
 
+### Request With Peer Analysis
+
+This example matches the peer-analysis request coverage in the repository's test suite.
+
+```json
+{
+  "job_name": "test",
+  "build_number": 123,
+  "ai_provider": "claude",
+  "ai_model": "test-model",
+  "peer_ai_configs": [
+    {
+      "ai_provider": "gemini",
+      "ai_model": "pro"
+    }
+  ],
+  "peer_analysis_max_rounds": 5
+}
+```
+
 ### CLI Equivalents
 
 ```bash
 jji analyze --job-name my-job --build-number 42
 jji analyze --job-name my-job --build-number 42 --no-wait
 jji analyze --job-name my-job --build-number 27 --provider claude --model opus-4 --jira
+jji analyze --job-name my-job --build-number 1 --peers "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro" --peer-analysis-max-rounds 5
 ```
 
 ## Async Behavior
@@ -122,6 +147,13 @@ The lifecycle is:
 ## Background Job Behavior
 
 Async analysis still uses FastAPI background tasks inside the application process. It is simple and fast, but it is not a separate external worker queue.
+
+While a job is in progress, the nested `result` object can also carry lightweight progress metadata for the status page and API clients:
+- `progress_phase` for the latest phase
+- `progress_log` as an ordered list of `{phase, timestamp}` entries that survives refreshes
+- sanitized `request_params` for resumable `waiting` jobs
+
+Common phase names include `waiting_for_jenkins`, `analyzing`, `analyzing_child_jobs`, `analyzing_failures`, `enriching_jira`, and `saving`. Peer-analysis runs can also add phases such as `peer_review_round_1` and `orchestrator_revising_round_1`.
 
 > **Warning:** Restart behavior now depends on the in-flight status. `pending` and `running` jobs are marked `failed` on startup because their background task is gone. `waiting` jobs are resumed on startup when the stored request contains enough information to rebuild Jenkins monitoring.
 
@@ -155,7 +187,7 @@ This is the JSON shape you poll after submission.
 | `job_id` | string | Job identifier. |
 | `jenkins_url` | string | Jenkins build URL stored for the analysis. |
 | `status` | string | Current stored state. Possible values are `pending`, `waiting`, `running`, `completed`, and `failed`. |
-| `result` | object or `null` | Minimal stored metadata while queued, the analysis payload when available, or an error payload when the job fails. |
+| `result` | object or `null` | Minimal stored metadata while the job is in progress, sometimes including sanitized `request_params`, `progress_phase`, and `progress_log`; the analysis payload when available; or an error payload when the job fails. |
 | `created_at` | string | Timestamp when the job row was created. |
 | `analysis_started_at` | string or `null` | Timestamp when analysis execution started, if it has started. |
 | `completed_at` | string or `null` | Timestamp when the job reached `completed` or `failed`, if available. |
@@ -196,6 +228,7 @@ Each item in `failures` has this shape:
 | `error` | string | Error message or exception. |
 | `error_signature` | string | SHA-256 signature of the error and stack trace, used for deduplication. |
 | `analysis` | object | Structured AI analysis for this failure. |
+| `peer_debate` | object or `null` | Peer debate trail when peer analysis is enabled for the run. |
 
 ### `failures[].analysis`
 
@@ -235,6 +268,20 @@ Each item in `jira_matches` contains:
 
 > **Note:** `code_fix` and `product_bug_report` are mutually exclusive. A failure gets one or the other, not both.
 
+### `failures[].peer_debate`
+
+When peer analysis is used, `peer_debate` records the consensus trail for the failure group.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `consensus_reached` | boolean | Whether the peer-analysis flow reached consensus. |
+| `rounds_used` | integer | How many rounds were actually used. |
+| `max_rounds` | integer | Maximum rounds allowed for that run. |
+| `ai_configs` | array | The provider/model pairs that participated in the debate. Each item includes `ai_provider` and `ai_model`. |
+| `rounds` | array | Ordered round entries. Each entry includes `round`, `ai_provider`, `ai_model`, `role` (`orchestrator` or `peer`), `classification`, `details`, and `agrees_with_orchestrator` (`null` means the peer failed or was excluded from consensus). |
+
+> **Note:** `peer_debate` supplements the main `analysis` object. It explains how consensus was reached, but the final classification still lives in `analysis.classification`.
+
 ### `child_job_analyses[]`
 
 Pipeline jobs can return failed child jobs recursively.
@@ -253,6 +300,8 @@ Pipeline jobs can return failed child jobs recursively.
 
 `POST /analyze` no longer supports callback delivery fields in the request body.
 
+> **Warning:** Older `CALLBACK_URL`, `CALLBACK_HEADERS`, `callback_url`, and `callback_headers` examples are legacy material for earlier flows and do not apply to the current API.
+
 > **Note:** Use the returned `job_id` with `GET /results/{job_id}` for machine-readable polling, or open `/status/{job_id}` and `/results/{job_id}` in the web UI for human-readable progress and results.
 
 ## Configuration Snippets
@@ -267,7 +316,13 @@ AI_PROVIDER=claude
 # AI model to use (required, applies to any provider)
 # Can also be set per-request in webhook body
 AI_MODEL=your-model-name
+
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
+
+> **Note:** `PEER_AI_CONFIGS` and `PEER_ANALYSIS_MAX_ROUNDS` are server-side defaults. In the JSON request body, the equivalent fields are `peer_ai_configs` and `peer_analysis_max_rounds`.
 
 ### Repository Defaults From `.env.example`
 

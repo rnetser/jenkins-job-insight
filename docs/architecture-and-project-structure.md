@@ -1,36 +1,39 @@
 # Architecture and Project Structure
 
-`jenkins-job-insight` is a single application that combines a FastAPI backend, a React web UI, a REST-backed CLI, and a SQLite persistence layer. A typical run starts with a Jenkins build or raw JUnit XML, passes through the analyzer and optional tracker automation, and ends up as a stored result that powers the HTML report, history views, comments, reviews, and CLI output.
+`jenkins-job-insight` is a single application that combines a FastAPI backend, a React web UI, a REST-backed CLI, and a SQLite persistence layer. A typical run starts with a Jenkins build or raw JUnit XML, passes through the analyzer, optional peer-analysis consensus, and optional tracker automation, and ends up as a stored result that powers the HTML report, live status views, history pages, comments, reviews, and CLI output.
 
 ## Repository map
 
-- `src/jenkins_job_insight/main.py`: FastAPI app, startup lifecycle, API routes, SPA hosting, status polling, comments/reviews, history, and issue preview/create endpoints.
-- `src/jenkins_job_insight/models.py`: request and response models such as `AnalyzeRequest`, `AnalyzeFailuresRequest`, `FailureAnalysis`, `ChildJobAnalysis`, and `AnalysisResult`.
-- `src/jenkins_job_insight/analyzer.py`: the core orchestration layer that talks to Jenkins, groups failures, builds AI prompts, and assembles final analysis results.
+- `src/jenkins_job_insight/main.py`: FastAPI app, startup lifecycle, request override merging, progress-phase tracking, API routes, SPA hosting, status polling, comments/reviews, history, and issue preview/create endpoints.
+- `src/jenkins_job_insight/models.py`: request and response models such as `AnalyzeRequest`, `AnalyzeFailuresRequest`, `AiConfigEntry`, `FailureAnalysis`, `PeerRound`, `PeerDebate`, `ChildJobAnalysis`, and `AnalysisResult`.
+- `src/jenkins_job_insight/analyzer.py`: the core orchestration layer that talks to Jenkins, groups failures, builds AI prompts, delegates to peer analysis when configured, and assembles final analysis results.
+- `src/jenkins_job_insight/peer_analysis.py`: multi-AI consensus orchestration where the main AI acts as the orchestrator, peers review in parallel, revision rounds continue until consensus or the configured limit, and the full debate trail is attached to each failure group.
+- `src/jenkins_job_insight/config.py`: environment-backed settings, request-override defaults, and parsing for `PEER_AI_CONFIGS`.
 - `src/jenkins_job_insight/jenkins.py`: thin `python-jenkins` wrapper with helper methods for build info, console output, test reports, and URL parsing.
 - `src/jenkins_job_insight/jenkins_artifacts.py`: artifact download, safe archive extraction, and artifact-context generation for AI analysis.
 - `src/jenkins_job_insight/jira.py`: Jira candidate search plus AI-based relevance filtering for `PRODUCT BUG` matches.
 - `src/jenkins_job_insight/bug_creation.py`: preview, duplicate lookup, and creation helpers for GitHub issues and Jira bugs.
 - `src/jenkins_job_insight/comment_enrichment.py`: detects GitHub/Jira references in comments and fetches live status information.
-- `src/jenkins_job_insight/storage.py`: SQLite schema, migrations, result persistence, failure history, comments, reviews, and classification overrides.
+- `src/jenkins_job_insight/storage.py`: SQLite schema, migrations, result persistence, atomic result patching for progress updates, failure history, comments, reviews, and classification overrides.
 - `src/jenkins_job_insight/encryption.py`: encryption-at-rest for stored sensitive request parameters.
 - `src/jenkins_job_insight/repository.py`: temporary clone management for the optional tests repository context.
-- `src/jenkins_job_insight/cli/`: the `jji` CLI, including HTTP client, config loader, and terminal output formatting.
-- `frontend/src/`: React + TypeScript UI for dashboard, live status, HTML report, failure history, and test history pages.
+- `src/jenkins_job_insight/cli/`: the `jji` CLI, including the HTTP client, config loader, profile validation, and peer-analysis flag handling.
+- `frontend/src/`: React + TypeScript UI for dashboard, live status, HTML report, peer-analysis summaries and debates, failure history, and test history pages.
 - `examples/pytest-junitxml/`: a drop-in pytest/JUnit example that sends failed test XML to JJI and writes enriched XML back.
-- `tests/`: backend, storage, Jira, bug-creation, Jenkins, and CLI tests.
+- `tests/`: backend, peer-analysis, storage, config, models, frontend, and CLI tests.
 - `tox.toml`, `.pre-commit-config.yaml`, `Dockerfile`, `docker-compose.yaml`, and `entrypoint.sh`: local validation and runtime packaging.
 
 ## End-to-end flow
 
 1. A client submits a Jenkins build to `POST /analyze`, or raw failures/XML to `POST /analyze-failures`.
-2. `main.py` creates a `job_id`, saves an initial SQLite row, and either queues background work or runs direct analysis immediately.
+2. `main.py` resolves the effective settings for that request, validates the main AI plus any peer AI configs, creates a `job_id`, saves the initial SQLite row, and either queues background work or runs direct analysis immediately.
 3. `analyzer.py` pulls Jenkins build data, structured test reports, console logs, and optional build artifacts. If `tests_repo_url` is configured, it also clones the test repository into a temporary workspace so the AI can inspect real code.
-4. Failures are grouped by signature so repeated failures only produce one AI call per unique root cause.
-5. The final result is enriched with Jira matches when the failure is classified as a product bug.
-6. `storage.py` persists the result, flattens failures into history tables, and exposes the same data to the React UI, REST API, and CLI.
+4. Failures are grouped by signature so repeated failures only produce one analysis workflow per unique root cause.
+5. When `peer_ai_configs` is enabled, `src/jenkins_job_insight/peer_analysis.py` runs a debate for each unique failure group: the main AI analyzes first, peers review in parallel, and the orchestrator can revise until consensus or `peer_analysis_max_rounds` is reached.
+6. The final result is enriched with Jira matches when the failure is classified as a product bug.
+7. `storage.py` persists the result, flattens failures into history tables, and exposes the same data to the React UI, REST API, and CLI.
 
-The asynchronous Jenkins entry point is deliberately queue-oriented: it creates the record first, then lets the client poll by `job_id`.
+The asynchronous Jenkins entry point is still deliberately queue-oriented: it creates the record first, then lets the client poll by `job_id`. Peer-analysis settings are validated before JJI returns `202`, and resolved peer settings are stored with resumable waiting jobs so a restart does not silently drop the debate configuration.
 
 ```921:976:src/jenkins_job_insight/main.py
 @app.post("/analyze", status_code=202, response_model=None)
@@ -91,7 +94,7 @@ async def analyze(
     return _attach_result_links(response, base_url, job_id)
 ```
 
-The analyzer’s most important scaling feature is failure deduplication. It uses one representative failure to build the prompt, then applies the same structured result to every test in the signature group.
+The analyzer’s most important scaling feature is still failure deduplication. The code example below shows the single-AI representative-failure path; when `peer_ai_configs` is present, that same failure-group boundary is first handed to `src/jenkins_job_insight/peer_analysis.py` so one unique error can produce one main analysis plus one `peer_debate` transcript that is reused for every sibling failure with the same `error_signature`. The same group-level path is reused by `POST /analyze-failures`, so raw failures and Jenkins-backed runs behave the same way.
 
 ```872:947:src/jenkins_job_insight/analyzer.py
 # Use the first failure as representative
@@ -179,6 +182,8 @@ return [
 - Initializes the database in the FastAPI lifespan hook.
 - Marks stale `pending` and `running` jobs as failed on startup.
 - Resumes `waiting` jobs that were monitoring Jenkins when the service restarted.
+- Resolves request-level overrides for analysis settings, including peer AI configs and debate-round limits.
+- Writes `progress_phase` and `progress_log` updates into stored results so the live status page survives refreshes.
 - Serves the built React app and its static assets.
 - Hosts JSON API endpoints for analysis, results, history, comments, reviews, classification, Jira/GitHub preview/create flows, and health checks.
 
@@ -191,7 +196,7 @@ The API surface is organized around a few core areas:
 - Automation: preview/create tracker issues and enrich comment links
 - Capability discovery: `GET /api/capabilities`, `GET /ai-configs`, `GET /health`
 
-`src/jenkins_job_insight/models.py` keeps those interfaces explicit. That file is where to look when you want the canonical request/response shapes for things like `AnalyzeRequest`, `AnalyzeFailuresRequest`, `FailureAnalysis`, `ChildJobAnalysis`, and `AnalysisResult`.
+`src/jenkins_job_insight/models.py` keeps those interfaces explicit. It now also defines the peer-analysis contract: `peer_ai_configs` can inherit the server default, override it, or use `[]` to disable peers for one run, `peer_analysis_max_rounds` caps the debate loop, and `FailureAnalysis.peer_debate` carries the round-by-round transcript back to the UI.
 
 > **Tip:** Set `PUBLIC_BASE_URL` when JJI runs behind a reverse proxy or external hostname. Link generation intentionally uses that trusted setting instead of request headers, which avoids host-header problems but means the app will otherwise return relative URLs.
 
@@ -199,7 +204,7 @@ The API surface is organized around a few core areas:
 
 `src/jenkins_job_insight/analyzer.py` is the real engine room.
 
-One deliberate design choice is that JJI talks to AI providers through their command-line tools, not through vendor SDKs. In practice that means the analyzer is responsible for prompt construction, workspace setup, retries, and structured-response parsing, while authentication stays with the provider CLI itself.
+One deliberate design choice is that JJI talks to AI providers through their command-line tools, not through vendor SDKs. In practice that means the analyzer is responsible for prompt construction, workspace setup, retries, structured-response parsing, and deciding whether a failure group should stay on the single-AI path or hand off to peer consensus.
 
 For Jenkins-backed analysis, the analyzer does the following:
 
@@ -210,6 +215,12 @@ For Jenkins-backed analysis, the analyzer does the following:
 - Optionally downloads and extracts build artifacts with `src/jenkins_job_insight/jenkins_artifacts.py`, then exposes them as `build-artifacts/` inside the AI working directory.
 
 That artifact layer is more than a convenience. It includes archive size limits, path traversal protection, and safe tar/zip extraction before the AI ever sees the files. If your Jenkins jobs produce diagnostic logs, events, or YAML/JSON status dumps, this is where that context is turned into something the analyzer can use.
+
+When peer analysis is enabled, `src/jenkins_job_insight/peer_analysis.py` becomes the debate coordinator for each deduplicated failure group. The main AI runs first using the same `_run_single_ai_analysis()` helper as the single-AI path, peers review that result in parallel, and the orchestrator can revise its answer until all valid peers agree or the configured round limit is reached.
+
+The debate output is stored as `PeerDebate` and `PeerRound` data on each grouped `FailureAnalysis`. Because the discussion happens once per `error_signature`, every sibling test with the same root cause gets the same final structured analysis and the same debate transcript.
+
+> **Warning:** Peer analysis is only used for structured test failures. If a job falls back to console-only analysis because no test report exists, JJI logs a warning and uses the single-AI path instead.
 
 The analyzer also has a history-aware path. When it has a local server URL and a current `job_id`, it points the AI at `src/jenkins_job_insight/ai-prompts/FAILURE_HISTORY_ANALYSIS.md` and lets the AI query JJI’s own history endpoints. That keeps the main prompt smaller and makes history lookup a first-class tool instead of an enormous prompt appendix.
 
@@ -252,9 +263,11 @@ A few storage behaviors matter when you are reasoning about the system:
 - Completed results are flattened into `failure_history` after analysis, so history queries do not have to repeatedly parse nested JSON blobs.
 - User overrides are mirrored back into both `failure_history` and the stored result JSON, so page refreshes and history filters stay in sync.
 - Startup recovery treats stale jobs differently: orphaned `pending` and `running` jobs are failed immediately, while `waiting` jobs can be resumed if their stored request parameters are still usable.
+- Waiting-job request parameters now include peer-analysis settings, so resumed jobs keep the same peer roster and `peer_analysis_max_rounds` they were queued with.
+- `progress_phase` and `progress_log` are patched into the stored result JSON as analysis advances, so the status page survives refreshes and resumes from server state rather than browser-only state.
 - Sensitive request fields are encrypted before they are stored for wait/resume behavior, and they are stripped back out before API responses are returned.
 
-> **Warning:** Waiting-job resumption depends on encrypted stored request parameters. If you change `JJI_ENCRYPTION_KEY`, old waiting jobs may no longer be decryptable and will not resume cleanly.
+> **Warning:** Waiting-job resumption depends on encrypted stored request parameters. If you change `JJI_ENCRYPTION_KEY`, old waiting jobs may no longer be decryptable, and any queued peer-analysis settings stored with them will not resume cleanly.
 
 > **Note:** `failure_history` records failure events, not every passing run. That is why some history views show estimated pass rates, and why some statistics only become meaningful when you scope them to a specific job.
 
@@ -314,13 +327,17 @@ export default function App() {
 
 The important UI pieces are:
 
-- `frontend/src/pages/DashboardPage.tsx`: recent analyses, failure counts, review/comment counts, delete action, and polling refresh.
-- `frontend/src/pages/StatusPage.tsx`: live polling screen for `waiting`, `pending`, and `running` jobs.
-- `frontend/src/pages/ReportPage.tsx`: the main HTML report view for one analysis.
-- `frontend/src/pages/report/`: report-specific building blocks such as `FailureCard`, `ChildJobSection`, `CommentsSection`, `ClassificationSelect`, `BugCreationDialog`, and `ReviewToggle`.
+- `frontend/src/pages/DashboardPage.tsx`: recent analyses, sortable metric columns, delete action, polling refresh, and session-persisted table sort state.
+- `frontend/src/pages/StatusPage.tsx`: live polling screen for `waiting`, `pending`, and `running` jobs; it renders persisted `progress_phase` / `progress_log` entries and shows main AI plus peer AI metadata while a run is in flight.
+- `frontend/src/pages/ReportPage.tsx`: the main HTML report view for one analysis, including the top-level peer-analysis summary.
+- `frontend/src/pages/report/`: report-specific building blocks such as `FailureCard`, `ChildJobSection`, `CommentsSection`, `ClassificationSelect`, `BugCreationDialog`, `ReviewToggle`, `PeerAnalysisSummary`, and `PeerDebateSection`.
+- `frontend/src/components/shared/PeerRoundEntry.tsx`: shared rendering for individual orchestrator and peer round entries in both compact and expanded debate views.
+- `frontend/src/components/shared/SortableHeader.tsx` and `frontend/src/lib/useTableSort.ts`: shared table-sorting primitives used by dashboard and history pages.
+- `frontend/src/lib/useSessionState.ts`: sessionStorage-backed UI state reused by expand/collapse panels and table sort preferences.
 - `frontend/src/pages/report/ReportContext.tsx`: page-scoped `useReducer` state for results, comments, review state, enrichments, AI configs, and manual overrides.
 - `frontend/src/pages/HistoryPage.tsx` and `frontend/src/pages/TestHistoryPage.tsx`: flattened failure history and per-test drill-down pages.
-- `frontend/src/lib/grouping.ts`: mirrors backend failure grouping logic so the UI can present deduplicated cards that line up with backend error-signature grouping.
+- `frontend/src/lib/grouping.ts` and `frontend/src/lib/peerDebate.ts`: client-side helpers that keep grouped failure cards and peer-debate timelines aligned with the backend’s `error_signature` and round structure.
+- `frontend/src/types/index.ts`: the handwritten frontend contract for backend response shapes, including `PeerDebate`, `PeerRound`, `progress_log`, and peer request params.
 - `frontend/src/lib/api.ts`: the centralized fetch wrapper used by the whole frontend.
 
 > **Note:** The `jji_username` cookie is used for attribution and collaboration in the UI. It is a convenience mechanism, not a full authentication system.
@@ -329,9 +346,9 @@ The important UI pieces are:
 
 JJI ships two entry points from `pyproject.toml`: the server entry point `jenkins-job-insight` and the CLI entry point `jji`. The CLI lives under `src/jenkins_job_insight/cli/` and is intentionally thin: `JJIClient` is just an HTTP client that maps commands to the same REST endpoints the web UI uses.
 
-The sample CLI/server-profile config is in `config.example.toml`. It is structured around shared defaults plus named servers, so you can reuse the same CLI against local, staging, and production environments without changing commands.
+The sample CLI/server-profile config is in `config.example.toml`. It is structured around shared defaults plus named servers, and peer analysis follows the same override chain as the rest of the system: server env defaults (`PEER_AI_CONFIGS`, `PEER_ANALYSIS_MAX_ROUNDS`), request JSON (`peer_ai_configs`, `peer_analysis_max_rounds`), and CLI/profile settings (`--peers`, `--peer-analysis-max-rounds`, plus `peers` / `peer_analysis_max_rounds` in `config.toml`).
 
-```12:23:config.example.toml
+```12:27:config.example.toml
 [default]
 server = "dev"  # Default server name
 
@@ -344,9 +361,13 @@ jenkins_ssl_verify = true
 tests_repo_url = "https://github.com/your-org/your-tests"
 ai_provider = "claude"
 ai_model = "claude-opus-4-6[1m]"
+ai_cli_timeout = 10
+# Peer analysis (multi-AI consensus)
+# peers = "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro"
+# peer_analysis_max_rounds = 3
 ```
 
-The rest of that file defines per-environment profiles such as `[servers.dev]`, `[servers.staging]`, and `[servers.prod]`, each with its own URL, username, SSL setting, and optional overrides.
+The rest of that file defines per-environment profiles such as `[servers.dev]`, `[servers.staging]`, and `[servers.prod]`, each with its own URL, username, SSL setting, and optional overrides. `src/jenkins_job_insight/cli/config.py` validates those values on load, and `src/jenkins_job_insight/cli/main.py` forwards them to the same REST endpoints the web UI uses.
 
 `docker-compose.yaml` shows the intended packaging model: one container, one public port, and a persistent `/data` mount for SQLite.
 
@@ -419,14 +440,16 @@ def pytest_sessionfinish(session, exitstatus):
 
 The test suite is broad and maps closely to the main architecture:
 
-- `tests/test_main.py`: FastAPI routes, async job queuing, XML analysis mode, waiting/resume behavior, dashboard/history endpoints, comments/reviews, issue preview/create flows, and SPA behavior.
-- `tests/test_storage.py`: schema initialization, persistence, classification overrides, result recovery, and stale-job handling.
-- `tests/test_analyzer.py`: Jenkins exception translation and AI CLI retry behavior.
+- `tests/test_main.py`: FastAPI routes, async job queuing, XML analysis mode, waiting/resume behavior, dashboard/history endpoints, comments/reviews, issue preview/create flows, SPA behavior, and peer-analysis request merging.
+- `tests/test_storage.py`: schema initialization, persistence, progress-log patching, classification overrides, result recovery, and stale-job handling.
+- `tests/test_analyzer.py`: Jenkins exception translation, AI CLI retry behavior, and delegation to `peer_analysis.py` when peers are configured.
+- `tests/test_peer_analysis.py`: consensus rules, peer response parsing, revision rounds, progress updates, and `peer_debate` attachment.
+- `tests/test_models.py` and `tests/test_config.py`: validation for peer request fields, model shapes, and environment-driven defaults.
+- `tests/test_cli_main.py`, `tests/test_cli_client.py`, and `tests/test_cli_config.py`: CLI parity, peer-analysis flag handling, config validation, and HTTP client request mapping.
 - `tests/test_jira.py`: Jira Cloud vs Server/DC auth detection, search, candidate handling, and AI relevance filtering.
 - `tests/test_bug_creation.py`: issue text generation, fallback behavior, duplicate lookup, and issue creation helpers.
 - `tests/test_jenkins.py`: Jenkins URL parsing edge cases.
-- `tests/test_cli_main.py` and `tests/test_cli_client.py`: CLI parity, flag handling, config behavior, and HTTP client request mapping.
-- `frontend/src/**/__tests__`: frontend API wrapper, grouping logic, cookies, and report-context helpers.
+- `frontend/src/**/__tests__`: frontend API wrapper, grouping logic, cookies, report-context helpers, and peer-debate round grouping.
 
 The repo’s top-level validation entry point is `tox.toml`, which runs both backend and frontend checks:
 
@@ -471,10 +494,12 @@ If you are onboarding to the codebase, this order gives the fastest payoff:
 
 1. `src/jenkins_job_insight/main.py`
 2. `src/jenkins_job_insight/analyzer.py`
-3. `src/jenkins_job_insight/storage.py`
-4. `frontend/src/App.tsx` and `frontend/src/pages/ReportPage.tsx`
-5. `src/jenkins_job_insight/jira.py` and `src/jenkins_job_insight/bug_creation.py`
-6. `examples/pytest-junitxml/`
-7. `tests/test_main.py`, `tests/test_storage.py`, and `tests/test_cli_main.py`
+3. `src/jenkins_job_insight/peer_analysis.py`
+4. `src/jenkins_job_insight/storage.py`
+5. `frontend/src/App.tsx` and `frontend/src/pages/ReportPage.tsx`
+6. `frontend/src/pages/report/PeerAnalysisSummary.tsx` and `frontend/src/pages/report/PeerDebateSection.tsx`
+7. `src/jenkins_job_insight/jira.py` and `src/jenkins_job_insight/bug_creation.py`
+8. `examples/pytest-junitxml/`
+9. `tests/test_main.py`, `tests/test_peer_analysis.py`, and `tests/test_cli_main.py`
 
-That path takes you from request entry, to analysis orchestration, to persistence, to HTML reporting, to tracker automation, and finally to the tests that describe the expected behavior.
+That path takes you from request entry, to analysis orchestration, to the multi-AI debate layer, to persistence, to HTML reporting, to tracker automation, and finally to the tests that describe the expected behavior.

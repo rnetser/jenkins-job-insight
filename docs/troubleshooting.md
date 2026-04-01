@@ -116,89 +116,69 @@ Check these first:
 
 ## Missing AI Configuration
 
-There are two different failure modes here:
+There are now three common failure modes here:
 
-- The API rejects the request because no provider or model was configured.
-- The request is accepted, but the runtime AI CLI is missing, unauthenticated, or otherwise unusable.
+- The API rejects the request because no main AI provider or model was configured.
+- The API rejects the request because the provider name or peer-analysis configuration is invalid.
+- The request is accepted, but the main AI CLI is missing, unauthenticated, or otherwise unusable at runtime.
 
-The API-level validation is explicit:
+The API-level validation is explicit, and it now also rejects unsupported provider names:
 
-```288:300:src/jenkins_job_insight/main.py
+```490:508:src/jenkins_job_insight/main.py
 provider = ai_provider or AI_PROVIDER
 model = ai_model or AI_MODEL
 if not provider:
-    raise HTTPException(
-        status_code=400,
-        detail=f"No AI provider configured. Set AI_PROVIDER env var or pass ai_provider in request body. Valid providers: {', '.join(sorted(VALID_AI_PROVIDERS))}",
-    )
+    raise HTTPException(...)  # missing AI_PROVIDER / ai_provider
+if provider not in VALID_AI_PROVIDERS:
+    raise HTTPException(...)  # unsupported provider name
 if not model:
-    raise HTTPException(
-        status_code=400,
-        detail="No AI model configured. Set AI_MODEL env var or pass ai_model in request body.",
-    )
-return provider, model
+    raise HTTPException(...)  # missing AI_MODEL / ai_model
 ```
 
-Provider authentication examples in the repository look like this:
+Peer configs also have an explicit default/override rule:
 
-```21:44:.env.example
-# --- Claude CLI Options ---
+```531:535:src/jenkins_job_insight/main.py
+if body.peer_ai_configs is not None:
+    return body.peer_ai_configs or None  # [] -> None (disable)
+if settings.peer_ai_configs:
+    return parse_peer_configs(settings.peer_ai_configs) or None
+return None
+```
 
-# Option 1: Direct API key (simplest)
+Provider authentication and optional peer-analysis defaults in the repo look like this:
+
+```23:57:.env.example
 ANTHROPIC_API_KEY=your-anthropic-api-key
-
-# Option 2: Vertex AI authentication
-# CLAUDE_CODE_USE_VERTEX=1
-# CLOUD_ML_REGION=us-east5
-# ANTHROPIC_VERTEX_PROJECT_ID=your-project-id
-
-# --- Gemini CLI Options ---
-
-# Option 1: API key
 GEMINI_API_KEY=your-gemini-api-key
-
-# Option 2: OAuth (run: gemini auth login)
-# No env vars needed for OAuth
-
-# --- Cursor Agent CLI Options ---
-
-# Choose ONE of the following authentication methods:
-
-# API key
 # CURSOR_API_KEY=your-cursor-api-key
+# AI_CLI_TIMEOUT=10
+
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
-If the provider and model are present but the CLI still cannot run, the analyzer fails early and stores the pre-flight error in the job summary:
+If the main provider and model are present but the CLI still cannot run, the analyzer fails early and stores the pre-flight error in the job summary:
 
-```1279:1294:src/jenkins_job_insight/analyzer.py
-# Pre-flight: verify AI CLI is reachable before spawning parallel tasks
-ok, err = await check_ai_cli_available(
-    ai_provider, ai_model, cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, [])
-)
+```1473:1488:src/jenkins_job_insight/analyzer.py
+ok, err = await check_ai_cli_available(...)
 if not ok:
-    return AnalysisResult(
-        job_id=job_id,
-        job_name=request.job_name,
-        build_number=request.build_number,
-        jenkins_url=HttpUrl(jenkins_build_url),
-        status="failed",
-        summary=err,
-        ai_provider=ai_provider,
-        ai_model=ai_model,
-        failures=[],
-    )
+    return AnalysisResult(...)  # failed result with summary=err
 ```
 
 Use this checklist:
 
-- In Docker Compose, `AI_PROVIDER` and `AI_MODEL` are required.
-- The valid providers are `claude`, `gemini`, and `cursor`.
+- `AI_PROVIDER` and `AI_MODEL`, or request-level `ai_provider` and `ai_model`, are always required. Peer analysis does not replace the main AI.
+- Valid provider names are `claude`, `gemini`, and `cursor`. `Unsupported AI provider: ...` means the provider name itself is wrong.
+- `PEER_AI_CONFIGS` must use `provider:model,provider:model`. Invalid peer configs are rejected early with `400`.
+- Omit `peer_ai_configs` to inherit the server default from `PEER_AI_CONFIGS`. Send `peer_ai_configs: []` to disable peers for a single request.
+- `PEER_ANALYSIS_MAX_ROUNDS` and request-level `peer_analysis_max_rounds` must be between `1` and `10`. The default is `3`.
 - Provider authentication is handled by the provider CLI itself. A valid app config is not enough if the CLI is not logged in or lacks its API key.
 - If a job finishes with `status: failed`, inspect the `summary` field in `/results/<job_id>` before rerunning anything.
-- Use `jji ai-configs` to list provider/model pairs from successful analyses. If it returns nothing, no completed analysis has recorded a working pair yet.
-- You can test a one-off change without redeploying by sending `ai_provider` and `ai_model` in the request body.
+- Use `jji ai-configs` to list primary provider/model pairs from successful analyses. If it returns nothing, no completed analysis has recorded a working main AI pair yet.
+- `jji ai-configs` helps with the main AI only. It does not validate or list peer configurations.
+- You can test a one-off main or peer AI change without redeploying by sending `ai_provider`, `ai_model`, and `peer_ai_configs` in the request body.
 
-> **Tip:** If you are using a custom image instead of the provided one, make sure the provider CLI itself is installed and on `PATH`, not just the environment variables.
+> **Tip:** If you are using a custom image instead of the provided one, make sure the primary provider CLI and any peer provider CLIs are installed and on `PATH`, not just the environment variables.
 
 ## XML Parse Errors
 
@@ -435,14 +415,30 @@ COPY --chown=appuser:0 --from=builder /app/src /app/src
 COPY --chown=appuser:0 --from=frontend-builder /frontend/dist /app/frontend/dist
 ```
 
+Peer-analysis panels are also conditional. The summary stays hidden when no debate data exists, and console-only fallback does not produce peer debates:
+
+```91:94:frontend/src/pages/report/PeerAnalysisSummary.tsx
+const totalWithDebate = debateFailures.length
+
+// Do not render when there are no peer debates
+if (totalWithDebate === 0) return null
+```
+
+```1276:1279:src/jenkins_job_insight/analyzer.py
+if peer_ai_configs:
+    logger.warning(...)  # peer analysis is not supported for console-only failures
+```
+
 Use this checklist:
 
 - Open `/results/<job_id>` in the browser, not `/results/<job_id>.html`.
 - If the job is still `pending`, `waiting`, or `running`, the browser route redirects to `/status/<job_id>` and the JSON endpoint returns `202`.
 - `404 Frontend not built` means the runtime image does not have `frontend/dist/index.html`. Rebuild the frontend with `cd frontend && npm install && npm run build`, or use the provided Docker build that copies `frontend/dist` into the final image.
-- If the report page hides Jira or GitHub bug actions, inspect the `capabilities` object in `/results/<job_id>` or `GET /api/capabilities` before debugging the frontend.
+- If the report page hides Jira or GitHub bug actions, inspect the `capabilities` object in `/results/<job_id>`, run `jji capabilities`, or call `GET /api/capabilities` before debugging the frontend.
+- If the `Peer Analysis` summary or a per-failure peer debate section is missing, that usually means the stored result does not contain debate data for that run. Check the JSON result first.
+- Console-only analyses do not render peer debate panels, even if `PEER_AI_CONFIGS` or request-level peers were set.
 - If generated `result_url` or tracker links point to the wrong scheme or hostname behind a proxy, set `PUBLIC_BASE_URL`. When it is unset, JJI intentionally returns relative URLs instead of trusting proxy headers.
 - Pipeline jobs may still show a `Child Job Analyses` section instead of top-level failures. That is expected when the parent job failed because downstream jobs failed.
 - A report page with no failures is still valid when the stored analysis contains none.
 
-> **Tip:** If you only need the authoritative state, use `jji results show <job_id> --full` or `curl -H 'Accept: application/json' http://your-host:8000/results/<job_id>` first, then debug the browser UI second. The cached HTML stores integration availability at render time.
+> **Tip:** If you only need the authoritative state, use `jji results show <job_id> --full` or `curl -H 'Accept: application/json' http://your-host:8000/results/<job_id>` first, then debug the browser UI second. The JSON response is the source of truth for `capabilities`, failure details, and any `peer_debate` data.

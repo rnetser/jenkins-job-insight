@@ -30,6 +30,19 @@ AI_PROVIDER=claude
 AI_MODEL=your-model-name
 ```
 
+If you want the same pytest-uploaded XML to use multi-AI consensus, the same template now also includes optional server-side peer-analysis defaults:
+
+```52:57:.env.example
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
+```
+
+> **Note:** When `PEER_AI_CONFIGS` is set on the server, the bundled pytest helper does not need any extra client-side peer settings. It still posts `raw_xml` to `POST /analyze-failures`, and the server applies its default peer-analysis settings.
+
 > **Warning:** The current pytest helper does not actually fall back to built-in client-side defaults for `JJI_AI_PROVIDER` or `JJI_AI_MODEL`. If either one is missing, the helper disables enrichment.
 
 ## How The Example Hooks Into Pytest
@@ -154,7 +167,24 @@ The bundled helper sends only three fields:
 
 That is enough for the standard flow, but it is deliberately minimal.
 
-> **Tip:** The `/analyze-failures` request model also supports optional fields such as `tests_repo_url`, `enable_jira`, and `raw_prompt`. If you want pytest-driven analysis to use those features, extend the JSON payload in `conftest_junit_ai_utils.py`.
+The shared request model behind `/analyze-failures` also supports optional peer-analysis overrides:
+
+```95:105:src/jenkins_job_insight/models.py
+peer_ai_configs: list[AiConfigEntry] | None = Field(
+    default=None,
+    description=(
+        "List of peer AI configs for consensus analysis. "
+        "Omit to inherit the server default; send [] to disable peer analysis "
+        "for this request. Each peer reviews the main AI's analysis."
+    ),
+)
+peer_analysis_max_rounds: Annotated[int, Field(ge=1, le=10)] = Field(
+    default=3,
+    description="Maximum debate rounds for peer analysis",
+)
+```
+
+> **Tip:** The `/analyze-failures` request model also supports optional fields such as `tests_repo_url`, `enable_jira`, `raw_prompt`, `peer_ai_configs`, and `peer_analysis_max_rounds`. If you want pytest-driven analysis to use those features, extend the JSON payload in `conftest_junit_ai_utils.py`.
 
 ## What The Server Does With The XML
 
@@ -252,7 +282,7 @@ The service also adds a `report_url` property to the first `<testsuite>` so the 
 
 Whether `report_url` is an absolute URL or a relative path depends on the server's `PUBLIC_BASE_URL` setting:
 
-```70:74:src/jenkins_job_insight/config.py
+```105:109:src/jenkins_job_insight/config.py
     # Trusted public base URL — used for result_url and tracker links.
     # When set, _extract_base_url() returns this value verbatim.
     # When unset, _extract_base_url() returns an empty string (relative

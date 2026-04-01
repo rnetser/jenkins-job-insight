@@ -24,22 +24,22 @@ For request-tunable analysis settings, configuration resolves in this order:
 
 Deployment-only settings do not have request-body equivalents. In this page, the main examples are `PORT`, `DB_PATH`, `DEBUG`, `LOG_LEVEL`, `PUBLIC_BASE_URL`, `ENABLE_GITHUB_ISSUES`, and `JJI_ENCRYPTION_KEY`.
 
-The merge path in `src/jenkins_job_insight/main.py` applies only non-`None` request values:
+The merge path in `src/jenkins_job_insight/main.py` applies direct non-`None` request values, and it treats fields with model defaults as overrides only when the caller explicitly sends them:
 
-```532:607:src/jenkins_job_insight/main.py
-def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
-    """Create a copy of settings with per-request overrides applied."""
-    overrides: dict = {}
-    # ... direct fields omitted ...
-    for field in direct_fields:
-        value = getattr(body, field, None)
-        if value is not None:
-            overrides[field] = value
-    # ... Jenkins-specific handling omitted ...
-    if overrides:
-        merged_data = settings.model_dump(mode="python") | overrides
-        return Settings.model_validate(merged_data)
-    return settings
+```582:610:src/jenkins_job_insight/main.py
+overrides: dict = {}
+
+# Direct field mappings (request field name == settings field name).
+# ... direct fields omitted ...
+for field in direct_fields:
+    value = getattr(body, field, None)
+    if value is not None:
+        overrides[field] = value
+
+# peer_analysis_max_rounds has a non-None default in the model;
+# only apply as override when explicitly sent by the caller.
+if "peer_analysis_max_rounds" in body.model_fields_set:
+    overrides["peer_analysis_max_rounds"] = body.peer_analysis_max_rounds
 ```
 
 `enable_jira` has one extra fallback: if you do not set `enable_jira` or `ENABLE_JIRA`, the app auto-enables Jira enrichment only when Jira is fully configured, including `JIRA_PROJECT_KEY`.
@@ -140,17 +140,55 @@ for field in (
 
 ## AI
 
-`AI_PROVIDER`, `AI_MODEL`, and `AI_CLI_TIMEOUT` can be set globally or overridden per request on `/analyze` and `/analyze-failures`. `ai_provider` and `ai_model` are also accepted on the preview issue endpoints for generated issue text.
+`AI_PROVIDER`, `AI_MODEL`, `AI_CLI_TIMEOUT`, `PEER_AI_CONFIGS`, and `PEER_ANALYSIS_MAX_ROUNDS` can be set globally or overridden per request on `/analyze` and `/analyze-failures`. `ai_provider` and `ai_model` are also accepted on the preview issue endpoints for generated issue text.
 
 | Environment variable | Request override | Default | What it does |
 | --- | --- | --- | --- |
 | `AI_PROVIDER` | `ai_provider` | none | AI provider. Valid analysis values are `claude`, `gemini`, or `cursor`. |
 | `AI_MODEL` | `ai_model` | none | Model name passed to the chosen AI CLI. |
-| `AI_CLI_TIMEOUT` | `ai_cli_timeout` | `10` | Timeout in minutes for AI CLI calls. This also applies to AI-assisted Jira relevance filtering. |
+| `AI_CLI_TIMEOUT` | `ai_cli_timeout` | `10` | Timeout in minutes for AI CLI calls. This also applies to peer-analysis debate calls and AI-assisted Jira relevance filtering. |
+| `PEER_AI_CONFIGS` | `peer_ai_configs` | disabled | Optional peer AI reviewers for consensus analysis. The environment variable uses comma-separated `provider:model` pairs, while the request body uses a JSON array of `{ "ai_provider": "...", "ai_model": "..." }` objects. |
+| `PEER_ANALYSIS_MAX_ROUNDS` | `peer_analysis_max_rounds` | `3` | Maximum debate rounds for peer analysis. Valid values are `1` through `10`. |
 
 > **Note:** The service can start without `AI_PROVIDER` or `AI_MODEL`, but analysis endpoints return `400` until you set them in the environment or pass them in the request body.
 
 The analysis request models also support `raw_prompt` for one-off extra AI instructions. It has no matching environment-variable equivalent.
+
+### Peer Analysis
+
+Peer analysis lets additional AI models review the main analysis and try to reach consensus. Use `PEER_AI_CONFIGS` for a server default, or send `peer_ai_configs` in a single request when you want to override that default.
+
+```52:57:.env.example
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
+```
+
+Omit `peer_ai_configs` to inherit the server default. Send an empty array to disable peer analysis for one request even when `PEER_AI_CONFIGS` is configured.
+
+```518:536:src/jenkins_job_insight/main.py
+def _resolve_peer_ai_configs(
+    body: BaseAnalysisRequest, settings: Settings
+) -> list | None:
+    """Resolve peer AI configs from request body or env var default.
+
+    Priority:
+    - Request field absent (None) -> use server default from PEER_AI_CONFIGS env var
+    - Request field present and empty ([]) -> explicitly disable peers
+    - Request field present and non-empty -> use request value
+    """
+    if body.peer_ai_configs is not None:
+        return body.peer_ai_configs or None  # [] -> None (disable)
+    # Fall back to env var default (string format)
+    if settings.peer_ai_configs:
+        return parse_peer_configs(settings.peer_ai_configs) or None
+    return None
+```
+
+> **Tip:** `PEER_ANALYSIS_MAX_ROUNDS` is validated between `1` and `10`. If the request omits `peer_analysis_max_rounds`, the app keeps the server setting instead of forcing the request model's default.
 
 ### Provider Authentication
 
@@ -294,7 +332,7 @@ Two analysis-time controls are now user-configurable: `AI_CLI_TIMEOUT` and the J
 
 | Operation | Environment variable | Request override | Value | Notes |
 | --- | --- | --- | --- | --- |
-| AI CLI calls | `AI_CLI_TIMEOUT` | `ai_cli_timeout` | `10` minutes by default | Applies to failure analysis and AI-based Jira match filtering. |
+| AI CLI calls | `AI_CLI_TIMEOUT` | `ai_cli_timeout` | `10` minutes by default | Applies to main analysis, peer-analysis debate calls, and AI-based Jira match filtering. |
 | Jenkins wait poll interval | `POLL_INTERVAL_MINUTES` | `poll_interval_minutes` | `2` minutes by default | Delay between Jenkins status checks when waiting for a build to finish. |
 | Jenkins wait deadline | `MAX_WAIT_MINUTES` | `max_wait_minutes` | `0` minutes by default | `0` means no deadline; positive values fail the job if the build does not finish in time. |
 | Comment enrichment and GitHub duplicate search | — | — | `10` seconds | Fixed in code for GitHub PR/issue status lookups, Jira ticket status lookups, and GitHub duplicate search. |

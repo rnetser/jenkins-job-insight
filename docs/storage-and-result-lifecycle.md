@@ -62,7 +62,48 @@ Jenkins Job Insight stores more than just the final analysis summary. In practic
 
 Direct `POST /analyze-failures` runs use the same persistence layer. They are stored in the same `results` table; they just do not have a Jenkins URL.
 
-There is no separate HTML report file anymore. Browser report views are driven by the stored SQLite result at `/results/{job_id}`. For Jenkins jobs in the `waiting` state, JJI can also store encrypted `request_params` inside `result_json` so the job can resume after a restart.
+There is no separate HTML report file anymore. Browser report views are driven by the stored SQLite result at `/results/{job_id}`.
+
+For Jenkins jobs in the `waiting` state, JJI stores an encrypted `request_params` payload inside `result_json` so the background task can be reconstructed after a restart. That payload now includes the resolved peer AI configuration, the peer-analysis round limit, and a `wait_started_at` timestamp so resumed jobs keep the original wait deadline instead of starting over.
+
+```922:987:src/jenkins_job_insight/main.py
+def _build_request_params(
+    body: AnalyzeRequest,
+    merged: Settings,
+    ai_provider: str,
+    ai_model: str,
+    peer_ai_configs_resolved: list | None = None,
+) -> dict:
+    params = {
+        # ... other persisted request settings ...
+        "peer_ai_configs": [
+            c.model_dump() if hasattr(c, "model_dump") else c
+            for c in (peer_ai_configs_resolved or [])
+        ],
+        "peer_analysis_max_rounds": merged.peer_analysis_max_rounds,
+        "wait_started_at": _time.time(),
+    }
+    return encrypt_sensitive_fields(params)
+```
+
+JJI also persists `progress_phase` and a timestamped `progress_log` inside `result_json`, so the status view can restore the same in-progress timeline after a refresh.
+
+```628:659:src/jenkins_job_insight/storage.py
+def _make_progress_phase_patcher(phase: str) -> Callable[[dict], None]:
+    import time
+
+    def _patcher(d: dict) -> None:
+        d["progress_phase"] = phase
+        progress_log = d.get("progress_log")
+        if not isinstance(progress_log, list):
+            progress_log = []
+            d["progress_log"] = progress_log
+        progress_log.append(
+            {"phase": phase, "timestamp": time.time()}
+        )
+
+    return _patcher
+```
 
 ## Result State Lifecycle
 
@@ -74,16 +115,17 @@ For persisted jobs, the state model now includes an explicit Jenkins-monitoring 
 - `completed`: the final JSON result has been written successfully
 - `failed`: waiting or analysis ended with an error, and the stored payload contains error details
 
-For asynchronous `POST /analyze`, JJI writes the row immediately. When `WAIT_FOR_COMPLETION=true` and Jenkins connectivity is available, the initial persisted state is `waiting`; otherwise it starts as `pending`.
+For asynchronous `POST /analyze`, JJI writes the row immediately. When `WAIT_FOR_COMPLETION=true` and Jenkins connectivity is available, the initial persisted state is `waiting`; otherwise it starts as `pending`. JJI now validates and resolves peer AI settings before saving the resumable payload so a restarted job uses the same provider/model mix that was queued originally.
 
-```942:967:src/jenkins_job_insight/main.py
+```1008:1040:src/jenkins_job_insight/main.py
+job_id = str(uuid.uuid4())
+merged = _merge_settings(body, settings)
+
+# Validate peer configs early -- fail fast before returning 202.
+resolved_peers = _validate_peer_configs(body, merged)
 jenkins_url = build_jenkins_url(
     merged.jenkins_url, body.job_name, body.build_number
 )
-# Save initial pending state before queueing background task.
-# Only persist request_params for waiting jobs (wait_for_completion),
-# since those are the only ones that need resumption after restart.
-# This avoids storing encrypted secrets with no operational use.
 initial_result: dict = {
     "job_name": body.job_name,
     "build_number": body.build_number,
@@ -95,6 +137,7 @@ if can_resume_wait:
         merged,
         body.ai_provider or AI_PROVIDER,
         body.ai_model or AI_MODEL,
+        peer_ai_configs_resolved=resolved_peers,
     )
 await save_result(
     job_id,
@@ -102,7 +145,6 @@ await save_result(
     "waiting" if can_resume_wait else "pending",
     initial_result,
 )
-background_tasks.add_task(process_analysis_with_id, job_id, body, merged)
 ```
 
 Once background work begins, JJI updates the same row in place. `analysis_started_at` is stamped the first time the job reaches `running`, and `completed_at` is stamped the first time it reaches `completed`.
@@ -134,34 +176,74 @@ def _build_status_update_clause(
 
 Direct `POST /analyze-failures` runs use the same persistence layer, but they skip `waiting` and follow the simpler `pending` -> `running` -> `completed` or `failed` flow.
 
-> **Note:** On startup, orphaned `pending` and `running` rows are marked `failed`, while resumable `waiting` rows are kept for restart-safe resumption.
+> **Note:** On startup, orphaned `pending` and `running` rows are still marked `failed`, but `waiting` rows are resumed only when their stored payload is actually usable. A `waiting` row must have valid JSON plus `job_name`, `build_number`, and a non-empty `request_params` object; otherwise JJI marks it `failed` as unrecoverable instead of leaving it stuck in `waiting`.
 
-```2049:2077:src/jenkins_job_insight/storage.py
-async def mark_stale_results_failed() -> list[dict]:
-    """Mark orphaned pending/running jobs as failed. Return waiting jobs for resumption.
+```2096:2160:src/jenkins_job_insight/storage.py
+cursor = await db.execute(
+    "UPDATE results SET status = 'failed' "
+    "WHERE status IN ('pending', 'running')"
+)
 
-    Pending and running jobs have lost their background task and cannot recover,
-    so they are marked as failed.  Waiting jobs were polling Jenkins and can be
-    safely resumed by re-creating their background task.
-
-    Returns:
-        List of dicts with ``job_id`` and ``result_data`` for each waiting job.
-    """
-    waiting_jobs: list[dict] = []
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-
-        # Mark pending/running as failed (background task is gone)
-        cursor = await db.execute(
-            "UPDATE results SET status = 'failed' "
-            "WHERE status IN ('pending', 'running')"
+cursor = await db.execute(
+    "SELECT job_id, result_json FROM results WHERE status = 'waiting'"
+)
+rows = await cursor.fetchall()
+for row in rows:
+    if row["result_json"]:
+        result_data = parse_result_json(
+            row["result_json"], job_id=row["job_id"]
         )
-
-        # Collect waiting jobs for resumption instead of failing them
-        cursor = await db.execute(
-            "SELECT job_id, result_json FROM results WHERE status = 'waiting'"
+        stored_params = (
+            result_data.get("request_params") if result_data else None
         )
-        rows = await cursor.fetchall()
+        is_resumable = (
+            result_data is not None
+            and isinstance(stored_params, dict)
+            and bool(stored_params)
+            and "job_name" in result_data
+            and "build_number" in result_data
+        )
+        if is_resumable:
+            waiting_jobs.append(
+                {"job_id": row["job_id"], "result_data": result_data}
+            )
+        else:
+            await db.execute(
+                "UPDATE results SET status = 'failed' WHERE job_id = ?",
+                (row["job_id"],),
+            )
+```
+
+When a `waiting` job is resumed, JJI subtracts the already-elapsed wait time from `MAX_WAIT_MINUTES`. If the deadline already passed while the service was down, the resumed job is marked `failed` immediately.
+
+```349:386:src/jenkins_job_insight/main.py
+raw_wait_started_at = params.get("wait_started_at")
+wait_started_at: float | None = None
+if raw_wait_started_at is not None:
+    try:
+        wait_started_at = float(raw_wait_started_at)
+    except (TypeError, ValueError):
+        await _fail_resumed_waiting_job(
+            job["job_id"],
+            result_data,
+            f"Cannot resume: malformed wait_started_at value: {raw_wait_started_at!r}",
+        )
+        continue
+
+if merged.max_wait_minutes > 0 and wait_started_at is not None:
+    elapsed_minutes = (_time.time() - wait_started_at) / 60
+    remaining = merged.max_wait_minutes - elapsed_minutes
+    if remaining <= 0:
+        await _fail_resumed_waiting_job(
+            job["job_id"],
+            result_data,
+            (
+                f"Timed out waiting for Jenkins job "
+                f"{result_data.get('job_name')} #{result_data.get('build_number')} "
+                f"after {merged.max_wait_minutes} minutes (deadline passed during restart)"
+            ),
+        )
+        continue
 ```
 
 ## Result Route and Browser Behavior

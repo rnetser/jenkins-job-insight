@@ -49,6 +49,15 @@ If you call the REST API directly, `/analyze` also accepts `jenkins_url`, `jenki
 - `poll_interval_minutes` controls how often Jenkins is checked while waiting
 - `max_wait_minutes` sets a deadline for waiting, and `0` means no limit
 
+The sample `config.example.toml` now includes the same monitoring defaults:
+
+```28:31:config.example.toml
+# Monitoring
+wait_for_completion = true
+poll_interval_minutes = 2
+max_wait_minutes = 0  # 0 = no limit (wait forever)
+```
+
 This is useful when:
 
 - one `jenkins-job-insight` service needs to analyze builds from more than one Jenkins

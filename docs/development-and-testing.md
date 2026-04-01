@@ -53,11 +53,43 @@ The `pytest` suite is broad. It is not just a handful of unit tests:
 
 - `tests/test_main.py` exercises the FastAPI app, including health checks, analysis endpoints, history, comments, review state, issue preview/creation, waiting logic, OpenAPI output, and SPA routes.
 - `tests/test_cli_main.py`, `tests/test_cli_client.py`, `tests/test_cli_config.py`, and `tests/test_cli_output.py` cover the `jji` CLI end to end: command wiring, HTTP transport, config resolution, and output formatting.
+- `tests/test_analyzer.py` and `tests/test_peer_analysis.py` cover AI CLI orchestration, JSON parsing and retry behavior, plus the multi-AI debate loop and consensus rules.
 - `tests/test_storage.py`, `tests/test_history.py`, and `tests/test_comments.py` cover SQLite storage, historical aggregation, comments, and review state.
 - `tests/test_models.py`, `tests/test_config.py`, and `tests/test_encryption.py` cover validation, settings, and redaction/encryption behavior.
 - `tests/test_jira.py`, `tests/test_jenkins.py`, `tests/test_jenkins_artifacts.py`, `tests/test_bug_creation.py`, `tests/test_repository.py`, and `tests/test_xml_enrichment.py` cover integrations and supporting utilities.
 
 Most backend tests avoid live network calls. Instead, they patch external boundaries such as Jenkins clients, HTTP transport, AI CLI calls, and temporary SQLite databases. That keeps the suite fast and predictable.
+
+The peer-analysis tests use the same approach. They build `PeerRound` values directly and assert consensus behavior in-process, which keeps the debate-loop coverage fast and deterministic.
+
+```102:127:tests/test_peer_analysis.py
+    def test_check_consensus_disagreement(self) -> None:
+        """At least one peer disagrees -> False."""
+        from jenkins_job_insight.peer_analysis import _check_consensus
+        from jenkins_job_insight.models import PeerRound
+
+        rounds = [
+            PeerRound(
+                round=1,
+                ai_provider="gemini",
+                ai_model="gemini-2.5-pro",
+                role="peer",
+                classification="CODE ISSUE",
+                details="agree",
+                agrees_with_orchestrator=True,
+            ),
+            PeerRound(
+                round=1,
+                ai_provider="claude",
+                ai_model="claude-sonnet-4-20250514",
+                role="peer",
+                classification="PRODUCT BUG",
+                details="disagree",
+                agrees_with_orchestrator=False,
+            ),
+        ]
+        assert _check_consensus("CODE ISSUE", rounds) is False
+```
 
 A representative API test from `tests/test_main.py` checks the public contract instead of internal helper functions:
 
@@ -171,7 +203,7 @@ A typical frontend unit test looks like this:
     )
 ```
 
-Current frontend tests live close to the code they validate, especially in `frontend/src/lib/__tests__/` and `frontend/src/pages/report/__tests__/`.
+Current frontend tests live close to the code they validate, especially in `frontend/src/lib/__tests__/` and `frontend/src/pages/report/__tests__/`. For example, `frontend/src/lib/__tests__/peerDebate.test.ts` covers the helper that groups peer-analysis rounds for the report UI.
 
 ## Pre-commit, Linting, and Formatting
 
@@ -215,7 +247,7 @@ Current frontend tests live close to the code they validate, especially in `fron
     hooks:
       - id: eslint
         files: \.js$
-        exclude: eslint\.config\.js
+        exclude: (eslint\.config\.js|^docs/)
         args: [--fix]
         additional_dependencies:
           - eslint@9.38.0
@@ -250,7 +282,7 @@ per-file-ignores =
 
 For the frontend, linting lives in `frontend/package.json` and `frontend/eslint.config.js`. The checked-in ESLint config targets `**/*.{ts,tsx}`, ignores `dist/`, and layers `typescript-eslint`, React Hooks, and React Refresh rules on top of the base JavaScript rules.
 
-> **Warning:** The checked-in `eslint` pre-commit hook only matches `.js` files. Most frontend code in this repository lives in `.ts` and `.tsx`, so `pre-commit run --all-files` is not a complete frontend lint check by itself. Run `cd frontend && npm run lint` when you change React or TypeScript code.
+> **Warning:** The checked-in `eslint` pre-commit hook still only matches `.js` files, and it now explicitly skips `docs/` as well as `eslint.config.js`. Most frontend code in this repository lives in `.ts` and `.tsx`, so `pre-commit run --all-files` is not a complete frontend lint check by itself. Run `cd frontend && npm run lint` when you change React or TypeScript code. If you edit JavaScript under `docs/`, remember that this hook will not check it.
 
 To make the hooks automatic in your local clone, run this once:
 
@@ -366,13 +398,16 @@ The fastest way to stay productive in this repository is to treat it as a few cl
 | `frontend/src/types/` | TypeScript types mirroring backend data structures. |
 | `frontend/src/test/` | Shared frontend test setup, including `@testing-library/jest-dom`. |
 | `examples/pytest-junitxml/` | A standalone example of integrating JJI with an external `pytest` suite by enriching JUnit XML. |
+| `docs/` | The checked-in documentation site: Markdown source pages, paired generated HTML pages, search assets, and static CSS/JavaScript. |
 | Repository root | Cross-cutting project config such as `pyproject.toml`, `tox.toml`, `.pre-commit-config.yaml`, `.gitleaks.toml`, `config.example.toml`, and the container files. |
 
 A few practical navigation rules help:
 
 - Start in `tests/test_main.py` when you need to understand backend HTTP behavior.
 - Start in `tests/test_cli_main.py` and `tests/test_cli_client.py` when a CLI change is involved.
+- Start in `src/jenkins_job_insight/peer_analysis.py` and `tests/test_peer_analysis.py` when you are working on multi-AI consensus or the debate loop.
 - Start in `frontend/src/lib/` for shared browser-side logic and in `frontend/src/pages/` for route behavior.
+- Start in `docs/*.md` when you are updating documentation content; the paired `docs/*.html` pages and search assets are checked in alongside them.
 - Check `examples/pytest-junitxml/` if you want to see how this project can plug into someone else’s `pytest` workflow.
 
 > **Tip:** When you add or change an API endpoint, keep the CLI in sync. In this repository that usually means updating the backend route in `src/jenkins_job_insight/main.py`, the client in `src/jenkins_job_insight/cli/client.py`, the command in `src/jenkins_job_insight/cli/main.py`, and the matching tests in `tests/test_cli_client.py` and `tests/test_cli_main.py`.

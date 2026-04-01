@@ -75,7 +75,7 @@ useEffect(() => {
 }, [fetchJobs])
 ```
 
-- **Status page (queued / running / failed before completion):** polls `GET /results/{job_id}` **every 10 seconds**; when status becomes `completed`, it **navigates to `/results/{jobId}`**.
+- **Status page (queued / running / failed before completion):** polls `GET /results/{job_id}` **every 10 seconds**; when status becomes `completed`, it **navigates to `/results/{jobId}`**. The page now also renders a persisted progress timeline from `result.progress_log`, so `F5` keeps the phase history instead of resetting it.
 
 ```typescript
 async function poll() {
@@ -86,13 +86,30 @@ async function poll() {
     if (cancelled) return
     setError('')
     setData(res)
+
     if (res.status === 'completed') {
       stopPolling()
       navigate(`/results/${jobId}`, { replace: true })
     } else if (res.status === 'failed') {
 ```
 
-- **Report page:** loads the analysis **once**; **comments / reviews** are polled on an interval (default **30 seconds** via `COMMENT_POLL_MS`, configurable with `VITE_COMMENT_POLL_MS`). Polling is skipped while a comment draft is open.
+```typescript
+// Derive stepLog from server-persisted progress_log (survives F5 refresh)
+const rawProgressLog = data?.result?.progress_log
+const progressLog = Array.isArray(rawProgressLog) ? rawProgressLog : []
+const stepLog: StepLogEntry[] = useMemo(
+  () => progressLog.map(entry => ({
+    phase: entry.phase,
+    label: getPhaseLabel(entry.phase) ?? entry.phase,
+    timestamp: new Date(entry.timestamp * 1000).toLocaleTimeString(),
+  })),
+  [progressLog],
+)
+```
+
+When peer analysis is enabled, that same timeline can also show peer-review rounds and orchestrator revision rounds while the job is still running.
+
+- **Report page:** loads the analysis **once**; **comments / reviews** are polled on an interval (default **30 seconds** via `COMMENT_POLL_MS`, configurable with `VITE_COMMENT_POLL_MS`). Polling is skipped while a comment draft is open. The page also restores the previous scroll position after a normal refresh, and expandable cards/sections keep their open state for the current tab.
 
 ```typescript
 useEffect(() => {
@@ -109,6 +126,32 @@ useEffect(() => {
 }, [jobId, fetchComments, state.commentDraftCount, state.error, state.result])
 ```
 
+```typescript
+useEffect(() => {
+  if (state.loading || state.error) return
+  if (window.location.hash) return
+  let saved: string | null = null
+  try {
+    saved = sessionStorage.getItem(scrollKey)
+  } catch {
+    /* storage may be blocked in privacy mode */
+  }
+  let raf1 = 0
+  let raf2 = 0
+  if (saved) {
+    // Double rAF: first lets React commit DOM, second lets browser layout
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        window.scrollTo(0, parseInt(saved, 10))
+      })
+    })
+  }
+```
+
+```typescript
+const [expanded, setExpanded] = useSessionState(expandKey, false)
+```
+
 ## Grouped failure cards
 
 The report’s **Failures** section is grouped for noisy builds: one card can represent many tests that share the same underlying error.
@@ -122,7 +165,9 @@ export function groupingKey(failure: FailureAnalysis): string {
 }
 ```
 
-Each grouped card typically includes the AI analysis, classification controls, affected tests, comments, and issue actions. For groups with more than one failure, the UI can **Review All** for the whole group:
+Each grouped card is a **root-cause card** for one error signature. The collapsed header shows the representative test name, the current primary classification, any mixed override badges inside the group, and a comment badge when discussion exists. Expanded cards can show the affected test list, copyable error and analysis sections, artifacts evidence, a suggested fix or bug report, comments, and a peer-analysis trail when that signature went through multi-AI review. Single-test cards can also show GitHub or Jira issue actions.
+
+For groups with more than one failure, the UI can **Review All** for the whole group:
 
 ```tsx
 {group.count > 1 && (
@@ -139,6 +184,13 @@ Each grouped card typically includes the AI analysis, classification controls, a
       <CheckCircle2 className="h-4 w-4" />
       {allReviewed ? 'All Reviewed' : `Review All (${reviewedCount}/${group.count})`}
     </button>
+```
+
+When peer analysis is present, the representative failure also exposes the debate timeline directly inside the card:
+
+```tsx
+{/* Peer debate trail */}
+{rep.peer_debate && <PeerDebateSection debate={rep.peer_debate} />}
 ```
 
 **Classification overrides** still update **all** failures in the same job that share the same `error_signature`, so grouped cards stay in sync:
@@ -161,8 +213,15 @@ Child pipeline jobs use the same grouped model under nested **Child Job** sectio
 
 A full report is laid out in the React UI with:
 
-- a **sticky header** with build context, status, AI provider/model, analysis timestamp, failure counts, and Jenkins links when available
+- a **sticky header** with build context, status, Jenkins link, the total failure count across top-level and child-job failures, and a review-progress badge
+- a lightweight **metadata row** with created time, completion time, total duration, and AI provider/model when those values are available
 - an optional **Key Takeaway** when a summary exists
+
+```tsx
+<Badge variant="destructive" className="font-mono">
+  {totalFailures} {totalFailures === 1 ? 'failure' : 'failures'}
+</Badge>
+```
 
 ```tsx
 {result.summary && (
@@ -173,7 +232,16 @@ A full report is laid out in the React UI with:
 )}
 ```
 
-- **Failures** — grouped cards (section title includes total failure count); this is the primary list of failing tests—there is **no** separate **All Failures** table or `Bug Ref` column tying back to HTML-era `BUG-n` labels.
+- an optional **Peer Analysis** summary when peer reviewers were configured; it rolls up one debate per unique error signature and shows which AI combinations reached consensus
+
+```tsx
+<PeerAnalysisSummary
+  failures={result.failures ?? []}
+  childJobAnalyses={result.child_job_analyses ?? []}
+/>
+```
+
+- **Failures** — grouped cards for top-level failures; this is the primary list of failing tests—there is **no** separate **All Failures** table or `Bug Ref` column tying back to HTML-era `BUG-n` labels. The section title counts top-level failures, while the sticky header badge counts **all** failures including nested child-job failures. When there are multiple groups, the page adds **Expand All / Collapse All** controls.
 
 ```tsx
 {groups.length > 0 && (
@@ -182,9 +250,22 @@ A full report is laid out in the React UI with:
       <h2 className="text-xs font-display uppercase tracking-widest text-text-tertiary">
         Failures ({(result.failures ?? []).length})
       </h2>
+      {groups.length >= 2 && (
+        <ExpandCollapseButtons onExpandAll={expandAllFailures} onCollapseAll={collapseAllFailures} />
+      )}
 ```
 
-- **Child job analyses** — nested sections for downstream jobs; **URL hash** targets auto-expand matching sections and scroll them into view for deep links:
+- **Child job analyses** — nested sections for downstream jobs, with their own **Expand All / Collapse All** controls. **URL hash** targets still auto-expand matching sections and scroll them into view for deep links.
+
+```tsx
+{(result.child_job_analyses ?? []).length > 0 && (
+  <section>
+    <div className="flex items-center justify-between mb-3">
+      <h2 className="text-xs font-display uppercase tracking-widest text-text-tertiary">
+        Child Jobs ({(result.child_job_analyses ?? []).length})
+      </h2>
+      <ExpandCollapseButtons onExpandAll={expandAllChildren} onCollapseAll={collapseAllChildren} />
+```
 
 ```typescript
 // Auto-expand and scroll when the URL hash targets this child job or any descendant
@@ -203,7 +284,7 @@ useEffect(() => {
 
 ## Dashboard search and pagination
 
-The dashboard is at **`/`** ( **`/dashboard` redirects to `/`** ). It is a **table** of recent jobs (not cards). The page loads jobs from **`GET /api/dashboard`** and **refetches every 10 seconds**.
+The dashboard is at **`/`** ( **`/dashboard` redirects to `/`** ). It is a **table** of recent jobs (not cards). The page loads jobs from **`GET /api/dashboard`**, **refetches every 10 seconds**, and each row can surface failure, review, comment, and child-job counts, a summary/error hint, and a relative creation time with a full timestamp tooltip. The dashboard failure count is the total across top-level and nested child-job failures.
 
 ```typescript
 useEffect(() => {
@@ -213,20 +294,27 @@ useEffect(() => {
 }, [fetchJobs])
 ```
 
-**Search** filters only **`job_name`** and **`job_id`** (case-insensitive substring match):
+**Search** still filters only **`job_name`** and **`job_id`** (case-insensitive substring match). A separate **status filter** narrows rows by `completed`, `running`, `waiting`, `pending`, `failed`, or the UI-only `timeout` label for failed AI analyses that timed out:
 
 ```typescript
 const filtered = useMemo(() => {
-  if (!search) return jobs
-  const q = search.toLowerCase()
   return jobs.filter((j) => {
-    const haystack = `${j.job_name ?? ''} ${j.job_id}`.toLowerCase()
-    return haystack.includes(q)
+    const displayStatus = isAnalysisTimeout(j.status, j.error, j.summary) ? 'timeout' : j.status
+    if (statusFilter !== STATUS_FILTER_ALL && displayStatus !== statusFilter) return false
+    if (!search) return true
+    const q = search.toLowerCase()
+    return (j.job_name ?? '').toLowerCase().includes(q) || j.job_id.toLowerCase().includes(q)
   })
-}, [jobs, search])
+}, [jobs, search, statusFilter])
 ```
 
-**Pagination** is client-side on the filtered rows. Page-size options are **10**, **20**, and **50**.
+**Sorting** is client-side. Column headers can sort by **Job**, **Status**, **Failures**, **Reviewed**, **Comments**, **Children**, and **Created**. The current sort is stored in `sessionStorage` for the active tab, and the default is **Created descending**.
+
+```typescript
+const { sortKey, sortDir, handleSort } = useTableSort('dash', 'created_at', 'desc', ['created_at'])
+```
+
+**Pagination** is client-side on the already filtered and sorted rows. Page-size options are **10**, **20**, and **50**.
 
 **Row navigation:** clicking a row goes to **`/status/{job_id}`** for `waiting`, `pending`, or `running` jobs; otherwise to **`/results/{job_id}`**.
 
@@ -240,7 +328,7 @@ function getJobRoute(job: DashboardJob): string {
 
 The backend default dashboard window is **`DEFAULT_DASHBOARD_LIMIT = 500`** in `storage.py`. The React dashboard has **no** “Load last” or server `limit` control in the UI—you work within that default list.
 
-> **Note:** Search and pagination apply only to jobs already returned in the dashboard list.
+> **Note:** Search, status filtering, sorting, and pagination apply only to jobs already returned in the dashboard list.
 
 > **Tip:** If a run is outside that window, use other flows (for example **`/history`**) to find it.
 

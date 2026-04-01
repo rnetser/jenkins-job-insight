@@ -27,6 +27,13 @@ AI_MODEL=your-model-name
 
 # Option 1: Direct API key (simplest)
 ANTHROPIC_API_KEY=your-anthropic-api-key
+
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
 ```bash
@@ -61,6 +68,26 @@ This request shape is used directly in the tests:
   "tests_repo_url": "https://github.com/example/repo"
 }
 ```
+
+If you want optional multi-AI consensus on that same request, add `peer_ai_configs` and, if you want something other than the default, `peer_analysis_max_rounds`:
+
+```json
+{
+  "job_name": "test",
+  "build_number": 123,
+  "ai_provider": "claude",
+  "ai_model": "test-model",
+  "peer_ai_configs": [
+    {
+      "ai_provider": "gemini",
+      "ai_model": "pro"
+    }
+  ],
+  "peer_analysis_max_rounds": 5
+}
+```
+
+> **Tip:** `peer_ai_configs` is optional. Omit it for the normal single-AI flow. When you do use peers, `peer_analysis_max_rounds` defaults to `3` and accepts `1` through `10`.
 
 Send it to `POST /analyze`:
 
@@ -157,6 +184,7 @@ The fields most people read first are:
 - `failures[].analysis.code_fix`: present for `CODE ISSUE` results.
 - `failures[].analysis.product_bug_report`: present for `PRODUCT BUG` results.
 - `failures[].error_signature`: the deduplication key used to group identical failures.
+- `failures[].peer_debate`: present when peer analysis was used; it records whether the peer AIs reached consensus, how many rounds were used, which AI configs participated, and the round-by-round debate trail.
 - `child_job_analyses`: present when a pipeline failed because child jobs failed.
 
 If the summary says something like `2 failure(s) analyzed (1 unique error type(s))`, multiple failing tests shared the same underlying error and were analyzed as one root cause.
@@ -206,6 +234,7 @@ Once the analysis is complete, the report page shows:
 
 - the job name, build number, status, AI provider/model, and failure counts
 - grouped failures and child-job analyses
+- a `Peer Analysis` summary and round-by-round debate trail when peer analysis is enabled
 - comments and reviewed toggles
 - classification overrides
 - `Open GitHub Issue` or `Open Jira Bug` actions when those integrations are configured
@@ -228,7 +257,11 @@ Queue an analysis:
 
 ```bash
 jji analyze --job-name test --build-number 123
+
+jji analyze --job-name test --build-number 123 --peers "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro" --peer-analysis-max-rounds 5
 ```
+
+> **Tip:** `--peers` uses the same `provider:model,provider:model` format as `PEER_AI_CONFIGS`.
 
 Check its status:
 
@@ -242,7 +275,7 @@ Show the stored result as JSON:
 jji results show <job_id> --full --json
 ```
 
-If Jenkins is not configured on the server, add `--jenkins-url`, `--jenkins-user`, and `--jenkins-password` to the `jji analyze` command. If you do not want to export `JJI_SERVER`, pass `--server http://localhost:8000` on each command instead. If you already have `~/.config/jji/config.toml`, `jji` can use the default server profile from that file.
+If Jenkins is not configured on the server, add `--jenkins-url`, `--jenkins-user`, and `--jenkins-password` to the `jji analyze` command. If you do not want to export `JJI_SERVER`, pass `--server http://localhost:8000` on each command instead. If you already have `~/.config/jji/config.toml`, `jji` can use the default server profile from that file. That config can also carry `peers` and `peer_analysis_max_rounds` defaults if you want peer consensus enabled by default.
 
 ## What a first successful run looks like
 

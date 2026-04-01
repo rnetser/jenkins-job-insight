@@ -46,46 +46,46 @@ A Jenkins analysis request can include monitoring controls like this:
 }
 ```
 
-A direct failure analysis request looks like this:
+A direct failure analysis request can also enable peer analysis. The API tests use this request shape:
 
-```python
+```json
 {
-    "failures": [
-        {
-            "test_name": "test_foo",
-            "error_message": "assert False",
-            "stack_trace": "File test.py, line 10",
-        }
-    ],
-    "ai_provider": "claude",
-    "ai_model": "test-model",
+  "failures": [
+    {
+      "test_name": "test_foo",
+      "error_message": "assert False",
+      "stack_trace": "File test.py, line 10"
+    }
+  ],
+  "ai_provider": "claude",
+  "ai_model": "test-model",
+  "peer_ai_configs": [
+    { "ai_provider": "gemini", "ai_model": "pro" }
+  ],
+  "peer_analysis_max_rounds": 7
 }
 ```
 
-> **Note:** Most analysis settings can be defined globally with environment variables and overridden per request. That includes the AI provider and model, Jira settings, AI timeouts, artifact handling, Jenkins monitoring controls, and the optional test repository URL. Jenkins connection settings can also be supplied per request instead of at server startup.
+> **Note:** Most analysis settings can be defined globally with environment variables and overridden per request. That includes the AI provider and model, peer analysis settings, Jira settings, AI timeouts, artifact handling, Jenkins monitoring controls, and the optional test repository URL. Jenkins connection settings can also be supplied per request instead of at server startup.
 
 ## Main outputs
 
 Every analysis gets a `job_id` and is stored for later retrieval. For Jenkins jobs, `POST /analyze` returns a queued response by default and includes a canonical `result_url` pointing at `/results/{job_id}`. That same route serves JSON to API clients and the React report UI to browsers. Jobs move through `waiting`, `pending`, `running`, `completed`, or `failed`.
 
-The core result is structured rather than free-form text. The main failure analysis model in `src/jenkins_job_insight/models.py` is:
+The core result is structured rather than free-form text. Each failure still carries structured `analysis`, and when peer analysis is enabled it can also include the debate trail from the participating AIs. The current model in `src/jenkins_job_insight/models.py` is:
 
 ```python
-class AnalysisDetail(BaseModel):
-    classification: str = Field(default="", description="CODE ISSUE or PRODUCT BUG")
-    affected_tests: list[str] = Field(
-        default_factory=list, description="List of affected test names"
-    )
-    details: str = Field(default="", description="Detailed analysis text")
-    artifacts_evidence: str = Field(
+class FailureAnalysis(BaseModel):
+    test_name: str = Field(description="Name of the failed test")
+    error: str = Field(description="Error message or exception")
+    analysis: AnalysisDetail = Field(description="Structured AI analysis output")
+    error_signature: str = Field(
         default="",
-        description="Verbatim log lines from build artifacts supporting the analysis (not a summary)",
+        description="SHA-256 hash of error + stack trace for deduplication",
     )
-    code_fix: CodeFix | bool | None = Field(
-        default=False, description="Code fix (if CODE ISSUE)"
-    )
-    product_bug_report: ProductBugReport | bool | None = Field(
-        default=False, description="Bug report (if PRODUCT BUG)"
+    peer_debate: PeerDebate | None = Field(
+        default=None,
+        description="Peer debate trail (present only when peer analysis was used)",
     )
 ```
 
@@ -97,6 +97,7 @@ In practice, that means a result can include:
 - A `code_fix` suggestion for code issues
 - A structured `product_bug_report` for product bugs
 - An `error_signature` used to group identical failures
+- A `peer_debate` trail with participating AI configs, round-by-round feedback, and `consensus_reached`
 - `child_job_analyses` when a pipeline failed because child jobs failed
 
 For direct JUnit XML analysis, the service can also return the XML with AI data added back into it:
@@ -129,13 +130,13 @@ The service supports three providers:
 - `gemini`
 - `cursor`
 
-The provider and model can be configured globally with environment variables or passed in the request body. The environment template in `.env.example` includes:
+The provider and model can be configured globally with environment variables or passed in the request body. Optional peer analysis uses the same provider names for additional reviewer models. Relevant lines from `.env.example` now include:
 
 ```bash
-# Choose AI provider (required): "claude", "gemini", or "cursor"
 AI_PROVIDER=claude
 
 # AI model to use (required, applies to any provider)
+# Can also be set per-request in webhook body
 AI_MODEL=your-model-name
 
 # --- Claude CLI Options ---
@@ -158,9 +159,26 @@ GEMINI_API_KEY=your-gemini-api-key
 
 # --- Cursor Agent CLI Options ---
 
+# Choose ONE of the following authentication methods:
+
 # API key
 # CURSOR_API_KEY=your-cursor-api-key
+
+# --- AI CLI Timeout ---
+
+# Timeout for AI CLI calls in minutes (default: 10)
+# Increase for slower models like gpt-5.2
+# AI_CLI_TIMEOUT=10
+
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
 ```
+
+For server-wide peer defaults, use `PEER_AI_CONFIGS` as a comma-separated `provider:model` list. For per-request overrides, send `peer_ai_configs` as a JSON array and `peer_analysis_max_rounds` as an integer.
 
 Jira is optional and supports both Cloud and Server/DC:
 
@@ -227,6 +245,20 @@ pytest --junitxml=report.xml --analyze-with-ai
 ```
 
 > **Tip:** If your CI already produces JUnit XML, `raw_xml` mode is the easiest way to add AI analysis without changing how your tests run.
+
+### Add peer analysis when you want consensus
+
+Single-AI analysis remains the default. When you want a second opinion, you can add peer providers to either `POST /analyze` or `POST /analyze-failures`. The main AI analyzes first, peer AIs review that result in parallel, and the service records whether consensus was reached within the configured number of rounds.
+
+The CLI exposes the same workflow:
+
+```shell
+jji analyze --job-name my-job --build-number 1 --peers cursor:gpt-5,gemini:2.5-pro --peer-analysis-max-rounds 5
+```
+
+In stored results, each affected failure can include `peer_debate`, and the report UI shows both a Peer Analysis summary and a per-failure round-by-round timeline. While a Jenkins-backed run is still processing, the status page also shows peer-review and main-AI revision phases as they happen.
+
+> **Note:** Peer analysis runs on grouped failures when structured test data is available. Console-only fallback analysis does not use peer review.
 
 ### Review, comment, classify, and search
 

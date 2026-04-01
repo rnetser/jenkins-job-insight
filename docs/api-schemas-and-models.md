@@ -18,6 +18,9 @@ A useful mental model is:
 - `AnalysisDetail.code_fix` -> `CodeFix`
 - `AnalysisDetail.product_bug_report` -> `ProductBugReport`
 - `ProductBugReport.jira_matches[]` -> `JiraMatch`
+- `BaseAnalysisRequest.peer_ai_configs[]` -> `AiConfigEntry`
+- `FailureAnalysis.peer_debate` -> `PeerDebate`
+- `PeerDebate.rounds[]` -> `PeerRound`
 - `AnalysisResult.child_job_analyses[]` -> recursive `ChildJobAnalysis`
 
 ## Shared Request Fields
@@ -27,11 +30,35 @@ Both `AnalyzeRequest` and `AnalyzeFailuresRequest` inherit `BaseAnalysisRequest`
 | Group | Fields | What they are for |
 | --- | --- | --- |
 | AI selection | `ai_provider`, `ai_model`, `ai_cli_timeout`, `raw_prompt` | Choose the AI backend and control how analysis is generated |
+| Peer analysis | `peer_ai_configs`, `peer_analysis_max_rounds` | Ask additional AI providers to review the main analysis and control how many debate rounds are allowed |
 | Source-code context | `tests_repo_url` | Let the service clone a repository and use it as extra context |
 | Jira enrichment | `enable_jira`, `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, `jira_max_results` | Attach likely Jira matches to `PRODUCT BUG` findings |
 | GitHub access | `github_token` | Optional token used by related GitHub-aware features, especially for private repos |
 
 `ai_provider` accepts `claude`, `gemini`, or `cursor`.
+
+`peer_ai_configs` is a list of `AiConfigEntry` objects, each with `ai_provider` and `ai_model`. Each entry must use a supported provider and a non-blank model name. `peer_analysis_max_rounds` controls how many review and revision cycles are allowed, and it must be between `1` and `10`.
+
+`peer_ai_configs` has three useful modes:
+
+- omit the field to inherit the server's `PEER_AI_CONFIGS` default
+- send `[]` to disable peer analysis for that request
+- send a non-empty list to choose the peer reviewers explicitly
+
+A request example from the test suite:
+
+```840:847:tests/test_models.py
+req = AnalyzeRequest(
+    job_name="j",
+    build_number=1,
+    peer_ai_configs=[
+        AiConfigEntry(ai_provider="cursor", ai_model="gpt-5.4-xhigh"),
+        AiConfigEntry(ai_provider="gemini", ai_model="pro"),
+    ],
+)
+```
+
+Because both request models inherit `BaseAnalysisRequest`, the same peer-analysis fields are available on `AnalyzeFailuresRequest` too.
 
 > **Note:** Most of these fields are optional because the server can load defaults from environment variables. If you send a non-`null` value in the request body, that value overrides the server default for that request.
 
@@ -231,6 +258,7 @@ Its fields are:
 - `error`: the result-side error message or exception text
 - `analysis`: the structured AI output
 - `error_signature`: a SHA-256 hash of the error plus stack trace, used for deduplication
+- `peer_debate`: an optional multi-AI debate trail attached when peer analysis is used
 
 A small but useful naming detail: request-side failure inputs use `error_message`, but result-side failure outputs use `error`.
 
@@ -303,6 +331,49 @@ A few practical notes about `AnalysisDetail`:
 - When one branch is empty, it is omitted from serialized output rather than emitted as `false`.
 
 > **Tip:** `error_signature` is not just metadata. The system uses it to deduplicate identical failures, connect matching historical failures, and keep related comments or overrides aligned across the same underlying error.
+
+### `PeerDebate`, `PeerRound`, and `AiConfigEntry`
+
+When peer analysis is enabled, each `FailureAnalysis` can include `peer_debate`. This object records which models participated, how many rounds were used, and whether the group reached consensus. Like the main classification, the debate is produced once per deduplicated error signature and then attached to every matching failure in that group.
+
+| Model | Fields | When you see it |
+| --- | --- | --- |
+| `AiConfigEntry` | `ai_provider`, `ai_model` | In request-side `peer_ai_configs` lists and in `PeerDebate.ai_configs` |
+| `PeerDebate` | `consensus_reached`, `rounds_used`, `max_rounds`, `ai_configs`, `rounds` | When peer analysis was enabled for that failure group |
+| `PeerRound` | `round`, `ai_provider`, `ai_model`, `role`, `classification`, `details`, `agrees_with_orchestrator` | One debate entry from either the main AI (`orchestrator`) or a reviewing `peer`; `agrees_with_orchestrator` can be `true`, `false`, or `null` |
+
+A real `PeerDebate` example from the tests:
+
+```690:696:tests/test_models.py
+d = PeerDebate(
+    consensus_reached=True,
+    rounds_used=1,
+    max_rounds=3,
+    ai_configs=[{"ai_provider": "claude", "ai_model": "opus"}],
+    rounds=[],
+)
+```
+
+A `FailureAnalysis` attaches that debate trail through `peer_debate`:
+
+```807:820:tests/test_models.py
+debate = PeerDebate(
+    consensus_reached=True,
+    rounds_used=1,
+    max_rounds=3,
+    ai_configs=[],
+    rounds=[],
+)
+fa = FailureAnalysis(
+    test_name="t",
+    error="e",
+    analysis=AnalysisDetail(details="d"),
+    error_signature="sig",
+    peer_debate=debate,
+)
+```
+
+> **Note:** When peer analysis is not used, `peer_debate` is not populated. The test suite checks this with `data.get("peer_debate") is None`.
 
 ## `JiraMatch`
 
@@ -432,6 +503,8 @@ The server-side `Settings` model still provides defaults for many request fields
 - `jira_ssl_verify = true`
 - `jira_max_results = 5`
 - `ai_cli_timeout = 10`
+- `peer_ai_configs` is empty by default (no peer reviewers configured)
+- `peer_analysis_max_rounds = 3`
 - `jenkins_artifacts_max_size_mb = 500`
 - `jenkins_artifacts_context_lines = 200`
 - `get_job_artifacts = true`
@@ -439,12 +512,25 @@ The server-side `Settings` model still provides defaults for many request fields
 - `poll_interval_minutes = 2`
 - `max_wait_minutes = 0`
 
+Server-side peer defaults can be configured in `.env`:
+
+```53:57:.env.example
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
+```
+
 A few configuration rules to remember:
 
 - Server-level Jenkins settings can be left blank and supplied per request through `AnalyzeRequest`.
 - `tests_repo_url` is validated as a URL in request payloads.
 - `ai_cli_timeout`, `jira_max_results`, `jenkins_artifacts_max_size_mb`, `jenkins_artifacts_context_lines`, and `poll_interval_minutes` must be positive.
+- `peer_analysis_max_rounds` must be between `1` and `10`.
 - `max_wait_minutes` accepts `0`, which means "wait indefinitely".
+- At the server level, `PEER_AI_CONFIGS` uses a `provider:model,provider:model` string, but API requests use a JSON list of `AiConfigEntry` objects.
+- Omitting `peer_ai_configs` lets a request inherit `PEER_AI_CONFIGS`; sending `[]` disables peer analysis for that request.
 - `jira_api_token` and `jira_pat` now represent different Jira auth paths: use `jira_api_token` with `jira_email` for Jira Cloud, and `jira_pat` for Jira Server/Data Center.
 - `PUBLIC_BASE_URL` affects only the HTTP helper links such as `base_url` and `result_url`; it is not part of any Pydantic response model.
 - `github_token` is a request field on the main analysis models, but `enable_github_issues` lives in server configuration rather than in `BaseAnalysisRequest`.
