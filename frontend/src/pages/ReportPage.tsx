@@ -334,6 +334,7 @@ function ReportContent() {
   if (!result) return null
 
   return (
+    <TooltipProvider delayDuration={200}>
     <div className="space-y-6 animate-fade-in">
       {/* ---- Sticky header ---- */}
       <div className="sticky top-14 z-40 -mx-4 bg-surface-page/95 backdrop-blur-sm px-4 py-3 border-b border-border-muted sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
@@ -393,8 +394,7 @@ function ReportContent() {
       </div>
 
       {/* ---- Metadata detail row ---- */}
-      <TooltipProvider delayDuration={200}>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-text-tertiary animate-slide-up">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-text-tertiary animate-slide-up">
           {state.createdAt && (
             <span className="inline-flex items-center gap-1">
               <Calendar className="h-3 w-3" />
@@ -460,7 +460,6 @@ function ReportContent() {
             </span>
           )}
         </div>
-      </TooltipProvider>
 
       {/* ---- Key takeaway ---- */}
       {result.summary && (
@@ -526,5 +525,6 @@ function ReportContent() {
         )}
       </footer>
     </div>
+    </TooltipProvider>
   )
 }
