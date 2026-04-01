@@ -199,21 +199,17 @@ class TestCloneInto:
         manager.clone_into("https://github.com/org/repo", target)
         assert target not in manager.temp_dirs
 
-    def test_clone_into_rejects_file_url(self) -> None:
+    def test_clone_into_rejects_file_url(self, tmp_path) -> None:
         """Test that clone_into rejects file:// URLs."""
-        from pathlib import Path
-
         manager = RepositoryManager()
         with pytest.raises(ValueError, match="Only https:// and git://"):
-            manager.clone_into("file:///etc/passwd", Path("/tmp/test"))
+            manager.clone_into("file:///etc/passwd", tmp_path / "repo")
 
-    def test_clone_into_rejects_ssh_url(self) -> None:
+    def test_clone_into_rejects_ssh_url(self, tmp_path) -> None:
         """Test that clone_into rejects ssh:// URLs."""
-        from pathlib import Path
-
         manager = RepositoryManager()
         with pytest.raises(ValueError, match="Only https:// and git://"):
-            manager.clone_into("ssh://git@github.com/org/repo", Path("/tmp/test"))
+            manager.clone_into("ssh://git@github.com/org/repo", tmp_path / "repo")
 
 
 class TestCloneWithSslRetry:

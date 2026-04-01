@@ -968,7 +968,10 @@ async def _run_single_ai_analysis(
         )
     )
 
-    has_git_repo = bool(repo_path and (repo_path / ".git").exists())
+    has_git_repo = bool(
+        additional_repos
+        and any((p / ".git").exists() for p in additional_repos.values())
+    )
     repo_sentence = (
         "You have access to the test repository. Explore the code to understand the failure."
         if has_git_repo

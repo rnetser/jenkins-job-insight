@@ -326,15 +326,14 @@ async def _fail_resumed_waiting_job(job_id: str, result_data: dict, error: str) 
         result_data: The stored result data dict for the job.
         error: Human-readable error message.
     """
-    await storage.update_status(
-        job_id,
-        "failed",
-        {
-            "job_name": result_data.get("job_name", ""),
-            "build_number": result_data.get("build_number", 0),
-            "error": error,
-        },
-    )
+    fail_data = {
+        "job_name": result_data.get("job_name", ""),
+        "build_number": result_data.get("build_number", 0),
+        "error": error,
+    }
+    if "request_params" in result_data:
+        fail_data["request_params"] = result_data["request_params"]
+    await storage.update_status(job_id, "failed", fail_data)
 
 
 async def _resume_waiting_jobs(waiting_jobs: list[dict]) -> None:
@@ -945,21 +944,26 @@ async def process_analysis_with_id(
 
 
 def _build_base_request_params(
-    body: BaseAnalysisRequest,
     ai_provider: str,
     ai_model: str,
     peer_ai_configs_resolved: list | None = None,
+    *,
+    tests_repo_url: str = "",
+    additional_repos: list | None = None,
 ) -> dict:
     """Serialize the common request parameters shared by all analysis endpoints.
 
     Captures the AI configuration, peer configs, tests repo, and additional
-    repos — everything that ``BaseAnalysisRequest`` carries.
+    repos.  Callers pass the **resolved** (effective) values so that env-var
+    and config-file defaults are persisted, not just request-body values.
 
     Args:
-        body: The original analysis request (any subclass of BaseAnalysisRequest).
         ai_provider: Resolved AI provider name.
         ai_model: Resolved AI model name.
         peer_ai_configs_resolved: Resolved peer AI configs (already validated).
+        tests_repo_url: Effective tests repo URL (already resolved from
+            request body / env / config).
+        additional_repos: Effective additional repos list (already resolved).
 
     Returns:
         Dict of serializable base request parameters.
@@ -973,13 +977,11 @@ def _build_base_request_params(
         ],
         "additional_repos": [
             ar.model_dump(mode="json") if hasattr(ar, "model_dump") else ar
-            for ar in body.additional_repos
+            for ar in additional_repos
         ]
-        if body.additional_repos is not None
+        if additional_repos is not None
         else None,
-        "tests_repo_url": (
-            str(body.tests_repo_url) if body.tests_repo_url is not None else ""
-        ),
+        "tests_repo_url": tests_repo_url,
     }
 
 
@@ -1004,16 +1006,20 @@ def _build_request_params(
     Returns:
         Dict of serializable request parameters.
     """
-    params = _build_base_request_params(
-        body, ai_provider, ai_model, peer_ai_configs_resolved
-    )
-    # Override tests_repo_url: fall back to merged settings for /analyze
-    params["tests_repo_url"] = (
+    resolved_tests_repo = (
         str(body.tests_repo_url)
         if body.tests_repo_url is not None
         else str(merged.tests_repo_url)
         if merged.tests_repo_url
         else ""
+    )
+    resolved_additional = resolve_additional_repos(body, merged)
+    params = _build_base_request_params(
+        ai_provider,
+        ai_model,
+        peer_ai_configs_resolved,
+        tests_repo_url=resolved_tests_repo,
+        additional_repos=resolved_additional,
     )
     params.update(
         {
@@ -1161,6 +1167,11 @@ async def analyze_failures(
     # Validate/resolve peer configs early -- fail fast before saving result.
     peer_ai_configs = _validate_peer_configs(body, merged)
 
+    # Resolve repos early so _build_base_request_params captures effective values
+    # (including env-var / config-file defaults, not just request-body values).
+    tests_repo_url = body.tests_repo_url or merged.tests_repo_url
+    additional_repos_list = resolve_additional_repos(body, merged)
+
     job_id = str(uuid.uuid4())
     logger.info(
         f"Direct failure analysis request received with {len(test_failures)} failures (job_id: {job_id})"
@@ -1170,7 +1181,11 @@ async def analyze_failures(
     # works immediately and _preserve_request_params can find them later.
     initial_result: dict = {
         "request_params": _build_base_request_params(
-            body, ai_provider, ai_model, peer_ai_configs
+            ai_provider,
+            ai_model,
+            peer_ai_configs,
+            tests_repo_url=str(tests_repo_url) if tests_repo_url else "",
+            additional_repos=additional_repos_list or None,
         ),
     }
     await save_result(job_id, "", "pending", initial_result)
@@ -1188,13 +1203,9 @@ async def analyze_failures(
     # Always create a workspace for AI to work in
     repo_manager = RepositoryManager()
     custom_prompt = ""
-    tests_repo_url = body.tests_repo_url or merged.tests_repo_url
     cloned_repos: dict[str, Path] = {}
     try:
         await update_status(job_id, "running")
-
-        # Resolve additional repos list early
-        additional_repos_list = resolve_additional_repos(body, merged)
 
         repo_path = repo_manager.create_workspace()
 
