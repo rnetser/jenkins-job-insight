@@ -1,16 +1,21 @@
 """Git repository management for cloning and cleanup."""
 
+from __future__ import annotations
+
 import os
 import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 from git import Repo
 from git.exc import GitCommandError
 from pydantic import HttpUrl
 from simple_logger.logger import get_logger
+
+if TYPE_CHECKING:
+    from jenkins_job_insight.models import AdditionalRepo
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
@@ -28,6 +33,46 @@ def repo_name_from_url(repo_url: str | HttpUrl) -> str:
         Repository name suitable for use as a subdirectory name.
     """
     return str(repo_url).rstrip("/").split("/")[-1].replace(".git", "")
+
+
+def derive_test_repo_name(
+    tests_repo_url: str,
+    additional_repos_list: list[AdditionalRepo] | None,
+) -> str:
+    """Derive test repo subdirectory name, avoiding collisions with additional repos.
+
+    Extracts the repository name from the URL and checks whether it would
+    collide with any additional repo name.  When a collision is detected the
+    function iterates candidate names (``tests-repo-1``, ``tests-repo-2``, ...)
+    until it finds one that does not clash.
+
+    Args:
+        tests_repo_url: URL of the test repository.
+        additional_repos_list: List of additional repo objects (may be None or empty).
+
+    Returns:
+        Safe subdirectory name for the test repo clone.
+    """
+    name = repo_name_from_url(tests_repo_url)
+    if not additional_repos_list:
+        return name
+
+    additional_names = {ar.name for ar in additional_repos_list}
+    if name not in additional_names:
+        return name
+
+    # Collision -- find a unique fallback
+    for suffix in range(1, 100):
+        candidate = f"tests-repo-{suffix}"
+        if candidate not in additional_names:
+            logger.warning(
+                f"Test repo directory name '{name}' collides with additional repo name. "
+                f"Using '{candidate}' as fallback."
+            )
+            return candidate
+
+    # Should never reach here with <100 additional repos
+    return f"tests-repo-{uuid.uuid4().hex[:8]}"
 
 
 def _validate_repo_url(repo_url: str | HttpUrl) -> None:

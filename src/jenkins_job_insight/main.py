@@ -8,6 +8,7 @@ import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, Coroutine
 from xml.etree.ElementTree import ParseError
 
 import httpx
@@ -20,7 +21,6 @@ from simple_logger.logger import get_logger
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
-    derive_test_repo_name,
     clone_additional_repos,
     resolve_additional_repos,
     analyze_failure_group,
@@ -61,7 +61,7 @@ from jenkins_job_insight.xml_enrichment import (
     build_enriched_xml,
     extract_test_failures,
 )
-from jenkins_job_insight.repository import RepositoryManager
+from jenkins_job_insight.repository import RepositoryManager, derive_test_repo_name
 from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
     get_ai_configs,
@@ -1129,25 +1129,20 @@ async def analyze_failures(
         f"Grouped {len(test_failures)} failures into {len(groups)} unique error signatures"
     )
 
-    # Optionally clone repo for AI code context
+    # Always create a workspace for AI to work in
     repo_manager = RepositoryManager()
-    repo_path: Path | None = None
     custom_prompt = ""
     tests_repo_url = body.tests_repo_url or merged.tests_repo_url
     cloned_repos: dict[str, Path] = {}
     try:
         await update_status(job_id, "running")
 
-        # Resolve additional repos list early so we know if a workspace is needed
+        # Resolve additional repos list early
         additional_repos_list = resolve_additional_repos(body, merged)
 
-        if tests_repo_url or additional_repos_list:
-            repo_path = repo_manager.create_workspace()
+        repo_path = repo_manager.create_workspace()
 
         if tests_repo_url:
-            assert (
-                repo_path is not None
-            )  # guaranteed by tests_repo_url or additional_repos_list check above
             try:
                 repo_name = derive_test_repo_name(
                     str(tests_repo_url), additional_repos_list
@@ -1175,7 +1170,7 @@ async def analyze_failures(
         server_url = _build_internal_server_url()
 
         # Analyze each unique failure group in parallel
-        coroutines = [
+        coroutines: list[Coroutine[Any, Any, Any]] = [
             analyze_failure_group(
                 failures=group_failures,
                 console_context="",
@@ -1584,7 +1579,7 @@ async def enrich_comments(
     )
 
     # Collect all enrichment tasks for parallel execution
-    tasks: list = []
+    tasks: list[Coroutine[Any, Any, Any]] = []
     task_map: dict[int, tuple[str, dict]] = {}
 
     for c in comments:

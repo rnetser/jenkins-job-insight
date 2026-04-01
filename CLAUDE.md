@@ -180,7 +180,6 @@ When adding a new analysis setting:
 3. Add the field to `_merge_settings()` in `main.py` so request values override env defaults
 4. Add the CLI option to the relevant command in `cli/main.py`
 5. Add the field to `ServerConfig` in `cli/config.py`
-6. Update the Request Override Priority table in `README.md`
 
 Exceptions (server-level only, no payload equivalent):
 - `DEBUG` — server reload toggle

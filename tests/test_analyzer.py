@@ -1050,14 +1050,16 @@ class TestResolveAdditionalRepos:
 
     def test_request_value_takes_priority(self) -> None:
         """Request additional_repos overrides settings."""
-        from jenkins_job_insight.models import AnalyzeRequest
+        from jenkins_job_insight.models import AdditionalRepo, AnalyzeRequest
         from jenkins_job_insight.analyzer import resolve_additional_repos
 
         request = AnalyzeRequest(
             job_name="test",
             build_number=1,
             additional_repos=[
-                {"name": "infra", "url": "https://github.com/org/infra"},
+                AdditionalRepo.model_validate(
+                    {"name": "infra", "url": "https://github.com/org/infra"}
+                ),
             ],
         )
         settings = MagicMock()
@@ -1115,8 +1117,12 @@ class TestCloneAdditionalRepos:
         repo_path.mkdir()
 
         repos = [
-            AdditionalRepo(name="infra", url="https://github.com/org/infra"),
-            AdditionalRepo(name="product", url="https://github.com/org/product"),
+            AdditionalRepo.model_validate(
+                {"name": "infra", "url": "https://github.com/org/infra"}
+            ),
+            AdditionalRepo.model_validate(
+                {"name": "product", "url": "https://github.com/org/product"}
+            ),
         ]
 
         manager = MagicMock(spec=RepositoryManager)
@@ -1146,8 +1152,8 @@ class TestCloneAdditionalRepos:
         assert cloned["product"] == repo_path / "product"
 
     @pytest.mark.asyncio
-    async def test_workspace_created_when_no_repo_path(self, tmp_path) -> None:
-        """When repo_path is None, a workspace dir is created and repo is a subdirectory."""
+    async def test_clones_into_caller_provided_workspace(self, tmp_path) -> None:
+        """Caller always provides workspace; repos are cloned as subdirectories."""
         from jenkins_job_insight.analyzer import clone_additional_repos
         from jenkins_job_insight.models import AdditionalRepo
         from jenkins_job_insight.repository import RepositoryManager
@@ -1156,11 +1162,12 @@ class TestCloneAdditionalRepos:
         workspace_dir.mkdir()
 
         repos = [
-            AdditionalRepo(name="main-code", url="https://github.com/org/main"),
+            AdditionalRepo.model_validate(
+                {"name": "main-code", "url": "https://github.com/org/main"}
+            ),
         ]
 
         manager = MagicMock(spec=RepositoryManager)
-        manager.create_workspace = MagicMock(return_value=workspace_dir)
 
         def fake_clone_into(url, target, depth=1):
             target.mkdir(parents=True, exist_ok=True)
@@ -1175,16 +1182,17 @@ class TestCloneAdditionalRepos:
             "jenkins_job_insight.analyzer.asyncio.to_thread",
             side_effect=fake_to_thread,
         ):
-            cloned, result_path = await clone_additional_repos(manager, repos, None)
+            cloned, result_path = await clone_additional_repos(
+                manager, repos, workspace_dir
+            )
 
         assert result_path == workspace_dir
         assert "main-code" in cloned
         assert cloned["main-code"] == workspace_dir / "main-code"
-        manager.create_workspace.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_all_repos_are_subdirs_when_no_repo_path(self, tmp_path) -> None:
-        """When repo_path is None, ALL repos are cloned as subdirectories of workspace."""
+    async def test_all_repos_are_subdirs_of_workspace(self, tmp_path) -> None:
+        """ALL repos are cloned as subdirectories of the provided workspace."""
         from jenkins_job_insight.analyzer import clone_additional_repos
         from jenkins_job_insight.models import AdditionalRepo
         from jenkins_job_insight.repository import RepositoryManager
@@ -1193,12 +1201,15 @@ class TestCloneAdditionalRepos:
         workspace_dir.mkdir()
 
         repos = [
-            AdditionalRepo(name="first", url="https://github.com/org/first"),
-            AdditionalRepo(name="second", url="https://github.com/org/second"),
+            AdditionalRepo.model_validate(
+                {"name": "first", "url": "https://github.com/org/first"}
+            ),
+            AdditionalRepo.model_validate(
+                {"name": "second", "url": "https://github.com/org/second"}
+            ),
         ]
 
         manager = MagicMock(spec=RepositoryManager)
-        manager.create_workspace = MagicMock(return_value=workspace_dir)
 
         def fake_clone_into(url, target, depth=1):
             target.mkdir(parents=True, exist_ok=True)
@@ -1213,7 +1224,9 @@ class TestCloneAdditionalRepos:
             "jenkins_job_insight.analyzer.asyncio.to_thread",
             side_effect=fake_to_thread,
         ):
-            cloned, result_path = await clone_additional_repos(manager, repos, None)
+            cloned, result_path = await clone_additional_repos(
+                manager, repos, workspace_dir
+            )
 
         assert result_path == workspace_dir
         assert "first" in cloned
@@ -1234,8 +1247,12 @@ class TestCloneAdditionalRepos:
         repo_path.mkdir()
 
         repos = [
-            AdditionalRepo(name="good", url="https://github.com/org/good"),
-            AdditionalRepo(name="bad", url="https://github.com/org/bad"),
+            AdditionalRepo.model_validate(
+                {"name": "good", "url": "https://github.com/org/good"}
+            ),
+            AdditionalRepo.model_validate(
+                {"name": "bad", "url": "https://github.com/org/bad"}
+            ),
         ]
 
         def fake_clone_into(url, target, depth=1):
@@ -1273,9 +1290,15 @@ class TestCloneAdditionalRepos:
         repo_path.mkdir()
 
         repos = [
-            AdditionalRepo(name="a", url="https://github.com/org/a"),
-            AdditionalRepo(name="b", url="https://github.com/org/b"),
-            AdditionalRepo(name="c", url="https://github.com/org/c"),
+            AdditionalRepo.model_validate(
+                {"name": "a", "url": "https://github.com/org/a"}
+            ),
+            AdditionalRepo.model_validate(
+                {"name": "b", "url": "https://github.com/org/b"}
+            ),
+            AdditionalRepo.model_validate(
+                {"name": "c", "url": "https://github.com/org/c"}
+            ),
         ]
 
         manager = MagicMock(spec=RepositoryManager)
@@ -1306,10 +1329,8 @@ class TestCloneAdditionalRepos:
         assert len(cloned) == 3
 
     @pytest.mark.asyncio
-    async def test_all_repos_use_asyncio_gather_when_no_repo_path(
-        self, tmp_path
-    ) -> None:
-        """When repo_path is None, ALL repos are cloned in parallel via asyncio.gather."""
+    async def test_all_repos_use_asyncio_gather_with_workspace(self, tmp_path) -> None:
+        """ALL repos are cloned in parallel via asyncio.gather in the provided workspace."""
         from jenkins_job_insight.analyzer import clone_additional_repos
         from jenkins_job_insight.models import AdditionalRepo
         from jenkins_job_insight.repository import RepositoryManager
@@ -1318,13 +1339,18 @@ class TestCloneAdditionalRepos:
         workspace_dir.mkdir()
 
         repos = [
-            AdditionalRepo(name="first", url="https://github.com/org/first"),
-            AdditionalRepo(name="second", url="https://github.com/org/second"),
-            AdditionalRepo(name="third", url="https://github.com/org/third"),
+            AdditionalRepo.model_validate(
+                {"name": "first", "url": "https://github.com/org/first"}
+            ),
+            AdditionalRepo.model_validate(
+                {"name": "second", "url": "https://github.com/org/second"}
+            ),
+            AdditionalRepo.model_validate(
+                {"name": "third", "url": "https://github.com/org/third"}
+            ),
         ]
 
         manager = MagicMock(spec=RepositoryManager)
-        manager.create_workspace = MagicMock(return_value=workspace_dir)
 
         def fake_clone_into(url, target, depth=1):
             target.mkdir(parents=True, exist_ok=True)
@@ -1345,7 +1371,9 @@ class TestCloneAdditionalRepos:
                 wraps=__import__("asyncio").gather,
             ) as mock_gather,
         ):
-            cloned, result_path = await clone_additional_repos(manager, repos, None)
+            cloned, result_path = await clone_additional_repos(
+                manager, repos, workspace_dir
+            )
 
         assert mock_gather.called
         assert result_path == workspace_dir
@@ -1423,10 +1451,12 @@ class TestAnalyzeJobWorkspacePattern:
         from jenkins_job_insight.analyzer import analyze_job
         from jenkins_job_insight.models import AnalyzeRequest
 
-        body = AnalyzeRequest(
-            job_name="my-job",
-            build_number=123,
-            tests_repo_url="https://github.com/RedHatQE/mtv-api-tests",
+        body = AnalyzeRequest.model_validate(
+            {
+                "job_name": "my-job",
+                "build_number": 123,
+                "tests_repo_url": "https://github.com/RedHatQE/mtv-api-tests",
+            }
         )
         settings = Settings()
         settings_data = settings.model_dump(mode="python")
@@ -1520,10 +1550,12 @@ class TestAnalyzeJobWorkspacePattern:
         from jenkins_job_insight.analyzer import analyze_job
         from jenkins_job_insight.models import AnalyzeRequest
 
-        body = AnalyzeRequest(
-            job_name="my-job",
-            build_number=123,
-            tests_repo_url="https://github.com/org/my-tests.git",
+        body = AnalyzeRequest.model_validate(
+            {
+                "job_name": "my-job",
+                "build_number": 123,
+                "tests_repo_url": "https://github.com/org/my-tests.git",
+            }
         )
         settings = Settings()
         settings_data = settings.model_dump(mode="python")
@@ -1607,12 +1639,14 @@ class TestAnalyzeJobWorkspacePattern:
         from jenkins_job_insight.analyzer import analyze_job
         from jenkins_job_insight.models import AnalyzeRequest
 
-        body = AnalyzeRequest(
-            job_name="my-job",
-            build_number=123,
-            additional_repos=[
-                {"name": "infra", "url": "https://github.com/org/infra"},
-            ],
+        body = AnalyzeRequest.model_validate(
+            {
+                "job_name": "my-job",
+                "build_number": 123,
+                "additional_repos": [
+                    {"name": "infra", "url": "https://github.com/org/infra"},
+                ],
+            }
         )
         settings = Settings()
         settings_data = settings.model_dump(mode="python")
@@ -1706,13 +1740,15 @@ class TestAnalyzeJobWorkspacePattern:
         from jenkins_job_insight.analyzer import analyze_job
         from jenkins_job_insight.models import AnalyzeRequest
 
-        body = AnalyzeRequest(
-            job_name="my-job",
-            build_number=123,
-            tests_repo_url="https://github.com/org/test-repo",
-            additional_repos=[
-                {"name": "infra", "url": "https://github.com/org/infra"},
-            ],
+        body = AnalyzeRequest.model_validate(
+            {
+                "job_name": "my-job",
+                "build_number": 123,
+                "tests_repo_url": "https://github.com/org/test-repo",
+                "additional_repos": [
+                    {"name": "infra", "url": "https://github.com/org/infra"},
+                ],
+            }
         )
         settings = Settings()
         settings_data = settings.model_dump(mode="python")
@@ -1817,10 +1853,12 @@ class TestAnalyzeJobWorkspacePattern:
             FailureAnalysis,
         )
 
-        body = AnalyzeRequest(
-            job_name="my-job",
-            build_number=123,
-            tests_repo_url="https://github.com/org/test-repo",
+        body = AnalyzeRequest.model_validate(
+            {
+                "job_name": "my-job",
+                "build_number": 123,
+                "tests_repo_url": "https://github.com/org/test-repo",
+            }
         )
         settings = Settings()
         settings_data = settings.model_dump(mode="python")
@@ -2050,57 +2088,260 @@ class TestDeriveTestRepoName:
 
     def test_no_collision(self) -> None:
         """When no additional repos, returns derived name from URL."""
-        from jenkins_job_insight.analyzer import derive_test_repo_name
+        from jenkins_job_insight.repository import derive_test_repo_name
 
         name = derive_test_repo_name("https://github.com/org/my-tests.git", [])
         assert name == "my-tests"
 
     def test_collision_falls_back(self) -> None:
         """When derived name collides with an additional repo, returns 'tests-repo-1'."""
-        from jenkins_job_insight.analyzer import derive_test_repo_name
+        from jenkins_job_insight.repository import derive_test_repo_name
         from jenkins_job_insight.models import AdditionalRepo
 
         additional = [
-            AdditionalRepo(name="my-tests", url="https://github.com/org/my-tests"),
+            AdditionalRepo.model_validate(
+                {"name": "my-tests", "url": "https://github.com/org/my-tests"}
+            ),
         ]
         name = derive_test_repo_name("https://github.com/org/my-tests.git", additional)
         assert name == "tests-repo-1"
 
     def test_no_collision_different_name(self) -> None:
         """No collision when additional repo has a different name."""
-        from jenkins_job_insight.analyzer import derive_test_repo_name
+        from jenkins_job_insight.repository import derive_test_repo_name
         from jenkins_job_insight.models import AdditionalRepo
 
         additional = [
-            AdditionalRepo(name="infra", url="https://github.com/org/infra"),
+            AdditionalRepo.model_validate(
+                {"name": "infra", "url": "https://github.com/org/infra"}
+            ),
         ]
         name = derive_test_repo_name("https://github.com/org/my-tests.git", additional)
         assert name == "my-tests"
 
     def test_empty_additional_repos(self) -> None:
         """Empty additional repos list causes no collision."""
-        from jenkins_job_insight.analyzer import derive_test_repo_name
+        from jenkins_job_insight.repository import derive_test_repo_name
 
         name = derive_test_repo_name("https://github.com/org/repo", [])
         assert name == "repo"
 
     def test_none_additional_repos(self) -> None:
         """None additional repos list causes no collision."""
-        from jenkins_job_insight.analyzer import derive_test_repo_name
+        from jenkins_job_insight.repository import derive_test_repo_name
 
         name = derive_test_repo_name("https://github.com/org/repo", None)
         assert name == "repo"
 
     def test_fallback_also_avoids_collision(self) -> None:
         """Fallback name avoids collision with 'tests-repo-1' too."""
-        from jenkins_job_insight.analyzer import derive_test_repo_name
+        from jenkins_job_insight.repository import derive_test_repo_name
         from jenkins_job_insight.models import AdditionalRepo
 
         repos = [
-            AdditionalRepo(name="my-repo", url="https://github.com/org/my-repo"),
-            AdditionalRepo(name="tests-repo-1", url="https://github.com/org/other"),
+            AdditionalRepo.model_validate(
+                {"name": "my-repo", "url": "https://github.com/org/my-repo"}
+            ),
+            AdditionalRepo.model_validate(
+                {"name": "tests-repo-1", "url": "https://github.com/org/other"}
+            ),
         ]
         result = derive_test_repo_name("https://github.com/org/my-repo", repos)
         assert result != "my-repo"
         assert result != "tests-repo-1"
         assert result.startswith("tests-repo-")
+
+
+class TestWorkspaceAlwaysCreated:
+    """Workspace is always created, even when no repos are configured."""
+
+    @pytest.mark.asyncio
+    async def test_analyze_job_creates_workspace_without_repos(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """analyze_job creates a workspace even when no test repo or additional repos."""
+        from jenkins_job_insight.analyzer import analyze_job
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest(
+            job_name="my-job",
+            build_number=123,
+        )
+        settings = Settings()
+        settings_data = settings.model_dump(mode="python")
+        settings_data["jenkins_url"] = "https://jenkins.example.com"
+        settings_data["jenkins_user"] = "user"
+        settings_data["jenkins_password"] = _FAKE_JENKINS_PASSWORD
+        settings_data["tests_repo_url"] = None
+        settings_data["additional_repos"] = ""
+        merged = Settings.model_validate(settings_data)
+
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+
+        mock_client = MagicMock()
+        mock_client.get_build_info_safe.return_value = {
+            "result": "FAILURE",
+            "building": False,
+        }
+        mock_client.get_build_console.return_value = "Build failed"
+        mock_client.get_test_report.return_value = None
+        mock_client.session = MagicMock()
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.JenkinsClient",
+            lambda **kwargs: mock_client,
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            fake_to_thread,
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.check_ai_cli_available",
+            AsyncMock(return_value=(True, "")),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
+            AsyncMock(
+                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+            ),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.update_progress_phase",
+            AsyncMock(),
+        )
+
+        mock_repo_manager = MagicMock()
+        mock_repo_manager.create_workspace.return_value = workspace_dir
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.RepositoryManager",
+            lambda: mock_repo_manager,
+        )
+
+        await analyze_job(
+            body,
+            merged,
+            ai_provider="claude",
+            ai_model="test-model",
+            job_id="test-job-id",
+        )
+
+        # Workspace must be created even without any repos
+        mock_repo_manager.create_workspace.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_analyze_failures_creates_workspace_without_repos(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """POST /analyze-failures creates workspace even without tests_repo_url."""
+        from jenkins_job_insight.models import (
+            AnalysisDetail,
+            FailureAnalysis,
+        )
+        from starlette.testclient import TestClient
+        from jenkins_job_insight.main import app
+        from jenkins_job_insight.config import get_settings
+
+        # Override settings to ensure no repos are configured
+        no_repo_settings = Settings()
+        settings_data = no_repo_settings.model_dump(mode="python")
+        settings_data["tests_repo_url"] = None
+        settings_data["additional_repos"] = ""
+        no_repo_settings = Settings.model_validate(settings_data)
+        app.dependency_overrides[get_settings] = lambda: no_repo_settings
+
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+
+        mock_repo_manager = MagicMock()
+        mock_repo_manager.create_workspace.return_value = workspace_dir
+        mock_repo_manager.cleanup.return_value = None
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.RepositoryManager",
+            lambda: mock_repo_manager,
+        )
+
+        mock_failure = FailureAnalysis(
+            test_name="test_foo",
+            error="assert False",
+            analysis=AnalysisDetail(classification="CODE ISSUE", details="d"),
+            error_signature="sig",
+        )
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.analyze_failure_group",
+            AsyncMock(return_value=[mock_failure]),
+        )
+
+        async def run_coroutines(coroutines, **kwargs):
+            return [await coro for coro in coroutines]
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.run_parallel_with_limit",
+            AsyncMock(side_effect=run_coroutines),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.save_result",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.update_status",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.populate_failure_history",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.storage.make_classifications_visible",
+            AsyncMock(),
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.main.asyncio.to_thread",
+            fake_to_thread,
+        )
+
+        test_client = TestClient(app)
+        response = test_client.post(
+            "/analyze-failures",
+            json={
+                "failures": [
+                    {
+                        "test_name": "test_foo",
+                        "error_message": "assert False",
+                        "stack_trace": "line 10",
+                    }
+                ],
+                "ai_provider": "claude",
+                "ai_model": "test-model",
+            },
+        )
+        assert response.status_code == 200
+
+        # Workspace must be created even without any repos
+        mock_repo_manager.create_workspace.assert_called_once()
+
+        # Clean up dependency override
+        app.dependency_overrides.pop(get_settings, None)
+
+    @pytest.mark.asyncio
+    async def test_clone_additional_repos_requires_path(self, tmp_path) -> None:
+        """clone_additional_repos always receives a Path, never None."""
+        from jenkins_job_insight.analyzer import clone_additional_repos
+        import inspect
+
+        sig = inspect.signature(clone_additional_repos)
+        repo_path_param = sig.parameters["repo_path"]
+        # The annotation should be Path, not Path | None
+        assert repo_path_param.annotation is not inspect.Parameter.empty
+        assert "None" not in str(repo_path_param.annotation)

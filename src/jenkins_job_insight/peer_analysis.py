@@ -8,7 +8,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, Coroutine, TypedDict
 
 from ai_cli_runner import run_parallel_with_limit
 from simple_logger.logger import get_logger
@@ -458,7 +458,9 @@ async def analyze_failure_group_with_peers(
             )
             return config, ok, output
 
-        peer_tasks = [_call_peer(idx, cfg) for idx, cfg in enumerate(peer_ai_configs)]
+        peer_tasks: list[Coroutine[Any, Any, Any]] = [
+            _call_peer(idx, cfg) for idx, cfg in enumerate(peer_ai_configs)
+        ]
         peer_results = await run_parallel_with_limit(peer_tasks)
 
         # Process peer responses

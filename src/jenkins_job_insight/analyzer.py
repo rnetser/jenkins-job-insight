@@ -7,7 +7,7 @@ import re
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, Coroutine, NoReturn
 
 from ai_cli_runner import (
     call_ai_cli,
@@ -40,7 +40,10 @@ from jenkins_job_insight.models import (
     ProductBugReport,
     TestFailure,
 )
-from jenkins_job_insight.repository import RepositoryManager, repo_name_from_url
+from jenkins_job_insight.repository import (
+    RepositoryManager,
+    derive_test_repo_name,
+)
 from jenkins_job_insight.storage import update_progress_phase
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -61,69 +64,24 @@ def resolve_additional_repos(
     return [AdditionalRepo(**r) for r in parsed] if parsed else []
 
 
-def derive_test_repo_name(
-    tests_repo_url: str,
-    additional_repos_list: list[AdditionalRepo] | None,
-) -> str:
-    """Derive test repo subdirectory name, avoiding collisions with additional repos.
-
-    Extracts the repository name from the URL and checks whether it would
-    collide with any additional repo name.  When a collision is detected the
-    function iterates candidate names (``tests-repo-1``, ``tests-repo-2``, ...)
-    until it finds one that does not clash.
-
-    Args:
-        tests_repo_url: URL of the test repository.
-        additional_repos_list: List of additional repo objects (may be None or empty).
-
-    Returns:
-        Safe subdirectory name for the test repo clone.
-    """
-    name = repo_name_from_url(tests_repo_url)
-    if not additional_repos_list:
-        return name
-
-    additional_names = {ar.name for ar in additional_repos_list}
-    if name not in additional_names:
-        return name
-
-    # Collision -- find a unique fallback
-    for suffix in range(1, 100):
-        candidate = f"tests-repo-{suffix}"
-        if candidate not in additional_names:
-            logger.warning(
-                f"Test repo directory name '{name}' collides with additional repo name. "
-                f"Using '{candidate}' as fallback."
-            )
-            return candidate
-
-    # Should never reach here with <100 additional repos
-    return f"tests-repo-{uuid.uuid4().hex[:8]}"
-
-
 async def clone_additional_repos(
     repo_manager: RepositoryManager,
     additional_repos_list: list[AdditionalRepo],
-    repo_path: Path | None,
-) -> tuple[dict[str, Path], Path | None]:
+    repo_path: Path,
+) -> tuple[dict[str, Path], Path]:
     """Clone additional repositories for AI analysis context.
 
-    When repo_path exists, clones as subdirectories.
-    When repo_path is None, creates a workspace directory first,
-    then clones ALL repos into it as subdirectories.
+    Clones all repos as subdirectories of the provided workspace path.
 
     Args:
         repo_manager: Repository manager for cloning.
         additional_repos_list: List of AdditionalRepo objects.
-        repo_path: Existing workspace path, or None.
+        repo_path: Workspace path (always provided by caller).
 
     Returns:
-        Tuple of (cloned repos dict mapping name to path, updated repo_path).
+        Tuple of (cloned repos dict mapping name to path, repo_path).
     """
     cloned: dict[str, Path] = {}
-
-    if not repo_path:
-        repo_path = repo_manager.create_workspace()
 
     async def _clone_into_subdir(ar: AdditionalRepo) -> None:
         target = repo_path / ar.name
@@ -1249,7 +1207,7 @@ async def analyze_child_job(
 
     if failed_children:
         # Recursively analyze failed children IN PARALLEL with bounded concurrency
-        child_tasks = [
+        child_tasks: list[Coroutine[Any, Any, Any]] = [
             analyze_child_job(
                 child_name,
                 child_num,
@@ -1333,7 +1291,7 @@ async def analyze_child_job(
 
         # Analyze each unique failure group in parallel
         total_groups = len(failure_groups)
-        tasks = []
+        tasks: list[Coroutine[Any, Any, Any]] = []
         for group_idx, (_sig, group) in enumerate(failure_groups.items(), 1):
             tasks.append(
                 analyze_failure_group(
@@ -1562,26 +1520,19 @@ async def analyze_job(
         # Use request value if provided, otherwise fall back to settings
         tests_repo_url = request.tests_repo_url or settings.tests_repo_url
         repo_context = ""
-        repo_path: Path | None = None
         custom_prompt = ""
 
         # Use RepositoryManager context for entire analysis (child jobs and main job)
-        repo_manager: RepositoryManager | None = None
         cloned_repos: dict[str, Path] = {}
         async with contextlib.AsyncExitStack() as stack:
             # Resolve additional repos list early so we know if a workspace is needed
             additional_repos_list = resolve_additional_repos(request, settings)
 
-            if tests_repo_url or additional_repos_list:
-                repo_manager = RepositoryManager()
-                stack.enter_context(repo_manager)
-                repo_path = repo_manager.create_workspace()
+            repo_manager = RepositoryManager()
+            stack.enter_context(repo_manager)
+            repo_path = repo_manager.create_workspace()
 
             if tests_repo_url:
-                assert (
-                    repo_manager is not None
-                )  # guaranteed by tests_repo_url or additional_repos_list check above
-                assert repo_path is not None
                 try:
                     repo_name = derive_test_repo_name(
                         str(tests_repo_url), additional_repos_list
@@ -1603,28 +1554,15 @@ async def analyze_job(
 
             # Make artifacts accessible in the AI working directory
             if extract_path:
-                if repo_path:
-                    # Symlink artifacts into the workspace so AI can access them
-                    artifacts_link = repo_path / "build-artifacts"
-                    try:
-                        artifacts_link.symlink_to(extract_path)
-                        logger.info(
-                            f"Linked artifacts into workspace: {artifacts_link}"
-                        )
-                    except OSError as exc:
-                        logger.warning(
-                            f"Could not link artifacts into workspace: {exc}"
-                        )
-                else:
-                    # No repo — use artifacts dir as the AI working directory
-                    repo_path = extract_path
-                    logger.info(f"Using artifacts dir as AI workspace: {repo_path}")
+                artifacts_link = repo_path / "build-artifacts"
+                try:
+                    artifacts_link.symlink_to(extract_path)
+                    logger.info(f"Linked artifacts into workspace: {artifacts_link}")
+                except OSError as exc:
+                    logger.warning(f"Could not link artifacts into workspace: {exc}")
 
             # Clone additional repositories for AI context
             if additional_repos_list:
-                assert (
-                    repo_manager is not None
-                )  # guaranteed by tests_repo_url or additional_repos_list check above
                 additional_repos_cloned, repo_path = await clone_additional_repos(
                     repo_manager, additional_repos_list, repo_path
                 )
@@ -1650,7 +1588,7 @@ async def analyze_job(
             # Analyze failed child jobs IN PARALLEL with bounded concurrency
             if failed_child_jobs:
                 await _safe_update_progress(progress_job_id, "analyzing_child_jobs")
-                child_tasks = [
+                child_tasks: list[Coroutine[Any, Any, Any]] = [
                     analyze_child_job(
                         job_name=child_name,
                         build_number=child_num,
@@ -1744,7 +1682,7 @@ async def analyze_job(
 
                 # Analyze each unique failure group in parallel
                 total_groups = len(failure_groups)
-                failure_tasks = []
+                failure_tasks: list[Coroutine[Any, Any, Any]] = []
                 for group_idx, (_sig, group) in enumerate(failure_groups.items(), 1):
                     failure_tasks.append(
                         analyze_failure_group(
