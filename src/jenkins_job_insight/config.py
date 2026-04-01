@@ -66,6 +66,14 @@ def parse_additional_repos(raw: str) -> list[dict]:
         if not url:
             raise ValueError(f"Empty URL at position {i + 1}: '{entry}'")
         result.append({"name": name, "url": url})
+
+    names = [r["name"] for r in result]
+    dupes = [n for n in names if names.count(n) > 1]
+    if dupes:
+        raise ValueError(
+            f"Duplicate additional repo names: {', '.join(sorted(set(dupes)))}"
+        )
+
     return result
 
 

@@ -374,6 +374,13 @@ class TestParseAdditionalRepos:
         with pytest.raises(ValueError, match="Empty URL"):
             parse_additional_repos("infra:")
 
+    def test_duplicate_names_rejected(self) -> None:
+        """Duplicate names in additional repos env var raise ValueError."""
+        with pytest.raises(ValueError, match="Duplicate"):
+            parse_additional_repos(
+                "infra:https://github.com/org/a,infra:https://github.com/org/b"
+            )
+
     def test_settings_loads_additional_repos(self) -> None:
         with patch.dict(
             os.environ,

@@ -134,6 +134,22 @@ class BaseAnalysisRequest(BaseModel):
         ),
     )
 
+    @field_validator("additional_repos")
+    @classmethod
+    def _unique_additional_repo_names(
+        cls,
+        v: list[AdditionalRepo] | None,
+    ) -> list[AdditionalRepo] | None:
+        if v is None:
+            return v
+        names = [ar.name for ar in v]
+        dupes = [n for n in names if names.count(n) > 1]
+        if dupes:
+            raise ValueError(
+                f"Duplicate additional repo names: {', '.join(sorted(set(dupes)))}"
+            )
+        return v
+
 
 class AnalyzeRequest(BaseAnalysisRequest):
     """Request payload for analysis endpoint."""

@@ -860,6 +860,44 @@ class TestAdditionalRepo:
             AdditionalRepo(name="foo\\bar", url="https://github.com/org/repo")
 
 
+class TestAdditionalReposDuplicateNames:
+    """Tests for duplicate name rejection in additional_repos."""
+
+    def test_duplicate_names_rejected(self) -> None:
+        """Duplicate additional repo names are rejected by validation."""
+        with pytest.raises(ValidationError):
+            AnalyzeRequest(
+                job_name="test",
+                build_number=1,
+                additional_repos=[
+                    {"name": "infra", "url": "https://github.com/org/infra"},
+                    {"name": "infra", "url": "https://github.com/org/other"},
+                ],
+            )
+
+    def test_unique_names_accepted(self) -> None:
+        """Distinct additional repo names pass validation."""
+        request = AnalyzeRequest(
+            job_name="test",
+            build_number=1,
+            additional_repos=[
+                {"name": "infra", "url": "https://github.com/org/infra"},
+                {"name": "product", "url": "https://github.com/org/product"},
+            ],
+        )
+        assert len(request.additional_repos) == 2
+
+    def test_none_additional_repos_accepted(self) -> None:
+        """None value for additional_repos passes validation."""
+        request = AnalyzeRequest(job_name="test", build_number=1, additional_repos=None)
+        assert request.additional_repos is None
+
+    def test_empty_list_accepted(self) -> None:
+        """Empty list for additional_repos passes validation."""
+        request = AnalyzeRequest(job_name="test", build_number=1, additional_repos=[])
+        assert request.additional_repos == []
+
+
 class TestAdditionalReposOnRequest:
     """Tests for additional_repos field on BaseAnalysisRequest."""
 

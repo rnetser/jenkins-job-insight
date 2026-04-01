@@ -1101,6 +1101,255 @@ class TestResolveAdditionalRepos:
         assert result == []
 
 
+class TestCloneAdditionalRepos:
+    """Tests for clone_additional_repos helper."""
+
+    @pytest.mark.asyncio
+    async def test_clones_into_subdirs_when_repo_path_exists(self, tmp_path) -> None:
+        """Additional repos are cloned as subdirectories of repo_path."""
+        from jenkins_job_insight.analyzer import clone_additional_repos
+        from jenkins_job_insight.models import AdditionalRepo
+        from jenkins_job_insight.repository import RepositoryManager
+
+        repo_path = tmp_path / "main-repo"
+        repo_path.mkdir()
+
+        repos = [
+            AdditionalRepo(name="infra", url="https://github.com/org/infra"),
+            AdditionalRepo(name="product", url="https://github.com/org/product"),
+        ]
+
+        manager = MagicMock(spec=RepositoryManager)
+
+        def fake_clone_into(url, target, depth=1):
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+
+        manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with patch(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            side_effect=fake_to_thread,
+        ):
+            cloned, result_path = await clone_additional_repos(
+                manager, repos, repo_path
+            )
+
+        assert result_path == repo_path
+        assert len(cloned) == 2
+        assert "infra" in cloned
+        assert "product" in cloned
+        assert cloned["infra"] == repo_path / "infra"
+        assert cloned["product"] == repo_path / "product"
+
+    @pytest.mark.asyncio
+    async def test_first_repo_becomes_base_when_no_repo_path(self, tmp_path) -> None:
+        """When repo_path is None, first repo becomes the workspace."""
+        from jenkins_job_insight.analyzer import clone_additional_repos
+        from jenkins_job_insight.models import AdditionalRepo
+        from jenkins_job_insight.repository import RepositoryManager
+
+        clone_dir = tmp_path / "cloned"
+        clone_dir.mkdir()
+
+        repos = [
+            AdditionalRepo(name="main-code", url="https://github.com/org/main"),
+        ]
+
+        manager = MagicMock(spec=RepositoryManager)
+        manager.clone = MagicMock(return_value=clone_dir)
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with patch(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            side_effect=fake_to_thread,
+        ):
+            cloned, result_path = await clone_additional_repos(manager, repos, None)
+
+        assert result_path == clone_dir
+        assert "main-code" in cloned
+        manager.clone.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_remaining_repos_cloned_when_no_repo_path(self, tmp_path) -> None:
+        """When repo_path is None, remaining repos are cloned as subdirectories."""
+        from jenkins_job_insight.analyzer import clone_additional_repos
+        from jenkins_job_insight.models import AdditionalRepo
+        from jenkins_job_insight.repository import RepositoryManager
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+
+        repos = [
+            AdditionalRepo(name="first", url="https://github.com/org/first"),
+            AdditionalRepo(name="second", url="https://github.com/org/second"),
+        ]
+
+        manager = MagicMock(spec=RepositoryManager)
+        manager.clone = MagicMock(return_value=base_dir)
+
+        def fake_clone_into(url, target, depth=1):
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+
+        manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with patch(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            side_effect=fake_to_thread,
+        ):
+            cloned, result_path = await clone_additional_repos(manager, repos, None)
+
+        assert result_path == base_dir
+        assert "first" in cloned
+        assert "second" in cloned
+        manager.clone.assert_called_once()
+        manager.clone_into.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_clone_failure_is_graceful(self, tmp_path) -> None:
+        """Failed clones are logged but don't crash the process."""
+        from jenkins_job_insight.analyzer import clone_additional_repos
+        from jenkins_job_insight.models import AdditionalRepo
+        from jenkins_job_insight.repository import RepositoryManager
+
+        repo_path = tmp_path / "main"
+        repo_path.mkdir()
+
+        repos = [
+            AdditionalRepo(name="good", url="https://github.com/org/good"),
+            AdditionalRepo(name="bad", url="https://github.com/org/bad"),
+        ]
+
+        def fake_clone_into(url, target, depth=1):
+            if "bad" in str(url):
+                raise RuntimeError("Clone failed")
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+
+        manager = MagicMock(spec=RepositoryManager)
+        manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with patch(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            side_effect=fake_to_thread,
+        ):
+            cloned, result_path = await clone_additional_repos(
+                manager, repos, repo_path
+            )
+
+        assert "good" in cloned
+        assert "bad" not in cloned
+        assert result_path == repo_path
+
+    @pytest.mark.asyncio
+    async def test_cloning_uses_asyncio_gather(self, tmp_path) -> None:
+        """Verify that parallel cloning uses asyncio.gather, not sequential loops."""
+        from jenkins_job_insight.analyzer import clone_additional_repos
+        from jenkins_job_insight.models import AdditionalRepo
+        from jenkins_job_insight.repository import RepositoryManager
+
+        repo_path = tmp_path / "main-repo"
+        repo_path.mkdir()
+
+        repos = [
+            AdditionalRepo(name="a", url="https://github.com/org/a"),
+            AdditionalRepo(name="b", url="https://github.com/org/b"),
+            AdditionalRepo(name="c", url="https://github.com/org/c"),
+        ]
+
+        manager = MagicMock(spec=RepositoryManager)
+
+        def fake_clone_into(url, target, depth=1):
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+
+        manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with (
+            patch(
+                "jenkins_job_insight.analyzer.asyncio.to_thread",
+                side_effect=fake_to_thread,
+            ),
+            patch(
+                "jenkins_job_insight.analyzer.asyncio.gather",
+                wraps=__import__("asyncio").gather,
+            ) as mock_gather,
+        ):
+            cloned, _ = await clone_additional_repos(manager, repos, repo_path)
+
+        # asyncio.gather must have been called (parallel, not sequential)
+        assert mock_gather.called
+        assert len(cloned) == 3
+
+    @pytest.mark.asyncio
+    async def test_remaining_repos_use_asyncio_gather_when_no_repo_path(
+        self, tmp_path
+    ) -> None:
+        """When repo_path is None, remaining repos after the first are cloned in parallel via asyncio.gather."""
+        from jenkins_job_insight.analyzer import clone_additional_repos
+        from jenkins_job_insight.models import AdditionalRepo
+        from jenkins_job_insight.repository import RepositoryManager
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+
+        repos = [
+            AdditionalRepo(name="first", url="https://github.com/org/first"),
+            AdditionalRepo(name="second", url="https://github.com/org/second"),
+            AdditionalRepo(name="third", url="https://github.com/org/third"),
+        ]
+
+        manager = MagicMock(spec=RepositoryManager)
+        manager.clone = MagicMock(return_value=base_dir)
+
+        def fake_clone_into(url, target, depth=1):
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+
+        manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with (
+            patch(
+                "jenkins_job_insight.analyzer.asyncio.to_thread",
+                side_effect=fake_to_thread,
+            ),
+            patch(
+                "jenkins_job_insight.analyzer.asyncio.gather",
+                wraps=__import__("asyncio").gather,
+            ) as mock_gather,
+        ):
+            cloned, result_path = await clone_additional_repos(manager, repos, None)
+
+        # asyncio.gather must have been called for the remaining repos
+        assert mock_gather.called
+        assert result_path == base_dir
+        # First repo cloned via manager.clone, remaining two via gather
+        assert len(cloned) == 3
+        assert "first" in cloned
+        assert "second" in cloned
+        assert "third" in cloned
+        manager.clone.assert_called_once()
+        assert manager.clone_into.call_count == 2
+
+
 class TestBuildResourcesSectionAdditionalRepos:
     """Tests for _build_resources_section with additional_repos."""
 

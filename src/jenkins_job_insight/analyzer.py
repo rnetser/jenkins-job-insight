@@ -80,17 +80,24 @@ async def clone_additional_repos(
         Tuple of (cloned repos dict mapping name to path, updated repo_path).
     """
     cloned: dict[str, Path] = {}
+
+    async def _clone_into_subdir(ar: AdditionalRepo, parent: Path) -> None:
+        """Clone a single repo as a subdirectory. Failures are logged, not raised."""
+        target = parent / ar.name
+        try:
+            await asyncio.to_thread(
+                repo_manager.clone_into, str(ar.url), target, depth=1
+            )
+            cloned[ar.name] = target
+            logger.info(f"Cloned additional repo '{ar.name}' into {target}")
+        except Exception as e:
+            logger.warning(f"Failed to clone additional repo '{ar.name}': {e}")
+
     if repo_path:
-        for ar in additional_repos_list:
-            try:
-                target = repo_path / ar.name
-                await asyncio.to_thread(
-                    repo_manager.clone_into, str(ar.url), target, depth=1
-                )
-                cloned[ar.name] = target
-                logger.info(f"Cloned additional repo '{ar.name}' into {target}")
-            except Exception as e:
-                logger.warning(f"Failed to clone additional repo '{ar.name}': {e}")
+        # Clone all as subdirectories in parallel
+        await asyncio.gather(
+            *[_clone_into_subdir(ar, repo_path) for ar in additional_repos_list]
+        )
     else:
         # No main repo -- use first additional repo as base workspace
         first = additional_repos_list[0]
@@ -105,18 +112,11 @@ async def clone_additional_repos(
         except Exception as e:
             logger.warning(f"Failed to clone additional repo '{first.name}': {e}")
 
-        # Clone remaining as subdirectories
-        if repo_path:
-            for ar in additional_repos_list[1:]:
-                try:
-                    target = repo_path / ar.name
-                    await asyncio.to_thread(
-                        repo_manager.clone_into, str(ar.url), target, depth=1
-                    )
-                    cloned[ar.name] = target
-                    logger.info(f"Cloned additional repo '{ar.name}' into {target}")
-                except Exception as e:
-                    logger.warning(f"Failed to clone additional repo '{ar.name}': {e}")
+        # Clone remaining as subdirectories in parallel
+        if repo_path and len(additional_repos_list) > 1:
+            await asyncio.gather(
+                *[_clone_into_subdir(ar, repo_path) for ar in additional_repos_list[1:]]
+            )
 
     return cloned, repo_path
 
