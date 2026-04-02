@@ -8,7 +8,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, Coroutine, TypedDict
 
 from ai_cli_runner import run_parallel_with_limit
 from simple_logger.logger import get_logger
@@ -305,6 +305,7 @@ async def analyze_failure_group_with_peers(
     server_url: str = "",
     job_id: str = "",
     group_label: str = "",
+    additional_repos: dict[str, Path] | None = None,
 ) -> list[FailureAnalysis]:
     """Analyze a failure group using multi-AI peer consensus.
 
@@ -351,6 +352,7 @@ async def analyze_failure_group_with_peers(
         artifacts_context=artifacts_context,
         server_url=server_url,
         job_id=job_id,
+        additional_repos=additional_repos,
     )
 
     # Validate orchestrator classification before feeding into consensus
@@ -368,7 +370,12 @@ async def analyze_failure_group_with_peers(
     # Build failure summary and resources section for peer prompts
     failure_summary = _build_failure_summary(failures, error_signature)
     _, _, resources_section, _ = _build_prompt_sections(
-        custom_prompt, artifacts_context, repo_path, server_url, job_id
+        custom_prompt,
+        artifacts_context,
+        repo_path,
+        server_url,
+        job_id,
+        additional_repos=additional_repos,
     )
     all_rounds: list[PeerRound] = []
     consensus_reached = False
@@ -451,7 +458,9 @@ async def analyze_failure_group_with_peers(
             )
             return config, ok, output
 
-        peer_tasks = [_call_peer(idx, cfg) for idx, cfg in enumerate(peer_ai_configs)]
+        peer_tasks: list[Coroutine[Any, Any, Any]] = [
+            _call_peer(idx, cfg) for idx, cfg in enumerate(peer_ai_configs)
+        ]
         peer_results = await run_parallel_with_limit(peer_tasks)
 
         # Process peer responses

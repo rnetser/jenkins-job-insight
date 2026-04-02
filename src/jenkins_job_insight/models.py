@@ -12,6 +12,8 @@ from pydantic import (
     model_validator,
 )
 
+from jenkins_job_insight.repository import RESERVED_REPO_NAMES
+
 
 class AiConfigEntry(BaseModel):
     """Single AI provider/model configuration for peer analysis."""
@@ -27,6 +29,31 @@ class AiConfigEntry(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("ai_model must not be blank")
+        return v
+
+
+class AdditionalRepo(BaseModel):
+    """A named additional repository for AI analysis context."""
+
+    name: str = Field(
+        min_length=1, description="Descriptive name (used as cloned directory name)"
+    )
+    url: HttpUrl = Field(description="Repository URL to clone")
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        if "/" in v or "\\" in v:
+            raise ValueError("name must not contain path separators ('/' or '\\')")
+        if ".." in v:
+            raise ValueError("name must not contain '..'")
+        if v.startswith("."):
+            raise ValueError("name must not start with '.'")
+        if v in RESERVED_REPO_NAMES:
+            raise ValueError(f"name '{v}' is reserved and cannot be used")
         return v
 
 
@@ -104,6 +131,30 @@ class BaseAnalysisRequest(BaseModel):
         default=3,
         description="Maximum debate rounds for peer analysis",
     )
+    additional_repos: list[AdditionalRepo] | None = Field(
+        default=None,
+        description=(
+            "Additional repository URLs for AI analysis context. "
+            "Each entry has a name (used as subdirectory name) and URL. "
+            "Omit to inherit the server default; send [] to disable."
+        ),
+    )
+
+    @field_validator("additional_repos")
+    @classmethod
+    def _unique_additional_repo_names(
+        cls,
+        v: list[AdditionalRepo] | None,
+    ) -> list[AdditionalRepo] | None:
+        if v is None:
+            return v
+        names = [ar.name for ar in v]
+        dupes = [n for n in names if names.count(n) > 1]
+        if dupes:
+            raise ValueError(
+                f"Duplicate additional repo names: {', '.join(sorted(set(dupes)))}"
+            )
+        return v
 
 
 class AnalyzeRequest(BaseAnalysisRequest):

@@ -684,6 +684,47 @@ class TestGlobalDefaults:
 # -- _server_config_from_dict type validation ---------------------------------
 
 
+class TestServerConfigAdditionalRepos:
+    """Tests for additional_repos field on ServerConfig."""
+
+    def test_additional_repos_default_empty(self) -> None:
+        """Default additional_repos is empty string."""
+        cfg = ServerConfig(url="http://test")
+        assert cfg.additional_repos == ""
+
+    def test_additional_repos_from_toml(self, tmp_path: Path) -> None:
+        """additional_repos is loaded from TOML config."""
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            '[default]\nserver = "a"\n\n'
+            "[servers.a]\n"
+            'url = "http://a"\n'
+            'additional_repos = "infra:https://github.com/org/infra,product:https://github.com/org/product"\n'
+        )
+        config = load_config(cfg_path)
+        cfg = get_server_config("a", config)
+        assert cfg is not None
+        assert (
+            cfg.additional_repos
+            == "infra:https://github.com/org/infra,product:https://github.com/org/product"
+        )
+
+    def test_additional_repos_from_dict(self) -> None:
+        """_server_config_from_dict loads additional_repos."""
+        data = {
+            "url": "http://test",
+            "additional_repos": "infra:https://github.com/org/infra",
+        }
+        cfg = _server_config_from_dict(data)
+        assert cfg.additional_repos == "infra:https://github.com/org/infra"
+
+    def test_additional_repos_non_string_raises(self) -> None:
+        """Non-string additional_repos value raises ValueError."""
+        data = {"url": "http://test", "additional_repos": 42}
+        with pytest.raises(ValueError, match=r"additional_repos.*must be a string"):
+            _server_config_from_dict(data)
+
+
 class TestServerConfigFromDictTypeValidation:
     """Type validation for peer-analysis fields in _server_config_from_dict."""
 

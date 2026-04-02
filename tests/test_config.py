@@ -9,6 +9,7 @@ from jenkins_job_insight.config import (
     Settings,
     _resolve_jira_auth,
     get_settings,
+    parse_additional_repos,
     parse_peer_configs,
 )
 
@@ -328,6 +329,66 @@ class TestParsePeerConfigs:
         """Trailing comma results in empty entry ValueError."""
         with pytest.raises(ValueError, match="Empty entry"):
             parse_peer_configs("claude:opus,")
+
+
+class TestParseAdditionalRepos:
+    """Tests for parse_additional_repos function."""
+
+    def test_empty_string_returns_empty(self) -> None:
+        assert parse_additional_repos("") == []
+
+    def test_whitespace_returns_empty(self) -> None:
+        assert parse_additional_repos("   ") == []
+
+    def test_single_repo(self) -> None:
+        result = parse_additional_repos("infra:https://github.com/org/infra")
+        assert result == [{"name": "infra", "url": "https://github.com/org/infra"}]
+
+    def test_multiple_repos(self) -> None:
+        result = parse_additional_repos(
+            "infra:https://github.com/org/infra,product:https://github.com/org/product"
+        )
+        assert len(result) == 2
+        assert result[0] == {"name": "infra", "url": "https://github.com/org/infra"}
+        assert result[1] == {"name": "product", "url": "https://github.com/org/product"}
+
+    def test_whitespace_trimmed(self) -> None:
+        result = parse_additional_repos("  infra : https://github.com/org/infra  ")
+        assert result == [{"name": "infra", "url": "https://github.com/org/infra"}]
+
+    def test_empty_entry_raises(self) -> None:
+        with pytest.raises(ValueError, match="Empty entry"):
+            parse_additional_repos(
+                "infra:https://github.com/org/infra,,product:https://github.com/org/product"
+            )
+
+    def test_missing_colon_raises(self) -> None:
+        with pytest.raises(ValueError, match="expected 'name:url'"):
+            parse_additional_repos("just-a-name-no-url")
+
+    def test_empty_name_raises(self) -> None:
+        with pytest.raises(ValueError, match="Empty name"):
+            parse_additional_repos(":https://github.com/org/infra")
+
+    def test_empty_url_raises(self) -> None:
+        with pytest.raises(ValueError, match="Empty URL"):
+            parse_additional_repos("infra:")
+
+    def test_duplicate_names_rejected(self) -> None:
+        """Duplicate names in additional repos env var raise ValueError."""
+        with pytest.raises(ValueError, match="Duplicate"):
+            parse_additional_repos(
+                "infra:https://github.com/org/a,infra:https://github.com/org/b"
+            )
+
+    def test_settings_loads_additional_repos(self) -> None:
+        with patch.dict(
+            os.environ,
+            _build_env(ADDITIONAL_REPOS="infra:https://github.com/org/infra"),
+            clear=True,
+        ):
+            settings = Settings(_env_file=None)
+            assert settings.additional_repos == "infra:https://github.com/org/infra"
 
 
 class TestPeerSettingsFields:

@@ -41,6 +41,42 @@ def parse_peer_configs(raw: str) -> list[dict]:
     return result
 
 
+def parse_additional_repos(raw: str) -> list[dict]:
+    """Parse 'name:url,name:url' into list of dicts.
+
+    Raises ValueError on malformed input. Empty string returns [].
+    """
+    if not raw or not raw.strip():
+        return []
+    result = []
+    for i, entry in enumerate(raw.split(",")):
+        entry = entry.strip()
+        if not entry:
+            raise ValueError(
+                f"Empty entry at position {i + 1} in additional repos: '{raw}'"
+            )
+        if ":" not in entry:
+            raise ValueError(
+                f"Invalid additional repo at position {i + 1}: '{entry}' (expected 'name:url')"
+            )
+        name, url = entry.split(":", 1)
+        name, url = name.strip(), url.strip()
+        if not name:
+            raise ValueError(f"Empty name at position {i + 1}: '{entry}'")
+        if not url:
+            raise ValueError(f"Empty URL at position {i + 1}: '{entry}'")
+        result.append({"name": name, "url": url})
+
+    names = [r["name"] for r in result]
+    dupes = [n for n in names if names.count(n) > 1]
+    if dupes:
+        raise ValueError(
+            f"Duplicate additional repo names: {', '.join(sorted(set(dupes)))}"
+        )
+
+    return result
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
@@ -89,6 +125,9 @@ class Settings(BaseSettings):
     # Peer analysis configuration
     peer_ai_configs: str = ""  # "provider:model,provider:model" format
     peer_analysis_max_rounds: int = Field(default=3, ge=1, le=10)
+
+    # Additional repositories for AI analysis context
+    additional_repos: str = ""  # "name:url,name:url" format
 
     # Jenkins artifacts configuration
     jenkins_artifacts_max_size_mb: int = Field(default=500, gt=0)

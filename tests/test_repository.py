@@ -4,8 +4,9 @@ from unittest.mock import MagicMock, patch
 
 import git.exc
 import pytest
+from git.exc import GitCommandError
 
-from jenkins_job_insight.repository import RepositoryManager
+from jenkins_job_insight.repository import RepositoryManager, repo_name_from_url
 
 
 class TestRepositoryManager:
@@ -147,6 +148,20 @@ class TestRepositoryManager:
         manager.cleanup()
 
     @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_rejects_file_url(self, _mock_repo: MagicMock) -> None:
+        """Test that clone rejects file:// URLs."""
+        manager = RepositoryManager()
+        with pytest.raises(ValueError, match="Only https:// and git://"):
+            manager.clone("file:///etc/passwd")
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_rejects_ssh_url(self, _mock_repo: MagicMock) -> None:
+        """Test that clone rejects ssh:// URLs."""
+        manager = RepositoryManager()
+        with pytest.raises(ValueError, match="Only https:// and git://"):
+            manager.clone("ssh://git@github.com/org/repo")
+
+    @patch("jenkins_job_insight.repository.Repo")
     def test_clone_real_failure_handling(self, mock_repo: MagicMock) -> None:
         """Test that clone raises error for invalid repository."""
         mock_repo.clone_from.side_effect = git.exc.GitCommandError("clone", 128)
@@ -157,3 +172,380 @@ class TestRepositoryManager:
 
         # Even on failure, cleanup should work
         manager.cleanup()
+
+
+class TestCloneInto:
+    """Tests for RepositoryManager.clone_into."""
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_into_creates_directory(self, mock_repo: MagicMock, tmp_path) -> None:
+        """Test that clone_into creates the target directory and clones."""
+        manager = RepositoryManager()
+        target = tmp_path / "my-repo"
+        result = manager.clone_into("https://github.com/org/repo", target, depth=1)
+        assert result == target
+        assert target.exists()
+        mock_repo.clone_from.assert_called_once_with(
+            "https://github.com/org/repo", target, depth=1
+        )
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_into_not_tracked_for_cleanup(
+        self, _mock_repo: MagicMock, tmp_path
+    ) -> None:
+        """Test that clone_into does NOT add directory to temp_dirs."""
+        manager = RepositoryManager()
+        target = tmp_path / "my-repo"
+        manager.clone_into("https://github.com/org/repo", target)
+        assert target not in manager.temp_dirs
+
+    def test_clone_into_rejects_file_url(self, tmp_path) -> None:
+        """Test that clone_into rejects file:// URLs."""
+        manager = RepositoryManager()
+        with pytest.raises(ValueError, match="Only https:// and git://"):
+            manager.clone_into("file:///etc/passwd", tmp_path / "repo")
+
+    def test_clone_into_rejects_ssh_url(self, tmp_path) -> None:
+        """Test that clone_into rejects ssh:// URLs."""
+        manager = RepositoryManager()
+        with pytest.raises(ValueError, match="Only https:// and git://"):
+            manager.clone_into("ssh://git@github.com/org/repo", tmp_path / "repo")
+
+
+class TestCloneWithSslRetry:
+    """Tests for SSL certificate retry logic."""
+
+    def test_clone_into_retries_on_ssl_error(self, tmp_path) -> None:
+        """clone_into retries with GIT_SSL_NO_VERIFY on cert failure."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = [
+                GitCommandError(
+                    "git clone",
+                    128,
+                    stderr="server verification failed: certificate signer not trusted",
+                ),
+                MagicMock(),
+            ]
+            target = tmp_path / "repo"
+            target.mkdir()
+            manager.clone_into("https://example.com/repo", target)
+            assert mock_clone.call_count == 2
+            _, kwargs = mock_clone.call_args
+            assert kwargs.get("env", {}).get("GIT_SSL_NO_VERIFY") == "1"
+
+    def test_clone_into_does_not_retry_on_other_errors(self, tmp_path) -> None:
+        """Non-SSL errors are not retried."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = GitCommandError(
+                "git clone", 128, stderr="repository not found"
+            )
+            with pytest.raises(GitCommandError):
+                manager.clone_into("https://example.com/repo", tmp_path / "repo")
+            assert mock_clone.call_count == 1
+
+    def test_clone_into_succeeds_without_retry(self, tmp_path) -> None:
+        """Successful clone doesn't trigger retry."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.return_value = MagicMock()
+            target = tmp_path / "repo"
+            target.mkdir()
+            manager.clone_into("https://example.com/repo", target)
+            assert mock_clone.call_count == 1
+
+    def test_clone_retries_on_ssl_error(self, tmp_path) -> None:
+        """clone() retries with GIT_SSL_NO_VERIFY on SSL cert failure."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = [
+                GitCommandError(
+                    "git clone",
+                    128,
+                    stderr="SSL certificate problem: unable to get local issuer certificate",
+                ),
+                MagicMock(),
+            ]
+            manager.clone("https://example.com/repo")
+            assert mock_clone.call_count == 2
+            _, kwargs = mock_clone.call_args
+            assert kwargs.get("env", {}).get("GIT_SSL_NO_VERIFY") == "1"
+        manager.cleanup()
+
+    def test_clone_does_not_retry_on_other_errors(self) -> None:
+        """clone() non-SSL errors are not retried."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = GitCommandError(
+                "git clone", 128, stderr="repository not found"
+            )
+            with pytest.raises(GitCommandError):
+                manager.clone("https://example.com/repo")
+            assert mock_clone.call_count == 1
+        manager.cleanup()
+
+    def test_clone_retries_on_certificate_keyword(self) -> None:
+        """clone() retries when stderr contains 'certificate'."""
+        manager = RepositoryManager()
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = [
+                GitCommandError(
+                    "git clone",
+                    128,
+                    stderr="fatal: unable to access: certificate verify failed",
+                ),
+                MagicMock(),
+            ]
+            manager.clone("https://example.com/repo")
+            assert mock_clone.call_count == 2
+        manager.cleanup()
+
+
+class TestCreateWorkspace:
+    """Tests for RepositoryManager.create_workspace."""
+
+    def test_create_workspace_returns_path(self) -> None:
+        """create_workspace returns a Path under base_path."""
+        manager = RepositoryManager()
+        workspace = manager.create_workspace()
+        assert workspace.exists()
+        assert workspace.parent == manager.base_path
+        assert "workspace-" in workspace.name
+        manager.cleanup()
+
+    def test_create_workspace_tracked_for_cleanup(self) -> None:
+        """create_workspace adds path to temp_dirs."""
+        manager = RepositoryManager()
+        workspace = manager.create_workspace()
+        assert workspace in manager.temp_dirs
+        manager.cleanup()
+        assert not workspace.exists()
+
+
+class TestRepoNameFromUrl:
+    """Tests for the repo_name_from_url utility function."""
+
+    def test_https_url_with_git_suffix(self) -> None:
+        """Extract repo name from HTTPS URL ending in .git."""
+        assert repo_name_from_url("https://github.com/org/my-repo.git") == "my-repo"
+
+    def test_https_url_without_git_suffix(self) -> None:
+        """Extract repo name from HTTPS URL without .git."""
+        assert repo_name_from_url("https://github.com/org/my-repo") == "my-repo"
+
+    def test_url_with_trailing_slash(self) -> None:
+        """Strip trailing slash before extracting."""
+        assert repo_name_from_url("https://github.com/org/my-repo/") == "my-repo"
+
+    def test_url_with_trailing_slash_and_git(self) -> None:
+        """Strip trailing slash and .git."""
+        assert repo_name_from_url("https://github.com/org/my-repo.git/") == "my-repo"
+
+    def test_git_protocol_url(self) -> None:
+        """Extract from git:// URL."""
+        assert repo_name_from_url("git://github.com/org/my-repo.git") == "my-repo"
+
+    def test_preserves_git_in_middle(self) -> None:
+        """Preserve .git when it appears in the middle of the name."""
+        assert (
+            repo_name_from_url("https://github.com/org/my.git-tools.git")
+            == "my.git-tools"
+        )
+
+    def test_preserves_git_in_middle_no_suffix(self) -> None:
+        """Preserve .git in middle when there is no trailing .git suffix."""
+        assert (
+            repo_name_from_url("https://github.com/org/my.git-tools") == "my.git-tools"
+        )
+
+    def test_pydantic_httpurl(self) -> None:
+        """Works with pydantic HttpUrl objects."""
+        from pydantic import HttpUrl
+
+        url = HttpUrl("https://github.com/org/my-repo.git")
+        assert repo_name_from_url(url) == "my-repo"
+
+
+class TestDeriveTestRepoName:
+    """Tests for derive_test_repo_name: name collision detection."""
+
+    def test_no_collision(self) -> None:
+        """When no additional repos, returns derived name from URL."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+
+        name = derive_test_repo_name("https://github.com/org/my-tests.git", [])
+        assert name == "my-tests"
+
+    def test_collision_falls_back(self) -> None:
+        """When derived name collides with an additional repo, returns 'tests-repo-1'."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+        from jenkins_job_insight.models import AdditionalRepo
+
+        additional = [
+            AdditionalRepo.model_validate(
+                {"name": "my-tests", "url": "https://github.com/org/my-tests"}
+            ),
+        ]
+        name = derive_test_repo_name("https://github.com/org/my-tests.git", additional)
+        assert name == "tests-repo-1"
+
+    def test_no_collision_different_name(self) -> None:
+        """No collision when additional repo has a different name."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+        from jenkins_job_insight.models import AdditionalRepo
+
+        additional = [
+            AdditionalRepo.model_validate(
+                {"name": "infra", "url": "https://github.com/org/infra"}
+            ),
+        ]
+        name = derive_test_repo_name("https://github.com/org/my-tests.git", additional)
+        assert name == "my-tests"
+
+    def test_empty_additional_repos(self) -> None:
+        """Empty additional repos list causes no collision."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+
+        name = derive_test_repo_name("https://github.com/org/repo", [])
+        assert name == "repo"
+
+    def test_none_additional_repos(self) -> None:
+        """None additional repos list causes no collision."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+
+        name = derive_test_repo_name("https://github.com/org/repo", None)
+        assert name == "repo"
+
+    def test_fallback_also_avoids_collision(self) -> None:
+        """Fallback name avoids collision with 'tests-repo-1' too."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+        from jenkins_job_insight.models import AdditionalRepo
+
+        repos = [
+            AdditionalRepo.model_validate(
+                {"name": "my-repo", "url": "https://github.com/org/my-repo"}
+            ),
+            AdditionalRepo.model_validate(
+                {"name": "tests-repo-1", "url": "https://github.com/org/other"}
+            ),
+        ]
+        result = derive_test_repo_name("https://github.com/org/my-repo", repos)
+        assert result != "my-repo"
+        assert result != "tests-repo-1"
+        assert result.startswith("tests-repo-")
+
+    def test_reserved_name_falls_back(self) -> None:
+        """Test repo URL with reserved basename gets a fallback name."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+
+        result = derive_test_repo_name("https://github.com/org/build-artifacts", [])
+        assert result != "build-artifacts"
+        assert result.startswith("tests-repo-")
+
+    def test_reserved_name_falls_back_with_none_additional(self) -> None:
+        """Reserved name is blocked even when additional_repos is None."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+
+        result = derive_test_repo_name("https://github.com/org/build-artifacts", None)
+        assert result != "build-artifacts"
+        assert result.startswith("tests-repo-")
+
+    def test_uuid_fallback_logs_warning(self) -> None:
+        """When all 99 numeric candidates are taken, UUID fallback logs a warning."""
+        from jenkins_job_insight.repository import derive_test_repo_name
+        from jenkins_job_insight.models import AdditionalRepo
+
+        # Create additional repos that collide with the base name and all 99 numeric fallbacks
+        repos = [
+            AdditionalRepo.model_validate(
+                {"name": "my-repo", "url": "https://github.com/org/my-repo"}
+            ),
+        ]
+        for i in range(1, 100):
+            repos.append(
+                AdditionalRepo.model_validate(
+                    {"name": f"tests-repo-{i}", "url": f"https://github.com/org/r{i}"}
+                ),
+            )
+
+        with patch("jenkins_job_insight.repository.logger") as mock_logger:
+            result = derive_test_repo_name("https://github.com/org/my-repo", repos)
+
+        assert result.startswith("tests-repo-")
+        # Should NOT match tests-repo-N where N is 1..99
+        assert result not in {f"tests-repo-{i}" for i in range(1, 100)}
+        mock_logger.warning.assert_called_once()
+        assert "exhausted" in mock_logger.warning.call_args[0][0].lower()
+
+
+class TestCloneWithSslRetryCleanup:
+    """Tests for Finding 2: partial clone cleanup before SSL retry."""
+
+    def test_partial_clone_cleaned_before_retry(self, tmp_path) -> None:
+        """After a failed SSL clone, the target dir is cleaned before retry."""
+        manager = RepositoryManager()
+        target = tmp_path / "repo"
+        target.mkdir()
+        # Create a partial file in the target to simulate partial clone
+        partial_file = target / "partial-object"
+        partial_file.write_text("partial data")
+
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = [
+                GitCommandError(
+                    "git clone",
+                    128,
+                    stderr="server verification failed: certificate signer not trusted",
+                ),
+                MagicMock(),
+            ]
+            manager.clone_into("https://example.com/repo", target)
+
+        # The partial file should have been removed before the retry
+        assert not partial_file.exists()
+        # Target dir should still exist (recreated for the retry)
+        assert target.exists()
+
+
+class TestRedactUrl:
+    """Tests for _redact_url credential stripping."""
+
+    def test_no_credentials(self) -> None:
+        """URL without credentials is returned unchanged."""
+        from jenkins_job_insight.repository import _redact_url
+
+        assert (
+            _redact_url("https://github.com/org/repo") == "https://github.com/org/repo"
+        )
+
+    def test_username_and_password_redacted(self) -> None:
+        """Username and password are replaced with ***."""
+        from jenkins_job_insight.repository import _redact_url
+
+        result = _redact_url("https://user:pass@github.com/org/repo")
+        assert "user" not in result
+        assert "pass" not in result
+        assert "***@github.com" in result
+
+    def test_username_only_redacted(self) -> None:
+        """Username-only auth is redacted."""
+        from jenkins_job_insight.repository import _redact_url
+
+        result = _redact_url("https://token@github.com/org/repo")
+        assert "token" not in result
+        assert "***@github.com" in result
+
+    def test_preserves_port(self) -> None:
+        """Port is preserved when credentials are redacted."""
+        from jenkins_job_insight.repository import _redact_url
+
+        result = _redact_url("https://user:pass@github.com:8443/org/repo")
+        assert ":8443" in result
+        assert "user" not in result
+
+    def test_git_protocol(self) -> None:
+        """git:// URLs without credentials are unchanged."""
+        from jenkins_job_insight.repository import _redact_url
+
+        assert _redact_url("git://github.com/org/repo") == "git://github.com/org/repo"

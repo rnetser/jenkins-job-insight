@@ -8,6 +8,7 @@ import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, Coroutine
 from xml.etree.ElementTree import ParseError
 
 import httpx
@@ -20,6 +21,8 @@ from simple_logger.logger import get_logger
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
+    clone_additional_repos,
+    resolve_additional_repos,
     analyze_failure_group,
     analyze_job,
     format_exception_with_type,
@@ -58,7 +61,7 @@ from jenkins_job_insight.xml_enrichment import (
     build_enriched_xml,
     extract_test_failures,
 )
-from jenkins_job_insight.repository import RepositoryManager
+from jenkins_job_insight.repository import RepositoryManager, derive_test_repo_name
 from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
     get_ai_configs,
@@ -238,6 +241,9 @@ def _reconstruct_from_params(
             params["peer_ai_configs"] if "peer_ai_configs" in params else []
         ),
         peer_analysis_max_rounds=params.get("peer_analysis_max_rounds", 3),
+        additional_repos=(
+            params["additional_repos"] if "additional_repos" in params else None
+        ),
     )
     # Build Settings from env defaults, then layer stored overrides
     base_settings = get_settings()
@@ -293,6 +299,25 @@ def _reconstruct_from_params(
 _background_tasks: set[asyncio.Task] = set()
 
 
+async def _preserve_request_params(job_id: str, result_data: dict) -> None:
+    """Copy ``request_params`` from the stored result into *result_data*.
+
+    The initial ``save_result`` persists ``request_params`` (ai_provider,
+    ai_model, peer_ai_configs, etc.) but the ``AnalysisResult`` model dump
+    produced when analysis finishes does not include that key.  Without this
+    merge the params would be silently lost when ``update_status`` overwrites
+    ``result_json``.
+
+    Args:
+        job_id: The analysis job identifier.
+        result_data: Mutable dict that will be written to ``result_json``.
+            Modified in place to add ``request_params`` when available.
+    """
+    stored = await get_result(job_id, strip_sensitive=False)
+    if stored and stored.get("result") and "request_params" in stored["result"]:
+        result_data["request_params"] = stored["result"]["request_params"]
+
+
 async def _fail_resumed_waiting_job(job_id: str, result_data: dict, error: str) -> None:
     """Mark a resumed waiting job as failed with a standard payload.
 
@@ -301,15 +326,14 @@ async def _fail_resumed_waiting_job(job_id: str, result_data: dict, error: str) 
         result_data: The stored result data dict for the job.
         error: Human-readable error message.
     """
-    await storage.update_status(
-        job_id,
-        "failed",
-        {
-            "job_name": result_data.get("job_name", ""),
-            "build_number": result_data.get("build_number", 0),
-            "error": error,
-        },
-    )
+    fail_data = {
+        "job_name": result_data.get("job_name", ""),
+        "build_number": result_data.get("build_number", 0),
+        "error": error,
+    }
+    if "request_params" in result_data:
+        fail_data["request_params"] = result_data["request_params"]
+    await storage.update_status(job_id, "failed", fail_data)
 
 
 async def _resume_waiting_jobs(waiting_jobs: list[dict]) -> None:
@@ -587,6 +611,7 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
     #   tests_repo_url   - HttpUrl vs str type mismatch; resolved in endpoint code
     #   ai_provider      - resolved + validated by _resolve_ai_config()
     #   ai_model         - resolved + validated by _resolve_ai_config()
+    #   additional_repos - list vs str type mismatch; resolved by resolve_additional_repos()
     direct_fields = [
         "jira_url",
         "jira_email",
@@ -881,6 +906,7 @@ async def process_analysis_with_id(
             f"process_analysis_with_id: saving completed result, job_id={job_id}"
         )
         result_data = result.model_dump(mode="json")
+        await _preserve_request_params(job_id, result_data)
 
         # Save to storage — do NOT persist base_url / result_url as they are
         # request-derived and re-generated on every GET to avoid host-header
@@ -908,15 +934,55 @@ async def process_analysis_with_id(
     except Exception as e:
         logger.exception(f"Analysis failed for job {job_id}")
         error_detail = format_exception_with_type(e)
-        await update_status(
-            job_id,
-            "failed",
-            {
-                "job_name": body.job_name,
-                "build_number": body.build_number,
-                "error": error_detail,
-            },
-        )
+        fail_data: dict = {
+            "job_name": body.job_name,
+            "build_number": body.build_number,
+            "error": error_detail,
+        }
+        await _preserve_request_params(job_id, fail_data)
+        await update_status(job_id, "failed", fail_data)
+
+
+def _build_base_request_params(
+    ai_provider: str,
+    ai_model: str,
+    peer_ai_configs_resolved: list | None = None,
+    *,
+    tests_repo_url: str = "",
+    additional_repos: list | None = None,
+) -> dict:
+    """Serialize the common request parameters shared by all analysis endpoints.
+
+    Captures the AI configuration, peer configs, tests repo, and additional
+    repos.  Callers pass the **resolved** (effective) values so that env-var
+    and config-file defaults are persisted, not just request-body values.
+
+    Args:
+        ai_provider: Resolved AI provider name.
+        ai_model: Resolved AI model name.
+        peer_ai_configs_resolved: Resolved peer AI configs (already validated).
+        tests_repo_url: Effective tests repo URL (already resolved from
+            request body / env / config).
+        additional_repos: Effective additional repos list (already resolved).
+
+    Returns:
+        Dict of serializable base request parameters.
+    """
+    return {
+        "ai_provider": ai_provider,
+        "ai_model": ai_model,
+        "peer_ai_configs": [
+            c.model_dump() if hasattr(c, "model_dump") else c
+            for c in (peer_ai_configs_resolved or [])
+        ],
+        "additional_repos": [
+            ar.model_dump(mode="json") if hasattr(ar, "model_dump") else ar
+            for ar in additional_repos
+        ]
+        if additional_repos is not None
+        else None,
+        "tests_repo_url": tests_repo_url,
+    }
 
 
 def _build_request_params(
@@ -940,50 +1006,54 @@ def _build_request_params(
     Returns:
         Dict of serializable request parameters.
     """
-    params = {
-        "ai_provider": ai_provider,
-        "ai_model": ai_model,
-        "jenkins_url": merged.jenkins_url,
-        "jenkins_user": merged.jenkins_user,
-        "jenkins_password": merged.jenkins_password,
-        "jenkins_ssl_verify": merged.jenkins_ssl_verify,
-        "tests_repo_url": (
-            str(body.tests_repo_url)
-            if body.tests_repo_url is not None
-            else str(merged.tests_repo_url)
-            if merged.tests_repo_url
-            else ""
-        ),
-        "wait_for_completion": merged.wait_for_completion,
-        "poll_interval_minutes": merged.poll_interval_minutes,
-        "max_wait_minutes": merged.max_wait_minutes,
-        "enable_jira": body.enable_jira
-        if body.enable_jira is not None
-        else merged.enable_jira,
-        "jira_url": merged.jira_url or "",
-        "jira_email": merged.jira_email or "",
-        "jira_api_token": merged.jira_api_token.get_secret_value()
-        if merged.jira_api_token
-        else "",
-        "jira_pat": merged.jira_pat.get_secret_value() if merged.jira_pat else "",
-        "jira_project_key": merged.jira_project_key or "",
-        "jira_ssl_verify": merged.jira_ssl_verify,
-        "jira_max_results": merged.jira_max_results,
-        "github_token": merged.github_token.get_secret_value()
-        if merged.github_token
-        else "",
-        "ai_cli_timeout": merged.ai_cli_timeout,
-        "jenkins_artifacts_max_size_mb": merged.jenkins_artifacts_max_size_mb,
-        "jenkins_artifacts_context_lines": merged.jenkins_artifacts_context_lines,
-        "get_job_artifacts": merged.get_job_artifacts,
-        "raw_prompt": body.raw_prompt or "",
-        "peer_ai_configs": [
-            c.model_dump() if hasattr(c, "model_dump") else c
-            for c in (peer_ai_configs_resolved or [])
-        ],
-        "peer_analysis_max_rounds": merged.peer_analysis_max_rounds,
-        "wait_started_at": _time.time(),
-    }
+    resolved_tests_repo = (
+        str(body.tests_repo_url)
+        if body.tests_repo_url is not None
+        else str(merged.tests_repo_url)
+        if merged.tests_repo_url
+        else ""
+    )
+    resolved_additional = resolve_additional_repos(body, merged)
+    params = _build_base_request_params(
+        ai_provider,
+        ai_model,
+        peer_ai_configs_resolved,
+        tests_repo_url=resolved_tests_repo,
+        additional_repos=resolved_additional,
+    )
+    params.update(
+        {
+            "jenkins_url": merged.jenkins_url,
+            "jenkins_user": merged.jenkins_user,
+            "jenkins_password": merged.jenkins_password,
+            "jenkins_ssl_verify": merged.jenkins_ssl_verify,
+            "wait_for_completion": merged.wait_for_completion,
+            "poll_interval_minutes": merged.poll_interval_minutes,
+            "max_wait_minutes": merged.max_wait_minutes,
+            "enable_jira": body.enable_jira
+            if body.enable_jira is not None
+            else merged.enable_jira,
+            "jira_url": merged.jira_url or "",
+            "jira_email": merged.jira_email or "",
+            "jira_api_token": merged.jira_api_token.get_secret_value()
+            if merged.jira_api_token
+            else "",
+            "jira_pat": merged.jira_pat.get_secret_value() if merged.jira_pat else "",
+            "jira_project_key": merged.jira_project_key or "",
+            "jira_ssl_verify": merged.jira_ssl_verify,
+            "jira_max_results": merged.jira_max_results,
+            "github_token": merged.github_token.get_secret_value()
+            if merged.github_token
+            else "",
+            "ai_cli_timeout": merged.ai_cli_timeout,
+            "jenkins_artifacts_max_size_mb": merged.jenkins_artifacts_max_size_mb,
+            "jenkins_artifacts_context_lines": merged.jenkins_artifacts_context_lines,
+            "get_job_artifacts": merged.get_job_artifacts,
+            "raw_prompt": body.raw_prompt or "",
+            "peer_analysis_max_rounds": merged.peer_analysis_max_rounds,
+            "wait_started_at": _time.time(),
+        }
+    )
     return encrypt_sensitive_fields(params)
 
 
@@ -1015,22 +1085,21 @@ async def analyze(
         merged.jenkins_url, body.job_name, body.build_number
     )
     # Save initial pending state before queueing background task.
-    # Only persist request_params for waiting jobs (wait_for_completion),
-    # since those are the only ones that need resumption after restart.
-    # This avoids storing encrypted secrets with no operational use.
+    # request_params is always persisted so the status page can display
+    # AI provider/model and peer configs, and waiting jobs can resume
+    # after a server restart.
     initial_result: dict = {
         "job_name": body.job_name,
         "build_number": body.build_number,
-    }
-    can_resume_wait = merged.wait_for_completion and bool(merged.jenkins_url)
-    if can_resume_wait:
-        initial_result["request_params"] = _build_request_params(
+        "request_params": _build_request_params(
             body,
             merged,
             body.ai_provider or AI_PROVIDER,
             body.ai_model or AI_MODEL,
             peer_ai_configs_resolved=resolved_peers,
-        )
+        ),
+    }
+    can_resume_wait = merged.wait_for_completion and bool(merged.jenkins_url)
     await save_result(
         job_id,
         jenkins_url,
@@ -1098,13 +1167,28 @@ async def analyze_failures(
     # Validate/resolve peer configs early -- fail fast before saving result.
     peer_ai_configs = _validate_peer_configs(body, merged)
 
+    # Resolve repos early so _build_base_request_params captures effective values
+    # (including env-var / config-file defaults, not just request-body values).
+    tests_repo_url = body.tests_repo_url or merged.tests_repo_url
+    additional_repos_list = resolve_additional_repos(body, merged)
+
     job_id = str(uuid.uuid4())
     logger.info(
         f"Direct failure analysis request received with {len(test_failures)} failures (job_id: {job_id})"
     )
 
-    # Save initial pending state so GET /results/{job_id} works immediately
-    await save_result(job_id, "", "pending", None)
+    # Save initial pending state with request_params so GET /results/{job_id}
+    # works immediately and _preserve_request_params can find them later.
+    initial_result: dict = {
+        "request_params": _build_base_request_params(
+            ai_provider,
+            ai_model,
+            peer_ai_configs,
+            tests_repo_url=str(tests_repo_url) if tests_repo_url else "",
+            additional_repos=additional_repos_list or None,
+        ),
+    }
+    await save_result(job_id, "", "pending", initial_result)
 
     # Group failures by error signature for deduplication
     groups: dict[str, list] = defaultdict(list)
@@ -1116,23 +1200,44 @@ async def analyze_failures(
         f"Grouped {len(test_failures)} failures into {len(groups)} unique error signatures"
     )
 
-    # Optionally clone repo for AI code context
+    # Always create a workspace for AI to work in
     repo_manager = RepositoryManager()
-    repo_path = None
     custom_prompt = ""
-    tests_repo_url = body.tests_repo_url or merged.tests_repo_url
+    cloned_repos: dict[str, Path] = {}
     try:
         await update_status(job_id, "running")
 
+        repo_path = repo_manager.create_workspace()
+
         if tests_repo_url:
-            repo_path = await asyncio.to_thread(repo_manager.clone, str(tests_repo_url))
+            try:
+                repo_name = derive_test_repo_name(
+                    str(tests_repo_url), additional_repos_list
+                )
+                logger.info(f"Cloning test repository: {tests_repo_url}")
+                await asyncio.to_thread(
+                    repo_manager.clone_into,
+                    str(tests_repo_url),
+                    repo_path / repo_name,
+                    depth=50,
+                )
+                cloned_repos[repo_name] = repo_path / repo_name
+            except Exception as e:
+                logger.warning(f"Failed to clone test repository: {e}")
+
+        # Clone additional repositories for AI context
+        if additional_repos_list:
+            additional_repos_cloned, repo_path = await clone_additional_repos(
+                repo_manager, additional_repos_list, repo_path
+            )
+            cloned_repos.update(additional_repos_cloned)
 
         custom_prompt = (body.raw_prompt or "").strip()
 
         server_url = _build_internal_server_url()
 
         # Analyze each unique failure group in parallel
-        coroutines = [
+        coroutines: list[Coroutine[Any, Any, Any]] = [
             analyze_failure_group(
                 failures=group_failures,
                 console_context="",
@@ -1145,6 +1250,7 @@ async def analyze_failures(
                 job_id=job_id,
                 peer_ai_configs=peer_ai_configs,
                 peer_analysis_max_rounds=merged.peer_analysis_max_rounds,
+                additional_repos=cloned_repos or None,
             )
             for group_failures in groups.values()
         ]
@@ -1186,6 +1292,7 @@ async def analyze_failures(
         )
 
         result_data = analysis_result.model_dump(mode="json")
+        await _preserve_request_params(job_id, result_data)
         await update_status(job_id, "completed", result_data)
 
         # Populate failure history
@@ -1213,9 +1320,10 @@ async def analyze_failures(
             ai_provider=ai_provider,
             ai_model=ai_model,
         )
-        await update_status(job_id, "failed", analysis_result.model_dump(mode="json"))
-        content = analysis_result.model_dump(mode="json")
-        return JSONResponse(content=_attach_result_links(content, base_url, job_id))
+        fail_data = analysis_result.model_dump(mode="json")
+        await _preserve_request_params(job_id, fail_data)
+        await update_status(job_id, "failed", fail_data)
+        return JSONResponse(content=_attach_result_links(fail_data, base_url, job_id))
 
     finally:
         repo_manager.cleanup()
@@ -1540,7 +1648,7 @@ async def enrich_comments(
     )
 
     # Collect all enrichment tasks for parallel execution
-    tasks: list = []
+    tasks: list[Coroutine[Any, Any, Any]] = []
     task_map: dict[int, tuple[str, dict]] = {}
 
     for c in comments:

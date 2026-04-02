@@ -1867,6 +1867,91 @@ class TestAnalyzePeerFlags:
             assert "must be between 1 and 10" in result.output
 
 
+class TestAnalyzeAdditionalReposFlags:
+    """Tests for --additional-repos CLI flag."""
+
+    _ANALYZE_RESPONSE = MappingProxyType({"status": "queued", "job_id": "j1"})
+
+    def test_additional_repos_flag_parsed_and_sent(self, mock_client):
+        """--additional-repos should parse and send additional_repos list."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--additional-repos",
+                "infra:https://github.com/org/infra,product:https://github.com/org/product",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert kwargs["additional_repos"] == [
+            {"name": "infra", "url": "https://github.com/org/infra"},
+            {"name": "product", "url": "https://github.com/org/product"},
+        ]
+
+    def test_additional_repos_flag_invalid_format_exits(self, mock_client):
+        """--additional-repos with invalid format should print error and exit 1."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                "--job-name",
+                "my-job",
+                "--build-number",
+                "1",
+                "--additional-repos",
+                "invalid-no-colon",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "Error" in result.output
+
+    def test_no_additional_repos_flag_omits_field(self, mock_client):
+        """When --additional-repos is not given, additional_repos is not sent."""
+        mock_client.analyze.return_value = self._ANALYZE_RESPONSE
+        with patch.dict(os.environ, _env_without_analyze_bindings(), clear=True):
+            result = runner.invoke(
+                app,
+                ["analyze", "--job-name", "my-job", "--build-number", "1"],
+            )
+        assert result.exit_code == 0
+        kwargs = mock_client.analyze.call_args[1]
+        assert "additional_repos" not in kwargs
+
+    def test_additional_repos_from_config(self):
+        """Config additional_repos should be used when CLI flag is absent."""
+        cfg = ServerConfig(
+            url="http://localhost:8000",
+            additional_repos="infra:https://github.com/org/infra",
+        )
+        with (
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=cfg,
+            ),
+            patch("jenkins_job_insight.cli.main._get_client") as mock_client_fn,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            client = MagicMock()
+            client.analyze.return_value = self._ANALYZE_RESPONSE
+            mock_client_fn.return_value = client
+            result = runner.invoke(
+                app,
+                ["analyze", "--job-name", "my-job", "--build-number", "1"],
+            )
+            assert result.exit_code == 0
+            kwargs = client.analyze.call_args[1]
+            assert kwargs["additional_repos"] == [
+                {"name": "infra", "url": "https://github.com/org/infra"},
+            ]
+
+
 class TestAnalyzeWaitFlags:
     """Tests for --wait/--no-wait, --poll-interval, --max-wait CLI flags."""
 

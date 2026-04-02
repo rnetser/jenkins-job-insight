@@ -47,6 +47,8 @@ class ServerConfig:
     # Peer analysis
     peers: str = ""  # "provider:model,provider:model" format
     peer_analysis_max_rounds: int = 0  # 0 = not set, use server default
+    # Additional repositories for AI analysis context
+    additional_repos: str = ""  # "name:url,name:url" format
     # Jenkins job monitoring
     wait_for_completion: bool | None = None
     poll_interval_minutes: int = 0  # 0 means use server default
@@ -207,6 +209,8 @@ def _server_config_from_dict(data: dict) -> ServerConfig:
         # Peer analysis
         peers=_validated_str(data, "peers"),
         peer_analysis_max_rounds=_validated_int(data, "peer_analysis_max_rounds"),
+        # Additional repos
+        additional_repos=_validated_str(data, "additional_repos"),
         # Jira
         jira_url=data.get("jira_url", ""),
         jira_email=data.get("jira_email", ""),

@@ -104,6 +104,8 @@ export interface AnalysisResult {
     ai_model: string
     peer_ai_configs?: AiConfig[]
     peer_analysis_max_rounds?: number
+    tests_repo_url?: string
+    additional_repos?: Array<{ name: string; url: string }>
     [key: string]: unknown
   }
 }

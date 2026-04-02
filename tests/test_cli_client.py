@@ -652,6 +652,21 @@ def _parse_analyze_request(request):
     return json.loads(request.content)
 
 
+class TestJJIClientAnalyzeAdditionalRepos:
+    def test_analyze_passes_additional_repos(self):
+        """additional_repos is forwarded in the request body."""
+        repos = [{"name": "infra", "url": "https://github.com/org/infra"}]
+
+        def handler(request):
+            body = _parse_analyze_request(request)
+            assert body["additional_repos"] == repos
+            return httpx.Response(202, json={"status": "queued", "job_id": "x"})
+
+        client = _make_client(handler)
+        result = client.analyze("my-job", 1, additional_repos=repos)
+        assert result["status"] == "queued"
+
+
 class TestJJIClientAnalyzeExtras:
     def test_analyze_with_ai_provider(self):
         def handler(request):

@@ -1,17 +1,139 @@
 """Git repository management for cloning and cleanup."""
 
+from __future__ import annotations
+
 import os
 import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 from git import Repo
+from git.exc import GitCommandError
 from pydantic import HttpUrl
 from simple_logger.logger import get_logger
 
+if TYPE_CHECKING:
+    from jenkins_job_insight.models import AdditionalRepo
+
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+
+RESERVED_REPO_NAMES = frozenset({"build-artifacts"})
+
+
+def _redact_url(url: str) -> str:
+    """Remove userinfo (credentials) from a URL for safe logging."""
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(url)
+    if parsed.username or parsed.password:
+        redacted = parsed._replace(
+            netloc=f"***@{parsed.hostname}" + (f":{parsed.port}" if parsed.port else "")
+        )
+        return urlunparse(redacted)
+    return url
+
+
+def repo_name_from_url(repo_url: str | HttpUrl) -> str:
+    """Extract repository name from a URL for use as a directory name.
+
+    Takes the last path segment and strips the '.git' suffix.
+    E.g., 'https://github.com/org/my-repo.git' -> 'my-repo'
+
+    Args:
+        repo_url: Repository URL (string or HttpUrl).
+
+    Returns:
+        Repository name suitable for use as a subdirectory name.
+    """
+    name = str(repo_url).rstrip("/").split("/")[-1]
+    return name[:-4] if name.endswith(".git") else name
+
+
+def derive_test_repo_name(
+    tests_repo_url: str,
+    additional_repos_list: list[AdditionalRepo] | None,
+) -> str:
+    """Derive test repo subdirectory name, avoiding collisions with additional repos.
+
+    Extracts the repository name from the URL and checks whether it would
+    collide with any additional repo name.  When a collision is detected the
+    function iterates candidate names (``tests-repo-1``, ``tests-repo-2``, ...)
+    until it finds one that does not clash.
+
+    Args:
+        tests_repo_url: URL of the test repository.
+        additional_repos_list: List of additional repo objects (may be None or empty).
+
+    Returns:
+        Safe subdirectory name for the test repo clone.
+    """
+    name = repo_name_from_url(tests_repo_url)
+    if not additional_repos_list:
+        additional_repos_list = []
+
+    additional_names = {ar.name for ar in additional_repos_list}
+    # Also treat reserved names as collisions
+    reserved = additional_names | RESERVED_REPO_NAMES
+    if name not in reserved:
+        return name
+
+    # Collision -- find a unique fallback
+    for suffix in range(1, 100):
+        candidate = f"tests-repo-{suffix}"
+        if candidate not in reserved:
+            logger.warning(
+                f"Test repo directory name '{name}' collides with additional repo name. "
+                f"Using '{candidate}' as fallback."
+            )
+            return candidate
+
+    # Should never reach here with <100 additional repos
+    fallback = f"tests-repo-{uuid.uuid4().hex[:8]}"
+    logger.warning(
+        f"Test repo directory name '{name}' collides with additional repo names. "
+        f"All numeric fallbacks exhausted. Using '{fallback}'."
+    )
+    return fallback
+
+
+def _validate_repo_url(repo_url: str | HttpUrl) -> None:
+    """Validate repository URL scheme to prevent SSRF."""
+    url_str = str(repo_url).lower()
+    if not url_str.startswith(("https://", "git://")):
+        raise ValueError(
+            f"Invalid repository URL scheme. Only https:// and git:// are allowed, got: {repo_url}"
+        )
+
+
+def _clone_with_ssl_retry(repo_url: str, clone_dir: Path, depth: int) -> None:
+    """Clone a repo, retrying without SSL verification on cert errors."""
+    try:
+        Repo.clone_from(repo_url, clone_dir, depth=depth)
+    except GitCommandError as exc:
+        stderr = str(exc)
+        if (
+            "SSL" in stderr
+            or "certificate" in stderr
+            or "server verification failed" in stderr
+        ):
+            logger.warning(
+                f"SSL certificate verification failed for {_redact_url(str(repo_url))}, "
+                "retrying with SSL verification disabled (GIT_SSL_NO_VERIFY=1)"
+            )
+            # Clean up partial clone before retry
+            if clone_dir.exists():
+                shutil.rmtree(clone_dir)
+                clone_dir.mkdir(parents=True, exist_ok=True)
+            Repo.clone_from(
+                repo_url,
+                clone_dir,
+                depth=depth,
+                env={"GIT_SSL_NO_VERIFY": "1"},
+            )
+        else:
+            raise
 
 
 class RepositoryManager:
@@ -38,20 +160,58 @@ class RepositoryManager:
         Raises:
             ValueError: If repo_url uses an unsafe scheme (not https:// or git://).
         """
-        # Validate URL scheme to prevent SSRF and local file access
-        url_str = str(repo_url).lower()
-        if not url_str.startswith(("https://", "git://")):
-            raise ValueError(
-                f"Invalid repository URL scheme. Only https:// and git:// are allowed, got: {repo_url}"
-            )
+        _validate_repo_url(repo_url)
         clone_id = str(uuid.uuid4())[:8]
-        repo_name = str(repo_url).rstrip("/").split("/")[-1].replace(".git", "")
+        repo_name = repo_name_from_url(repo_url)
         clone_dir = self.base_path / f"{repo_name}-{clone_id}"
         clone_dir.mkdir(parents=True, exist_ok=True)
         self.temp_dirs.append(clone_dir)
         logger.info(f"Cloning repository to {clone_dir}")
-        Repo.clone_from(str(repo_url), clone_dir, depth=depth)
+        _clone_with_ssl_retry(str(repo_url), clone_dir, depth)
         return clone_dir
+
+    def clone_into(
+        self, repo_url: str | HttpUrl, target_dir: Path, depth: int = 1
+    ) -> Path:
+        """Clone repository into a specific target directory.
+
+        Unlike clone(), this places the repo at an explicit path instead
+        of auto-generating one.  The target directory is NOT individually
+        tracked for cleanup -- it is expected to live under a workspace
+        directory whose lifecycle is managed by the caller.
+
+        Args:
+            repo_url: URL of the git repository to clone.
+            target_dir: Exact directory to clone into.
+            depth: Number of commits to fetch (default 1 for shallow).
+
+        Returns:
+            Path to the cloned repository (same as target_dir).
+
+        Raises:
+            ValueError: If repo_url uses an unsafe scheme.
+        """
+        _validate_repo_url(repo_url)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Cloning repository into {target_dir}")
+        _clone_with_ssl_retry(str(repo_url), target_dir, depth)
+        return target_dir
+
+    def create_workspace(self) -> Path:
+        """Create a workspace directory for repository clones.
+
+        Both the test repository and additional repositories are cloned
+        as subdirectories of this workspace.
+
+        Returns:
+            Path to the created workspace directory.
+        """
+        workspace_id = str(uuid.uuid4())[:8]
+        workspace_dir = self.base_path / f"workspace-{workspace_id}"
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        self.temp_dirs.append(workspace_dir)
+        logger.info(f"Created workspace directory: {workspace_dir}")
+        return workspace_dir
 
     def cleanup(self) -> None:
         """Remove all cloned repositories."""

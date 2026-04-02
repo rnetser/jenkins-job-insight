@@ -7,7 +7,7 @@ import re
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, Coroutine, NoReturn
 
 from ai_cli_runner import (
     call_ai_cli,
@@ -19,7 +19,7 @@ import jenkins
 from fastapi import HTTPException
 from simple_logger.logger import get_logger
 
-from jenkins_job_insight.config import Settings
+from jenkins_job_insight.config import Settings, parse_additional_repos
 from jenkins_job_insight.jenkins_artifacts import (
     ERROR_PATTERN,
     cleanup_extract_dir,
@@ -29,19 +29,74 @@ from jenkins_job_insight.jenkins import JenkinsClient
 from pydantic import HttpUrl
 
 from jenkins_job_insight.models import (
+    AdditionalRepo,
     AnalysisDetail,
     AnalysisResult,
     AnalyzeRequest,
+    BaseAnalysisRequest,
     ChildJobAnalysis,
     CodeFix,
     FailureAnalysis,
     ProductBugReport,
     TestFailure,
 )
-from jenkins_job_insight.repository import RepositoryManager
+from jenkins_job_insight.repository import (
+    RepositoryManager,
+    derive_test_repo_name,
+)
 from jenkins_job_insight.storage import update_progress_phase
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+
+
+def resolve_additional_repos(
+    request: BaseAnalysisRequest, settings: Settings
+) -> list[AdditionalRepo]:
+    """Resolve additional repos from request or settings.
+
+    Request value takes priority over settings env var.
+    Returns list of AdditionalRepo objects, or empty list.
+    """
+    if request.additional_repos is not None:
+        return request.additional_repos
+
+    parsed = parse_additional_repos(settings.additional_repos)
+    return [AdditionalRepo(**r) for r in parsed] if parsed else []
+
+
+async def clone_additional_repos(
+    repo_manager: RepositoryManager,
+    additional_repos_list: list[AdditionalRepo],
+    repo_path: Path,
+) -> tuple[dict[str, Path], Path]:
+    """Clone additional repositories for AI analysis context.
+
+    Clones all repos as subdirectories of the provided workspace path.
+
+    Args:
+        repo_manager: Repository manager for cloning.
+        additional_repos_list: List of AdditionalRepo objects.
+        repo_path: Workspace path (always provided by caller).
+
+    Returns:
+        Tuple of (cloned repos dict mapping name to path, repo_path).
+    """
+    cloned: dict[str, Path] = {}
+
+    async def _clone_into_subdir(ar: AdditionalRepo) -> None:
+        target = repo_path / ar.name
+        try:
+            await asyncio.to_thread(
+                repo_manager.clone_into, str(ar.url), target, depth=1
+            )
+            cloned[ar.name] = target
+            logger.info(f"Cloned additional repo '{ar.name}' into {target}")
+        except Exception as e:
+            logger.warning(f"Failed to clone additional repo '{ar.name}': {e}")
+
+    await asyncio.gather(*[_clone_into_subdir(ar) for ar in additional_repos_list])
+
+    return cloned, repo_path
 
 
 async def _safe_update_progress(job_id: str | None, phase: str) -> None:
@@ -733,6 +788,8 @@ def _build_prompt_sections(
     repo_path: Path | None,
     server_url: str,
     job_id: str,
+    *,
+    additional_repos: dict[str, Path] | None = None,
 ) -> tuple[str, str, str, str]:
     """Build common prompt sections used across all analysis flows.
 
@@ -746,7 +803,7 @@ def _build_prompt_sections(
     artifacts_section = _build_artifacts_section(artifacts_context)
     history_enabled = bool(server_url and job_id and _QUERY_MD_PATH.exists())
     resources_section = _build_resources_section(
-        repo_path, history_enabled=history_enabled
+        repo_path, additional_repos=additional_repos, history_enabled=history_enabled
     )
 
     if not _QUERY_MD_PATH.exists():
@@ -769,19 +826,25 @@ def _build_prompt_sections(
             f"Pointing AI to FAILURE_HISTORY_ANALYSIS.md with server_url={server_url}"
         )
         repo_history_prompt = ""
-        if repo_path:
-            repo_history_path = repo_path / JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME
-            logger.debug(
-                f"Repo history analysis prompt exists: {repo_history_path.exists()}"
-            )
-            if repo_history_path.exists():
-                logger.info(
-                    f"Found repo-level history analysis prompt at {repo_history_path}"
+        # Scan cloned repos (not workspace root) for history prompt
+        if additional_repos:
+            for _name, _path in additional_repos.items():
+                repo_history_path = _path / JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME
+                logger.debug(
+                    f"Repo history analysis prompt exists at {_path}: {repo_history_path.exists()}"
                 )
-                repo_history_prompt = f"""
+                if repo_history_path.exists():
+                    logger.info(
+                        f"Found repo-level history analysis prompt at {repo_history_path}"
+                    )
+                    repo_history_prompt += f"""
 Also read and follow the project-specific history analysis instructions at {repo_history_path}.
 These instructions complement (do not replace) the main instructions above.
 """
+        elif repo_path:
+            logger.debug(
+                "No additional repos provided, skipping repo history prompt check"
+            )
         else:
             logger.debug("No repo path provided, skipping repo history prompt check")
 
@@ -797,7 +860,10 @@ These instructions are NOT optional. You MUST complete ALL steps for EVERY test.
 
 
 def _build_resources_section(
-    repo_path: Path | None, *, history_enabled: bool = False
+    repo_path: Path | None,
+    *,
+    additional_repos: dict[str, Path] | None = None,
+    history_enabled: bool = False,
 ) -> str:
     """Build a section telling the AI about available resources.
 
@@ -805,7 +871,8 @@ def _build_resources_section(
     AI what tools and files are available so it can access them on its own.
 
     Args:
-        repo_path: Path to cloned test repository, or None.
+        repo_path: Path to workspace root (all repos are subdirectories), or None.
+        additional_repos: Mapping of repo name to cloned path.
         history_enabled: Whether failure history analysis is active.
             When False, the history prompt file is not advertised.
 
@@ -815,28 +882,36 @@ def _build_resources_section(
     if not repo_path:
         return ""
 
-    is_git_repo = (repo_path / ".git").exists()
     resources: list[str] = []
-    if is_git_repo:
-        resources.append(
-            f"- Git repository at {repo_path} — you can run git commands (git log, git diff, etc.)"
-        )
-    else:
-        resources.append(
-            f"- Workspace at {repo_path} — inspect files directly; git commands are not available here"
-        )
 
-    job_insight_prompt = repo_path / JOB_INSIGHT_PROMPT_FILENAME
-    if job_insight_prompt.exists():
-        resources.append(
-            f"- Project-specific analysis instructions at {job_insight_prompt} — read and follow them"
-        )
+    # Workspace directory
+    resources.append(
+        f"- Workspace at {repo_path} — all repositories are cloned as subdirectories here"
+    )
 
-    repo_history_prompt = repo_path / JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME
-    if history_enabled and repo_history_prompt.exists():
-        resources.append(
-            f"- Project-specific history analysis instructions at {repo_history_prompt} — read and follow alongside the main history analysis instructions"
-        )
+    # Advertise each cloned repo
+    if additional_repos:
+        for name, path in additional_repos.items():
+            is_git = (path / ".git").exists()
+            if is_git:
+                resources.append(
+                    f"- Repository '{name}' at {path} — explore source code, run git commands"
+                )
+            else:
+                resources.append(
+                    f"- Directory '{name}' at {path} — inspect files directly"
+                )
+            # Check for project-specific instructions in each repo
+            job_insight_prompt = path / JOB_INSIGHT_PROMPT_FILENAME
+            if job_insight_prompt.exists():
+                resources.append(
+                    f"- Project-specific analysis instructions at {job_insight_prompt} — read and follow them"
+                )
+            repo_history_prompt = path / JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME
+            if history_enabled and repo_history_prompt.exists():
+                resources.append(
+                    f"- Project-specific history analysis instructions at {repo_history_prompt} — read and follow alongside the main history analysis instructions"
+                )
 
     if resources:
         return "\n\nAVAILABLE RESOURCES:\n" + "\n".join(resources) + "\n"
@@ -856,6 +931,7 @@ async def _run_single_ai_analysis(
     artifacts_context: str,
     server_url: str,
     job_id: str,
+    additional_repos: dict[str, Path] | None = None,
 ) -> tuple[AnalysisDetail, str]:
     """Run single-AI analysis on a failure group. Returns (parsed_analysis, error_signature).
 
@@ -883,11 +959,19 @@ async def _run_single_ai_analysis(
 
     custom_prompt_section, artifacts_section, resources_section, query_section = (
         _build_prompt_sections(
-            custom_prompt, artifacts_context, repo_path, server_url, job_id
+            custom_prompt,
+            artifacts_context,
+            repo_path,
+            server_url,
+            job_id,
+            additional_repos=additional_repos,
         )
     )
 
-    has_git_repo = bool(repo_path and (repo_path / ".git").exists())
+    has_git_repo = bool(
+        additional_repos
+        and any((p / ".git").exists() for p in additional_repos.values())
+    )
     repo_sentence = (
         "You have access to the test repository. Explore the code to understand the failure."
         if has_git_repo
@@ -958,6 +1042,7 @@ async def analyze_failure_group(
     peer_ai_configs: list | None = None,
     peer_analysis_max_rounds: int = 3,
     group_label: str = "",
+    additional_repos: dict[str, Path] | None = None,
 ) -> list[FailureAnalysis]:
     """Analyze a group of failures with the same error signature.
 
@@ -1007,6 +1092,7 @@ async def analyze_failure_group(
             server_url=server_url,
             job_id=job_id,
             group_label=group_label,
+            additional_repos=additional_repos,
         )
 
     parsed, error_signature = await _run_single_ai_analysis(
@@ -1020,6 +1106,7 @@ async def analyze_failure_group(
         artifacts_context=artifacts_context,
         server_url=server_url,
         job_id=job_id,
+        additional_repos=additional_repos,
     )
 
     # Apply the same analysis to all failures in the group.
@@ -1053,6 +1140,7 @@ async def analyze_child_job(
     job_id: str = "",
     peer_ai_configs: list | None = None,
     peer_analysis_max_rounds: int = 3,
+    additional_repos: dict[str, Path] | None = None,
 ) -> ChildJobAnalysis:
     """Analyze a single child job, recursively analyzing its failed children.
 
@@ -1125,7 +1213,7 @@ async def analyze_child_job(
 
     if failed_children:
         # Recursively analyze failed children IN PARALLEL with bounded concurrency
-        child_tasks = [
+        child_tasks: list[Coroutine[Any, Any, Any]] = [
             analyze_child_job(
                 child_name,
                 child_num,
@@ -1143,6 +1231,7 @@ async def analyze_child_job(
                 job_id=job_id,
                 peer_ai_configs=peer_ai_configs,
                 peer_analysis_max_rounds=peer_analysis_max_rounds,
+                additional_repos=additional_repos,
             )
             for child_name, child_num in failed_children
         ]
@@ -1208,7 +1297,7 @@ async def analyze_child_job(
 
         # Analyze each unique failure group in parallel
         total_groups = len(failure_groups)
-        tasks = []
+        tasks: list[Coroutine[Any, Any, Any]] = []
         for group_idx, (_sig, group) in enumerate(failure_groups.items(), 1):
             tasks.append(
                 analyze_failure_group(
@@ -1227,6 +1316,7 @@ async def analyze_child_job(
                     group_label=f"{job_name}:{group_idx}/{total_groups}"
                     if total_groups > 1
                     else "",
+                    additional_repos=additional_repos,
                 )
             )
         group_results = await run_parallel_with_limit(tasks)
@@ -1280,7 +1370,12 @@ async def analyze_child_job(
 
     custom_prompt_section, artifacts_section, resources_section, query_section = (
         _build_prompt_sections(
-            custom_prompt, artifacts_context, repo_path, server_url, job_id
+            custom_prompt,
+            artifacts_context,
+            repo_path,
+            server_url,
+            job_id,
+            additional_repos=additional_repos,
         )
     )
 
@@ -1431,20 +1526,32 @@ async def analyze_job(
         # Use request value if provided, otherwise fall back to settings
         tests_repo_url = request.tests_repo_url or settings.tests_repo_url
         repo_context = ""
-        repo_path: Path | None = None
         custom_prompt = ""
 
         # Use RepositoryManager context for entire analysis (child jobs and main job)
+        cloned_repos: dict[str, Path] = {}
         async with contextlib.AsyncExitStack() as stack:
+            # Resolve additional repos list early so we know if a workspace is needed
+            additional_repos_list = resolve_additional_repos(request, settings)
+
+            repo_manager = RepositoryManager()
+            stack.enter_context(repo_manager)
+            repo_path = repo_manager.create_workspace()
+
             if tests_repo_url:
-                repo_manager = RepositoryManager()
-                stack.enter_context(repo_manager)
                 try:
-                    logger.info(f"Cloning repository: {tests_repo_url}")
-                    repo_path = await asyncio.to_thread(
-                        repo_manager.clone, str(tests_repo_url)
+                    repo_name = derive_test_repo_name(
+                        str(tests_repo_url), additional_repos_list
                     )
-                    repo_context = f"\nRepository cloned from: {tests_repo_url}"
+                    logger.info(f"Cloning test repository: {tests_repo_url}")
+                    await asyncio.to_thread(
+                        repo_manager.clone_into,
+                        str(tests_repo_url),
+                        repo_path / repo_name,
+                        depth=50,
+                    )
+                    cloned_repos[repo_name] = repo_path / repo_name
+                    repo_context = f"\nTest repository cloned from: {tests_repo_url} (at {repo_name}/)"
                 except Exception as e:
                     logger.warning(f"Failed to clone repository: {e}")
                     repo_context = f"\nFailed to clone repo: {e}"
@@ -1453,22 +1560,19 @@ async def analyze_job(
 
             # Make artifacts accessible in the AI working directory
             if extract_path:
-                if repo_path:
-                    # Symlink artifacts into the repo dir so AI can access them
-                    artifacts_link = repo_path / "build-artifacts"
-                    try:
-                        artifacts_link.symlink_to(extract_path)
-                        logger.info(
-                            f"Linked artifacts into workspace: {artifacts_link}"
-                        )
-                    except OSError as exc:
-                        logger.warning(
-                            f"Could not link artifacts into workspace: {exc}"
-                        )
-                else:
-                    # No repo — use artifacts dir as the AI working directory
-                    repo_path = extract_path
-                    logger.info(f"Using artifacts dir as AI workspace: {repo_path}")
+                artifacts_link = repo_path / "build-artifacts"
+                try:
+                    artifacts_link.symlink_to(extract_path)
+                    logger.info(f"Linked artifacts into workspace: {artifacts_link}")
+                except OSError as exc:
+                    logger.warning(f"Could not link artifacts into workspace: {exc}")
+
+            # Clone additional repositories for AI context
+            if additional_repos_list:
+                additional_repos_cloned, repo_path = await clone_additional_repos(
+                    repo_manager, additional_repos_list, repo_path
+                )
+                cloned_repos.update(additional_repos_cloned)
 
             # Pre-flight: verify AI CLI is reachable before spawning parallel tasks
             ok, err = await check_ai_cli_available(
@@ -1490,7 +1594,7 @@ async def analyze_job(
             # Analyze failed child jobs IN PARALLEL with bounded concurrency
             if failed_child_jobs:
                 await _safe_update_progress(progress_job_id, "analyzing_child_jobs")
-                child_tasks = [
+                child_tasks: list[Coroutine[Any, Any, Any]] = [
                     analyze_child_job(
                         job_name=child_name,
                         build_number=child_num,
@@ -1508,6 +1612,7 @@ async def analyze_job(
                         job_id=job_id,
                         peer_ai_configs=peer_ai_configs,
                         peer_analysis_max_rounds=peer_analysis_max_rounds,
+                        additional_repos=cloned_repos or None,
                     )
                     for child_name, child_num in failed_child_jobs
                 ]
@@ -1583,7 +1688,7 @@ async def analyze_job(
 
                 # Analyze each unique failure group in parallel
                 total_groups = len(failure_groups)
-                failure_tasks = []
+                failure_tasks: list[Coroutine[Any, Any, Any]] = []
                 for group_idx, (_sig, group) in enumerate(failure_groups.items(), 1):
                     failure_tasks.append(
                         analyze_failure_group(
@@ -1602,6 +1707,7 @@ async def analyze_job(
                             group_label=f"{group_idx}/{total_groups}"
                             if total_groups > 1
                             else "",
+                            additional_repos=cloned_repos or None,
                         )
                     )
                 group_results = await run_parallel_with_limit(failure_tasks)
@@ -1638,7 +1744,12 @@ async def analyze_job(
                     resources_section,
                     query_section,
                 ) = _build_prompt_sections(
-                    custom_prompt, artifacts_context, repo_path, server_url, job_id
+                    custom_prompt,
+                    artifacts_context,
+                    repo_path,
+                    server_url,
+                    job_id,
+                    additional_repos=cloned_repos or None,
                 )
 
                 prompt = f"""{query_section}
