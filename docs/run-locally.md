@@ -5,7 +5,7 @@ You can bring `jenkins-job-insight` up locally in two ways: by using the package
 ```1:24:pyproject.toml
 [project]
 name = "jenkins-job-insight"
-version = "2.0.0"
+version = "2.1.0"
 description = "Jenkins job insight and analysis tool"
 requires-python = ">=3.12"
 dependencies = [
@@ -71,9 +71,9 @@ If you leave `PORT` unset, the app uses `8000`.
 
 ## Start with the Packaged Entrypoint
 
-The installed `jenkins-job-insight` command is the package entrypoint for the service. It calls the app's `run()` function, which starts `uvicorn` on `0.0.0.0` using the `PORT` environment variable.
+The installed `jenkins-job-insight` command is the package entrypoint for the service. It calls the app's `run()` function, which starts `uvicorn` on `0.0.0.0` using the validated `APP_PORT` value derived from `PORT`. If you set `PORT`, it must be an integer between `1` and `65535`.
 
-```2386:2393:src/jenkins_job_insight/main.py
+```2494:2501:src/jenkins_job_insight/main.py
 def run() -> None:
     """Entry point for the CLI."""
     import uvicorn
@@ -98,7 +98,7 @@ If you prefer to run the ASGI app yourself, start the same app object directly:
 uv run uvicorn jenkins_job_insight.main:app --host 0.0.0.0 --port "$PORT"
 ```
 
-This is the most direct way to run the service if you already work with ASGI apps and want full control over `uvicorn` flags.
+This is the most direct way to run the service if you already work with ASGI apps and want full control over `uvicorn` flags. Keep `--port` aligned with the exported `PORT` value so the app and `uvicorn` agree on the same listening port.
 
 ## Verify the Service
 
@@ -106,7 +106,7 @@ This is the most direct way to run the service if you already work with ASGI app
 
 The health endpoint returns a minimal JSON payload:
 
-```2344:2347:src/jenkins_job_insight/main.py
+```2452:2455:src/jenkins_job_insight/main.py
 @app.get("/health")
 async def health_check() -> dict:
     """Health check endpoint."""
@@ -133,7 +133,7 @@ curl -s "http://localhost:$PORT/openapi.json" | python -m json.tool
 
 The test suite confirms that the generated schema exposes the expected title and version, and that `/docs` is available:
 
-```933:944:tests/test_main.py
+```962:973:tests/test_main.py
 def test_openapi_schema_available(self, test_client) -> None:
     """Test that OpenAPI schema is available."""
     response = test_client.get("/openapi.json")
@@ -156,7 +156,7 @@ Open `http://localhost:$PORT/docs` in your browser.
 
 > **Note:** Browser requests without a `jji_username` cookie are still redirected to `/register`. That route is served by the React frontend, so if the browser lands on `Frontend not built`, run the frontend build commands above. Once the register page loads, enter any username and then reopen `/docs`.
 
-```440:463:src/jenkins_job_insight/main.py
+```464:487:src/jenkins_job_insight/main.py
 class UsernameMiddleware(BaseHTTPMiddleware):
     """Middleware that checks for jji_username cookie and redirects to /register if missing."""
 
@@ -183,7 +183,7 @@ class UsernameMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 ```
 
-```2360:2365:src/jenkins_job_insight/main.py
+```2468:2473:src/jenkins_job_insight/main.py
 def _serve_spa() -> HTMLResponse:
     """Read and serve the React SPA index.html."""
     index_file = _FRONTEND_DIR / "index.html"
@@ -217,3 +217,12 @@ AI_MODEL=your-model-name
 ```
 
 Export those values in your shell before you start the app when you are ready to analyze real Jenkins jobs.
+
+
+## Related Pages
+
+- [Installation](installation.html)
+- [Quickstart](quickstart.html)
+- [Container Deployment](container-deployment.html)
+- [HTML Reports and Dashboard](html-reports-and-dashboard.html)
+- [Troubleshooting](troubleshooting.html)

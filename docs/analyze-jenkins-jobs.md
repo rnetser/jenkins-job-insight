@@ -1,379 +1,516 @@
 # Analyze Jenkins Jobs
 
-`POST /analyze` submits a Jenkins build for analysis as an async job and stores the result so you can revisit it later as JSON or in the web UI.
+`POST /analyze` is the Jenkins-backed entry point in `jenkins-job-insight`. You give JJI a `job_name` and `build_number`, and it creates a stored analysis job that you can follow with `GET /results/{job_id}` or the built-in browser route `/status/{job_id}`.
 
-Most clients use one of these patterns:
-- submit asynchronously, then poll `GET /results/{job_id}`
-- submit asynchronously, then open `/status/{job_id}` in a browser while the job is queued, waiting, or running
-- submit early and let the server wait for the Jenkins build to finish before analysis by leaving `wait_for_completion` enabled
+> **Note:** A Jenkins build that failed can still produce `status: "completed"` if JJI finished analyzing it successfully. In this API, `failed` means the analysis job itself failed.
 
-A completed analysis can represent either:
-- a failing Jenkins build that was analyzed successfully
-- a successful Jenkins build with nothing to analyze
+## Before You Submit
 
-`status: "failed"` means the analysis process failed. It does not simply mean the Jenkins build failed.
+JJI needs two things somewhere in the merged configuration for the request:
 
-## Before you call it
+- AI configuration: `AI_PROVIDER` and `AI_MODEL`, or per-request `ai_provider` and `ai_model`
+- Jenkins connectivity: server defaults or per-request `jenkins_url`, `jenkins_user`, `jenkins_password`, and optionally `jenkins_ssl_verify`
 
-The server needs Jenkins access and an AI provider. The minimum settings shown in `.env.example` are:
+The container example exposes the core environment variables like this:
 
-```dotenv
-JENKINS_URL=https://jenkins.example.com
-JENKINS_USER=your-username
-JENKINS_PASSWORD=your-api-token
-JENKINS_SSL_VERIFY=true
+```73:82:docker-compose.yaml
+      - JENKINS_URL=${JENKINS_URL:-https://jenkins.example.com}
+      - JENKINS_USER=${JENKINS_USER:-your-username}
+      - JENKINS_PASSWORD=${JENKINS_PASSWORD:-your-api-token}
 
-# Choose AI provider (required): "claude", "gemini", or "cursor"
-AI_PROVIDER=claude
-
-# AI model to use (required, applies to any provider)
-# Can also be set per-request in webhook body
-AI_MODEL=your-model-name
+      # ===================
+      # AI CLI Configuration
+      # ===================
+      # AI_PROVIDER: claude, gemini, or cursor
+      - AI_PROVIDER=${AI_PROVIDER:?AI_PROVIDER is required}
+      - AI_MODEL=${AI_MODEL:?AI_MODEL is required}
 ```
 
-Optional defaults in `.env.example` let you add repository context or peer analysis for every request:
+The example CLI config also shows the default waiting behavior for Jenkins-backed runs:
 
-```dotenv
-# Tests repository URL
-# TESTS_REPO_URL=https://github.com/org/test-repo
-
-# Peer Analysis (Optional)
-# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
-# PEER_ANALYSIS_MAX_ROUNDS=3
+```29:31:config.example.toml
+wait_for_completion = true
+poll_interval_minutes = 2
+max_wait_minutes = 0  # 0 = no limit (wait forever)
 ```
 
-> **Note:** Request-body values override environment defaults. That includes `tests_repo_url`, `ai_provider`, `ai_model`, Jenkins connection settings, `wait_for_completion`, `poll_interval_minutes`, `max_wait_minutes`, artifact settings, timeout settings, `peer_ai_configs`, and `peer_analysis_max_rounds`. `PUBLIC_BASE_URL` is server-side only and controls whether returned `result_url` values are absolute or relative.
+Request-body values override server defaults for that run. That includes `wait_for_completion`, `poll_interval_minutes`, `max_wait_minutes`, `tests_repo_url`, and Jenkins connection fields.
 
-## Request body
+## What You Send
 
-At minimum, send `job_name` and `build_number`. One of the endpoint tests uses this exact JSON body:
+A real queued submission in the test suite looks like this:
 
-```json
-{
-  "job_name": "test",
-  "build_number": 123,
-  "tests_repo_url": "https://github.com/example/repo"
-}
-```
-
-The most useful request fields are:
-
-| Field | Required | Purpose |
-| --- | --- | --- |
-| `job_name` | Yes | Jenkins job name. Folder-style names such as `folder/job-name` are supported. |
-| `build_number` | Yes | Jenkins build number to analyze. |
-| `tests_repo_url` | No | Repository to clone so the AI can inspect test code. |
-| `ai_provider` | No | Per-request AI provider override. Valid values are `claude`, `gemini`, and `cursor`. |
-| `ai_model` | No | Per-request AI model override. |
-| `wait_for_completion` | No | If `true` (default), monitor a still-running Jenkins build and start analysis only after it reaches a terminal state. |
-| `poll_interval_minutes` | No | Minutes between Jenkins status polls while waiting. Default is `2`. |
-| `max_wait_minutes` | No | Maximum minutes to wait for build completion. `0` means no limit. |
-| `jenkins_url`, `jenkins_user`, `jenkins_password`, `jenkins_ssl_verify` | No | Per-request Jenkins overrides. |
-| `get_job_artifacts` | No | Controls whether build artifacts are downloaded for analysis. Default is `true`. |
-| `jenkins_artifacts_max_size_mb` | No | Max total artifact size to process. |
-| `jenkins_artifacts_context_lines` | No | Max artifact context lines to feed into the AI prompt. |
-| `raw_prompt` | No | Extra instructions appended to the AI prompt. |
-| `peer_ai_configs` | No | Per-request peer AI list for consensus analysis. Send a JSON array such as `[{"ai_provider":"gemini","ai_model":"pro"}]`. Omit the field to use the server default from `PEER_AI_CONFIGS`, or send `[]` to disable peers for this request. |
-| `peer_analysis_max_rounds` | No | Maximum debate rounds when peer analysis is enabled. If omitted, the server uses its configured default, or `3` when unset. |
-
-If `tests_repo_url` is provided, the repository is cloned once and reused for the main build analysis and any recursively analyzed child jobs.
-
-Validation is strict:
-- Missing required fields return `422`.
-- A non-numeric `build_number` returns `422`.
-- Invalid URLs such as a bad `tests_repo_url` return `422`.
-- `poll_interval_minutes` must be greater than `0`, and `max_wait_minutes` cannot be negative.
-- `peer_analysis_max_rounds` must be between `1` and `10`.
-- Each `peer_ai_configs` entry must use a supported `ai_provider` and a non-blank `ai_model`.
-
-## Async vs Sync
-
-### Async mode
-
-For Jenkins-backed analysis, `POST /analyze` is the submission flow. On successful submission, it returns `202 Accepted`, creates a stored job record, and schedules background work.
-
-The queueing path currently looks like this:
-
-```python
-# Validate AI config early -- fail fast before queuing invalid jobs.
-_resolve_ai_config(body)
-
-# Generate job_id here so we can return it to the client for polling
-job_id = str(uuid.uuid4())
-merged = _merge_settings(body, settings)
-
-# Validate peer configs early -- fail fast before returning 202.
-resolved_peers = _validate_peer_configs(body, merged)
-jenkins_url = build_jenkins_url(
-    merged.jenkins_url, body.job_name, body.build_number
-)
-# Save initial pending state before queueing background task.
-# Only persist request_params for waiting jobs (wait_for_completion),
-# since those are the only ones that need resumption after restart.
-# This avoids storing encrypted secrets with no operational use.
-initial_result: dict = {
-    "job_name": body.job_name,
-    "build_number": body.build_number,
-}
-can_resume_wait = merged.wait_for_completion and bool(merged.jenkins_url)
-if can_resume_wait:
-    initial_result["request_params"] = _build_request_params(
-        body,
-        merged,
-        body.ai_provider or AI_PROVIDER,
-        body.ai_model or AI_MODEL,
-        peer_ai_configs_resolved=resolved_peers,
+```128:145:tests/test_main.py
+with patch("jenkins_job_insight.main.process_analysis_with_id"):
+    response = test_client.post(
+        "/analyze",
+        json={
+            "job_name": "test",
+            "build_number": 123,
+            "tests_repo_url": "https://github.com/example/repo",
+            "ai_provider": "claude",
+            "ai_model": "test-model",
+        },
     )
-await save_result(
-    job_id,
-    jenkins_url,
-    "waiting" if can_resume_wait else "pending",
-    initial_result,
-)
-background_tasks.add_task(process_analysis_with_id, job_id, body, merged)
-message = f"Analysis job queued. Poll /results/{job_id} for status."
-
-response: dict = {
-    "status": "queued",
-    "job_id": job_id,
-    "message": message,
-}
-
-return _attach_result_links(response, base_url, job_id)
+    assert response.status_code == 202
+    data = response.json()
+    assert data["status"] == "queued"
+    assert data["base_url"] == ""
+    assert data["result_url"].startswith("/results/")
 ```
 
-In practice, the submission response gives you:
+The fields that matter most for Jenkins-backed analysis are:
+
+| Field | Required | What it does |
+| --- | --- | --- |
+| `job_name` | Yes | Jenkins job name. Folder-style names like `folder/job-name` are supported. |
+| `build_number` | Yes | Jenkins build number to inspect. |
+| `wait_for_completion` | No | If `true` (default), JJI waits for a still-running Jenkins build to finish before analysis starts. |
+| `poll_interval_minutes` | No | Minutes between Jenkins status checks while waiting. Default: `2`. |
+| `max_wait_minutes` | No | Maximum wait time before JJI gives up. `0` means no limit. |
+| `tests_repo_url` | No | Repository to clone so the AI can inspect source and test code. |
+| `jenkins_url`, `jenkins_user`, `jenkins_password`, `jenkins_ssl_verify` | No | Per-request Jenkins overrides. |
+| `get_job_artifacts` and artifact size/context fields | No | Control whether JJI downloads build artifacts and how much artifact context it feeds into analysis. |
+
+When `tests_repo_url` is set, JJI clones it once and reuses that workspace for the top-level job and any recursively analyzed child jobs.
+
+The same endpoint also accepts shared analysis options such as `enable_jira`, `raw_prompt`, `peer_ai_configs`, and `additional_repos`, but the fields above are the ones that most directly change Jenkins-backed behavior.
+
+A few important validation rules:
+
+- Missing required fields or invalid types return `422`.
+- `poll_interval_minutes` must be greater than `0`.
+- `max_wait_minutes` cannot be negative.
+- If JJI cannot resolve an AI provider or model, `POST /analyze` fails fast with `400` instead of queueing a broken job.
+
+## Async By Design
+
+`POST /analyze` is asynchronous only. It always queues work and returns `202 Accepted`.
+
+```1060:1118:src/jenkins_job_insight/main.py
+@app.post("/analyze", status_code=202, response_model=None)
+async def analyze(
+    request: Request,
+    body: AnalyzeRequest,
+    background_tasks: BackgroundTasks,
+    *,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Submit a Jenkins job for analysis.
+
+    Returns immediately with a job_id. Poll /results/{job_id} for status.
+    """
+    logger.debug(f"Starting analysis for {body.job_name} #{body.build_number}")
+    base_url = _extract_base_url()
+
+    # Validate AI config early -- fail fast before queuing invalid jobs.
+    _resolve_ai_config(body)
+
+    # Generate job_id here so we can return it to the client for polling
+    job_id = str(uuid.uuid4())
+    merged = _merge_settings(body, settings)
+
+    # ...
+
+    await save_result(
+        job_id,
+        jenkins_url,
+        "waiting" if can_resume_wait else "pending",
+        initial_result,
+    )
+    background_tasks.add_task(process_analysis_with_id, job_id, body, merged)
+    message = f"Analysis job queued. Poll /results/{job_id} for status."
+
+    response: dict = {
+        "status": "queued",
+        "job_id": job_id,
+        "message": message,
+    }
+
+    return _attach_result_links(response, base_url, job_id)
+```
+
+That submit response gives you:
+
 - `status: "queued"`
 - `job_id`
 - `message`
-- `base_url`
 - `result_url`
+- `base_url`
 
-The response no longer includes `html_report_url`. For browser flows, use `/status/{job_id}` while the job is in progress and `/results/{job_id}` for the final report page.
+Unless `PUBLIC_BASE_URL` is configured, `result_url` is a relative path like `/results/{job_id}`.
 
-After submission, the stored status progresses through:
-- `waiting` while the service is in the Jenkins monitoring phase before analysis begins
-- `pending` when the job is queued without a waiting phase
-- `running` while analysis is actively executing
-- `completed` or `failed` when processing finishes
+### Sync vs Async
 
-> **Note:** AI configuration is validated before the job is queued. If no AI provider or model is configured, `POST /analyze` returns `400` immediately instead of returning `202` and failing later.
+| Use case | Endpoint | Execution model |
+| --- | --- | --- |
+| Analyze a Jenkins build by `job_name` and `build_number` | `POST /analyze` | Async only. Returns `202` and a `job_id`. |
+| Analyze raw failures or JUnit XML you already have | `POST /analyze-failures` | Synchronous request/response. |
 
-> **Note:** Peer-analysis settings are also resolved before queueing. If the server default `PEER_AI_CONFIGS` value is malformed, the request fails immediately instead of creating a broken background job.
+> **Note:** `wait_for_completion` does not make `POST /analyze` synchronous. It only changes whether the queued background job pauses in a Jenkins-monitoring phase before analysis begins.
 
-> **Note:** Waiting jobs persist resumable request parameters. If the server restarts while a job is in the `waiting` phase, monitoring can resume when the app comes back up.
+> **Warning:** The older `?sync=true` style is not part of the current `POST /analyze` contract.
 
-> **Warning:** `pending` and `running` jobs do not survive a restart. Because their in-process background task is gone, the server marks those rows as `failed` on startup. Only resumable `waiting` jobs are restarted automatically.
+This is asynchronous, but it is still implemented inside the application process with FastAPI background tasks, not an external worker queue.
 
-### Sync mode
+### Job Lifecycle
 
-The older `?sync=true` pattern is not part of the current Jenkins-backed flow. Treat `POST /analyze` as async-only and retrieve the final result from `GET /results/{job_id}`.
+A Jenkins-backed analysis typically moves through these stored states:
 
-If you need a single request/response flow, the supported synchronous endpoint is `POST /analyze-failures`, which analyzes raw failures or JUnit XML instead of pulling data from Jenkins.
+- `waiting`: JJI accepted the request and is polling Jenkins for the target build to finish
+- `pending`: JJI accepted the request and queued it without a waiting phase
+- `running`: analysis is actively executing
+- `completed`: the result is ready
+- `failed`: the analysis failed, or the Jenkins wait phase failed
 
-## Polling and Reports
+Because `POST /analyze` uses in-process background tasks, restart behavior matters:
 
-Once you have a `job_id`, there are two main ways to follow the job.
+- `waiting` jobs can be resumed on startup
+- `pending` and `running` jobs are marked `failed` on startup because their background task is gone
 
-### `GET /results/{job_id}`
+## Waiting For Jenkins
 
-This is the machine-friendly endpoint for both progress checks and final result retrieval.
+If you submit a build that is still running and leave `wait_for_completion` at its default value of `true`, JJI does not start analysis immediately. It first polls Jenkins until the build reaches a terminal state.
 
-The JSON response path is implemented like this:
+The wait loop does three user-visible things:
 
-```python
-result = await get_result(job_id)
-if not result:
-    raise HTTPException(status_code=404, detail="Job not found")
-_attach_result_links(result, _extract_base_url(), job_id)
-settings = get_settings()
-result["capabilities"] = {
-    "github_issues": settings.github_issues_enabled,
-    "jira_bugs": settings.jira_enabled,
-}
-if result.get("status") in IN_PROGRESS_STATUSES:
-    response.status_code = 202
-return result
+- returns success as soon as Jenkins reports `building: false`
+- keeps polling through transient transport problems like `OSError` and `TimeoutError`
+- stops immediately on permanent problems like Jenkins `404` or other non-transient errors
+
+```751:798:src/jenkins_job_insight/main.py
+    if max_wait_minutes > 0:
+        deadline: float | None = _time.monotonic() + max_wait_minutes * 60
+    else:
+        deadline = None  # No limit
+
+    while True:
+        try:
+            build_info = await asyncio.to_thread(
+                client.get_build_info_safe, job_name, build_number
+            )
+
+            if build_info and not build_info.get("building", True):
+                logger.info(
+                    f"Jenkins job {job_name} #{build_number} completed "
+                    f"with result: {build_info.get('result')}"
+                )
+                return True, ""
+
+            logger.info(f"Jenkins job {job_name} #{build_number} still running")
+
+        except jenkins.NotFoundException:
+            # ...
+            return False, f"Jenkins job {job_name} #{build_number} not found (404)"
+
+        except (OSError, TimeoutError) as e:
+            logger.warning(f"Transient error checking Jenkins status: {e}")
+
+        except Exception as e:
+            logger.error(f"Non-transient error checking Jenkins status: {e}")
+            return False, f"Jenkins poll failed: {e}"
+
+        if deadline is not None:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(poll_interval_minutes * 60, remaining))
+        else:
+            await asyncio.sleep(poll_interval_minutes * 60)
 ```
 
-A stored result record includes:
-- top-level job metadata such as `job_id`, `status`, `jenkins_url`, `created_at`, `analysis_started_at`, and `completed_at`
-- a nested `result` object containing the latest stored payload, such as initial job metadata, sanitized `request_params` for resumable waiting jobs, a completed analysis, or failure details
-- optional in-progress fields inside `result`, including `progress_phase` and `progress_log`
-- `base_url` and `result_url`, generated on each response
-- `capabilities`, which tells the UI whether GitHub issue creation and Jira bug creation are enabled
+Practical rules:
 
-Status meanings:
-- `waiting`: accepted and stored, currently in the Jenkins monitoring phase before analysis begins
-- `pending`: accepted and queued
-- `running`: analysis is in progress
-- `completed`: analysis finished and a result is available
-- `failed`: the analysis process failed
+- `max_wait_minutes = 0` means wait indefinitely.
+- If the wait times out, the stored job becomes `failed` before AI analysis starts.
+- If `wait_for_completion` is `false`, JJI skips the wait and moves straight to `running`.
+- If the merged settings do not include a Jenkins URL, the wait phase is skipped even when `wait_for_completion` is `true`, but the later analysis step still needs Jenkins access to fetch the build.
 
-> **Note:** `completed` refers to the analysis job, not the Jenkins build result. A Jenkins build can fail and still produce `status: "completed"` if the analysis itself finished successfully.
+> **Warning:** `wait_for_completion=false` means JJI starts analysis against the current Jenkins state. If the build is still running, the result may reflect incomplete logs or test reports.
 
-> **Note:** `GET /results/{job_id}` returns `202 Accepted` while the job is `waiting`, `pending`, or `running`. Once the job reaches `completed` or `failed`, the same endpoint returns `200 OK`.
+## Polling And The Built-In Status Page
 
-> **Tip:** While a job is in progress, `result.progress_phase` holds the latest server phase and `result.progress_log` stores the full timestamped history as `{"phase": "...", "timestamp": ...}` entries. Common phases include `waiting_for_jenkins`, `analyzing_child_jobs`, `analyzing_failures`, `analyzing`, `enriching_jira`, and `saving`.
+Once you have a `job_id`, `GET /results/{job_id}` is the durable source of truth.
 
-### Browser flow
+```1332:1355:src/jenkins_job_insight/main.py
+@app.get("/results/{job_id}", response_model=None)
+async def get_job_result(request: Request, job_id: str, response: Response):
+    """Retrieve stored result by job_id, or serve SPA for browser requests."""
+    # Content negotiation: browsers requesting HTML get the SPA
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept and "application/json" not in accept:
+        result = await get_result(job_id)
+        if result and result.get("status") in IN_PROGRESS_STATUSES:
+            return RedirectResponse(url=f"/status/{job_id}", status_code=302)
+        return _serve_spa()
 
-The browser UI now uses React routes instead of `GET /results/{job_id}.html`. There is no separate HTML report endpoint to poll or refresh.
-
-For browser requests, the backend checks the `Accept` header and either redirects an in-progress job to `/status/{job_id}` or serves the report app:
-
-```python
-accept = request.headers.get("accept", "")
-if "text/html" in accept and "application/json" not in accept:
+    logger.debug(f"GET /results/{job_id}")
     result = await get_result(job_id)
-    if result and result.get("status") in IN_PROGRESS_STATUSES:
-        return RedirectResponse(url=f"/status/{job_id}", status_code=302)
-    return _serve_spa()
+    if not result:
+        raise HTTPException(status_code=404, detail="Job not found")
+    _attach_result_links(result, _extract_base_url(), job_id)
+    # ...
+    if result.get("status") in IN_PROGRESS_STATUSES:
+        response.status_code = 202
+    return result
 ```
 
-In practice:
-- open `/status/{job_id}` while the job is `waiting`, `pending`, or `running`
-- open `/results/{job_id}` once the analysis is finished
-- if you hit `/results/{job_id}` too early in a browser, the server redirects you to `/status/{job_id}` automatically
+What that means in practice:
 
-The React status page then polls `GET /results/{job_id}` and switches to the report view when the analysis finishes:
+- API clients poll `GET /results/{job_id}` until the status becomes `completed` or `failed`.
+- `GET /results/{job_id}` returns `202` while the job is `waiting`, `pending`, or `running`.
+- The same route returns `200` once the stored job is in a terminal state.
+- Browsers that request `/results/{job_id}` early are redirected to the UI route `/status/{job_id}` instead of seeing a half-finished report.
 
-```typescript
-const res = await api.get<ResultResponse>(`/results/${jobId}`)
-if (res.status === 'completed') {
-  stopPolling()
-  navigate(`/results/${jobId}`, { replace: true })
-} else if (res.status === 'failed') {
-  stopPolling()
-  setTerminalErrorKind('failed')
-  setError(res.result?.error ?? 'Analysis failed')
+The response wrapper includes top-level fields such as `job_id`, `status`, `jenkins_url`, `created_at`, `base_url`, and `result_url`, plus a nested `result` object. During in-progress states, that nested `result` can already contain `request_params`, `progress_phase`, and `progress_log`. When the job finishes, it holds the full analysis payload. Sensitive request fields are stripped from API responses.
+
+The built-in status page polls every 10 seconds and automatically navigates to the final report when analysis finishes:
+
+```10:18:frontend/src/pages/StatusPage.tsx
+const POLL_MS = 10_000
+
+const phaseLabels: Record<string, string> = {
+  waiting_for_jenkins: 'Waiting for Jenkins build to complete...',
+  analyzing: 'Analyzing test failures with AI...',
+  analyzing_child_jobs: 'Analyzing child job failures...',
+  analyzing_failures: 'Analyzing test failures...',
+  enriching_jira: 'Searching Jira for matching bugs...',
+  saving: 'Saving results...',
 }
 ```
 
-> **Note:** `result_url` and `base_url` come from `PUBLIC_BASE_URL` when that setting is configured. When it is not set, the service returns relative links such as `/results/{job_id}` and does not trust `Host` or `X-Forwarded-*` headers.
+```101:143:frontend/src/pages/StatusPage.tsx
+    async function poll() {
+      if (inFlight || cancelled) return
+      inFlight = true
+      try {
+        const res = await api.get<ResultResponse>(`/results/${jobId}`)
+        if (cancelled) return
+        setError('')
+        setData(res)
+
+        if (res.status === 'completed') {
+          stopPolling()
+          navigate(`/results/${jobId}`, { replace: true })
+        } else if (res.status === 'failed') {
+          stopPolling()
+          setTerminalErrorKind('failed')
+          setError(res.result?.error ?? 'Analysis failed')
+        }
+      } catch (err) {
+        // ...
+      } finally {
+        inFlight = false
+      }
+    }
+
+    poll()
+    intervalRef.current = setInterval(poll, POLL_MS)
+```
+
+Common progress phases you may see in `result.progress_phase` or `result.progress_log`:
+
+- `waiting_for_jenkins`
+- `analyzing`
+- `analyzing_child_jobs`
+- `analyzing_failures`
+- `enriching_jira`
+- `saving`
+
+The phase history is stored server-side, so refreshing `/status/{job_id}` does not lose the progress log.
+
+> **Tip:** If peer analysis is enabled for your server or request, you may also see phases like `peer_review_round_1` and `orchestrator_revising_round_1`.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant JJI as jenkins-job-insight
+    participant Jenkins
+
+    Client->>JJI: POST /analyze
+    JJI->>JJI: Validate request and save initial row
+    JJI-->>Client: 202 + job_id + result_url
+
+    alt wait_for_completion = true
+        loop until build finishes or deadline hits
+            JJI->>Jenkins: Check build status
+            Jenkins-->>JJI: building=true/false
+        end
+    end
+
+    alt build can be analyzed
+        JJI->>Jenkins: Fetch build info, test report, console, artifacts
+        JJI->>JJI: Analyze failures and child jobs
+        JJI->>JJI: Save final result
+    else wait timed out or permanent Jenkins error
+        JJI->>JJI: Save failed result
+    end
+
+    loop poll
+        Client->>JJI: GET /results/{job_id}
+        JJI-->>Client: 202 while waiting/pending/running
+    end
+
+    Client->>JJI: GET /results/{job_id}
+    JJI-->>Client: 200 with final result
+```
 
 ## Callbacks
 
-Callbacks are no longer part of the `POST /analyze` flow.
+Callbacks are not part of the current `POST /analyze` flow.
 
-> **Warning:** Legacy `CALLBACK_URL`, `CALLBACK_HEADERS`, `callback_url`, and `callback_headers` examples are outdated for this endpoint.
+> **Warning:** There is no `callback_url`, `callback_headers`, `CALLBACK_URL`, or `CALLBACK_HEADERS` support in the current codebase for Jenkins analysis.
 
 Use one of these supported patterns instead:
+
 - poll `GET /results/{job_id}` from automation
 - open `/status/{job_id}` in a browser while the job is still in progress
-- treat the stored result at `GET /results/{job_id}` as the durable source of truth
+- open `/results/{job_id}` once the job reaches `completed` or `failed`
 
-## How Successful Builds Are Handled
+## Successful Builds
 
-The analyzer checks the Jenkins build result before it starts deeper failure analysis. If Jenkins reports `SUCCESS`, the service returns early with a normal completed result and an empty failure list:
+JJI checks the Jenkins build result before it starts failure extraction. If Jenkins says the build passed, JJI returns a normal completed result with an empty `failures` list.
 
-```python
-build_result = build_info.get("result")
-if build_result == "SUCCESS":
-    return AnalysisResult(
-        job_id=job_id,
-        job_name=request.job_name,
-        build_number=request.build_number,
-        jenkins_url=HttpUrl(jenkins_build_url),
-        status="completed",
-        summary="Build passed successfully. No failures to analyze.",
-        ai_provider=ai_provider,
-        ai_model=ai_model,
-        failures=[],
-    )
+```1470:1483:src/jenkins_job_insight/analyzer.py
+    build_result = build_info.get("result")
+    if build_result == "SUCCESS":
+        return AnalysisResult(
+            job_id=job_id,
+            job_name=request.job_name,
+            build_number=request.build_number,
+            jenkins_url=HttpUrl(jenkins_build_url),
+            status="completed",
+            summary="Build passed successfully. No failures to analyze.",
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            failures=[],
+        )
 ```
 
-What this means for users:
-- a passing build is not treated as an error
-- `status` is still `completed`
-- `failures` is empty
-- the result is still stored and accessible from the results endpoints
+That is why a passing Jenkins build still produces a stored analysis result:
 
-> **Note:** Because the service short-circuits on `SUCCESS`, no failure parsing or AI classification runs for a passing build.
+- `status` is `completed`
+- `summary` is `Build passed successfully. No failures to analyze.`
+- `failures` is empty
+
+> **Note:** A successful build is not treated as an API error. It is a successful analysis result with nothing to classify.
 
 ## Recursive Child-Job Analysis
 
-`POST /analyze` does not stop at the top-level Jenkins build. If the build is a pipeline or orchestrator job, it also looks for failed downstream jobs and analyzes them recursively.
+`POST /analyze` does not stop at the top-level Jenkins build. For pipeline-style or orchestrator jobs, JJI looks for failed downstream builds and analyzes them recursively.
 
-### What gets detected as a child job
+Child-job discovery checks:
 
-The analyzer first checks structured Jenkins metadata:
 - `subBuilds`
 - `actions[].triggeredBuilds`
+- console output as a fallback when Jenkins metadata does not list child jobs
 
-Only child jobs with `FAILURE` or `UNSTABLE` are included.
+Only child jobs with result `FAILURE` or `UNSTABLE` are followed.
 
-If no child jobs are found there, it falls back to console parsing. The console parser looks for lines like `Build folder » job-name #123 completed: FAILURE`:
+When JJI finds failed children, it analyzes them in parallel and nests the results. If recursion reaches the safety limit, the child entry is returned with a note instead of recursing forever.
 
-```python
-pattern = r"Build\s+(.+?)\s+#(\d+)\s+completed:\s*(FAILURE|UNSTABLE)"
-matches = re.findall(pattern, console_output)
-
-for match in matches:
-    job_path = match[0].strip()
-    build_num = int(match[1])
-    job_name = job_path.replace(" » ", "/")
-    failed_jobs.append((job_name, build_num))
+```1172:1178:src/jenkins_job_insight/analyzer.py
+    if depth >= max_depth:
+        return ChildJobAnalysis(
+            job_name=job_name,
+            build_number=build_number,
+            jenkins_url=jenkins_url,
+            note="Max depth reached - analysis stopped to prevent infinite recursion",
+        )
 ```
 
-### How recursion works
+```1214:1270:src/jenkins_job_insight/analyzer.py
+    if failed_children:
+        # Recursively analyze failed children IN PARALLEL with bounded concurrency
+        child_tasks: list[Coroutine[Any, Any, Any]] = [
+            analyze_child_job(
+                child_name,
+                child_num,
+                jenkins_client,
+                jenkins_base_url,
+                depth + 1,
+                max_depth,
+                # ...
+            )
+            for child_name, child_num in failed_children
+        ]
+        child_results = await run_parallel_with_limit(child_tasks)
 
-When child jobs are found, the service analyzes them in parallel with bounded concurrency and descends through nested failures.
+        # ...
 
-Key behaviors:
-- direct child analyses appear in `child_job_analyses`
-- deeper nested children appear in `failed_children`
-- if a pipeline wrapper has no direct test failures, its own `failures` list can be empty even though its child jobs contain failures
-- if a child job cannot be inspected, or recursion reaches the limit, that child entry gets a `note` instead of failing the entire analysis
+        return ChildJobAnalysis(
+            job_name=job_name,
+            build_number=build_number,
+            jenkins_url=jenkins_url,
+            summary=summary,
+            failures=[],  # Pipeline has no direct failures
+            failed_children=child_analyses,
+        )
+```
 
-> **Note:** The maximum child-job recursion depth is `3`. When that limit is reached, the child entry is returned with a note explaining that analysis stopped to prevent infinite recursion.
+How to read the result:
 
-### Leaf child jobs vs pipeline wrapper jobs
+- Direct child jobs appear in `child_job_analyses`.
+- Nested descendants appear in `failed_children`.
+- A pipeline wrapper can have `failures: []` and still contain real failures underneath in child jobs.
+- Leaf jobs are analyzed like normal builds: JJI prefers structured test reports, and falls back to console-only analysis when no report exists.
 
-Leaf child jobs are analyzed like normal Jenkins builds:
-- if a Jenkins test report exists, individual failed tests are extracted and analyzed
-- if no structured test report exists, the service falls back to console-only analysis
+A stored result with child-job nesting looks like this in the tests:
 
-Pipeline-style child jobs are treated differently:
-- if they have failed children but no direct test failures, the service skips direct failure analysis for the wrapper job and returns nested child analyses instead
+```1265:1281:tests/test_main.py
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [],
+            "child_job_analyses": [
+                {
+                    "job_name": "child-1",
+                    "build_number": 5,
+                    "failures": [
+                        {
+                            "test_name": "test_foo",
+                            "error": "err",
+                            "analysis": {"classification": "CODE ISSUE"},
+                        }
+                    ],
+                    "failed_children": [],
+                }
+            ],
+        }
+```
 
-This keeps pipeline results focused on the actual failing jobs instead of a vague top-level pipeline failure.
+> **Note:** The recursion limit is `3`. When JJI hits that limit, it preserves the child entry and adds a note explaining that recursion stopped.
 
-## Result Shape to Expect
+```mermaid
+flowchart TD
+    A[Top-level Jenkins build] --> B{Failed child jobs detected?}
+    B -- No --> C{Structured test report exists?}
+    B -- Yes --> D[Analyze child jobs in parallel]
+    D --> E{Depth < 3?}
+    E -- Yes --> F[Recurse into each failed child]
+    E -- No --> G[Return child entry with note]
+    C -- Yes --> H[Analyze direct test failures]
+    C -- No --> I[Fallback to console-only analysis]
+    F --> C
+```
 
-A completed analysis result contains:
-- `job_id`, `job_name`, `build_number`, and `jenkins_url`
-- `status` and `summary`
-- `ai_provider` and `ai_model`
-- `failures` for direct failures on the requested build
-- `child_job_analyses` for direct child jobs
+## Common Responses
 
-Each child job can contain:
-- `job_name`, `build_number`, and `jenkins_url`
-- `summary`
-- `failures`
-- nested `failed_children`
-- `note` when recursion stops or a child job could not be processed
-
-Each failure includes:
-- `test_name`
-- `error`
-- `analysis.classification`
-- `analysis.details`
-- optional structured fields such as `code_fix` or `product_bug_report`
-
-If the service has to fall back to console-only analysis, it creates a synthetic failure entry with:
-- `test_name` set to `<job_name>#<build_number>`
-- `error` set to `Console-only analysis`
-
-## Common Response Codes
-
-| Status code | When to expect it |
+| HTTP status | When you should expect it |
 | --- | --- |
-| `202` | A `POST /analyze` request was accepted and queued, or `GET /results/{job_id}` is reporting an in-progress job with status `waiting`, `pending`, or `running`. |
-| `200` | `GET /results/{job_id}` returned a final stored result with status `completed` or `failed`. |
-| `400` | AI configuration cannot be resolved, or the server's `PEER_AI_CONFIGS` default is invalid. `POST /analyze` validates those settings before it queues work. |
-| `404` | A results lookup requested an unknown `job_id`. If the Jenkins build itself cannot be found, the async job later moves to `failed` and the stored result carries the error. |
-| `422` | The request body failed validation, such as a missing field, bad URL, non-numeric `build_number`, `poll_interval_minutes <= 0`, `max_wait_minutes < 0`, out-of-range `peer_analysis_max_rounds`, or malformed `peer_ai_configs` entries. |
+| `202 Accepted` | `POST /analyze` was accepted and queued, or `GET /results/{job_id}` is returning an in-progress job. |
+| `200 OK` | `GET /results/{job_id}` returned a terminal result. |
+| `400 Bad Request` | JJI could not resolve a valid AI provider or model before queueing. |
+| `404 Not Found` | You requested a `job_id` that does not exist. |
+| `422 Unprocessable Entity` | The request body failed validation. |
 
-> **Tip:** For automation, treat `GET /results/{job_id}` as the authoritative status endpoint. The initial `202` submission response is just the handoff; the stored result is the durable source of truth.
+> **Tip:** Jenkins connectivity problems, missing Jenkins permissions, wait timeouts, and similar runtime issues usually appear as a stored `failed` result after queueing. Poll the `job_id` to see the final error message.
+
+
+## Related Pages
+
+- [POST /analyze](api-post-analyze.html)
+- [Quickstart](quickstart.html)
+- [Pipeline Analysis and Failure Deduplication](pipeline-analysis-and-failure-deduplication.html)
+- [Jenkins, Repository Context, and Prompts](jenkins-repository-and-prompts.html)
+- [HTML Reports and Dashboard](html-reports-and-dashboard.html)

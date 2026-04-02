@@ -262,7 +262,7 @@
                     ⚡ docs<span class="brand-accent">fy</span>
                 </a>
                 
-                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                <a href="https://github.com/myk-org/jenkins-job-insight.git" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight.git">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
                     <span class="github-stars" id="github-stars"></span>
                 </a>
@@ -287,210 +287,97 @@
                          user-supplied input. XSS risk is minimal and accepted since
                          the AI generates the content, not end users. -->
                     <h1 id="pipeline-analysis-and-failure-deduplication">Pipeline Analysis and Failure Deduplication</h1>
-<p><code>jenkins-job-insight</code> is designed to answer two practical questions fast:</p>
+<p>When a Jenkins pipeline fails, the hard part is usually not finding the red build. It is figuring out which child job actually failed, whether many failed tests are really the same root cause, and why different parts of the UI sometimes show different totals.</p>
+<p><code>jenkins-job-insight</code> handles that by treating a failed pipeline as a tree, not a flat list. It walks failed child jobs until it reaches the jobs that actually contain failures, groups identical failures by a shared signature, and then stores the result in a way that keeps summaries and history counts useful.</p>
+<h2 id="what-you-need-to-know">What You Need To Know</h2>
 <ul>
-<li>Which part of my Jenkins pipeline actually failed?</li>
-<li>Are all these failing tests really different problems, or the same root cause repeated?</li>
+<li><code>POST /analyze</code> does full Jenkins-backed analysis, including child-job discovery.</li>
+<li><code>POST /analyze-failures</code> skips Jenkins discovery but reuses the same signature-based deduplication once failures are already available.</li>
+<li>Deduplication reduces repeated analysis work. It does not remove failures from the result. Each failed test still gets its own <code>FailureAnalysis</code> entry.</li>
+<li>Pipeline results are tree-shaped: direct failures live in <code>failures</code>, top-level downstream jobs live in <code>child_job_analyses</code>, and deeper downstream jobs live in <code>failed_children</code>.</li>
 </ul>
-<p>To do that, it follows failed child jobs through a pipeline, groups identical failures by signature, and then computes summaries and history counts from that normalized result.</p>
-<h2 id="what-jji-does-during-analysis">What JJI Does During Analysis</h2>
-<p>At a high level, a Jenkins analysis run looks like this:</p>
-<ul>
-<li>Read the main build metadata and console output.</li>
-<li>Discover failed child jobs from Jenkins pipeline metadata, with a console fallback.</li>
-<li>Recursively analyze those child jobs until it reaches jobs that actually contain failures.</li>
-<li>For jobs with structured test reports, group matching failures by signature so one analysis can cover many tests.</li>
-<li>Return one <code>FailureAnalysis</code> per failed test, while still preserving the shared <code>error_signature</code>.</li>
-<li>Flatten the final result into <code>failure_history</code> so recurring failures can be searched later by signature, test name, job, and trend.</li>
-</ul>
-<h2 id="how-failure-deduplication-works">How Failure Deduplication Works</h2>
-<p>When JJI has a structured Jenkins test report, it does not analyze every failed test independently. Instead, it builds a stable signature from the error message plus the first five lines of the stack trace.</p>
-<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_failure_signature</span><span class="p">(</span><span class="n">failure</span><span class="p">:</span> <span class="n">TestFailure</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Create a signature for grouping identical failures.</span>
+<h2 id="end-to-end-flow">End-To-End Flow</h2>
+<div class="mermaid-diagram"><svg id="my-svg" width="100%" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" class="flowchart" style="max-width: 586px; background-color: transparent;" viewBox="0 0 586 2543.609375" role="graphics-document document" aria-roledescription="flowchart-v2"><style>#my-svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;fill:#333;}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#my-svg .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#my-svg .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#my-svg .error-icon{fill:#552222;}#my-svg .error-text{fill:#552222;stroke:#552222;}#my-svg .edge-thickness-normal{stroke-width:1px;}#my-svg .edge-thickness-thick{stroke-width:3.5px;}#my-svg .edge-pattern-solid{stroke-dasharray:0;}#my-svg .edge-thickness-invisible{stroke-width:0;fill:none;}#my-svg .edge-pattern-dashed{stroke-dasharray:3;}#my-svg .edge-pattern-dotted{stroke-dasharray:2;}#my-svg .marker{fill:#333333;stroke:#333333;}#my-svg .marker.cross{stroke:#333333;}#my-svg svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;}#my-svg p{margin:0;}#my-svg .label{font-family:"trebuchet ms",verdana,arial,sans-serif;color:#333;}#my-svg .cluster-label text{fill:#333;}#my-svg .cluster-label span{color:#333;}#my-svg .cluster-label span p{background-color:transparent;}#my-svg .label text,#my-svg span{fill:#333;color:#333;}#my-svg .node rect,#my-svg .node circle,#my-svg .node ellipse,#my-svg .node polygon,#my-svg .node path{fill:#ECECFF;stroke:#9370DB;stroke-width:1px;}#my-svg .rough-node .label text,#my-svg .node .label text,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-anchor:middle;}#my-svg .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#my-svg .rough-node .label,#my-svg .node .label,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-align:center;}#my-svg .node.clickable{cursor:pointer;}#my-svg .root .anchor path{fill:#333333!important;stroke-width:0;stroke:#333333;}#my-svg .arrowheadPath{fill:#333333;}#my-svg .edgePath .path{stroke:#333333;stroke-width:1px;}#my-svg .flowchart-link{stroke:#333333;fill:none;}#my-svg .edgeLabel{background-color:rgba(232,232,232, 0.8);text-align:center;}#my-svg .edgeLabel p{background-color:rgba(232,232,232, 0.8);}#my-svg .edgeLabel rect{opacity:0.5;background-color:rgba(232,232,232, 0.8);fill:rgba(232,232,232, 0.8);}#my-svg .labelBkg{background-color:rgba(232, 232, 232, 0.5);}#my-svg .cluster rect{fill:#ffffde;stroke:#aaaa33;stroke-width:1px;}#my-svg .cluster text{fill:#333;}#my-svg .cluster span{color:#333;}#my-svg div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:12px;background:hsl(80, 100%, 96.2745098039%);border:1px solid #aaaa33;border-radius:2px;pointer-events:none;z-index:100;}#my-svg .flowchartTitleText{text-anchor:middle;font-size:18px;fill:#333;}#my-svg rect.text{fill:none;stroke-width:0;}#my-svg .icon-shape,#my-svg .image-shape{background-color:rgba(232,232,232, 0.8);text-align:center;}#my-svg .icon-shape p,#my-svg .image-shape p{background-color:rgba(232,232,232, 0.8);padding:2px;}#my-svg .icon-shape .label rect,#my-svg .image-shape .label rect{opacity:0.5;background-color:rgba(232,232,232, 0.8);fill:rgba(232,232,232, 0.8);}#my-svg .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#my-svg .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#my-svg .node .neo-node{stroke:#9370DB;}#my-svg [data-look="neo"].node rect,#my-svg [data-look="neo"].cluster rect,#my-svg [data-look="neo"].node polygon{stroke:#9370DB;filter:drop-shadow(1px 2px 2px rgba(185, 185, 185, 1));}#my-svg [data-look="neo"].node path{stroke:#9370DB;stroke-width:1px;}#my-svg [data-look="neo"].node .outer-path{filter:drop-shadow(1px 2px 2px rgba(185, 185, 185, 1));}#my-svg [data-look="neo"].node .neo-line path{stroke:#9370DB;filter:none;}#my-svg [data-look="neo"].node circle{stroke:#9370DB;filter:drop-shadow(1px 2px 2px rgba(185, 185, 185, 1));}#my-svg [data-look="neo"].node circle .state-start{fill:#000000;}#my-svg [data-look="neo"].icon-shape .icon{fill:#9370DB;filter:drop-shadow(1px 2px 2px rgba(185, 185, 185, 1));}#my-svg [data-look="neo"].icon-shape .icon-neo path{stroke:#9370DB;filter:drop-shadow(1px 2px 2px rgba(185, 185, 185, 1));}#my-svg :root{--mermaid-font-family:"trebuchet ms",verdana,arial,sans-serif;}</style><g><marker id="my-svg_flowchart-v2-pointEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-pointStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="4.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 5 L 10 10 L 10 0 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-pointEnd-margin" class="marker flowchart-v2" viewBox="0 0 11.5 14" refX="11.5" refY="7" markerUnits="userSpaceOnUse" markerWidth="10.5" markerHeight="14" orient="auto"><path d="M 0 0 L 11.5 7 L 0 14 z" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-pointStart-margin" class="marker flowchart-v2" viewBox="0 0 11.5 14" refX="1" refY="7" markerUnits="userSpaceOnUse" markerWidth="11.5" markerHeight="14" orient="auto"><polygon points="0,7 11.5,14 11.5,0" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="11" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-1" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleEnd-margin" class="marker flowchart-v2" viewBox="0 0 10 10" refY="5" refX="12.25" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleStart-margin" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-2" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossEnd" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="12" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossStart" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="-1" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossEnd-margin" class="marker cross flowchart-v2" viewBox="0 0 15 15" refX="17.7" refY="7.5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto"><path d="M 1,1 L 14,14 M 1,14 L 14,1" class="arrowMarkerPath" style="stroke-width: 2.5;"/></marker><marker id="my-svg_flowchart-v2-crossStart-margin" class="marker cross flowchart-v2" viewBox="0 0 15 15" refX="-3.5" refY="7.5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto"><path d="M 1,1 L 14,14 M 1,14 L 14,1" class="arrowMarkerPath" style="stroke-width: 2.5; stroke-dasharray: 1, 0;"/></marker><g class="root"><g class="clusters"/><g class="edgePaths"><path d="M293,62L293,66.167C293,70.333,293,78.667,293,86.333C293,94,293,101,293,104.5L293,108" id="my-svg-L_A_B_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_A_B_0" data-points="W3sieCI6MjkzLCJ5Ijo2Mn0seyJ4IjoyOTMsInkiOjg3fSx7IngiOjI5MywieSI6MTEyfV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M339.313,343.687L346.251,357.573C353.189,371.458,367.065,399.229,374.003,418.615C380.941,438,380.941,449,380.941,454.5L380.941,460" id="my-svg-L_B_C_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_B_C_0" data-points="W3sieCI6MzM5LjMxMjc2MTc2OTQ1MDUsInkiOjM0My42ODcyMzgyMzA1NDk1fSx7IngiOjM4MC45NDE0MDYyNSwieSI6NDI3fSx7IngiOjM4MC45NDE0MDYyNSwieSI6NDY0fV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M246.687,343.687L239.749,357.573C232.811,371.458,218.935,399.229,211.997,425.781C205.059,452.333,205.059,477.667,205.059,501C205.059,524.333,205.059,545.667,210.245,560.108C215.431,574.549,225.804,582.098,230.99,585.872L236.177,589.646" id="my-svg-L_B_D_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_B_D_0" data-points="W3sieCI6MjQ2LjY4NzIzODIzMDU0OTUzLCJ5IjozNDMuNjg3MjM4MjMwNTQ5NX0seyJ4IjoyMDUuMDU4NTkzNzUsInkiOjQyN30seyJ4IjoyMDUuMDU4NTkzNzUsInkiOjUwM30seyJ4IjoyMDUuMDU4NTkzNzUsInkiOjU2N30seyJ4IjoyMzkuNDEwNzA1NTY2NDA2MjUsInkiOjU5Mn1d" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M380.941,542L380.941,546.167C380.941,550.333,380.941,558.667,375.755,566.608C370.569,574.549,360.196,582.098,355.01,585.872L349.823,589.646" id="my-svg-L_C_D_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_C_D_0" data-points="W3sieCI6MzgwLjk0MTQwNjI1LCJ5Ijo1NDJ9LHsieCI6MzgwLjk0MTQwNjI1LCJ5Ijo1Njd9LHsieCI6MzQ2LjU4OTI5NDQzMzU5Mzc1LCJ5Ijo1OTJ9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M293,670L293,674.167C293,678.333,293,686.667,293,694.333C293,702,293,709,293,712.5L293,716" id="my-svg-L_D_E_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_D_E_0" data-points="W3sieCI6MjkzLCJ5Ijo2NzB9LHsieCI6MjkzLCJ5Ijo2OTV9LHsieCI6MjkzLCJ5Ijo3MjB9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M293,822L293,826.167C293,830.333,293,838.667,293,846.333C293,854,293,861,293,864.5L293,868" id="my-svg-L_E_F_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_E_F_0" data-points="W3sieCI6MjkzLCJ5Ijo4MjJ9LHsieCI6MjkzLCJ5Ijo4NDd9LHsieCI6MjkzLCJ5Ijo4NzJ9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M331.167,1025.442L339.463,1037.97C347.758,1050.498,364.35,1075.554,372.646,1093.582C380.941,1111.609,380.941,1122.609,380.941,1128.109L380.941,1133.609" id="my-svg-L_F_G_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_F_G_0" data-points="W3sieCI6MzMxLjE2NjkyMjAwOTY1MywieSI6MTAyNS40NDI0NTI5OTAzNDd9LHsieCI6MzgwLjk0MTQwNjI1LCJ5IjoxMTAwLjYwOTM3NX0seyJ4IjozODAuOTQxNDA2MjUsInkiOjExMzcuNjA5Mzc1fV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M254.833,1025.442L246.537,1037.97C238.242,1050.498,221.65,1075.554,213.354,1100.748C205.059,1125.943,205.059,1151.276,205.059,1174.609C205.059,1197.943,205.059,1219.276,211.531,1233.77C218.004,1248.264,230.95,1255.919,237.422,1259.746L243.895,1263.573" id="my-svg-L_F_H_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_F_H_0" data-points="W3sieCI6MjU0LjgzMzA3Nzk5MDM0NzAyLCJ5IjoxMDI1LjQ0MjQ1Mjk5MDM0N30seyJ4IjoyMDUuMDU4NTkzNzUsInkiOjExMDAuNjA5Mzc1fSx7IngiOjIwNS4wNTg1OTM3NSwieSI6MTE3Ni42MDkzNzV9LHsieCI6MjA1LjA1ODU5Mzc1LCJ5IjoxMjQwLjYwOTM3NX0seyJ4IjoyNDcuMzM4MTE1OTg1NTc2OSwieSI6MTI2NS42MDkzNzV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M380.941,1215.609L380.941,1219.776C380.941,1223.943,380.941,1232.276,374.469,1240.27C367.996,1248.264,355.05,1255.919,348.578,1259.746L342.105,1263.573" id="my-svg-L_G_H_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_G_H_0" data-points="W3sieCI6MzgwLjk0MTQwNjI1LCJ5IjoxMjE1LjYwOTM3NX0seyJ4IjozODAuOTQxNDA2MjUsInkiOjEyNDAuNjA5Mzc1fSx7IngiOjMzOC42NjE4ODQwMTQ0MjMxLCJ5IjoxMjY1LjYwOTM3NX1d" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M293,1319.609L293,1323.776C293,1327.943,293,1336.276,293,1343.943C293,1351.609,293,1358.609,293,1362.109L293,1365.609" id="my-svg-L_H_I_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_H_I_0" data-points="W3sieCI6MjkzLCJ5IjoxMzE5LjYwOTM3NX0seyJ4IjoyOTMsInkiOjEzNDQuNjA5Mzc1fSx7IngiOjI5MywieSI6MTM2OS42MDkzNzV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M227.909,1582.519L212.924,1599.534C197.94,1616.549,167.97,1650.579,152.985,1673.094C138,1695.609,138,1706.609,138,1712.109L138,1717.609" id="my-svg-L_I_J_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_I_J_0" data-points="W3sieCI6MjI3LjkwOTM2NTU1ODkxMjM4LCJ5IjoxNTgyLjUxODc0MDU1ODkxMjR9LHsieCI6MTM4LCJ5IjoxNjg0LjYwOTM3NX0seyJ4IjoxMzgsInkiOjE3MjEuNjA5Mzc1fV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M138,1799.609L138,1805.776C138,1811.943,138,1824.276,138,1835.943C138,1847.609,138,1858.609,138,1864.109L138,1869.609" id="my-svg-L_J_K_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_J_K_0" data-points="W3sieCI6MTM4LCJ5IjoxNzk5LjYwOTM3NX0seyJ4IjoxMzgsInkiOjE4MzYuNjA5Mzc1fSx7IngiOjEzOCwieSI6MTg3My42MDkzNzV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M138,1951.609L138,1955.776C138,1959.943,138,1968.276,138,1975.943C138,1983.609,138,1990.609,138,1994.109L138,1997.609" id="my-svg-L_K_L_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_K_L_0" data-points="W3sieCI6MTM4LCJ5IjoxOTUxLjYwOTM3NX0seyJ4IjoxMzgsInkiOjE5NzYuNjA5Mzc1fSx7IngiOjEzOCwieSI6MjAwMS42MDkzNzV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M358.091,1582.519L373.076,1599.534C388.06,1616.549,418.03,1650.579,433.015,1680.261C448,1709.943,448,1735.276,448,1760.609C448,1785.943,448,1811.276,448,1836.609C448,1861.943,448,1887.276,448,1910.609C448,1933.943,448,1955.276,448,1971.443C448,1987.609,448,1998.609,448,2004.109L448,2009.609" id="my-svg-L_I_M_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_I_M_0" data-points="W3sieCI6MzU4LjA5MDYzNDQ0MTA4NzYsInkiOjE1ODIuNTE4NzQwNTU4OTEyNH0seyJ4Ijo0NDgsInkiOjE2ODQuNjA5Mzc1fSx7IngiOjQ0OCwieSI6MTc2MC42MDkzNzV9LHsieCI6NDQ4LCJ5IjoxODM2LjYwOTM3NX0seyJ4Ijo0NDgsInkiOjE5MTIuNjA5Mzc1fSx7IngiOjQ0OCwieSI6MTk3Ni42MDkzNzV9LHsieCI6NDQ4LCJ5IjoyMDEzLjYwOTM3NX1d" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M138,2103.609L138,2107.776C138,2111.943,138,2120.276,145.899,2128.316C153.798,2136.356,169.597,2144.102,177.496,2147.975L185.395,2151.848" id="my-svg-L_L_N_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_L_N_0" data-points="W3sieCI6MTM4LCJ5IjoyMTAzLjYwOTM3NX0seyJ4IjoxMzgsInkiOjIxMjguNjA5Mzc1fSx7IngiOjE4OC45ODY4NDIxMDUyNjMxOCwieSI6MjE1My42MDkzNzV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M448,2091.609L448,2097.776C448,2103.943,448,2116.276,440.101,2126.316C432.202,2136.356,416.403,2144.102,408.504,2147.975L400.605,2151.848" id="my-svg-L_M_N_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_M_N_0" data-points="W3sieCI6NDQ4LCJ5IjoyMDkxLjYwOTM3NX0seyJ4Ijo0NDgsInkiOjIxMjguNjA5Mzc1fSx7IngiOjM5Ny4wMTMxNTc4OTQ3MzY4LCJ5IjoyMTUzLjYwOTM3NX1d" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M293,2255.609L293,2259.776C293,2263.943,293,2272.276,293,2279.943C293,2287.609,293,2294.609,293,2298.109L293,2301.609" id="my-svg-L_N_O_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_N_O_0" data-points="W3sieCI6MjkzLCJ5IjoyMjU1LjYwOTM3NX0seyJ4IjoyOTMsInkiOjIyODAuNjA5Mzc1fSx7IngiOjI5MywieSI6MjMwNS42MDkzNzV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M293,2383.609L293,2387.776C293,2391.943,293,2400.276,293,2407.943C293,2415.609,293,2422.609,293,2426.109L293,2429.609" id="my-svg-L_O_P_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_O_P_0" data-points="W3sieCI6MjkzLCJ5IjoyMzgzLjYwOTM3NX0seyJ4IjoyOTMsInkiOjI0MDguNjA5Mzc1fSx7IngiOjI5MywieSI6MjQzMy42MDkzNzV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/></g><g class="edgeLabels"><g class="edgeLabel"><g class="label" data-id="L_A_B_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(380.94140625, 427)"><g class="label" data-id="L_B_C_0" transform="translate(-12.9140625, -12)"><foreignObject width="25.828125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>Yes</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(205.05859375, 503)"><g class="label" data-id="L_B_D_0" transform="translate(-10.8828125, -12)"><foreignObject width="21.765625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>No</p></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_C_D_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_D_E_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_E_F_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(380.94140625, 1100.609375)"><g class="label" data-id="L_F_G_0" transform="translate(-12.9140625, -12)"><foreignObject width="25.828125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>Yes</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(205.05859375, 1176.609375)"><g class="label" data-id="L_F_H_0" transform="translate(-10.8828125, -12)"><foreignObject width="21.765625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>No</p></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_G_H_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_H_I_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(138, 1684.609375)"><g class="label" data-id="L_I_J_0" transform="translate(-12.9140625, -12)"><foreignObject width="25.828125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>Yes</p></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_J_K_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_K_L_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(448, 1836.609375)"><g class="label" data-id="L_I_M_0" transform="translate(-10.8828125, -12)"><foreignObject width="21.765625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>No</p></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_L_N_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_M_N_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_N_O_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_O_P_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g></g><g class="nodes"><g class="node default" id="my-svg-flowchart-A-0" data-look="classic" transform="translate(293, 35)"><rect class="basic label-container" style="" x="-118.203125" y="-27" width="236.40625" height="54"/><g class="label" style="" transform="translate(-88.203125, -12)"><rect/><foreignObject width="176.40625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Submit POST /analyze</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-B-1" data-look="classic" transform="translate(293, 251)"><polygon points="139,0 278,-139 139,-278 0,-139" class="label-container" transform="translate(-138.5, 139)"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>wait_for_completion enabled?</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-C-3" data-look="classic" transform="translate(380.94140625, 503)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Poll Jenkins until build completes</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-D-5" data-look="classic" transform="translate(293, 631)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Fetch build_info and console</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-E-9" data-look="classic" transform="translate(293, 771)"><rect class="basic label-container" style="" x="-130" y="-51" width="260" height="102"/><g class="label" style="" transform="translate(-100, -36)"><rect/><foreignObject width="200" height="72"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Discover failed child jobs from subBuilds or actions.triggeredBuilds</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-F-11" data-look="classic" transform="translate(293, 967.8046875)"><polygon points="95.8046875,0 191.609375,-95.8046875 95.8046875,-191.609375 0,-95.8046875" class="label-container" transform="translate(-95.3046875, 95.8046875)"/><g class="label" style="" transform="translate(-68.8046875, -12)"><rect/><foreignObject width="137.609375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Child jobs found?</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-G-13" data-look="classic" transform="translate(380.94140625, 1176.609375)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Recursively analyze child jobs</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-H-15" data-look="classic" transform="translate(293, 1292.609375)"><rect class="basic label-container" style="" x="-125.9765625" y="-27" width="251.953125" height="54"/><g class="label" style="" transform="translate(-95.9765625, -12)"><rect/><foreignObject width="191.953125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Read Jenkins test report</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-I-19" data-look="classic" transform="translate(293, 1508.609375)"><polygon points="139,0 278,-139 139,-278 0,-139" class="label-container" transform="translate(-138.5, 139)"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Structured test failures found?</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-J-21" data-look="classic" transform="translate(138, 1760.609375)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Group failures by error_signature</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-K-23" data-look="classic" transform="translate(138, 1912.609375)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Analyze each unique group once</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-L-25" data-look="classic" transform="translate(138, 2052.609375)"><rect class="basic label-container" style="" x="-130" y="-51" width="260" height="102"/><g class="label" style="" transform="translate(-100, -36)"><rect/><foreignObject width="200" height="72"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Fan results back out to one FailureAnalysis per test</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-M-27" data-look="classic" transform="translate(448, 2052.609375)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Fall back to console-only analysis</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-N-29" data-look="classic" transform="translate(293, 2204.609375)"><rect class="basic label-container" style="" x="-130" y="-51" width="260" height="102"/><g class="label" style="" transform="translate(-100, -36)"><rect/><foreignObject width="200" height="72"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Build summary and nested child_job_analyses</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-O-33" data-look="classic" transform="translate(293, 2344.609375)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Flatten failures into failure_history</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-P-35" data-look="classic" transform="translate(293, 2484.609375)"><rect class="basic label-container" style="" x="-130" y="-51" width="260" height="102"/><g class="label" style="" transform="translate(-100, -36)"><rect/><foreignObject width="200" height="72"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Use in dashboard, report page, signature search, and job stats</p></span></div></foreignObject></g></g></g></g></g><defs><filter id="my-svg-drop-shadow" height="130%" width="130%"><feDropShadow dx="4" dy="4" stdDeviation="0" flood-opacity="0.06" flood-color="#000000"/></filter></defs><defs><filter id="my-svg-drop-shadow-small" height="150%" width="150%"><feDropShadow dx="2" dy="2" stdDeviation="0" flood-opacity="0.06" flood-color="#000000"/></filter></defs></svg></div>
 
-<span class="sd">    Uses error message and first few lines of stack trace to identify</span>
-<span class="sd">    failures that are essentially the same issue.</span>
+<p><code>POST /analyze</code> queues background work and stores status while the analysis runs. <code>POST /analyze-failures</code> is synchronous, so there is no Jenkins wait or child-job discovery step, but from the grouping step onward it uses the same deduplication flow.</p>
+<h2 id="how-failed-child-jobs-are-discovered">How Failed Child Jobs Are Discovered</h2>
+<p>JJI starts with Jenkins build metadata. It prefers structured pipeline metadata because it is cleaner and less ambiguous, and only falls back to console parsing when that metadata is missing.</p>
+<p>From <code>src/jenkins_job_insight/analyzer.py</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">extract_failed_child_jobs</span><span class="p">(</span><span class="n">build_info</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Extract failed child job names and build numbers from pipeline build info.</span>
+
+<span class="sd">    Looks for failed jobs in subBuilds (Pipeline plugin) and triggeredBuilds</span>
+<span class="sd">    (older Jenkins plugins).</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="c1"># Use error message and first 5 lines of stack trace for deduplication.</span>
-    <span class="c1"># Intentionally limited to 5 lines: different stack depths for the same</span>
-    <span class="c1"># root cause (e.g., varying call-site depth) should still collapse into</span>
-    <span class="c1"># one group so the AI analyzes each unique error only once.</span>
-    <span class="n">stack_lines</span> <span class="o">=</span> <span class="n">failure</span><span class="o">.</span><span class="n">stack_trace</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)[:</span><span class="mi">5</span><span class="p">]</span>
-    <span class="n">signature_text</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">failure</span><span class="o">.</span><span class="n">error_message</span><span class="si">}</span><span class="s2">|</span><span class="si">{</span><span class="s1">&#39;|&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">stack_lines</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
-    <span class="k">return</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha256</span><span class="p">(</span><span class="n">signature_text</span><span class="o">.</span><span class="n">encode</span><span class="p">())</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">()</span>
+    <span class="n">failed_jobs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="c1"># Check for subBuilds in pipeline (Blue Ocean / Pipeline plugin)</span>
+    <span class="n">sub_builds</span> <span class="o">=</span> <span class="n">build_info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;subBuilds&quot;</span><span class="p">,</span> <span class="p">[])</span>
+    <span class="k">for</span> <span class="n">sub</span> <span class="ow">in</span> <span class="n">sub_builds</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">sub</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;result&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;FAILURE&quot;</span><span class="p">,</span> <span class="s2">&quot;UNSTABLE&quot;</span><span class="p">):</span>
+            <span class="n">job_name</span> <span class="o">=</span> <span class="n">sub</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;jobName&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+            <span class="n">build_num</span> <span class="o">=</span> <span class="n">sub</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;buildNumber&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">job_name</span> <span class="ow">and</span> <span class="n">build_num</span><span class="p">:</span>
+                <span class="n">failed_jobs</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">job_name</span><span class="p">,</span> <span class="n">build_num</span><span class="p">))</span>
+
+    <span class="c1"># Also check actions for triggered builds (older Jenkins plugins)</span>
+    <span class="k">for</span> <span class="n">action</span> <span class="ow">in</span> <span class="n">build_info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;actions&quot;</span><span class="p">,</span> <span class="p">[]):</span>
+        <span class="k">if</span> <span class="n">action</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">action_class</span> <span class="o">=</span> <span class="n">action</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;_class&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">triggered_builds</span> <span class="o">=</span> <span class="n">action</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;triggeredBuilds&quot;</span><span class="p">,</span> <span class="p">[])</span>
+
+        <span class="c1"># Check for BuildAction or similar action types</span>
+        <span class="k">if</span> <span class="n">triggered_builds</span> <span class="ow">or</span> <span class="s2">&quot;BuildAction&quot;</span> <span class="ow">in</span> <span class="n">action_class</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">triggered</span> <span class="ow">in</span> <span class="n">triggered_builds</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">triggered</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;result&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;FAILURE&quot;</span><span class="p">,</span> <span class="s2">&quot;UNSTABLE&quot;</span><span class="p">):</span>
+                    <span class="c1"># Try to get job name from different possible fields</span>
+                    <span class="n">job_name</span> <span class="o">=</span> <span class="n">triggered</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;jobName&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="ow">not</span> <span class="n">job_name</span><span class="p">:</span>
+                        <span class="c1"># Try to parse from URL if available</span>
+                        <span class="n">url</span> <span class="o">=</span> <span class="n">triggered</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;url&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+                        <span class="k">if</span> <span class="n">url</span><span class="p">:</span>
+                            <span class="k">try</span><span class="p">:</span>
+                                <span class="n">job_name</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">JenkinsClient</span><span class="o">.</span><span class="n">parse_jenkins_url</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
+                            <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+                                <span class="k">continue</span>
+                    <span class="n">build_num</span> <span class="o">=</span> <span class="n">triggered</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;number&quot;</span><span class="p">,</span> <span class="n">triggered</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;buildNumber&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+                    <span class="k">if</span> <span class="n">job_name</span> <span class="ow">and</span> <span class="n">build_num</span><span class="p">:</span>
+                        <span class="n">failed_jobs</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">job_name</span><span class="p">,</span> <span class="n">build_num</span><span class="p">))</span>
+
+    <span class="k">return</span> <span class="n">failed_jobs</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">extract_failed_child_jobs_from_console</span><span class="p">(</span>
+    <span class="n">console_output</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Extract failed child jobs from console output using regex.&quot;&quot;&quot;</span>
+    <span class="n">failed_jobs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="c1"># Pattern: Build [job path] #[number] completed: FAILURE/UNSTABLE</span>
+    <span class="n">pattern</span> <span class="o">=</span> <span class="sa">r</span><span class="s2">&quot;Build\s+(.+?)\s+#(\d+)\s+completed:\s*(FAILURE|UNSTABLE)&quot;</span>
+    <span class="n">matches</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="n">pattern</span><span class="p">,</span> <span class="n">console_output</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">match</span> <span class="ow">in</span> <span class="n">matches</span><span class="p">:</span>
+        <span class="n">job_path</span> <span class="o">=</span> <span class="n">match</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+        <span class="n">build_num</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">match</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="c1"># Convert &quot;folder » job&quot; to &quot;folder/job&quot; format for Jenkins API</span>
+        <span class="n">job_name</span> <span class="o">=</span> <span class="n">job_path</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot; » &quot;</span><span class="p">,</span> <span class="s2">&quot;/&quot;</span><span class="p">)</span>
+        <span class="n">failed_jobs</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">job_name</span><span class="p">,</span> <span class="n">build_num</span><span class="p">))</span>
+
+    <span class="k">return</span> <span class="n">failed_jobs</span>
 </code></pre></div>
 
-<p>That signature is then used to group failures before JJI starts any per-group investigation. Each signature group still fans back out to one <code>FailureAnalysis</code> per failed test, but the actual analysis work happens once per unique signature.</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Group failures by signature to avoid analyzing identical errors multiple times</span>
-<span class="n">failure_groups</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">TestFailure</span><span class="p">]]</span> <span class="o">=</span> <span class="n">defaultdict</span><span class="p">(</span><span class="nb">list</span><span class="p">)</span>
-<span class="k">for</span> <span class="n">tf</span> <span class="ow">in</span> <span class="n">test_failures</span><span class="p">:</span>
-    <span class="n">sig</span> <span class="o">=</span> <span class="n">get_failure_signature</span><span class="p">(</span><span class="n">tf</span><span class="p">)</span>
-    <span class="n">failure_groups</span><span class="p">[</span><span class="n">sig</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tf</span><span class="p">)</span>
-
-<span class="c1"># Analyze each unique failure group in parallel</span>
-<span class="n">total_groups</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">failure_groups</span><span class="p">)</span>
-<span class="n">failure_tasks</span> <span class="o">=</span> <span class="p">[]</span>
-<span class="k">for</span> <span class="n">group_idx</span><span class="p">,</span> <span class="p">(</span><span class="n">_sig</span><span class="p">,</span> <span class="n">group</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">failure_groups</span><span class="o">.</span><span class="n">items</span><span class="p">(),</span> <span class="mi">1</span><span class="p">):</span>
-    <span class="n">failure_tasks</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-        <span class="n">analyze_failure_group</span><span class="p">(</span>
-            <span class="n">failures</span><span class="o">=</span><span class="n">group</span><span class="p">,</span>
-            <span class="n">console_context</span><span class="o">=</span><span class="n">console_context</span><span class="p">,</span>
-            <span class="n">repo_path</span><span class="o">=</span><span class="n">repo_path</span><span class="p">,</span>
-            <span class="c1"># ... other analysis args ...</span>
-            <span class="n">peer_ai_configs</span><span class="o">=</span><span class="n">peer_ai_configs</span><span class="p">,</span>
-            <span class="n">peer_analysis_max_rounds</span><span class="o">=</span><span class="n">peer_analysis_max_rounds</span><span class="p">,</span>
-            <span class="n">group_label</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">group_idx</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">total_groups</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="k">if</span> <span class="n">total_groups</span> <span class="o">&gt;</span> <span class="mi">1</span>
-            <span class="k">else</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
-        <span class="p">)</span>
-    <span class="p">)</span>
-</code></pre></div>
-
-<p>If peer analysis is enabled, the deduplicated group is still the unit of work. JJI just switches the group handler from the single-AI path to the peer-consensus path instead of re-analyzing each test independently.</p>
-<div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="n">peer_ai_configs</span><span class="p">:</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">jenkins_job_insight.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">AiConfigEntry</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">jenkins_job_insight.peer_analysis</span><span class="w"> </span><span class="kn">import</span> <span class="n">analyze_failure_group_with_peers</span>
-
-    <span class="n">configs</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="n">AiConfigEntry</span><span class="p">(</span><span class="o">**</span><span class="n">c</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="k">else</span> <span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">peer_ai_configs</span>
-    <span class="p">]</span>
-    <span class="k">return</span> <span class="k">await</span> <span class="n">analyze_failure_group_with_peers</span><span class="p">(</span>
-        <span class="n">failures</span><span class="o">=</span><span class="n">failures</span><span class="p">,</span>
-        <span class="n">console_context</span><span class="o">=</span><span class="n">console_context</span><span class="p">,</span>
-        <span class="n">repo_path</span><span class="o">=</span><span class="n">repo_path</span><span class="p">,</span>
-        <span class="n">main_ai_provider</span><span class="o">=</span><span class="n">ai_provider</span><span class="p">,</span>
-        <span class="n">main_ai_model</span><span class="o">=</span><span class="n">ai_model</span><span class="p">,</span>
-        <span class="n">peer_ai_configs</span><span class="o">=</span><span class="n">configs</span><span class="p">,</span>
-        <span class="n">max_rounds</span><span class="o">=</span><span class="n">peer_analysis_max_rounds</span><span class="p">,</span>
-        <span class="c1"># ... other shared args ...</span>
-        <span class="n">group_label</span><span class="o">=</span><span class="n">group_label</span><span class="p">,</span>
-    <span class="p">)</span>
-</code></pre></div>
-
-<p>This is the core reason JJI scales better on noisy failures: ten tests with the same root cause do not trigger ten separate investigations, even when peer consensus is enabled.</p>
-<blockquote>
-<p><strong>Note:</strong> Deduplication removes repeated analysis work, not failures from the result. Users still get one <code>FailureAnalysis</code> entry per failed test, and each entry keeps its <code>error_signature</code>.</p>
-<p><strong>Note:</strong> Peer analysis only applies when JJI has structured test failures to group. If a job falls back to console-only analysis, JJI logs a warning and runs a single console-level analysis instead of a per-signature peer debate.</p>
-<p><strong>Tip:</strong> The same signature-grouping logic is also used by <code>POST /analyze-failures</code>, so you can test deduplication without a live Jenkins job.</p>
-</blockquote>
-<p>If you want a concrete example, the test suite verifies that three failures with only two unique signatures produce only two group analyses:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Return same signature for first two failures, different for third</span>
-<span class="n">signatures</span> <span class="o">=</span> <span class="nb">iter</span><span class="p">([</span><span class="s2">&quot;sig-a&quot;</span><span class="p">,</span> <span class="s2">&quot;sig-a&quot;</span><span class="p">,</span> <span class="s2">&quot;sig-b&quot;</span><span class="p">])</span>
-<span class="k">with</span> <span class="n">patch</span><span class="p">(</span>
-    <span class="s2">&quot;jenkins_job_insight.main.get_failure_signature&quot;</span><span class="p">,</span>
-    <span class="n">side_effect</span><span class="o">=</span><span class="k">lambda</span> <span class="n">f</span><span class="p">:</span> <span class="nb">next</span><span class="p">(</span><span class="n">signatures</span><span class="p">),</span>
-<span class="p">):</span>
-    <span class="k">with</span> <span class="n">patch</span><span class="p">(</span>
-        <span class="s2">&quot;jenkins_job_insight.main.analyze_failure_group&quot;</span><span class="p">,</span>
-        <span class="n">new_callable</span><span class="o">=</span><span class="n">AsyncMock</span><span class="p">,</span>
-    <span class="p">)</span> <span class="k">as</span> <span class="n">mock_analyze_group</span><span class="p">:</span>
-        <span class="n">mock_analyze_group</span><span class="o">.</span><span class="n">side_effect</span> <span class="o">=</span> <span class="p">[</span>
-            <span class="p">[</span><span class="n">mock_analysis_a</span><span class="p">,</span> <span class="n">mock_analysis_a</span><span class="p">],</span>
-            <span class="p">[</span><span class="n">mock_analysis_b</span><span class="p">],</span>
-        <span class="p">]</span>
-
-        <span class="c1"># ...</span>
-        <span class="n">response</span> <span class="o">=</span> <span class="n">test_client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span>
-            <span class="s2">&quot;/analyze-failures&quot;</span><span class="p">,</span>
-            <span class="n">json</span><span class="o">=</span><span class="p">{</span>
-                <span class="s2">&quot;failures&quot;</span><span class="p">:</span> <span class="p">[</span>
-                    <span class="p">{</span>
-                        <span class="s2">&quot;test_name&quot;</span><span class="p">:</span> <span class="s2">&quot;test_foo&quot;</span><span class="p">,</span>
-                        <span class="s2">&quot;error_message&quot;</span><span class="p">:</span> <span class="s2">&quot;assert False&quot;</span><span class="p">,</span>
-                        <span class="s2">&quot;stack_trace&quot;</span><span class="p">:</span> <span class="s2">&quot;File test.py, line 10&quot;</span><span class="p">,</span>
-                    <span class="p">},</span>
-                    <span class="p">{</span>
-                        <span class="s2">&quot;test_name&quot;</span><span class="p">:</span> <span class="s2">&quot;test_baz&quot;</span><span class="p">,</span>
-                        <span class="s2">&quot;error_message&quot;</span><span class="p">:</span> <span class="s2">&quot;assert False&quot;</span><span class="p">,</span>
-                        <span class="s2">&quot;stack_trace&quot;</span><span class="p">:</span> <span class="s2">&quot;File test.py, line 10&quot;</span><span class="p">,</span>
-                    <span class="p">},</span>
-                    <span class="p">{</span>
-                        <span class="s2">&quot;test_name&quot;</span><span class="p">:</span> <span class="s2">&quot;test_bar&quot;</span><span class="p">,</span>
-                        <span class="s2">&quot;error_message&quot;</span><span class="p">:</span> <span class="s2">&quot;KeyError: x&quot;</span><span class="p">,</span>
-                        <span class="s2">&quot;stack_trace&quot;</span><span class="p">:</span> <span class="s2">&quot;File test.py, line 20&quot;</span><span class="p">,</span>
-                    <span class="p">},</span>
-                <span class="p">],</span>
-                <span class="s2">&quot;ai_provider&quot;</span><span class="p">:</span> <span class="s2">&quot;claude&quot;</span><span class="p">,</span>
-                <span class="s2">&quot;ai_model&quot;</span><span class="p">:</span> <span class="s2">&quot;test-model&quot;</span><span class="p">,</span>
-            <span class="p">},</span>
-        <span class="p">)</span>
-        <span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span>
-        <span class="n">data</span> <span class="o">=</span> <span class="n">response</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
-        <span class="k">assert</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;status&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;completed&quot;</span>
-        <span class="c1"># analyze_failure_group called twice: once for sig-a group, once for sig-b</span>
-        <span class="k">assert</span> <span class="n">mock_analyze_group</span><span class="o">.</span><span class="n">call_count</span> <span class="o">==</span> <span class="mi">2</span>
-</code></pre></div>
-
-<blockquote>
-<p><strong>Note:</strong> Deduplication is strongest when Jenkins publishes a structured test report. If no test report is available, JJI falls back to a single console-level analysis for that job instead of per-test grouping.</p>
-</blockquote>
-<h2 id="how-failed-child-jobs-are-found">How Failed Child Jobs Are Found</h2>
-<p>Pipeline discovery starts with Jenkins build metadata. JJI first looks for failed or unstable downstream jobs in <code>subBuilds</code>, then in <code>actions[].triggeredBuilds</code> for older plugin styles. If the job name is missing, it can recover it from the triggered build URL.</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check for subBuilds in pipeline (Blue Ocean / Pipeline plugin)</span>
-<span class="n">sub_builds</span> <span class="o">=</span> <span class="n">build_info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;subBuilds&quot;</span><span class="p">,</span> <span class="p">[])</span>
-<span class="k">for</span> <span class="n">sub</span> <span class="ow">in</span> <span class="n">sub_builds</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">sub</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;result&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;FAILURE&quot;</span><span class="p">,</span> <span class="s2">&quot;UNSTABLE&quot;</span><span class="p">):</span>
-        <span class="n">job_name</span> <span class="o">=</span> <span class="n">sub</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;jobName&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
-        <span class="n">build_num</span> <span class="o">=</span> <span class="n">sub</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;buildNumber&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">job_name</span> <span class="ow">and</span> <span class="n">build_num</span><span class="p">:</span>
-            <span class="n">failed_jobs</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">job_name</span><span class="p">,</span> <span class="n">build_num</span><span class="p">))</span>
-
-<span class="c1"># Also check actions for triggered builds (older Jenkins plugins)</span>
-<span class="k">for</span> <span class="n">action</span> <span class="ow">in</span> <span class="n">build_info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;actions&quot;</span><span class="p">,</span> <span class="p">[]):</span>
-    <span class="k">if</span> <span class="n">action</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">continue</span>
-    <span class="n">action_class</span> <span class="o">=</span> <span class="n">action</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;_class&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
-    <span class="n">triggered_builds</span> <span class="o">=</span> <span class="n">action</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;triggeredBuilds&quot;</span><span class="p">,</span> <span class="p">[])</span>
-
-    <span class="c1"># Check for BuildAction or similar action types</span>
-    <span class="k">if</span> <span class="n">triggered_builds</span> <span class="ow">or</span> <span class="s2">&quot;BuildAction&quot;</span> <span class="ow">in</span> <span class="n">action_class</span><span class="p">:</span>
-        <span class="k">for</span> <span class="n">triggered</span> <span class="ow">in</span> <span class="n">triggered_builds</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">triggered</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;result&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;FAILURE&quot;</span><span class="p">,</span> <span class="s2">&quot;UNSTABLE&quot;</span><span class="p">):</span>
-                <span class="c1"># Try to get job name from different possible fields</span>
-                <span class="n">job_name</span> <span class="o">=</span> <span class="n">triggered</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;jobName&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
-                <span class="k">if</span> <span class="ow">not</span> <span class="n">job_name</span><span class="p">:</span>
-                    <span class="c1"># Try to parse from URL if available</span>
-                    <span class="n">url</span> <span class="o">=</span> <span class="n">triggered</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;url&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
-                    <span class="k">if</span> <span class="n">url</span><span class="p">:</span>
-                        <span class="k">try</span><span class="p">:</span>
-                            <span class="n">job_name</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">JenkinsClient</span><span class="o">.</span><span class="n">parse_jenkins_url</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
-                        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
-                            <span class="k">continue</span>
-                <span class="n">build_num</span> <span class="o">=</span> <span class="n">triggered</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;number&quot;</span><span class="p">,</span> <span class="n">triggered</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;buildNumber&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
-                <span class="k">if</span> <span class="n">job_name</span> <span class="ow">and</span> <span class="n">build_num</span><span class="p">:</span>
-                    <span class="n">failed_jobs</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">job_name</span><span class="p">,</span> <span class="n">build_num</span><span class="p">))</span>
-
-<span class="c1"># Pattern: Build [job path] #[number] completed: FAILURE/UNSTABLE</span>
-<span class="n">pattern</span> <span class="o">=</span> <span class="sa">r</span><span class="s2">&quot;Build\s+(.+?)\s+#(\d+)\s+completed:\s*(FAILURE|UNSTABLE)&quot;</span>
-<span class="n">matches</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="n">pattern</span><span class="p">,</span> <span class="n">console_output</span><span class="p">)</span>
-
-<span class="k">for</span> <span class="n">match</span> <span class="ow">in</span> <span class="n">matches</span><span class="p">:</span>
-    <span class="n">job_path</span> <span class="o">=</span> <span class="n">match</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
-    <span class="n">build_num</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">match</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
-    <span class="c1"># Convert &quot;folder » job&quot; to &quot;folder/job&quot; format for Jenkins API</span>
-    <span class="n">job_name</span> <span class="o">=</span> <span class="n">job_path</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot; » &quot;</span><span class="p">,</span> <span class="s2">&quot;/&quot;</span><span class="p">)</span>
-    <span class="n">failed_jobs</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">job_name</span><span class="p">,</span> <span class="n">build_num</span><span class="p">))</span>
-</code></pre></div>
-
-<p>A few details matter here:</p>
+<p>A few practical details matter here:</p>
 <ul>
 <li><code>FAILURE</code> and <code>UNSTABLE</code> are both treated as failed child jobs worth following.</li>
-<li>Structured Jenkins metadata is preferred.</li>
-<li>If metadata is missing, console parsing acts as a fallback.</li>
-<li>Console lines such as <code>Build folder » job-name #123 completed: FAILURE</code> are normalized into API-friendly job paths like <code>folder/job-name</code>.</li>
+<li><code>subBuilds</code> is checked first.</li>
+<li>Older plugin data in <code>actions[].triggeredBuilds</code> is supported too.</li>
+<li>If Jenkins only exposes the failure in console text, lines such as <code>Build folder » child-job #123 completed: FAILURE</code> are still detected and followed.</li>
 </ul>
-<p>Once child jobs are found, JJI analyzes them recursively. If a job failed only because its children failed, JJI skips a redundant top-level root-cause analysis and returns a pipeline summary with nested child results.</p>
-<div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="n">depth</span> <span class="o">&gt;=</span> <span class="n">max_depth</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">ChildJobAnalysis</span><span class="p">(</span>
-        <span class="n">job_name</span><span class="o">=</span><span class="n">job_name</span><span class="p">,</span>
-        <span class="n">build_number</span><span class="o">=</span><span class="n">build_number</span><span class="p">,</span>
-        <span class="n">jenkins_url</span><span class="o">=</span><span class="n">jenkins_url</span><span class="p">,</span>
-        <span class="n">note</span><span class="o">=</span><span class="s2">&quot;Max depth reached - analysis stopped to prevent infinite recursion&quot;</span><span class="p">,</span>
-    <span class="p">)</span>
-
-<span class="c1"># ...</span>
-
-<span class="n">failed_children</span> <span class="o">=</span> <span class="n">extract_failed_child_jobs</span><span class="p">(</span><span class="n">build_info</span><span class="p">)</span>
+<p>Once child jobs are found, JJI analyzes them recursively. If a child job is itself just another pipeline wrapper, JJI does not waste an AI call on that wrapper. It follows its failed children instead and returns a nested summary.</p>
+<p>From <code>src/jenkins_job_insight/analyzer.py</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="n">failed_children</span> <span class="o">=</span> <span class="n">extract_failed_child_jobs</span><span class="p">(</span><span class="n">build_info</span><span class="p">)</span>
 
 <span class="c1"># Fallback to console parsing if none found from build_info</span>
 <span class="k">if</span> <span class="ow">not</span> <span class="n">failed_children</span><span class="p">:</span>
@@ -498,7 +385,7 @@
 
 <span class="k">if</span> <span class="n">failed_children</span><span class="p">:</span>
     <span class="c1"># Recursively analyze failed children IN PARALLEL with bounded concurrency</span>
-    <span class="n">child_tasks</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">child_tasks</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Coroutine</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[</span>
         <span class="n">analyze_child_job</span><span class="p">(</span>
             <span class="n">child_name</span><span class="p">,</span>
             <span class="n">child_num</span><span class="p">,</span>
@@ -506,13 +393,40 @@
             <span class="n">jenkins_base_url</span><span class="p">,</span>
             <span class="n">depth</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
             <span class="n">max_depth</span><span class="p">,</span>
-            <span class="c1"># ...</span>
+            <span class="n">repo_path</span><span class="p">,</span>
+            <span class="n">ai_provider</span><span class="p">,</span>
+            <span class="n">ai_model</span><span class="p">,</span>
+            <span class="n">ai_cli_timeout</span><span class="p">,</span>
+            <span class="n">custom_prompt</span><span class="p">,</span>
+            <span class="n">artifacts_context</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+            <span class="n">server_url</span><span class="o">=</span><span class="n">server_url</span><span class="p">,</span>
+            <span class="n">job_id</span><span class="o">=</span><span class="n">job_id</span><span class="p">,</span>
+            <span class="n">peer_ai_configs</span><span class="o">=</span><span class="n">peer_ai_configs</span><span class="p">,</span>
+            <span class="n">peer_analysis_max_rounds</span><span class="o">=</span><span class="n">peer_analysis_max_rounds</span><span class="p">,</span>
+            <span class="n">additional_repos</span><span class="o">=</span><span class="n">additional_repos</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">for</span> <span class="n">child_name</span><span class="p">,</span> <span class="n">child_num</span> <span class="ow">in</span> <span class="n">failed_children</span>
     <span class="p">]</span>
     <span class="n">child_results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">run_parallel_with_limit</span><span class="p">(</span><span class="n">child_tasks</span><span class="p">)</span>
 
-    <span class="c1"># ...</span>
+    <span class="c1"># Handle exceptions in results</span>
+    <span class="n">child_analyses</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">result</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">child_results</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="ne">Exception</span><span class="p">):</span>
+            <span class="n">child_name</span><span class="p">,</span> <span class="n">child_num</span> <span class="o">=</span> <span class="n">failed_children</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+            <span class="n">child_analyses</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">ChildJobAnalysis</span><span class="p">(</span>
+                    <span class="n">job_name</span><span class="o">=</span><span class="n">child_name</span><span class="p">,</span>
+                    <span class="n">build_number</span><span class="o">=</span><span class="n">child_num</span><span class="p">,</span>
+                    <span class="n">jenkins_url</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                    <span class="n">note</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Analysis failed: </span><span class="si">{</span><span class="n">format_exception_with_type</span><span class="p">(</span><span class="n">result</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">child_analyses</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+
+    <span class="c1"># This job failed because children failed - skip Claude CLI analysis</span>
+    <span class="c1"># Count failures from child analyses</span>
     <span class="n">total_failures</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">failures</span><span class="p">)</span> <span class="k">for</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">child_analyses</span><span class="p">)</span>
     <span class="n">summary</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;Pipeline failed due to </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">child_analyses</span><span class="p">)</span><span class="si">}</span><span class="s2"> child job(s).&quot;</span>
     <span class="k">if</span> <span class="n">total_failures</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
@@ -528,183 +442,251 @@
     <span class="p">)</span>
 </code></pre></div>
 
+<p>When JJI reaches a leaf job, it tries Jenkins' structured test report first and extracts only cases with status <code>FAILED</code> or <code>REGRESSION</code>. Those extracted test failures are the inputs to deduplication. If no test report exists, JJI falls back to console-only analysis for that leaf job.</p>
 <blockquote>
-<p><strong>Warning:</strong> Recursive child-job analysis stops at depth <code>3</code> to prevent infinite loops in unusual Jenkins pipeline graphs.</p>
+<p><strong>Warning:</strong> Recursive child-job analysis stops at depth <code>3</code> in the current implementation to avoid infinite loops in unusual Jenkins graphs.</p>
+<p><strong>Note:</strong> A top-level result with <code>failures: []</code> can still be completely valid. It usually means the top-level job was an orchestrator and the actionable failures live under <code>child_job_analyses</code> or deeper <code>failed_children</code>.</p>
+<p><strong>Note:</strong> If Jenkins does not expose a structured test report for a leaf job, JJI falls back to a single console-only analysis for that job. You still get a result, but you do not get per-test deduplication for that leaf.</p>
+</blockquote>
+<h2 id="how-identical-failures-are-grouped">How Identical Failures Are Grouped</h2>
+<p>When structured test failures are available, JJI builds a stable signature from the error message plus the first five lines of the stack trace. That choice is deliberate: it keeps the grouping stable even when the same root cause produces slightly different stack depths.</p>
+<p>From <code>src/jenkins_job_insight/analyzer.py</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_failure_signature</span><span class="p">(</span><span class="n">failure</span><span class="p">:</span> <span class="n">TestFailure</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Create a signature for grouping identical failures.</span>
+
+<span class="sd">    Uses error message and first few lines of stack trace to identify</span>
+<span class="sd">    failures that are essentially the same issue.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Use error message and first 5 lines of stack trace for deduplication.</span>
+    <span class="c1"># Intentionally limited to 5 lines: different stack depths for the same</span>
+    <span class="c1"># root cause (e.g., varying call-site depth) should still collapse into</span>
+    <span class="c1"># one group so the AI analyzes each unique error only once.</span>
+    <span class="n">stack_lines</span> <span class="o">=</span> <span class="n">failure</span><span class="o">.</span><span class="n">stack_trace</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)[:</span><span class="mi">5</span><span class="p">]</span>
+    <span class="n">signature_text</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">failure</span><span class="o">.</span><span class="n">error_message</span><span class="si">}</span><span class="s2">|</span><span class="si">{</span><span class="s1">&#39;|&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">stack_lines</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="k">return</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha256</span><span class="p">(</span><span class="n">signature_text</span><span class="o">.</span><span class="n">encode</span><span class="p">())</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">()</span>
+</code></pre></div>
+
+<p>Once JJI has those signatures, it groups failures by signature and analyzes each group once. The direct-failure endpoint shows this especially clearly because it builds the groups, runs one group-analysis task per signature, and then reports both the submitted-failure count and the unique-signature count.</p>
+<p>From <code>src/jenkins_job_insight/main.py</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Group failures by error signature for deduplication</span>
+<span class="n">groups</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">]</span> <span class="o">=</span> <span class="n">defaultdict</span><span class="p">(</span><span class="nb">list</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">failure</span> <span class="ow">in</span> <span class="n">test_failures</span><span class="p">:</span>
+    <span class="n">sig</span> <span class="o">=</span> <span class="n">get_failure_signature</span><span class="p">(</span><span class="n">failure</span><span class="p">)</span>
+    <span class="n">groups</span><span class="p">[</span><span class="n">sig</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">failure</span><span class="p">)</span>
+
+<span class="c1"># Analyze each unique failure group in parallel</span>
+<span class="n">coroutines</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Coroutine</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">analyze_failure_group</span><span class="p">(</span>
+        <span class="n">failures</span><span class="o">=</span><span class="n">group_failures</span><span class="p">,</span>
+        <span class="n">console_context</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+        <span class="n">repo_path</span><span class="o">=</span><span class="n">repo_path</span><span class="p">,</span>
+        <span class="n">ai_provider</span><span class="o">=</span><span class="n">ai_provider</span><span class="p">,</span>
+        <span class="n">ai_model</span><span class="o">=</span><span class="n">ai_model</span><span class="p">,</span>
+        <span class="n">ai_cli_timeout</span><span class="o">=</span><span class="n">merged</span><span class="o">.</span><span class="n">ai_cli_timeout</span><span class="p">,</span>
+        <span class="n">custom_prompt</span><span class="o">=</span><span class="n">custom_prompt</span><span class="p">,</span>
+        <span class="n">server_url</span><span class="o">=</span><span class="n">server_url</span><span class="p">,</span>
+        <span class="n">job_id</span><span class="o">=</span><span class="n">job_id</span><span class="p">,</span>
+        <span class="n">peer_ai_configs</span><span class="o">=</span><span class="n">peer_ai_configs</span><span class="p">,</span>
+        <span class="n">peer_analysis_max_rounds</span><span class="o">=</span><span class="n">merged</span><span class="o">.</span><span class="n">peer_analysis_max_rounds</span><span class="p">,</span>
+        <span class="n">additional_repos</span><span class="o">=</span><span class="n">cloned_repos</span> <span class="ow">or</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">for</span> <span class="n">group_failures</span> <span class="ow">in</span> <span class="n">groups</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+<span class="p">]</span>
+
+<span class="n">results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">run_parallel_with_limit</span><span class="p">(</span><span class="n">coroutines</span><span class="p">)</span>
+
+<span class="c1"># Flatten results and filter out exceptions</span>
+<span class="n">all_analyses</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">result</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="ne">Exception</span><span class="p">):</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Failed to analyze failure group: </span><span class="si">{</span><span class="n">result</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">exc_info</span><span class="o">=</span><span class="n">result</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">all_analyses</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+
+<span class="n">unique_errors</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">groups</span><span class="p">)</span>
+<span class="n">summary</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;Analyzed </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">test_failures</span><span class="p">)</span><span class="si">}</span><span class="s2"> test failures (</span><span class="si">{</span><span class="n">unique_errors</span><span class="si">}</span><span class="s2"> unique errors). </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">all_analyses</span><span class="p">)</span><span class="si">}</span><span class="s2"> analyzed successfully.&quot;</span>
+</code></pre></div>
+
+<p>A few practical consequences follow from this design:</p>
+<ul>
+<li>Ten tests with the same signature trigger one analysis, not ten.</li>
+<li>Each failed test still gets its own <code>FailureAnalysis</code> entry in the final result.</li>
+<li>Each of those entries keeps the shared <code>error_signature</code>, so later history search can tie them back together.</li>
+<li>Peer analysis does not change the grouping unit. If peer review is enabled, the peer debate still happens once per signature group, not once per test.</li>
+</ul>
+<blockquote>
+<p><strong>Note:</strong> Deduplication removes repeated analysis work. It does not hide duplicate failures from the result. Users still see one failure record per test.</p>
+<p><strong>Tip:</strong> <code>POST /analyze-failures</code> uses the same signature grouping logic as Jenkins-backed analysis. It is a good way to test deduplication behavior when you already have JUnit XML or raw failure data.</p>
+<p><strong>Note:</strong> The direct-failure summary can report partial success. If one signature group fails to analyze but others succeed, the response can still be <code>completed</code>, and the summary will reflect how many analyses succeeded.</p>
 </blockquote>
 <h2 id="how-summaries-and-counts-are-computed">How Summaries And Counts Are Computed</h2>
-<p>The project computes different counts for different views. That is intentional, and it is useful to know which number you are looking at.</p>
+<p>Different parts of JJI count slightly different things on purpose. The table below is the easiest way to keep them straight.</p>
 <table>
 <thead>
 <tr>
 <th>Where you see it</th>
-<th>How JJI computes it</th>
+<th>What it counts</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Result summary for a direct test job</td>
-<td><code>N failure(s) analyzed</code>, or <code>N failure(s) analyzed (M unique error type(s))</code> when deduplication reduced repeated work.</td>
+<td>Result summary for a job with direct test failures</td>
+<td>Total returned <code>FailureAnalysis</code> records. If deduplication reduced repeated work, the summary adds the number of unique error types.</td>
 </tr>
 <tr>
 <td>Result summary for a pipeline-only job</td>
-<td><code>Pipeline failed due to X child job(s)</code> plus a <code>Total: Y failure(s) analyzed</code> suffix when immediate child analyses contain direct failures.</td>
+<td>Immediate failed child jobs in <code>child_job_analyses</code>. The optional <code>Total: ... failure(s) analyzed</code> suffix is based on the immediate child objects' <code>failures</code> lists.</td>
 </tr>
 <tr>
 <td>Result summary for a mixed job</td>
-<td>The direct-failure summary above, plus <code>Additionally, X failed child job(s) were analyzed recursively.</code></td>
+<td>Direct-failure summary, plus <code>Additionally, X failed child job(s) were analyzed recursively.</code></td>
 </tr>
 <tr>
-<td><code>POST /analyze-failures</code> summary</td>
-<td><code>Analyzed X test failures (Y unique errors). Z analyzed successfully.</code></td>
+<td>Dashboard <code>failure_count</code></td>
+<td>Recursive total across top-level <code>failures</code>, top-level <code>child_job_analyses</code>, and nested <code>failed_children</code>.</td>
 </tr>
 <tr>
-<td>Dashboard failure count / report page total</td>
-<td>Recursive count across top-level failures and nested child jobs. The dashboard uses <code>count_all_failures()</code> in <code>storage.py</code>, and the React report page mirrors that same traversal with <code>countAllFailures()</code>.</td>
+<td>Report page total</td>
+<td>The same recursive traversal, mirrored in the frontend.</td>
 </tr>
 <tr>
-<td>Dashboard child-job badge</td>
-<td>Number of top-level entries in <code>child_job_analyses</code>.</td>
+<td>Signature search</td>
+<td><code>total_occurrences</code> is the number of matching <code>failure_history</code> rows for that signature. <code>unique_tests</code> is the number of distinct <code>test_name</code> values in that set.</td>
 </tr>
 <tr>
-<td>Signature search count</td>
-<td><code>total_occurrences</code> is the number of failure-history rows with that signature; <code>unique_tests</code> is the number of distinct test names in that set.</td>
-</tr>
-<tr>
-<td>Job stats failure rate</td>
-<td>Completed analyzed builds from <code>results</code> are the base count, failing builds from <code>failure_history</code> are the failure count, and failure rate is <code>builds_with_failures / total_builds_analyzed</code>.</td>
+<td>Job stats</td>
+<td><code>total_builds_analyzed</code> comes from completed rows in <code>results</code>. <code>builds_with_failures</code> comes from distinct failing <code>job_id</code> values in <code>failure_history</code>. Failure rate is <code>builds_with_failures / total_builds_analyzed</code>.</td>
 </tr>
 <tr>
 <td>Test history pass count</td>
-<td>Estimated only when <code>job_name</code> is supplied, because <code>failure_history</code> stores failures, not full pass records.</td>
+<td>Only estimated when <code>job_name</code> is provided, because <code>failure_history</code> stores failures, not complete pass records.</td>
 </tr>
 </tbody>
 </table>
+<p>The recursive dashboard and report totals come from shared tree traversal logic. The backend uses <code>count_all_failures()</code>, and the React report page mirrors the same idea in <code>countAllFailures()</code>.</p>
+<p>From <code>src/jenkins_job_insight/storage.py</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">count_all_failures</span><span class="p">(</span><span class="n">result_data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Count all failures including those in nested child job analyses.&quot;&quot;&quot;</span>
+    <span class="n">count</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">result_data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;failures&quot;</span><span class="p">,</span> <span class="p">[]))</span>
+    <span class="k">for</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">result_data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;child_job_analyses&quot;</span><span class="p">,</span> <span class="p">[]):</span>
+        <span class="n">count</span> <span class="o">+=</span> <span class="n">_count_child_failures_recursive</span><span class="p">(</span><span class="n">child</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">count</span>
+</code></pre></div>
+
+<p>From <code>frontend/src/pages/ReportPage.tsx</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">function</span><span class="w"> </span><span class="nx">countAllFailures</span><span class="p">(</span><span class="nx">failures</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">test_name</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">}[],</span><span class="w"> </span><span class="nx">children</span><span class="o">:</span><span class="w"> </span><span class="kt">ChildJobAnalysis</span><span class="p">[])</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="nx">count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span>
+<span class="w">  </span><span class="nx">walkChildTree</span><span class="p">(</span><span class="nx">failures</span><span class="p">,</span><span class="w"> </span><span class="nx">children</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">nodeFailures</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">count</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">nodeFailures</span><span class="p">.</span><span class="nx">length</span>
+<span class="w">  </span><span class="p">})</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">count</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The history-side signature counts come directly from SQL over <code>failure_history</code>.</p>
+<p>From <code>src/jenkins_job_insight/storage.py</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Total occurrences</span>
+<span class="n">cursor</span> <span class="o">=</span> <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+    <span class="sa">f</span><span class="s2">&quot;SELECT COUNT(*) FROM failure_history WHERE error_signature = ?</span><span class="si">{</span><span class="n">exclude_filter</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+    <span class="n">base_params</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">total_occurrences</span> <span class="o">=</span> <span class="p">(</span><span class="k">await</span> <span class="n">cursor</span><span class="o">.</span><span class="n">fetchone</span><span class="p">())[</span><span class="mi">0</span><span class="p">]</span>
+
+<span class="c1"># Tests with this signature and their occurrence counts</span>
+<span class="n">cursor</span> <span class="o">=</span> <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+    <span class="sa">f</span><span class="s2">&quot;SELECT test_name, COUNT(*) as occurrences FROM failure_history &quot;</span>
+    <span class="sa">f</span><span class="s2">&quot;WHERE error_signature = ?</span><span class="si">{</span><span class="n">exclude_filter</span><span class="si">}</span><span class="s2"> GROUP BY test_name ORDER BY occurrences DESC&quot;</span><span class="p">,</span>
+    <span class="n">base_params</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">tests</span> <span class="o">=</span> <span class="p">[</span><span class="nb">dict</span><span class="p">(</span><span class="n">row</span><span class="p">)</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="k">await</span> <span class="n">cursor</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()]</span>
+<span class="n">unique_tests</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">tests</span><span class="p">)</span>
+</code></pre></div>
+
 <blockquote>
-<p><strong>Note:</strong> The short pipeline summary string and the dashboard/report totals are not identical on deep pipelines. The summary is built from the current analysis layer, while dashboard and report totals recurse through nested <code>failed_children</code>.</p>
+<p><strong>Note:</strong> The one-line <code>summary</code> string and the recursive dashboard/report totals are not always identical on deep pipelines. The dashboard and report recurse through the whole child-job tree. The short pipeline summary is built from the current analysis layer.</p>
+<p><strong>Note:</strong> Per-test history cannot infer true passes without a <code>job_name</code> filter. That is because <code>failure_history</code> records failures, not every execution of every test.</p>
 </blockquote>
-<p>The same-signature history search is easy to understand in practice. The tests verify that one shared signature can span multiple test names and still report both totals correctly:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Two different tests with the same error signature</span>
-<span class="k">for</span> <span class="n">test_name</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="p">[</span>
-    <span class="p">(</span><span class="s2">&quot;tests.TestA.test_one&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
-    <span class="p">(</span><span class="s2">&quot;tests.TestB.test_two&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
-<span class="p">]:</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">count</span><span class="p">):</span>
-        <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
-<span class="w">            </span><span class="sd">&quot;&quot;&quot;INSERT INTO failure_history</span>
-<span class="sd">               (job_id, job_name, build_number, test_name, error_signature, classification)</span>
-<span class="sd">               VALUES (?, ?, ?, ?, ?, ?)&quot;&quot;&quot;</span><span class="p">,</span>
-            <span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;job-sig-</span><span class="si">{</span><span class="n">test_name</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-                <span class="s2">&quot;ocp-e2e&quot;</span><span class="p">,</span>
-                <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
-                <span class="n">test_name</span><span class="p">,</span>
-                <span class="s2">&quot;sig-shared&quot;</span><span class="p">,</span>
-                <span class="s2">&quot;PRODUCT BUG&quot;</span><span class="p">,</span>
-            <span class="p">),</span>
+<h2 id="how-history-preserves-deduplicated-results">How History Preserves Deduplicated Results</h2>
+<p>After analysis completes, JJI flattens the result tree into <code>failure_history</code>. That flattening is what makes signature search, job statistics, and per-test history work later without re-walking every stored result JSON blob.</p>
+<p>Child-job context is preserved while flattening. The stored history row keeps the parent job, the child job name and build number, the test name, the error text, the classification, and the shared <code>error_signature</code>.</p>
+<p>From <code>src/jenkins_job_insight/storage.py</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_extract_child_failures_for_history</span><span class="p">(</span>
+    <span class="n">child</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
+    <span class="n">job_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">job_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">build_number</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">rows</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">],</span>
+    <span class="n">analyzed_at</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Recursively extract failures from a child job analysis dict.&quot;&quot;&quot;</span>
+    <span class="n">child_job</span> <span class="o">=</span> <span class="n">child</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;job_name&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+    <span class="n">child_build</span> <span class="o">=</span> <span class="n">child</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;build_number&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">child</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;failures&quot;</span><span class="p">,</span> <span class="p">[]):</span>
+        <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="n">_failure_to_history_row</span><span class="p">(</span>
+                <span class="n">f</span><span class="p">,</span>
+                <span class="n">job_id</span><span class="p">,</span>
+                <span class="n">job_name</span><span class="p">,</span>
+                <span class="n">build_number</span><span class="p">,</span>
+                <span class="n">child_job</span><span class="p">,</span>
+                <span class="n">child_build</span><span class="p">,</span>
+                <span class="n">analyzed_at</span><span class="o">=</span><span class="n">analyzed_at</span><span class="p">,</span>
+            <span class="p">)</span>
         <span class="p">)</span>
 
-<span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">storage</span><span class="o">.</span><span class="n">search_by_signature</span><span class="p">(</span><span class="s2">&quot;sig-shared&quot;</span><span class="p">)</span>
-<span class="k">assert</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;signature&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;sig-shared&quot;</span>
-<span class="k">assert</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;total_occurrences&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">5</span>
-<span class="k">assert</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;unique_tests&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">2</span>
-<span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">result</span><span class="p">[</span><span class="s2">&quot;tests&quot;</span><span class="p">])</span> <span class="o">==</span> <span class="mi">2</span>
+    <span class="k">for</span> <span class="n">nested</span> <span class="ow">in</span> <span class="n">child</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;failed_children&quot;</span><span class="p">,</span> <span class="p">[]):</span>
+        <span class="n">_extract_child_failures_for_history</span><span class="p">(</span>
+            <span class="n">nested</span><span class="p">,</span> <span class="n">job_id</span><span class="p">,</span> <span class="n">job_name</span><span class="p">,</span> <span class="n">build_number</span><span class="p">,</span> <span class="n">rows</span><span class="p">,</span> <span class="n">analyzed_at</span><span class="o">=</span><span class="n">analyzed_at</span>
+        <span class="p">)</span>
 </code></pre></div>
 
-<h2 id="how-failure-history-is-preserved">How Failure History Is Preserved</h2>
-<p>After analysis completes, JJI flattens failures into <code>failure_history</code>. That includes:</p>
+<p>This is why a signature search can answer practical questions such as:</p>
 <ul>
-<li>top-level failures from the main job,</li>
-<li>failures discovered in child jobs,</li>
-<li>nested failures from deeper <code>failed_children</code>,</li>
-<li>the shared <code>error_signature</code>,</li>
-<li>child-job context such as <code>child_job_name</code> and <code>child_build_number</code>.</li>
+<li>How many times has this exact failure signature shown up?</li>
+<li>Which tests share it?</li>
+<li>What was the last classification?</li>
+<li>Are there comments already attached to the same signature?</li>
 </ul>
-<p>That flattening still makes later history search and job statistics fast and consistent, and it now also supports startup backfill. If JJI finds completed results that do not yet have <code>failure_history</code> rows, it rebuilds those rows and preserves the original analysis timestamp so signature searches, per-job stats, and trend views keep the right chronology.</p>
-<div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">backfill_failure_history</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Backfill failure_history from existing completed results.&quot;&quot;&quot;</span>
-
-    <span class="c1"># Find completed results that are NOT yet in failure_history.</span>
-    <span class="n">cursor</span> <span class="o">=</span> <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
-        <span class="s2">&quot;SELECT r.job_id, r.result_json, r.created_at FROM results r &quot;</span>
-        <span class="s2">&quot;LEFT JOIN failure_history fh ON r.job_id = fh.job_id &quot;</span>
-        <span class="s2">&quot;WHERE r.status = &#39;completed&#39; AND r.result_json IS NOT NULL AND fh.job_id IS NULL&quot;</span>
-    <span class="p">)</span>
-    <span class="n">rows</span> <span class="o">=</span> <span class="k">await</span> <span class="n">cursor</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()</span>
-
-    <span class="c1"># Skip completed results with zero failures — they have nothing to</span>
-    <span class="c1"># insert into failure_history, so without this guard the LEFT JOIN</span>
-    <span class="c1"># would find them &quot;missing&quot; on every startup and reprocess them.</span>
-    <span class="k">if</span> <span class="n">count_all_failures</span><span class="p">(</span><span class="n">result_data</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">continue</span>
-    <span class="c1"># Use the original created_at timestamp to preserve historical chronology</span>
-    <span class="k">await</span> <span class="n">populate_failure_history</span><span class="p">(</span>
-        <span class="n">job_id</span><span class="p">,</span> <span class="n">result_data</span><span class="p">,</span> <span class="n">analyzed_at</span><span class="o">=</span><span class="n">created_at</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span>
-    <span class="p">)</span>
-</code></pre></div>
-
+<p>JJI also backfills <code>failure_history</code> from completed stored results when needed, so historical counts remain available after upgrades or restarts.</p>
 <blockquote>
-<p><strong>Note:</strong> Backfill only processes completed results that are missing history rows. Completed results with zero failures are skipped, so they are not reprocessed on every startup.</p>
-<p><strong>Tip:</strong> If several different tests suddenly look related, search by <code>error_signature</code> first. It is usually the fastest way to tell whether you are looking at one repeated root cause or several independent failures.</p>
+<p><strong>Tip:</strong> If several different tests suddenly fail in the same build, start with signature search instead of per-test history. It is usually the fastest way to confirm whether you are looking at one repeated root cause or several independent failures.</p>
 </blockquote>
-<p>You can inspect that stored history through the web UI, the API, or the <code>jji</code> CLI:</p>
-<ul>
-<li>Web UI: <code>/history</code></li>
-<li>Web UI: <code>/history/test/:testName</code></li>
-<li>API: <code>GET /history/search?signature=...</code></li>
-<li>API: <code>GET /history/test/{test_name}</code></li>
-<li>API: <code>GET /history/stats/{job_name}</code></li>
-<li>API: <code>GET /history/trends</code></li>
-<li>CLI: <code>jji history search --signature ...</code></li>
-<li>CLI: <code>jji history test TEST_NAME</code></li>
-<li>CLI: <code>jji history stats JOB_NAME</code></li>
-<li>CLI: <code>jji history trends</code></li>
-</ul>
 <h2 id="relevant-configuration">Relevant Configuration</h2>
-<p>For Jenkins-backed <code>/analyze</code>, you need Jenkins connectivity plus an AI provider and model. Those Jenkins settings can be set as server defaults or passed per request. For <code>POST /analyze-failures</code>, you can skip Jenkins entirely and send failures or raw JUnit XML directly.</p>
+<p>Two kinds of settings matter most for this page:</p>
+<ul>
+<li>settings that control when Jenkins-backed analysis begins,</li>
+<li>settings that affect how much context JJI gives the analyzer once it reaches a leaf failure.</li>
+</ul>
+<p>From <code>.env.example</code>:</p>
 <div class="highlight"><pre><span></span><code>JENKINS_URL=https://jenkins.example.com
 JENKINS_USER=your-username
 JENKINS_PASSWORD=your-api-token
 JENKINS_SSL_VERIFY=true
 
-# ===================
-# AI CLI Configuration
-# ===================
-# Choose AI provider (required): &quot;claude&quot;, &quot;gemini&quot;, or &quot;cursor&quot;
 AI_PROVIDER=claude
-
-# AI model to use (required, applies to any provider)
-# Can also be set per-request in webhook body
 AI_MODEL=your-model-name
-
-# ...
-
-# --- AI CLI Timeout ---
 
 # Timeout for AI CLI calls in minutes (default: 10)
 # Increase for slower models like gpt-5.2
 # AI_CLI_TIMEOUT=10
 
-# ===================
-# Peer Analysis (Optional)
-# ===================
 # Enable multi-AI consensus by configuring peer AI providers
 # PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
 # PEER_ANALYSIS_MAX_ROUNDS=3
 </code></pre></div>
 
-<p>For <code>/analyze</code>, the request model and config defaults also support a few pipeline-focused overrides that are especially useful during pipeline investigations:</p>
-<ul>
-<li><code>wait_for_completion</code> lets you submit analysis while a Jenkins build is still running. When it is <code>true</code>, JJI waits for the build to finish before it starts child-job discovery and failure analysis.</li>
-<li><code>poll_interval_minutes</code> controls how often JJI polls Jenkins while it is waiting.</li>
-<li><code>max_wait_minutes</code> sets an upper bound on that wait. <code>0</code> means wait indefinitely.</li>
-<li><code>tests_repo_url</code> lets the analyzer inspect the test repository while still grouping failures by signature.</li>
-<li><code>get_job_artifacts</code> controls whether build artifacts are downloaded for extra evidence.</li>
-<li><code>jenkins_artifacts_max_size_mb</code> limits how much artifact data can be downloaded.</li>
-<li><code>jenkins_artifacts_context_lines</code> controls how much artifact context is prepared for analysis.</li>
-<li><code>PEER_AI_CONFIGS</code> or <code>peer_ai_configs</code> enables optional peer review for each deduplicated failure group. Omit the request field to inherit the server default, or send <code>[]</code> to disable peers for one run.</li>
-<li><code>PEER_ANALYSIS_MAX_ROUNDS</code> or <code>peer_analysis_max_rounds</code> limits how many debate rounds peer analysis can use for a group. The default is <code>3</code>.</li>
-</ul>
-<div class="highlight"><pre><span></span><code><span class="n">ai_cli_timeout</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span>
+<p>From <code>config.example.toml</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">[defaults]</span>
+<span class="n">jenkins_url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;https://jenkins.example.com&quot;</span>
+<span class="n">jenkins_user</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;your-jenkins-user&quot;</span>
+<span class="n">jenkins_password</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;your-jenkins-token&quot;</span>
+<span class="n">tests_repo_url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;https://github.com/your-org/your-tests&quot;</span>
+<span class="n">ai_provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;claude&quot;</span>
+<span class="n">ai_model</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;claude-opus-4-6[1m]&quot;</span>
+<span class="n">ai_cli_timeout</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span>
 <span class="c1"># Peer analysis (multi-AI consensus)</span>
 <span class="c1"># peers = &quot;cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro&quot;</span>
 <span class="c1"># peer_analysis_max_rounds = 3</span>
@@ -714,18 +696,36 @@ AI_MODEL=your-model-name
 <span class="n">max_wait_minutes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="w">  </span><span class="c1"># 0 = no limit (wait forever)</span>
 </code></pre></div>
 
-<blockquote>
-<p><strong>Tip:</strong> Wait/poll settings affect when a Jenkins-backed analysis starts. Artifact settings improve the quality of leaf-job analysis. Peer settings change how each deduplicated failure group is reviewed, but they do not change how signatures are computed or how child jobs are discovered.</p>
-</blockquote>
-<h2 id="what-this-means-in-practice">What This Means In Practice</h2>
-<p>For end users, the important outcome is simple:</p>
+<p>Here is how those settings affect pipeline analysis:</p>
 <ul>
-<li>A noisy pipeline is broken down into the child jobs that actually failed.</li>
-<li>Repeated failures are analyzed once instead of over and over.</li>
-<li>Summaries stay readable.</li>
-<li>History pages and CLI queries can show whether a signature is spreading, stable, or already well understood.</li>
+<li><code>wait_for_completion</code> tells <code>POST /analyze</code> to wait until the Jenkins build is finished before child-job discovery starts.</li>
+<li><code>poll_interval_minutes</code> controls how often JJI checks Jenkins while waiting.</li>
+<li><code>max_wait_minutes</code> sets a hard stop for that wait. <code>0</code> means no limit.</li>
+<li><code>AI_CLI_TIMEOUT</code> controls how long each analysis call can run.</li>
+<li><code>PEER_AI_CONFIGS</code> and <code>PEER_ANALYSIS_MAX_ROUNDS</code> switch a deduplicated failure group from single-AI analysis to peer review. They do not change how signatures are computed.</li>
+<li><code>tests_repo_url</code> gives the analyzer source-code context while keeping the same child-job discovery and deduplication behavior.</li>
+<li><code>get_job_artifacts</code>, <code>jenkins_artifacts_max_size_mb</code>, and <code>jenkins_artifacts_context_lines</code> affect how much artifact evidence is available for leaf-job analysis. They do not change child-job discovery or signature generation.</li>
 </ul>
-<p>That combination is what makes <code>jenkins-job-insight</code> useful on real pipelines: it turns a large nested Jenkins failure into a smaller set of actionable root causes.</p>
+<blockquote>
+<p><strong>Tip:</strong> If you often analyze long-running pipelines, <code>wait_for_completion</code>, <code>poll_interval_minutes</code>, and <code>max_wait_minutes</code> are the settings that most directly change the user experience.</p>
+</blockquote>
+<h2 id="practical-reading-guide">Practical Reading Guide</h2>
+<p>If you are looking at a result and want to understand it quickly:</p>
+<ul>
+<li>Start with the top-level <code>summary</code>, but treat it as a short explanation, not the authoritative recursive total.</li>
+<li>If the result has <code>child_job_analyses</code>, expand those first. That is usually where the real leaf failures live in pipeline jobs.</li>
+<li>If several tests look suspiciously similar, compare their <code>error_signature</code> values or run <code>GET /history/search?signature=...</code>.</li>
+<li>If you prefer the CLI, <code>jji history search --signature ...</code>, <code>jji history test TEST_NAME</code>, and <code>jji history stats JOB_NAME</code> map directly to the same stored history data.</li>
+</ul>
+<p>That combination is what makes <code>jenkins-job-insight</code> useful on large Jenkins pipelines: it turns a nested pipeline failure into a smaller set of real root causes, keeps duplicate analysis work under control, and makes the counts in the UI explainable once you know which layer each count comes from.</p>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="#">Analyze Jenkins Jobs</a></li>
+<li><a href="#">Analyze Raw Failures and JUnit XML</a></li>
+<li><a href="#">Architecture and Project Structure</a></li>
+<li><a href="#">Storage and Result Lifecycle</a></li>
+<li><a href="#">HTML Reports and Dashboard</a></li>
+</ul>
                 </div>
             </article>
             <nav class="page-nav">
@@ -748,13 +748,15 @@ AI_MODEL=your-model-name
                     <h3>On this page</h3>
                     <div class="toc">
 <ul>
-<li><a href="#what-jji-does-during-analysis">What JJI Does During Analysis</a></li>
-<li><a href="#how-failure-deduplication-works">How Failure Deduplication Works</a></li>
-<li><a href="#how-failed-child-jobs-are-found">How Failed Child Jobs Are Found</a></li>
+<li><a href="#what-you-need-to-know">What You Need To Know</a></li>
+<li><a href="#end-to-end-flow">End-To-End Flow</a></li>
+<li><a href="#how-failed-child-jobs-are-discovered">How Failed Child Jobs Are Discovered</a></li>
+<li><a href="#how-identical-failures-are-grouped">How Identical Failures Are Grouped</a></li>
 <li><a href="#how-summaries-and-counts-are-computed">How Summaries And Counts Are Computed</a></li>
-<li><a href="#how-failure-history-is-preserved">How Failure History Is Preserved</a></li>
+<li><a href="#how-history-preserves-deduplicated-results">How History Preserves Deduplicated Results</a></li>
 <li><a href="#relevant-configuration">Relevant Configuration</a></li>
-<li><a href="#what-this-means-in-practice">What This Means In Practice</a></li>
+<li><a href="#practical-reading-guide">Practical Reading Guide</a></li>
+<li><a href="#related-pages">Related Pages</a></li>
 </ul>
 </div>
 
@@ -765,9 +767,13 @@ AI_MODEL=your-model-name
         </main>
 
         <footer class="page-footer">
+            
+            <span class="footer-version">Generated from version 2.1.0</span>
+            <span class="footer-sep">&middot;</span>
+            
             Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
-            <span class="footer-sep">·</span>
-            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+            <span class="footer-sep">&middot;</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> &middot; <a href="llms-full.txt">llms-full.txt</a></span>
         </footer>
     </div>
 

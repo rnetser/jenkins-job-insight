@@ -1,75 +1,65 @@
 # Troubleshooting
 
-When something goes wrong, start with the `job_id`, not the browser report page. The JSON result at `/results/<job_id>` is the source of truth for whether the analysis is still `pending`, `waiting`, or `running`, finished `completed`, or stopped `failed`.
+Most operator problems in `jenkins-job-insight` fall into one of these buckets:
+
+| What you see | Usually means | Check first |
+| --- | --- | --- |
+| `502 Jenkins authentication failed...` | Jenkins rejected the credential | `JENKINS_USER`, `JENKINS_PASSWORD`, per-request Jenkins overrides |
+| `400 No AI provider configured` or `No AI model configured` | Main AI is not configured | `AI_PROVIDER`, `AI_MODEL`, or your `jji` profile |
+| `400 Invalid XML: ...` | `raw_xml` could not be parsed | The XML payload itself |
+| `403 Jira integration is disabled on this server` | Jira is incomplete or explicitly disabled | `JIRA_URL`, Jira credential, `JIRA_PROJECT_KEY` |
+| A job stays in `waiting` | JJI is still polling Jenkins, or polling cannot finish cleanly | Jenkins build state, `wait_for_completion`, `max_wait_minutes` |
+| A legacy callback flow never fires | The current API is poll-based, not callback-based | `job_id`, `result_url`, `/status/{job_id}` |
+| `404 Frontend not built` | The runtime image does not contain `frontend/dist` | Frontend build step or Docker image |
+| Enriched JUnit XML was not written back | The pytest helper skipped enrichment or preserved the original file | `--junitxml`, `JJI_SERVER`, `JJI_AI_PROVIDER`, `JJI_AI_MODEL` |
+
+Use these first:
 
 ```bash
-jji --server http://your-host:8000 health
-jji --server http://your-host:8000 ai-configs
-jji --server http://your-host:8000 status <job_id>
-jji --server http://your-host:8000 results show <job_id> --full
-curl -H 'Accept: application/json' http://your-host:8000/results/<job_id>
+jji health
+jji status <job_id>
+jji results show <job_id> --full
+jji ai-configs
+jji capabilities
 ```
 
-> **Tip:** The CLI uses `JJI_SERVER` or `--server`. If you configured a default profile in `~/.config/jji/config.toml`, `jji` can use that too, but passing `--server` explicitly is still the fastest way to diagnose a single instance.
+> **Tip:** Start with the JSON or CLI view before debugging the browser. The JSON result shows the stored server state, while the browser adds redirects, cookies, and frontend packaging on top.
 
-If you are using the provided container setup, make sure the service is healthy and the data directory is persisted:
+```mermaid
+flowchart TD
+    A[POST /analyze] --> B[Store job_id and request_params]
+    B --> C{wait_for_completion and Jenkins configured?}
+    C -- Yes --> D[status = waiting<br/>poll Jenkins]
+    C -- No --> E[status = running]
+    D -->|Build finishes| E
+    D -->|Timeout or poll error| F[status = failed]
 
-```26:50:docker-compose.yaml
-# Persist SQLite database across container restarts
-# The ./data directory on host maps to /data in container
-volumes:
-  - ./data:/data
-  # Optional: Mount gcloud credentials for Vertex AI authentication
-  # Uncomment if using CLAUDE_CODE_USE_VERTEX=1 with Application Default Credentials
-  # - ~/.config/gcloud:/home/appuser/.config/gcloud:ro
+    E --> G[Analyze failures]
+    G --> H{Jira enabled and configured?}
+    H -- Yes --> I[Search Jira matches]
+    H -- No --> J[Save result]
+    I --> J
 
+    J --> K[GET /results/{job_id}]
+    K -->|Browser + in progress| L[/status/{job_id}]
+    K -->|Browser + completed| M[Report page]
+    K -->|CLI or JSON caller| N[JSON payload]
 
-# Restart policy: container restarts unless explicitly stopped
-restart: unless-stopped
-
-# Health check configuration
-# Verifies the service is responding on /health endpoint
-healthcheck:
-  test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-  interval: 30s
-  timeout: 10s
-  retries: 3
-  start_period: 10s
-
-# Environment variables
-# Option 1: Use .env file (recommended)
-env_file:
-  - .env
-```
-
-The server still needs an AI provider and model, but Jenkins settings are now optional defaults. You can keep Jenkins URL and credentials in the environment, or pass them per request for `/analyze`.
-
-```28:33:src/jenkins_job_insight/config.py
-# Jenkins configuration (optional; can be provided per-request via API body).
-# Empty string means "not configured"; checked with `if not self.jenkins_url`.
-jenkins_url: str = ""
-jenkins_user: str = ""
-jenkins_password: str = Field(default="", repr=False)
-jenkins_ssl_verify: bool = True
-```
-
-```11:19:.env.example
-# ===================
-# AI CLI Configuration
-# ===================
-# Choose AI provider (required): "claude", "gemini", or "cursor"
-AI_PROVIDER=claude
-
-# AI model to use (required, applies to any provider)
-# Can also be set per-request in webhook body
-AI_MODEL=your-model-name
+    O[POST /analyze-failures] --> P[Parse failures or raw_xml]
+    P --> Q[Return completed or failed response immediately]
 ```
 
 ## Jenkins Auth Failures
 
-If `/analyze` returns `502`, the service is usually telling you exactly which Jenkins problem it hit: bad credentials, missing permissions, or general connectivity.
+For Jenkins-backed analysis, JJI turns Jenkins client errors into clear HTTP responses instead of returning a generic failure.
 
-```474:505:src/jenkins_job_insight/analyzer.py
+```604:654:src/jenkins_job_insight/analyzer.py
+if isinstance(e, jenkins.NotFoundException):
+    raise HTTPException(
+        status_code=404,
+        detail=f"Job '{job_name}' build #{build_number} not found in Jenkins",
+    )
+
 if isinstance(e, jenkins.JenkinsException):
     error_msg = str(e).lower()
     if (
@@ -91,100 +81,99 @@ if isinstance(e, jenkins.JenkinsException):
             status_code=502,
             detail=f"Access denied to job '{job_name}'. Check Jenkins permissions.",
         )
-    else:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Jenkins error: {e!s}",
-        )
-
-# For any other exception type
+...
 raise HTTPException(
     status_code=502,
     detail=f"Failed to connect to Jenkins: {e!s}",
 )
 ```
 
-Check these first:
+A few practical rules help here:
 
-- `JENKINS_USER` and `JENKINS_PASSWORD`, or per-request `jenkins_user` and `jenkins_password`, should be credentials that can read build metadata and console output, not just log into the UI.
-- A `401` means authentication failed. A `403` means the credential is valid but does not have access to that job or build.
-- A `404` often means the `job_name` is wrong, especially for folder or multibranch jobs. Pass the Jenkins job path, such as `folder/job-name`, not a full Jenkins URL.
-- If Jenkins uses a self-signed or internal certificate, set `JENKINS_SSL_VERIFY=false` only after you confirm the endpoint is trusted.
-- If the build exists in the browser but JJI still cannot find it, verify the build number and job path carefully.
+- `401` means the credential itself is wrong.
+- `403` means the credential is valid, but it cannot read that job or build.
+- `404` often means the `job_name` is wrong. Use the Jenkins job path such as `folder/job-name`, not a full Jenkins build URL.
+- JJI uses the same Jenkins settings for both build lookup and optional waiting/polling, so a credential that can browse Jenkins in a browser is not always enough.
+- If Jenkins uses an internal or self-signed certificate, set `JENKINS_SSL_VERIFY=false` only after you confirm you trust that endpoint.
 
-> **Warning:** Use `JENKINS_SSL_VERIFY=false` only for trusted internal Jenkins instances. It disables certificate verification for the Jenkins connection.
+> **Warning:** Only disable `JENKINS_SSL_VERIFY` for trusted internal Jenkins instances. It turns off TLS certificate verification for that connection.
 
 ## Missing AI Configuration
 
-There are now three common failure modes here:
+The main AI provider and model are always required. Peer analysis is optional, but it does not replace the main provider.
 
-- The API rejects the request because no main AI provider or model was configured.
-- The API rejects the request because the provider name or peer-analysis configuration is invalid.
-- The request is accepted, but the main AI CLI is missing, unauthenticated, or otherwise unusable at runtime.
+```15:31:config.example.toml
+[defaults]
+# Global defaults -- all servers inherit these
+jenkins_url = "https://jenkins.example.com"
+jenkins_user = "your-jenkins-user"
+jenkins_password = "your-jenkins-token"  # pragma: allowlist secret
+jenkins_ssl_verify = true
+tests_repo_url = "https://github.com/your-org/your-tests"
+ai_provider = "claude"
+ai_model = "claude-opus-4-6[1m]"
+ai_cli_timeout = 10
+# Peer analysis (multi-AI consensus)
+# peers = "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro"
+# peer_analysis_max_rounds = 3
+# Monitoring
+wait_for_completion = true
+poll_interval_minutes = 2
+max_wait_minutes = 0  # 0 = no limit (wait forever)
+```
 
-The API-level validation is explicit, and it now also rejects unsupported provider names:
-
-```490:508:src/jenkins_job_insight/main.py
+```499:534:src/jenkins_job_insight/main.py
 provider = ai_provider or AI_PROVIDER
 model = ai_model or AI_MODEL
 if not provider:
-    raise HTTPException(...)  # missing AI_PROVIDER / ai_provider
+    raise HTTPException(
+        status_code=400,
+        detail=f"No AI provider configured. Set AI_PROVIDER env var or pass ai_provider in request body. Valid providers: {', '.join(sorted(VALID_AI_PROVIDERS))}",
+    )
 if provider not in VALID_AI_PROVIDERS:
-    raise HTTPException(...)  # unsupported provider name
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Unsupported AI provider: {provider}. "
+            f"Valid providers: {', '.join(sorted(VALID_AI_PROVIDERS))}"
+        ),
+    )
 if not model:
-    raise HTTPException(...)  # missing AI_MODEL / ai_model
-```
-
-Peer configs also have an explicit default/override rule:
-
-```531:535:src/jenkins_job_insight/main.py
-if body.peer_ai_configs is not None:
-    return body.peer_ai_configs or None  # [] -> None (disable)
-if settings.peer_ai_configs:
-    return parse_peer_configs(settings.peer_ai_configs) or None
-return None
-```
-
-Provider authentication and optional peer-analysis defaults in the repo look like this:
-
-```23:57:.env.example
-ANTHROPIC_API_KEY=your-anthropic-api-key
-GEMINI_API_KEY=your-gemini-api-key
-# CURSOR_API_KEY=your-cursor-api-key
-# AI_CLI_TIMEOUT=10
-
-# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
-# PEER_ANALYSIS_MAX_ROUNDS=3
-```
-
-If the main provider and model are present but the CLI still cannot run, the analyzer fails early and stores the pre-flight error in the job summary:
-
-```1473:1488:src/jenkins_job_insight/analyzer.py
-ok, err = await check_ai_cli_available(...)
-if not ok:
-    return AnalysisResult(...)  # failed result with summary=err
+    raise HTTPException(
+        status_code=400,
+        detail="No AI model configured. Set AI_MODEL env var or pass ai_model in request body.",
+    )
 ```
 
 Use this checklist:
 
-- `AI_PROVIDER` and `AI_MODEL`, or request-level `ai_provider` and `ai_model`, are always required. Peer analysis does not replace the main AI.
-- Valid provider names are `claude`, `gemini`, and `cursor`. `Unsupported AI provider: ...` means the provider name itself is wrong.
-- `PEER_AI_CONFIGS` must use `provider:model,provider:model`. Invalid peer configs are rejected early with `400`.
-- Omit `peer_ai_configs` to inherit the server default from `PEER_AI_CONFIGS`. Send `peer_ai_configs: []` to disable peers for a single request.
-- `PEER_ANALYSIS_MAX_ROUNDS` and request-level `peer_analysis_max_rounds` must be between `1` and `10`. The default is `3`.
-- Provider authentication is handled by the provider CLI itself. A valid app config is not enough if the CLI is not logged in or lacks its API key.
-- If a job finishes with `status: failed`, inspect the `summary` field in `/results/<job_id>` before rerunning anything.
-- Use `jji ai-configs` to list primary provider/model pairs from successful analyses. If it returns nothing, no completed analysis has recorded a working main AI pair yet.
-- `jji ai-configs` helps with the main AI only. It does not validate or list peer configurations.
-- You can test a one-off main or peer AI change without redeploying by sending `ai_provider`, `ai_model`, and `peer_ai_configs` in the request body.
+- Set a main `ai_provider` and `ai_model` either in server environment or in the request body.
+- Valid providers are `claude`, `gemini`, and `cursor`.
+- If you use peer analysis, the format is `provider:model,provider:model`.
+- `peer_ai_configs: []` explicitly disables peers for a single request.
+- `jji ai-configs` shows provider/model pairs from successful completed analyses. On a fresh server, it may legitimately return nothing.
+- A correct app config is not enough if the provider CLI itself is missing, not on `PATH`, or not authenticated.
 
-> **Tip:** If you are using a custom image instead of the provided one, make sure the primary provider CLI and any peer provider CLIs are installed and on `PATH`, not just the environment variables.
+The provided Docker image installs all three supported CLIs at build time. If you use a custom image or VM, you must do that work yourself.
 
-## XML Parse Errors
+```64:73:Dockerfile
+# Install Claude Code CLI (installs to ~/.local/bin)
+RUN /bin/bash -o pipefail -c "curl -fsSL https://claude.ai/install.sh | bash"
 
-When you use `/analyze-failures` with `raw_xml`, the request must contain exactly one input source: either `raw_xml` or `failures`.
+# Install Cursor Agent CLI (installs to ~/.local/bin)
+RUN /bin/bash -o pipefail -c "curl -fsSL https://cursor.com/install | bash"
 
-```297:314:src/jenkins_job_insight/models.py
+# Configure npm for non-root global installs and install Gemini CLI
+RUN mkdir -p /home/appuser/.npm-global \
+    && npm config set prefix '/home/appuser/.npm-global' \
+    && npm install -g @google/gemini-cli
+```
+
+## XML Parse and Enrichment Problems
+
+`POST /analyze-failures` accepts exactly one input source: either structured `failures` or `raw_xml`.
+
+```409:426:src/jenkins_job_insight/models.py
 class AnalyzeFailuresRequest(BaseAnalysisRequest):
     """Request payload for direct failure analysis (no Jenkins)."""
 
@@ -205,53 +194,101 @@ class AnalyzeFailuresRequest(BaseAnalysisRequest):
         return self
 ```
 
-Malformed XML becomes a `400` error:
-
-```653:660:src/jenkins_job_insight/main.py
+```1140:1145:src/jenkins_job_insight/main.py
 if raw_xml := body.raw_xml:
     try:
         test_failures = extract_test_failures(raw_xml)
     except ParseError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid XML: {e}")
-
-    if not test_failures:
-        job_id = str(uuid.uuid4())
+        raise HTTPException(status_code=400, detail=f"Invalid XML: {e}") from e
 ```
 
-A valid fixture from the test suite looks like this:
+A valid JUnit example from the test suite looks like this:
 
-```13:26:tests/test_xml_enrichment.py
-JUNIT_XML_WITH_FAILURES = """<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="TestSuite" tests="3" failures="2" errors="0">
-    <testcase classname="com.example.Tests" name="test_pass" time="0.1"/>
-    <testcase classname="com.example.Tests" name="test_fail_with_message" time="0.5">
-        <failure message="Expected true but got false" type="AssertionError">
-            at com.example.Tests.test_fail_with_message(Tests.java:42)
+```648:656:tests/test_main.py
+SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="TestSuite" tests="2" failures="1" errors="0">
+    <testcase classname="tests.test_auth" name="test_login" time="0.5">
+        <failure message="assert False" type="AssertionError">
+            at tests/test_auth.py:42
         </failure>
     </testcase>
-    <testcase classname="com.example.Tests" name="test_fail_no_message" time="1.2">
-        <failure type="Failure">tests/storage/datavolume.go:229
-Timed out after 500.055s.
-Expected Running but got Scheduling</failure>
-    </testcase>
+    <testcase classname="tests.test_auth" name="test_logout" time="0.1"/>
 </testsuite>"""
 ```
 
-If XML analysis is failing:
+Use this checklist when XML analysis fails:
 
-- `400 Invalid XML: ...` means the XML could not be parsed at all.
-- `422` usually means you sent both `raw_xml` and `failures`, sent neither, or exceeded the request model limits.
-- If the response says `No test failures found in the provided XML.`, the XML parsed successfully but did not contain `<failure>` or `<error>` elements under `<testcase>`.
+- `400 Invalid XML: ...` means the XML itself could not be parsed.
+- `422` usually means the payload shape was rejected before analysis started, for example because both `failures` and `raw_xml` were sent.
+- `No test failures found in the provided XML.` means the XML parsed successfully but did not contain failing `<testcase>` elements.
 - The extractor accepts both `<failure>` and `<error>`.
-- If a `<failure>` has no `message` attribute, the service falls back to the first line of the failure body, so multiline failure bodies are fine.
+- If a `<failure>` has no `message` attribute, JJI falls back to the first line of the element body.
 
-## Jira Issues
+> **Note:** `POST /analyze-failures` is synchronous. It returns a finished response immediately and never enters `waiting`.
 
-Jira integration is still optional, but the server now treats it as enabled only when the full Jira configuration is present: `JIRA_URL`, working Jira credentials, and `JIRA_PROJECT_KEY`. A Jenkins or XML analysis can still succeed even if Jira lookups fail or return no matches.
+If you use the example pytest integration, missing environment variables disable enrichment cleanly, and request errors preserve the original XML file instead of corrupting it.
 
-The enablement check now requires the project key as well as credentials:
+```40:58:examples/pytest-junitxml/conftest_junit_ai_utils.py
+if not os.environ.get("JJI_SERVER"):
+    logger.warning(
+        "JJI_SERVER is not set. Analyze with AI features will be disabled."
+    )
+    session.config.option.analyze_with_ai = False
+else:
+    if not os.environ.get("JJI_AI_PROVIDER"):
+        logger.warning(
+            "JJI_AI_PROVIDER is not set. Set it explicitly (e.g., 'claude', 'gemini', 'cursor')."
+        )
+        session.config.option.analyze_with_ai = False
+        return
 
-```110:132:src/jenkins_job_insight/config.py
+    if not os.environ.get("JJI_AI_MODEL"):
+        logger.warning(
+            "JJI_AI_MODEL is not set. Set it explicitly to the desired model name."
+        )
+        session.config.option.analyze_with_ai = False
+```
+
+```102:122:examples/pytest-junitxml/conftest_junit_ai_utils.py
+response = requests.post(
+    f"{server_url.rstrip('/')}/analyze-failures",
+    json={
+        "raw_xml": raw_xml,
+        "ai_provider": ai_provider,
+        "ai_model": ai_model,
+    },
+    timeout=timeout_value,
+)
+response.raise_for_status()
+result = response.json()
+...
+if enriched_xml := result.get("enriched_xml"):
+    xml_path.write_text(enriched_xml)
+    logger.info("JUnit XML enriched with AI analysis: %s", xml_path)
+else:
+    logger.info("No enriched XML returned (no failures or analysis failed)")
+```
+
+If your downstream tooling expects a link back to JJI, the XML writer adds a `report_url` property to the first `<testsuite>` when one is available.
+
+```131:148:src/jenkins_job_insight/xml_enrichment.py
+if report_url:
+    first_testsuite = next(root.iter("testsuite"), None)
+    if first_testsuite is None and root.tag == "testsuite":
+        first_testsuite = root
+    if first_testsuite is not None:
+        ts_props = first_testsuite.find("properties")
+        if ts_props is None:
+            ts_props = ET.Element("properties")
+            first_testsuite.insert(0, ts_props)
+        _add_property(ts_props, "report_url", report_url)
+```
+
+## Jira Problems
+
+Jira is optional during analysis, but the server only treats it as enabled when it has a full Jira setup.
+
+```184:206:src/jenkins_job_insight/config.py
 @property
 def jira_enabled(self) -> bool:
     """Check if Jira integration is enabled and configured with valid credentials."""
@@ -277,103 +314,139 @@ def jira_enabled(self) -> bool:
     return True
 ```
 
-Credential selection is also stricter now:
+The auth mode is stricter than many teams expect:
 
-```170:186:src/jenkins_job_insight/config.py
-has_api_token = bool(
-    settings.jira_api_token and settings.jira_api_token.get_secret_value()
-)
-has_pat = bool(settings.jira_pat and settings.jira_pat.get_secret_value())
-has_email = bool(settings.jira_email)
+- Jira Cloud is only detected when `JIRA_EMAIL` and `JIRA_API_TOKEN` are both set.
+- `JIRA_EMAIL` plus `JIRA_PAT` does **not** switch the client into Cloud mode.
+- Server/Data Center prefers `JIRA_PAT`, and only falls back to `JIRA_API_TOKEN` when no PAT is set.
 
-is_cloud = has_email and has_api_token
+When you preview or create Jira bugs, JJI returns different errors depending on the failure mode:
 
-if is_cloud:
-    # Cloud: jira_api_token only (has_api_token already confirms truthiness)
-    return True, settings.jira_api_token.get_secret_value()  # type: ignore[union-attr]
+```1843:1847:src/jenkins_job_insight/main.py
+if not settings.jira_enabled:
+    raise HTTPException(
+        status_code=403,
+        detail="Jira integration is disabled on this server",
+    )
+```
 
-# Server/DC: prefer PAT, fall back to API token
-if has_pat and settings.jira_pat:
-    return False, settings.jira_pat.get_secret_value()
-if has_api_token and settings.jira_api_token:
-    return False, settings.jira_api_token.get_secret_value()
+```2063:2094:src/jenkins_job_insight/main.py
+if failure.analysis.classification == "CODE ISSUE":
+    raise HTTPException(
+        status_code=422,
+        detail="Cannot create Jira bug for a CODE ISSUE classification. Use GitHub instead.",
+    )
+
+...
+except httpx.HTTPStatusError as exc:
+    raise HTTPException(
+        status_code=502,
+        detail=f"Jira API error: {exc.response.status_code}",
+    ) from exc
+except httpx.RequestError as exc:
+    raise HTTPException(
+        status_code=502,
+        detail=f"Jira API unreachable: {exc}",
+    ) from exc
 ```
 
 Use this checklist:
 
-- For Atlassian Cloud, set `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, and `JIRA_PROJECT_KEY`. Cloud mode requires `JIRA_EMAIL` together with `JIRA_API_TOKEN`.
-- `JIRA_EMAIL` plus `JIRA_PAT` does not switch the client into Cloud mode. Without `JIRA_API_TOKEN`, that combination stays on the Server/Data Center auth path.
-- For Server/Data Center, set `JIRA_URL`, `JIRA_PAT`, and `JIRA_PROJECT_KEY`. If `JIRA_PAT` is absent, `JIRA_API_TOKEN` can still be used as a fallback only when `JIRA_EMAIL` is not set.
-- If Jira is optional in your deployment, missing Jira matches do not mean the main analysis failed.
-- If the UI or API says `Jira must be configured to create Jira bugs`, the server does not currently see a complete Jira config.
-- If the API says `Cannot create Jira bug for a CODE ISSUE classification. Use GitHub instead.`, the current failure classification is the blocker, not Jira connectivity.
-- `JIRA_MAX_RESULTS` defaults to `5`. Increase it if expected matches are being cut off.
-- For internal Jira endpoints with self-signed certificates, use `JIRA_SSL_VERIFY=false` only on trusted networks.
-- A `502 Jira API error: ...` means Jira responded with an error status. A `502 Jira API unreachable: ...` means the network path, DNS, TLS, or proxy path between JJI and Jira is broken.
+- For Cloud, set `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, and `JIRA_PROJECT_KEY`.
+- For Server/Data Center, set `JIRA_URL`, `JIRA_PAT`, and `JIRA_PROJECT_KEY`.
+- `403 Jira integration is disabled on this server` usually means the server does not currently see a complete Jira config.
+- `502 Jira API error: ...` means Jira responded, but with an error status.
+- `502 Jira API unreachable: ...` means DNS, routing, TLS, proxying, or firewalling is broken between JJI and Jira.
+- Jira bug creation only works for failures currently classified as `PRODUCT BUG`.
 
-> **Note:** Jira enrichment is best-effort. The analysis pipeline continues even when Jira search or relevance filtering fails.
+> **Note:** Jira search during analysis is best-effort. Jira lookup failures are swallowed so the main analysis can still complete.
 
-## Waiting for Completion
+> **Warning:** Only disable `JIRA_SSL_VERIFY` for trusted internal Jira endpoints.
 
-Earlier callback-based delivery troubleshooting no longer applies. The current service stores analysis results locally and, by default, waits for running Jenkins builds to finish before analysis starts. During that period, the job status is `waiting`, not `failed`.
+## Callback Expectations and Long-Running Jobs
 
-The waiting behavior is configured directly in settings:
+If you are troubleshooting an old callback-based integration, the first thing to know is that the current service is poll-based.
 
-```65:68:src/jenkins_job_insight/config.py
-# Jenkins job monitoring (wait for completion before analysis)
-wait_for_completion: bool = True
-poll_interval_minutes: int = Field(default=2, gt=0)
-max_wait_minutes: int = Field(default=0, ge=0)
+`POST /analyze` creates a `job_id` and returns a poll URL:
+
+```1078:1118:src/jenkins_job_insight/main.py
+job_id = str(uuid.uuid4())
+...
+message = f"Analysis job queued. Poll /results/{job_id} for status."
+
+response: dict = {
+    "status": "queued",
+    "job_id": job_id,
+    "message": message,
+}
+
+return _attach_result_links(response, base_url, job_id)
 ```
 
-And the analysis flow updates the job to `waiting` before polling Jenkins:
+The CLI mirrors that behavior:
 
-```753:771:src/jenkins_job_insight/main.py
-# Wait for Jenkins job to finish if requested and Jenkins is configured
-if settings.wait_for_completion and not settings.jenkins_url:
-    logger.info(
-        f"Wait requested for job {job_id} but jenkins_url not configured, skipping wait"
-    )
+```706:718:src/jenkins_job_insight/cli/main.py
+data = client.analyze(job_name, build_number, **extras)
 
-if settings.wait_for_completion and settings.jenkins_url:
-    await update_status(job_id, "waiting")
-
-    completed, wait_error = await _wait_for_jenkins_completion(
-        jenkins_url=settings.jenkins_url,
-        job_name=body.job_name,
-        build_number=body.build_number,
-        jenkins_user=settings.jenkins_user,
-        jenkins_password=settings.jenkins_password,
-        jenkins_ssl_verify=settings.jenkins_ssl_verify,
-        poll_interval_minutes=settings.poll_interval_minutes,
-        max_wait_minutes=settings.max_wait_minutes,
-    )
+if _state.get("json", False):
+    print_output(data, columns=[], as_json=True)
+else:
+    typer.echo(f"Job queued: {data.get('job_id', '')}")
+    typer.echo(f"Status: {data.get('status', '')}")
+    typer.echo(f"Poll: {data.get('result_url', '')}")
 ```
 
-Use this checklist:
+That means:
 
-- `CALLBACK_URL` and `CALLBACK_HEADERS` are not part of the current service anymore. Use `/results/<job_id>` or `/status/<job_id>` to track work instead of waiting for a webhook.
-- `WAIT_FOR_COMPLETION` defaults to `true` for `/analyze`.
-- `POLL_INTERVAL_MINUTES` defaults to `2`, and `MAX_WAIT_MINUTES=0` means there is no timeout.
-- Use `--no-wait` or `"wait_for_completion": false` if you want to skip Jenkins monitoring.
-- `waiting` means Jenkins monitoring is active. It is not the same as `failed`.
-- If a job never leaves `waiting`, verify that the Jenkins build is still running and that the configured Jenkins URL and credentials can poll build status.
-- Timeouts surface as `Timed out waiting for Jenkins job ...`, and polling problems surface as `Jenkins poll failed: ...`.
-- If the server has no default Jenkins URL configured, the wait step is skipped, but `/analyze` still needs Jenkins connectivity later to fetch the finished build.
+- Use `GET /results/{job_id}`, `jji status <job_id>`, or the browser status page instead of waiting for a callback.
+- `waiting` is normal when Jenkins monitoring is enabled and the build is still running.
+- Use `--no-wait` in `jji analyze` or `"wait_for_completion": false` in the API request if you want to skip that polling step.
+- A timeout appears as `Timed out waiting for Jenkins job ...`.
+- A polling failure appears as `Jenkins poll failed: ...`.
 
-> **Tip:** Triggering analysis immediately after starting a Jenkins build is now supported. `waiting` is the expected state while the service monitors that build.
+JJI also persists in-progress state so long waits survive browser refreshes, and `waiting` jobs can resume after a restart if they still have enough request data.
 
-## Report UI Problems
+```2096:2169:src/jenkins_job_insight/storage.py
+async def mark_stale_results_failed() -> list[dict]:
+    """Mark orphaned pending/running jobs as failed. Return waiting jobs for resumption."""
+    waiting_jobs: list[dict] = []
+...
+    # Mark pending/running as failed (background task is gone)
+    cursor = await db.execute(
+        "UPDATE results SET status = 'failed' "
+        "WHERE status IN ('pending', 'running')"
+    )
+...
+    # Collect waiting jobs for resumption instead of failing them
+    cursor = await db.execute(
+        "SELECT job_id, result_json FROM results WHERE status = 'waiting'"
+    )
+...
+    if waiting_jobs:
+        logger.info(f"Found {len(waiting_jobs)} waiting job(s) to resume")
+```
 
-Older `.html` report URLs no longer apply. Browser requests to `/results/<job_id>` now load the React report UI, while API and CLI callers still get JSON from that same endpoint.
+The status page labels the main phases explicitly:
 
-The result endpoint now switches behavior based on the request type:
+```12:18:frontend/src/pages/StatusPage.tsx
+const phaseLabels: Record<string, string> = {
+  waiting_for_jenkins: 'Waiting for Jenkins build to complete...',
+  analyzing: 'Analyzing test failures with AI...',
+  analyzing_child_jobs: 'Analyzing child job failures...',
+  analyzing_failures: 'Analyzing test failures...',
+  enriching_jira: 'Searching Jira for matching bugs...',
+  saving: 'Saving results...',
+}
+```
 
-```1146:1169:src/jenkins_job_insight/main.py
+## Report Page and Report Generation Problems
+
+The browser report and the JSON API share the same `GET /results/{job_id}` route. What you get depends on the request type.
+
+```1332:1355:src/jenkins_job_insight/main.py
 @app.get("/results/{job_id}", response_model=None)
 async def get_job_result(request: Request, job_id: str, response: Response):
     """Retrieve stored result by job_id, or serve SPA for browser requests."""
-    # Content negotiation: browsers requesting HTML get the SPA
     accept = request.headers.get("accept", "")
     if "text/html" in accept and "application/json" not in accept:
         result = await get_result(job_id)
@@ -385,20 +458,11 @@ async def get_job_result(request: Request, job_id: str, response: Response):
     result = await get_result(job_id)
     if not result:
         raise HTTPException(status_code=404, detail="Job not found")
-    _attach_result_links(result, _extract_base_url(), job_id)
-    settings = get_settings()
-    result["capabilities"] = {
-        "github_issues": settings.github_issues_enabled,
-        "jira_bugs": settings.jira_enabled,
-    }
-    if result.get("status") in IN_PROGRESS_STATUSES:
-        response.status_code = 202
-    return result
 ```
 
-If the browser route fails entirely, the backend is usually missing the built frontend assets:
+If the frontend bundle is missing, the API is still fine, but the browser UI is not:
 
-```2282:2287:src/jenkins_job_insight/main.py
+```2468:2473:src/jenkins_job_insight/main.py
 def _serve_spa() -> HTMLResponse:
     """Read and serve the React SPA index.html."""
     index_file = _FRONTEND_DIR / "index.html"
@@ -406,6 +470,8 @@ def _serve_spa() -> HTMLResponse:
         raise HTTPException(status_code=404, detail="Frontend not built")
     return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
 ```
+
+The production image expects the built frontend files to be copied in:
 
 ```84:88:Dockerfile
 # Copy source code
@@ -415,30 +481,61 @@ COPY --chown=appuser:0 --from=builder /app/src /app/src
 COPY --chown=appuser:0 --from=frontend-builder /frontend/dist /app/frontend/dist
 ```
 
-Peer-analysis panels are also conditional. The summary stays hidden when no debate data exists, and console-only fallback does not produce peer debates:
+Use this checklist for report problems:
 
-```91:94:frontend/src/pages/report/PeerAnalysisSummary.tsx
-const totalWithDebate = debateFailures.length
+- If a browser request goes to `/status/{job_id}`, the analysis is still in progress. That redirect is expected.
+- If the browser returns `404 Frontend not built`, the runtime image is missing `frontend/dist`.
+- If the browser keeps sending you to `/register`, set a username once in the UI. The browser workflow uses the `jji_username` cookie.
+- If `result_url` or other generated links use the wrong scheme or hostname behind a proxy, set `PUBLIC_BASE_URL`. JJI intentionally ignores forwarded headers and falls back to relative links when this setting is absent.
+- The same `PUBLIC_BASE_URL` behavior also affects `report_url` inside enriched JUnit XML.
 
-// Do not render when there are no peer debates
-if (totalWithDebate === 0) return null
+```146:164:src/jenkins_job_insight/main.py
+def _extract_base_url() -> str:
+    """Extract the external base URL for building public-facing links."""
+    settings = get_settings()
+    if settings.public_base_url:
+        return settings.public_base_url.rstrip("/")
+
+    logger.debug(
+        "PUBLIC_BASE_URL is not set; returning empty base URL (relative paths)"
+    )
+    return ""
 ```
 
-```1276:1279:src/jenkins_job_insight/analyzer.py
-if peer_ai_configs:
-    logger.warning(...)  # peer analysis is not supported for console-only failures
+To reproduce frontend packaging problems with the same commands the repo uses for validation, run the frontend tox environment or the equivalent commands directly:
+
+```9:30:tox.toml
+[env.frontend]
+commands = [
+  [
+    "npm",
+    "ci",
+    "--no-audit",
+    "--no-fund",
+  ],
+  [
+    "npx",
+    "vite",
+    "build",
+  ],
+  [
+    "npm",
+    "test",
+  ],
+]
+description = "Run frontend build and tests"
+skip_install = true
+allowlist_externals = ["npm", "npx"]
+change_dir = "frontend"
 ```
 
-Use this checklist:
+> **Tip:** If the browser and the API disagree, trust `jji results show <job_id> --full` first. If the JSON looks correct but the page is wrong, you are usually dealing with a frontend build, routing, cookie, or `PUBLIC_BASE_URL` problem rather than a backend analysis problem.
 
-- Open `/results/<job_id>` in the browser, not `/results/<job_id>.html`.
-- If the job is still `pending`, `waiting`, or `running`, the browser route redirects to `/status/<job_id>` and the JSON endpoint returns `202`.
-- `404 Frontend not built` means the runtime image does not have `frontend/dist/index.html`. Rebuild the frontend with `cd frontend && npm install && npm run build`, or use the provided Docker build that copies `frontend/dist` into the final image.
-- If the report page hides Jira or GitHub bug actions, inspect the `capabilities` object in `/results/<job_id>`, run `jji capabilities`, or call `GET /api/capabilities` before debugging the frontend.
-- If the `Peer Analysis` summary or a per-failure peer debate section is missing, that usually means the stored result does not contain debate data for that run. Check the JSON result first.
-- Console-only analyses do not render peer debate panels, even if `PEER_AI_CONFIGS` or request-level peers were set.
-- If generated `result_url` or tracker links point to the wrong scheme or hostname behind a proxy, set `PUBLIC_BASE_URL`. When it is unset, JJI intentionally returns relative URLs instead of trusting proxy headers.
-- Pipeline jobs may still show a `Child Job Analyses` section instead of top-level failures. That is expected when the parent job failed because downstream jobs failed.
-- A report page with no failures is still valid when the stored analysis contains none.
 
-> **Tip:** If you only need the authoritative state, use `jji results show <job_id> --full` or `curl -H 'Accept: application/json' http://your-host:8000/results/<job_id>` first, then debug the browser UI second. The JSON response is the source of truth for `capabilities`, failure details, and any `peer_debate` data.
+## Related Pages
+
+- [AI Provider Setup](ai-provider-setup.html)
+- [Analyze Jenkins Jobs](analyze-jenkins-jobs.html)
+- [Analyze Raw Failures and JUnit XML](direct-failure-analysis.html)
+- [Jira Integration](jira-integration.html)
+- [Reverse Proxy and Base URL Handling](reverse-proxy-and-base-urls.html)

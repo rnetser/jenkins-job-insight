@@ -262,7 +262,7 @@
                     ⚡ docs<span class="brand-accent">fy</span>
                 </a>
                 
-                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                <a href="https://github.com/myk-org/jenkins-job-insight.git" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight.git">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
                     <span class="github-stars" id="github-stars"></span>
                 </a>
@@ -415,6 +415,9 @@
 <li>Failure history and classifications</li>
 <li>Stored data used to resume waiting Jenkins jobs after a restart</li>
 </ul>
+<blockquote>
+<p><strong>Note:</strong> A restart does not resume every in-progress job. JJI resumes only jobs that were in the <code>waiting</code> state and still have usable stored request data in SQLite. Orphaned <code>pending</code> and <code>running</code> jobs are marked <code>failed</code> instead of resuming mid-analysis.</p>
+</blockquote>
 <p>The app initializes the database automatically on startup, creates the parent directory if needed, and runs SQLite schema migrations as part of startup.</p>
 <div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">init_db</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Initialize the database schema.</span>
@@ -583,7 +586,7 @@ GEMINI_API_KEY=your-gemini-api-key
 <li>If you add secret or config mounts under the home directory, make sure they are compatible with arbitrary-UID access.</li>
 <li>Keep the service as a single replica when using the built-in SQLite storage.</li>
 </ul>
-<p>The entrypoint still stages Cursor credentials from <code>/cursor-credentials</code> and normalizes <code>PORT</code>, but it now also supports a development-only mode that starts the Vite dev server. Leave <code>DEV_MODE</code> unset in OpenShift production.</p>
+<p>The entrypoint still stages Cursor credentials from <code>/cursor-credentials</code> and normalizes <code>PORT</code>, but it now also appends <code>--port $PORT</code> to the <code>uvicorn</code> command when needed. In <code>DEV_MODE</code>, it starts the Vite dev server and adds <code>--reload --reload-dir /app/src</code> for backend hot reload. Leave <code>DEV_MODE</code> unset in OpenShift production.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Copy cursor credentials from PVC staging mount</span>
 <span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-d<span class="w"> </span>/cursor-credentials<span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
 <span class="w">    </span>mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">XDG_CONFIG_HOME</span><span class="k">:-</span><span class="p">/home/appuser/.config</span><span class="si">}</span><span class="s2">/cursor&quot;</span>
@@ -604,6 +607,31 @@ GEMINI_API_KEY=your-gemini-api-key
 <span class="w">    </span><span class="k">fi</span>
 <span class="w">    </span>npm<span class="w"> </span>run<span class="w"> </span>dev<span class="w"> </span>--<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">5173</span><span class="w"> </span><span class="p">&amp;</span>
 <span class="w">    </span><span class="nb">cd</span><span class="w"> </span>/app<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">{</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;[DEV] Failed to return to app directory&quot;</span><span class="p">;</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span><span class="p">;</span><span class="w"> </span><span class="o">}</span>
+<span class="k">fi</span>
+
+<span class="c1"># Check if any argument contains &quot;uvicorn&quot; to detect all uvicorn invocations</span>
+<span class="nv">has_uvicorn</span><span class="o">=</span><span class="nb">false</span>
+<span class="nv">has_port</span><span class="o">=</span><span class="nb">false</span>
+<span class="k">for</span><span class="w"> </span>arg<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$@</span><span class="s2">&quot;</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$arg</span><span class="s2">&quot;</span><span class="w"> </span><span class="k">in</span>
+<span class="w">        </span>*uvicorn*<span class="o">)</span><span class="w"> </span><span class="nv">has_uvicorn</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="p">;;</span>
+<span class="w">        </span>--port<span class="p">|</span>--port<span class="o">=</span>*<span class="o">)</span><span class="w"> </span><span class="nv">has_port</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="p">;;</span>
+<span class="w">    </span><span class="k">esac</span>
+<span class="k">done</span>
+
+<span class="c1"># Build final arguments</span>
+<span class="nv">extra_args</span><span class="o">=</span><span class="s2">&quot;&quot;</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$has_uvicorn</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="w"> </span><span class="o">]</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$has_port</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nv">extra_args</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$extra_args</span><span class="s2"> --port </span><span class="nv">$PORT</span><span class="s2">&quot;</span>
+<span class="k">fi</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$has_uvicorn</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="w"> </span><span class="o">]</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">DEV_MODE</span><span class="k">:-</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;true&quot;</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nv">extra_args</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$extra_args</span><span class="s2"> --reload --reload-dir /app/src&quot;</span>
+<span class="k">fi</span>
+
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$extra_args</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$@</span><span class="s2">&quot;</span><span class="w"> </span><span class="nv">$extra_args</span>
+<span class="k">else</span>
+<span class="w">    </span><span class="nb">exec</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$@</span><span class="s2">&quot;</span>
 <span class="k">fi</span>
 </code></pre></div>
 
@@ -633,12 +661,21 @@ GEMINI_API_KEY=your-gemini-api-key
     <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
         <span class="s2">&quot;PUBLIC_BASE_URL is not set; returning empty base URL (relative paths)&quot;</span>
     <span class="p">)</span>
+    <span class="k">return</span> <span class="s2">&quot;&quot;</span>
 </code></pre></div>
 
 <blockquote>
 <p><strong>Tip:</strong> On OpenShift, set <code>PUBLIC_BASE_URL</code> to your public route URL, for example <code>https://jji.apps.example.com</code>, if you want API responses and issue-preview links to contain absolute external URLs.</p>
 <p><strong>Warning:</strong> The image-level health check respects <code>PORT</code>, but the provided <code>docker-compose.yaml</code> health check does not. If you override the container port, update both the Compose port mapping and the Compose health check.</p>
 </blockquote>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="#">Installation</a></li>
+<li><a href="#">Configuration Reference</a></li>
+<li><a href="#">Reverse Proxy and Base URL Handling</a></li>
+<li><a href="#">AI Provider Setup</a></li>
+<li><a href="#">Storage and Result Lifecycle</a></li>
+</ul>
                 </div>
             </article>
             <nav class="page-nav">
@@ -666,6 +703,7 @@ GEMINI_API_KEY=your-gemini-api-key
 <li><a href="#persistent-data-storage">Persistent /data Storage</a></li>
 <li><a href="#configure-provider-credentials">Configure Provider Credentials</a></li>
 <li><a href="#openshift-specific-runtime-considerations">OpenShift-Specific Runtime Considerations</a></li>
+<li><a href="#related-pages">Related Pages</a></li>
 </ul>
 </div>
 
@@ -676,9 +714,13 @@ GEMINI_API_KEY=your-gemini-api-key
         </main>
 
         <footer class="page-footer">
+            
+            <span class="footer-version">Generated from version 2.1.0</span>
+            <span class="footer-sep">&middot;</span>
+            
             Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
-            <span class="footer-sep">·</span>
-            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+            <span class="footer-sep">&middot;</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> &middot; <a href="llms-full.txt">llms-full.txt</a></span>
         </footer>
     </div>
 

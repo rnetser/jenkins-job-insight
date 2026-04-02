@@ -262,7 +262,7 @@
                     ⚡ docs<span class="brand-accent">fy</span>
                 </a>
                 
-                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                <a href="https://github.com/myk-org/jenkins-job-insight.git" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight.git">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
                     <span class="github-stars" id="github-stars"></span>
                 </a>
@@ -290,7 +290,7 @@
 <p>You can bring <code>jenkins-job-insight</code> up locally in two ways: by using the package's console entrypoint or by running <code>uvicorn</code> directly. For an API-level smoke test, you only need Python 3.12+, <code>uv</code>, and a writable database path. If you also want browser-based checks that can redirect to <code>/register</code>, build the frontend once with Node.js and npm. You do <strong>not</strong> need Jenkins or AI credentials just to verify <code>/health</code>, <code>/docs</code>, and <code>/openapi.json</code>.</p>
 <div class="highlight"><pre><span></span><code><span class="k">[project]</span>
 <span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;jenkins-job-insight&quot;</span>
-<span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;2.0.0&quot;</span>
+<span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;2.1.0&quot;</span>
 <span class="n">description</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;Jenkins job insight and analysis tool&quot;</span>
 <span class="n">requires-python</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;&gt;=3.12&quot;</span>
 <span class="n">dependencies</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
@@ -352,7 +352,7 @@ npm<span class="w"> </span>run<span class="w"> </span>build
 <p><strong>Tip:</strong> You do not need to create the <code>data/</code> directory yourself. The app creates the parent directory for the SQLite database on startup.</p>
 </blockquote>
 <h2 id="start-with-the-packaged-entrypoint">Start with the Packaged Entrypoint</h2>
-<p>The installed <code>jenkins-job-insight</code> command is the package entrypoint for the service. It calls the app's <code>run()</code> function, which starts <code>uvicorn</code> on <code>0.0.0.0</code> using the <code>PORT</code> environment variable.</p>
+<p>The installed <code>jenkins-job-insight</code> command is the package entrypoint for the service. It calls the app's <code>run()</code> function, which starts <code>uvicorn</code> on <code>0.0.0.0</code> using the validated <code>APP_PORT</code> value derived from <code>PORT</code>. If you set <code>PORT</code>, it must be an integer between <code>1</code> and <code>65535</code>.</p>
 <div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Entry point for the CLI.&quot;&quot;&quot;</span>
     <span class="kn">import</span><span class="w"> </span><span class="nn">uvicorn</span>
@@ -372,7 +372,7 @@ npm<span class="w"> </span>run<span class="w"> </span>build
 <div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>uvicorn<span class="w"> </span>jenkins_job_insight.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$PORT</span><span class="s2">&quot;</span>
 </code></pre></div>
 
-<p>This is the most direct way to run the service if you already work with ASGI apps and want full control over <code>uvicorn</code> flags.</p>
+<p>This is the most direct way to run the service if you already work with ASGI apps and want full control over <code>uvicorn</code> flags. Keep <code>--port</code> aligned with the exported <code>PORT</code> value so the app and <code>uvicorn</code> agree on the same listening port.</p>
 <h2 id="verify-the-service">Verify the Service</h2>
 <h3 id="check-health">Check <code>/health</code></h3>
 <p>The health endpoint returns a minimal JSON payload:</p>
@@ -472,6 +472,14 @@ AI_MODEL=your-model-name
 </code></pre></div>
 
 <p>Export those values in your shell before you start the app when you are ready to analyze real Jenkins jobs.</p>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="#">Installation</a></li>
+<li><a href="#">Quickstart</a></li>
+<li><a href="#">Container Deployment</a></li>
+<li><a href="#">HTML Reports and Dashboard</a></li>
+<li><a href="#">Troubleshooting</a></li>
+</ul>
                 </div>
             </article>
             <nav class="page-nav">
@@ -504,6 +512,7 @@ AI_MODEL=your-model-name
 </ul>
 </li>
 <li><a href="#when-you-move-past-smoke-testing">When You Move Past Smoke Testing</a></li>
+<li><a href="#related-pages">Related Pages</a></li>
 </ul>
 </div>
 
@@ -514,9 +523,13 @@ AI_MODEL=your-model-name
         </main>
 
         <footer class="page-footer">
+            
+            <span class="footer-version">Generated from version 2.1.0</span>
+            <span class="footer-sep">&middot;</span>
+            
             Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
-            <span class="footer-sep">·</span>
-            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+            <span class="footer-sep">&middot;</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> &middot; <a href="llms-full.txt">llms-full.txt</a></span>
         </footer>
     </div>
 

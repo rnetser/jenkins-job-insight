@@ -281,3 +281,12 @@ This is the quickest way to confirm which primary provider/model combinations ha
 - If a model is slow, increase `AI_CLI_TIMEOUT`. The default in `config.py` and `.env.example` is `10` minutes.
 
 > **Tip:** If you are experimenting, start by getting one provider working through the supplied container image first. Once that works, moving to another provider is usually just a matter of changing `AI_PROVIDER`, `AI_MODEL`, and the provider-specific auth settings.
+
+
+## Related Pages
+
+- [Installation](installation.html)
+- [Configuration Reference](configuration-reference.html)
+- [Quickstart](quickstart.html)
+- [Container Deployment](container-deployment.html)
+- [Analyze Jenkins Jobs](analyze-jenkins-jobs.html)

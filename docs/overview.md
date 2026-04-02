@@ -70,7 +70,7 @@ A direct failure analysis request can also enable peer analysis. The API tests u
 
 ## Main outputs
 
-Every analysis gets a `job_id` and is stored for later retrieval. For Jenkins jobs, `POST /analyze` returns a queued response by default and includes a canonical `result_url` pointing at `/results/{job_id}`. That same route serves JSON to API clients and the React report UI to browsers. Jobs move through `waiting`, `pending`, `running`, `completed`, or `failed`.
+Every analysis gets a `job_id` and is stored for later retrieval. For Jenkins jobs, `POST /analyze` is async-only: it returns a queued response and includes a canonical `result_url` pointing at `/results/{job_id}`. That same route serves JSON to API clients and the React report UI to browsers. Jobs move through `waiting`, `pending`, `running`, `completed`, or `failed`.
 
 The core result is structured rather than free-form text. Each failure still carries structured `analysis`, and when peer analysis is enabled it can also include the debate trail from the participating AIs. The current model in `src/jenkins_job_insight/models.py` is:
 
@@ -130,7 +130,7 @@ The service supports three providers:
 - `gemini`
 - `cursor`
 
-The provider and model can be configured globally with environment variables or passed in the request body. Optional peer analysis uses the same provider names for additional reviewer models. Relevant lines from `.env.example` now include:
+The AI setup has two layers. `AI_PROVIDER` and `AI_MODEL` choose the primary AI that produces the final analysis, and you can still override both per request. `PEER_AI_CONFIGS` and `PEER_ANALYSIS_MAX_ROUNDS` optionally add peer reviewers for consensus analysis. Relevant lines from `.env.example` now include:
 
 ```bash
 AI_PROVIDER=claude
@@ -178,7 +178,9 @@ GEMINI_API_KEY=your-gemini-api-key
 # PEER_ANALYSIS_MAX_ROUNDS=3
 ```
 
-For server-wide peer defaults, use `PEER_AI_CONFIGS` as a comma-separated `provider:model` list. For per-request overrides, send `peer_ai_configs` as a JSON array and `peer_analysis_max_rounds` as an integer.
+Use `PEER_AI_CONFIGS` as a comma-separated `provider:model` list for server defaults. In request bodies, use `peer_ai_configs` as a JSON array and `peer_analysis_max_rounds` as an integer from `1` to `10`. Omit `peer_ai_configs` to inherit the server default, or send `peer_ai_configs: []` to disable peer analysis for one request while keeping the server default in place.
+
+> **Note:** If you enable peer analysis, every provider listed in `PEER_AI_CONFIGS` or `peer_ai_configs` must also be installed and authenticated in the same runtime.
 
 Jira is optional and supports both Cloud and Server/DC:
 
@@ -201,7 +203,7 @@ Use `POST /analyze` when Jenkins is your source of truth. You send `job_name` an
 - Optionally clones your test repository for source-level context
 - Recursively analyzes failed child jobs in pipeline or orchestrator builds
 
-By default, Jenkins analysis returns a `job_id` immediately. With `wait_for_completion` enabled (the default), the service can accept a build that is still running, store the job in `waiting`, poll Jenkins until the build reaches a terminal state, and then start the analysis automatically.
+`POST /analyze` is async-only and returns a `job_id` immediately. With `wait_for_completion` enabled (the default), the service can accept a build that is still running, store the job in `waiting`, poll Jenkins until the build reaches a terminal state, and then start the analysis automatically.
 
 You can then:
 
@@ -209,7 +211,7 @@ You can then:
 - Open `/results/{job_id}` in a browser; if the analysis is still in progress, the app redirects you to `/status/{job_id}`
 - Set `wait_for_completion` to `false` when you do not want the service to monitor a running build
 
-If you need the full result immediately, use `?sync=true`.
+If you need a single request/response flow, use `POST /analyze-failures` instead.
 
 For pipeline-style jobs, the top-level result may mostly be a summary, with the actual failure details stored under `child_job_analyses`.
 
@@ -253,7 +255,7 @@ Single-AI analysis remains the default. When you want a second opinion, you can 
 The CLI exposes the same workflow:
 
 ```shell
-jji analyze --job-name my-job --build-number 1 --peers cursor:gpt-5,gemini:2.5-pro --peer-analysis-max-rounds 5
+jji analyze --job-name my-job --build-number 1 --peers "cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro" --peer-analysis-max-rounds 5
 ```
 
 In stored results, each affected failure can include `peer_debate`, and the report UI shows both a Peer Analysis summary and a per-failure round-by-round timeline. While a Jenkins-backed run is still processing, the status page also shows peer-review and main-AI revision phases as they happen.
@@ -327,3 +329,12 @@ Once the service is running, the most useful entry points are:
 - `/health` to confirm it is up
 - `/docs` to explore the API
 - `/dashboard` to browse stored analyses
+
+
+## Related Pages
+
+- [Quickstart](quickstart.html)
+- [Architecture and Project Structure](architecture-and-project-structure.html)
+- [API Overview](api-overview.html)
+- [Configuration Reference](configuration-reference.html)
+- [HTML Reports and Dashboard](html-reports-and-dashboard.html)

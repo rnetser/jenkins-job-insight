@@ -138,6 +138,8 @@ That makes `/data` the stateful part of the container. It holds:
 - Failure history and classifications
 - Stored data used to resume waiting Jenkins jobs after a restart
 
+> **Note:** A restart does not resume every in-progress job. JJI resumes only jobs that were in the `waiting` state and still have usable stored request data in SQLite. Orphaned `pending` and `running` jobs are marked `failed` instead of resuming mid-analysis.
+
 The app initializes the database automatically on startup, creates the parent directory if needed, and runs SQLite schema migrations as part of startup.
 
 ```85:92:src/jenkins_job_insight/storage.py
@@ -324,9 +326,9 @@ In practice, that means:
 - If you add secret or config mounts under the home directory, make sure they are compatible with arbitrary-UID access.
 - Keep the service as a single replica when using the built-in SQLite storage.
 
-The entrypoint still stages Cursor credentials from `/cursor-credentials` and normalizes `PORT`, but it now also supports a development-only mode that starts the Vite dev server. Leave `DEV_MODE` unset in OpenShift production.
+The entrypoint still stages Cursor credentials from `/cursor-credentials` and normalizes `PORT`, but it now also appends `--port $PORT` to the `uvicorn` command when needed. In `DEV_MODE`, it starts the Vite dev server and adds `--reload --reload-dir /app/src` for backend hot reload. Leave `DEV_MODE` unset in OpenShift production.
 
-```8:27:entrypoint.sh
+```8:53:entrypoint.sh
 # Copy cursor credentials from PVC staging mount
 if [ -d /cursor-credentials ]; then
     mkdir -p "${XDG_CONFIG_HOME:-/home/appuser/.config}/cursor"
@@ -348,6 +350,31 @@ if [ "${DEV_MODE:-}" = "true" ] && [ -f /app/frontend/package.json ]; then
     npm run dev -- --host 0.0.0.0 --port 5173 &
     cd /app || { echo "[DEV] Failed to return to app directory"; exit 1; }
 fi
+
+# Check if any argument contains "uvicorn" to detect all uvicorn invocations
+has_uvicorn=false
+has_port=false
+for arg in "$@"; do
+    case "$arg" in
+        *uvicorn*) has_uvicorn=true ;;
+        --port|--port=*) has_port=true ;;
+    esac
+done
+
+# Build final arguments
+extra_args=""
+if [ "$has_uvicorn" = true ] && [ "$has_port" = false ]; then
+    extra_args="$extra_args --port $PORT"
+fi
+if [ "$has_uvicorn" = true ] && [ "${DEV_MODE:-}" = "true" ]; then
+    extra_args="$extra_args --reload --reload-dir /app/src"
+fi
+
+if [ -n "$extra_args" ]; then
+    exec "$@" $extra_args
+else
+    exec "$@"
+fi
 ```
 
 If a projected volume or `subPath` mount makes `~/.config` non-writable, set `XDG_CONFIG_HOME` to a writable location and mount provider configuration there instead.
@@ -360,7 +387,7 @@ This matters on OpenShift because platform runtimes often inject or expect a `PO
 
 Public result links no longer trust `Host` or `X-Forwarded-*` headers. If you want absolute URLs behind an OpenShift `Route` or another reverse proxy, set `PUBLIC_BASE_URL` explicitly.
 
-```142:160:src/jenkins_job_insight/main.py
+```146:164:src/jenkins_job_insight/main.py
 def _extract_base_url() -> str:
     """Extract the external base URL for building public-facing links.
 
@@ -379,8 +406,18 @@ def _extract_base_url() -> str:
     logger.debug(
         "PUBLIC_BASE_URL is not set; returning empty base URL (relative paths)"
     )
+    return ""
 ```
 
 > **Tip:** On OpenShift, set `PUBLIC_BASE_URL` to your public route URL, for example `https://jji.apps.example.com`, if you want API responses and issue-preview links to contain absolute external URLs.
 
 > **Warning:** The image-level health check respects `PORT`, but the provided `docker-compose.yaml` health check does not. If you override the container port, update both the Compose port mapping and the Compose health check.
+
+
+## Related Pages
+
+- [Installation](installation.html)
+- [Configuration Reference](configuration-reference.html)
+- [Reverse Proxy and Base URL Handling](reverse-proxy-and-base-urls.html)
+- [AI Provider Setup](ai-provider-setup.html)
+- [Storage and Result Lifecycle](storage-and-result-lifecycle.html)

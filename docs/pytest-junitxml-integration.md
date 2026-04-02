@@ -1,25 +1,45 @@
 # Pytest JUnit XML Integration
 
-`jenkins-job-insight` includes a bundled pytest example in `examples/pytest-junitxml/`. It is meant for teams that already generate JUnit XML in CI and want that same XML artifact rewritten with AI annotations after the test run finishes.
+`jenkins-job-insight` includes a bundled pytest example in `examples/pytest-junitxml/`. Use it when your tests already produce JUnit XML and you want that same artifact rewritten with AI annotations after the run finishes.
 
-This flow uses the direct `/analyze-failures` API. It uploads raw JUnit XML, not Jenkins job metadata, so it works even when you are outside a Jenkins-native workflow.
+This integration uses `POST /analyze-failures` directly. Pytest writes the XML, the helper uploads the raw document, JJI analyzes the failing testcases, and the helper overwrites the same file with `enriched_xml`. Because the logic lives in pytest hooks, it works the same locally or in any CI runner that already invokes `pytest`.
 
-> **Note:** This is a copy-and-adapt example, not an installable pytest plugin package. Copy `examples/pytest-junitxml/conftest_junit_ai.py` into your test repository as `conftest.py`, and keep `examples/pytest-junitxml/conftest_junit_ai_utils.py` alongside it.
+> **Note:** This is a copy-and-adapt example, not an installable pytest plugin. Copy `examples/pytest-junitxml/conftest_junit_ai.py` into your test repository as `conftest.py`, and keep `examples/pytest-junitxml/conftest_junit_ai_utils.py` alongside it.
 
-## What You Need
+## End-to-End Flow
 
-- A running `jenkins-job-insight` server.
-- A pytest job that already writes `--junitxml` output.
-- `requests` and `python-dotenv` installed where pytest runs.
-- Client-side environment variables:
-  - `JJI_SERVER`
-  - `JJI_AI_PROVIDER`
-  - `JJI_AI_MODEL`
-  - `JJI_TIMEOUT` optional, default `600` seconds
+1. Run pytest with `--junitxml=...` so it writes a JUnit XML file.
+2. Add `--analyze-with-ai` to opt into the bundled hook.
+3. The helper reads that XML file and posts it to JJI.
+4. JJI extracts failures, deduplicates repeated errors, runs AI analysis, and returns `enriched_xml`.
+5. The helper writes the enriched XML back to the same path.
 
-Install the helper dependencies in the environment where pytest runs with `pip install requests python-dotenv`.
+```mermaid
+sequenceDiagram
+    participant Pytest
+    participant XML as report.xml
+    participant Helper as Bundled conftest
+    participant JJI as jenkins-job-insight
 
-If you use the bundled container setup, the service is exposed on `http://localhost:8000`. The server still needs its own AI configuration and provider credentials. The checked-in environment template shows the required server-side model settings:
+    Pytest->>XML: Write JUnit XML (--junitxml)
+    Helper->>Helper: Check --analyze-with-ai
+    Helper->>JJI: POST /analyze-failures\nraw_xml + ai_provider + ai_model
+    JJI->>JJI: Parse failing testcases
+    JJI->>JJI: Group repeated failures
+    JJI->>JJI: Run AI analysis
+    JJI-->>Helper: job_id + result_url + enriched_xml
+    Helper->>XML: Overwrite same file with enriched_xml
+```
+
+## Set It Up
+
+1. Copy `examples/pytest-junitxml/conftest_junit_ai.py` into your test repository root and rename it to `conftest.py`.
+2. Copy `examples/pytest-junitxml/conftest_junit_ai_utils.py` into the same directory.
+3. Install the helper dependencies in the environment where pytest runs: `requests` and `python-dotenv`.
+4. Set `JJI_SERVER`, `JJI_AI_PROVIDER`, `JJI_AI_MODEL`, and optionally `JJI_TIMEOUT`.
+5. Run pytest with both `--junitxml=report.xml` and `--analyze-with-ai`.
+
+The JJI server still needs its own AI provider and model configured. The checked-in environment template shows the core server-side settings:
 
 ```14:19:.env.example
 # Choose AI provider (required): "claude", "gemini", or "cursor"
@@ -30,24 +50,13 @@ AI_PROVIDER=claude
 AI_MODEL=your-model-name
 ```
 
-If you want the same pytest-uploaded XML to use multi-AI consensus, the same template now also includes optional server-side peer-analysis defaults:
+> **Warning:** The example header mentions defaults for `JJI_AI_PROVIDER` and `JJI_AI_MODEL`, but the current helper code requires both to be set. If either one is missing, it disables enrichment instead of falling back.
 
-```52:57:.env.example
-# ===================
-# Peer Analysis (Optional)
-# ===================
-# Enable multi-AI consensus by configuring peer AI providers
-# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
-# PEER_ANALYSIS_MAX_ROUNDS=3
-```
+> **Tip:** The helper calls `load_dotenv()`, so a project-local `.env` file is a convenient place to keep the pytest-side `JJI_*` settings.
 
-> **Note:** When `PEER_AI_CONFIGS` is set on the server, the bundled pytest helper does not need any extra client-side peer settings. It still posts `raw_xml` to `POST /analyze-failures`, and the server applies its default peer-analysis settings.
+## How the Pytest Hook Works
 
-> **Warning:** The current pytest helper does not actually fall back to built-in client-side defaults for `JJI_AI_PROVIDER` or `JJI_AI_MODEL`. If either one is missing, the helper disables enrichment.
-
-## How The Example Hooks Into Pytest
-
-The example adds an opt-in `--analyze-with-ai` flag, loads its configuration at session start, and then tries to enrich the XML at the end of the run:
+The bundled `conftest` adds an opt-in CLI flag and runs enrichment at session finish:
 
 ```33:67:examples/pytest-junitxml/conftest_junit_ai.py
 def pytest_addoption(parser):
@@ -69,11 +78,13 @@ def pytest_sessionstart(session):
 
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
+    """Enrich JUnit XML with AI analysis when tests fail."""
     if session.config.option.analyze_with_ai:
         if exitstatus == 0:
             logger.info(
                 "No test failures (exit code %d), skipping AI analysis", exitstatus
             )
+
         else:
             try:
                 enrich_junit_xml(session)
@@ -81,185 +92,175 @@ def pytest_sessionfinish(session, exitstatus):
                 logger.exception("Failed to enrich JUnit XML, original preserved")
 ```
 
-This has a few practical consequences:
+In practice, that means:
 
-- You must opt in with `--analyze-with-ai`.
-- You must also pass `--junitxml=...`, because the helper rewrites the XML file pytest created.
-- Passing runs are skipped because the helper only enriches when pytest exits non-zero.
-- Dry-run modes such as `--collectonly` and `--setupplan` disable the feature during setup.
+- You must pass `--analyze-with-ai`. Nothing happens by default.
+- You must also pass `--junitxml=...`, because the helper rewrites the file pytest created.
+- The hook uses `trylast=True`, so it runs after pytest has had a chance to write the XML artifact.
+- Clean runs are skipped.
+- Any non-zero exit triggers an enrichment attempt.
+- If enrichment fails, the helper keeps the original XML file.
 
-> **Tip:** The hook uses `trylast=True`, so the enrichment step runs at the very end of pytest session shutdown, after pytest has had a chance to write the XML artifact.
+The setup utility also turns the feature off for `--collectonly` and `--setupplan`, and disables it when required environment variables are missing.
 
-## Running It
+## What the Helper Uploads
 
-Once the two example files are in your test repository, run pytest normally with JUnit XML enabled:
+The XML sent to JJI is a normal JUnit document. The tests include a small example like this:
 
-`pytest --junitxml=report.xml --analyze-with-ai`
-
-The helper calls `load_dotenv()`, so a local `.env` file in your test repository is a convenient place to set `JJI_SERVER`, `JJI_AI_PROVIDER`, `JJI_AI_MODEL`, and `JJI_TIMEOUT`.
-
-The client-side timeout comes from `JJI_TIMEOUT` and is measured in seconds. That is separate from the server's `AI_CLI_TIMEOUT`, which is a server setting measured in minutes.
-
-## What Gets Sent To The Service
-
-The helper reads the JUnit XML file from pytest, uploads it to `/analyze-failures`, and only rewrites the file when the response includes `enriched_xml`:
-
-```60:122:examples/pytest-junitxml/conftest_junit_ai_utils.py
-def enrich_junit_xml(session) -> None:
-    xml_path_raw = getattr(session.config.option, "xmlpath", None)
-    if not xml_path_raw:
-        logger.warning(
-            "xunit file not found; pass --junitxml. Skipping AI analysis enrichment"
-        )
-        return
-
-    xml_path = Path(xml_path_raw)
-    if not xml_path.exists():
-        logger.warning(
-            "xunit file not found under %s. Skipping AI analysis enrichment",
-            xml_path_raw,
-        )
-        return
-
-    ai_provider = os.environ.get("JJI_AI_PROVIDER", "")
-    ai_model = os.environ.get("JJI_AI_MODEL", "")
-    if not ai_provider or not ai_model:
-        logger.warning(
-            "JJI_AI_PROVIDER and JJI_AI_MODEL must be set, skipping AI analysis enrichment"
-        )
-        return
-
-    server_url = os.environ.get("JJI_SERVER", "")
-    raw_xml = xml_path.read_text()
-
-    try:
-        timeout_value = int(os.environ.get("JJI_TIMEOUT", "600"))
-    except ValueError:
-        logger.warning("Invalid JJI_TIMEOUT value, using default 600 seconds")
-        timeout_value = 600
-
-    try:
-        response = requests.post(
-            f"{server_url.rstrip('/')}/analyze-failures",
-            json={
-                "raw_xml": raw_xml,
-                "ai_provider": ai_provider,
-                "ai_model": ai_model,
-            },
-            timeout=timeout_value,
-        )
-        response.raise_for_status()
-        result = response.json()
-    except Exception as ex:
-        logger.exception(f"Failed to enrich JUnit XML, original preserved. {ex}")
-        return
-
-    if enriched_xml := result.get("enriched_xml"):
-        xml_path.write_text(enriched_xml)
-        logger.info("JUnit XML enriched with AI analysis: %s", xml_path)
+```648:656:tests/test_main.py
+SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="TestSuite" tests="2" failures="1" errors="0">
+    <testcase classname="tests.test_auth" name="test_login" time="0.5">
+        <failure message="assert False" type="AssertionError">
+            at tests/test_auth.py:42
+        </failure>
+    </testcase>
+    <testcase classname="tests.test_auth" name="test_logout" time="0.1"/>
+</testsuite>"""
 ```
 
-The bundled helper sends only three fields:
+At session finish, the helper reads the XML from disk, posts it to `POST /analyze-failures`, and writes the response back to the same file only when `enriched_xml` is present:
+
+```93:120:examples/pytest-junitxml/conftest_junit_ai_utils.py
+server_url = os.environ.get("JJI_SERVER", "")
+raw_xml = xml_path.read_text()
+
+try:
+    timeout_value = int(os.environ.get("JJI_TIMEOUT", "600"))
+except ValueError:
+    logger.warning("Invalid JJI_TIMEOUT value, using default 600 seconds")
+    timeout_value = 600
+
+try:
+    response = requests.post(
+        f"{server_url.rstrip('/')}/analyze-failures",
+        json={
+            "raw_xml": raw_xml,
+            "ai_provider": ai_provider,
+            "ai_model": ai_model,
+        },
+        timeout=timeout_value,
+    )
+    response.raise_for_status()
+    result = response.json()
+except Exception as ex:
+    logger.exception(f"Failed to enrich JUnit XML, original preserved. {ex}")
+    return
+
+if enriched_xml := result.get("enriched_xml"):
+    xml_path.write_text(enriched_xml)
+    logger.info("JUnit XML enriched with AI analysis: %s", xml_path)
+```
+
+The bundled example sends a deliberately small payload:
 
 - `raw_xml`
 - `ai_provider`
 - `ai_model`
 
-That is enough for the standard flow, but it is deliberately minimal.
+That keeps the example easy to understand. If you need additional request options, extend the JSON body in `conftest_junit_ai_utils.py`.
 
-The shared request model behind `/analyze-failures` also supports optional peer-analysis overrides:
+> **Note:** `raw_xml` is sent as a JSON string in the request body. This endpoint is not a multipart file-upload API.
 
-```95:105:src/jenkins_job_insight/models.py
-peer_ai_configs: list[AiConfigEntry] | None = Field(
-    default=None,
-    description=(
-        "List of peer AI configs for consensus analysis. "
-        "Omit to inherit the server default; send [] to disable peer analysis "
-        "for this request. Each peer reviews the main AI's analysis."
-    ),
-)
-peer_analysis_max_rounds: Annotated[int, Field(ge=1, le=10)] = Field(
-    default=3,
-    description="Maximum debate rounds for peer analysis",
-)
+> **Note:** The request model caps `raw_xml` at `50,000,000` characters.
+
+## What JJI Does With the XML
+
+### Extract failing testcases
+
+On the server, JJI walks each `testcase`, looks for both `<failure>` and `<error>`, and builds the analysis input from the XML itself:
+
+```35:60:src/jenkins_job_insight/xml_enrichment.py
+for testcase in root.iter("testcase"):
+    failure_elem = testcase.find("failure")
+    error_elem = testcase.find("error")
+    result_elem = failure_elem if failure_elem is not None else error_elem
+
+    if result_elem is None:
+        continue
+
+    classname = testcase.get("classname", "")
+    name = testcase.get("name", "")
+    test_name = f"{classname}.{name}" if classname else name
+
+    if not test_name:
+        logger.warning("Skipping testcase with empty name attribute")
+        continue
+
+    failures.append(
+        {
+            "test_name": test_name,
+            "error_message": result_elem.get("message", "")
+            or ((result_elem.text or "").split("\n")[0].strip()),
+            "stack_trace": result_elem.text or "",
+            "status": "ERROR"
+            if error_elem is not None and failure_elem is None
+            else "FAILED",
+        }
+    )
 ```
 
-> **Tip:** The `/analyze-failures` request model also supports optional fields such as `tests_repo_url`, `enable_jira`, `raw_prompt`, `peer_ai_configs`, and `peer_analysis_max_rounds`. If you want pytest-driven analysis to use those features, extend the JSON payload in `conftest_junit_ai_utils.py`.
+This gives you a few useful guarantees:
 
-## What The Server Does With The XML
+- JJI recognizes both failed tests and test errors.
+- It uses `classname.name` when the XML provides both fields.
+- It preserves the full element text as the stack trace.
+- If the XML has no `message` attribute, it falls back to the first line of the failure text.
 
-On the server side, JUnit XML is parsed, failures and errors are extracted, repeated failures are deduplicated by signature, AI analysis runs, and the response includes a new `enriched_xml` string.
+### Deduplicate repeated failures
 
-A few endpoint details are worth knowing:
+If many tests fail for the same reason, JJI does not ask the AI to analyze each one separately. It groups failures by a signature built from the error message plus the first five stack-trace lines:
 
-- `/analyze-failures` accepts either `raw_xml` or a `failures` array, but not both.
-- The bundled pytest example always uses `raw_xml`.
-- The parser analyzes both `<failure>` and `<error>` elements.
-- In raw XML mode, malformed XML returns HTTP `400`.
-- If the XML contains no failures, the service returns the original XML unchanged as `enriched_xml`.
-- The `raw_xml` field is capped at `50,000,000` characters.
+```273:291:src/jenkins_job_insight/analyzer.py
+def get_failure_signature(failure: TestFailure) -> str:
+    """Create a signature for grouping identical failures."""
+    # Use error message and first 5 lines of stack trace for deduplication.
+    # Intentionally limited to 5 lines: different stack depths for the same
+    # root cause (e.g., varying call-site depth) should still collapse into
+    # one group so the AI analyzes each unique error only once.
+    stack_lines = failure.stack_trace.split("\n")[:5]
+    signature_text = f"{failure.error_message}|{'|'.join(stack_lines)}"
+    return hashlib.sha256(signature_text.encode()).hexdigest()
+```
 
-## What The Server Writes Back Into The XML
+That is especially useful for parameterized tests, shared-environment outages, and any failure pattern where many red tests all point back to the same root cause.
 
-When enrichment happens, `jenkins-job-insight` adds AI properties to the affected `<testcase>` elements and appends a readable summary to `system-out`:
+## What Gets Added Back to the Artifact
 
-```226:297:src/jenkins_job_insight/xml_enrichment.py
-def _inject_analysis(testcase: Element, analysis: dict[str, Any]) -> None:
-    properties = testcase.find("properties")
-    if properties is None:
-        properties = ET.SubElement(testcase, "properties")
+When analysis completes, JJI rewrites the XML with two kinds of additions:
 
-    _add_property(properties, "ai_classification", analysis.get("classification", ""))
-    _add_property(properties, "ai_details", analysis.get("details", ""))
+- a `report_url` property on the first `testsuite`
+- structured AI annotations plus readable summary text on each matching `testcase`
 
-    affected = analysis.get("affected_tests", [])
-    if affected:
-        _add_property(properties, "ai_affected_tests", ", ".join(affected))
+The rewrite is driven by the XML enrichment layer:
 
-    code_fix = analysis.get("code_fix")
-    if code_fix and isinstance(code_fix, dict):
-        _add_property(properties, "ai_code_fix_file", code_fix.get("file", ""))
-        _add_property(properties, "ai_code_fix_line", str(code_fix.get("line", "")))
-        _add_property(properties, "ai_code_fix_change", code_fix.get("change", ""))
+```95:148:src/jenkins_job_insight/xml_enrichment.py
+def apply_analysis_to_xml(
+    raw_xml: str,
+    analysis_map: dict[tuple[str, str], dict[str, Any]],
+    report_url: str = "",
+) -> str:
+    root = safe_fromstring(raw_xml)
+    matched_keys: set[tuple[str, str]] = set()
 
-    bug_report = analysis.get("product_bug_report")
-    if bug_report and isinstance(bug_report, dict):
-        _add_property(properties, "ai_bug_title", bug_report.get("title", ""))
-        _add_property(properties, "ai_bug_severity", bug_report.get("severity", ""))
-        _add_property(properties, "ai_bug_component", bug_report.get("component", ""))
-        _add_property(
-            properties, "ai_bug_description", bug_report.get("description", "")
+    for testcase in root.iter("testcase"):
+        key = (testcase.get("classname", ""), testcase.get("name", ""))
+        analysis = analysis_map.get(key)
+        if analysis:
+            _inject_analysis(testcase, analysis)
+            matched_keys.add(key)
+
+    unmatched = set(analysis_map.keys()) - matched_keys
+    if unmatched:
+        logger.warning(
+            "%d analysis results did not match any testcase: %s",
+            len(unmatched),
+            unmatched,
         )
-# ... Jira match properties omitted for brevity ...
-    text = _format_analysis_text(analysis)
-    if text:
-        system_out = testcase.find("system-out")
-        if system_out is None:
-            system_out = ET.SubElement(testcase, "system-out")
-            system_out.text = text
-        else:
-            existing = system_out.text or ""
-            system_out.text = (
-                f"{existing}\n\n--- AI Analysis ---\n{text}" if existing else text
-            )
-```
 
-In practice, the rewritten XML can include:
-
-- `ai_classification` and `ai_details`
-- `ai_affected_tests` when one root cause affects multiple tests
-- `ai_code_fix_file`, `ai_code_fix_line`, and `ai_code_fix_change` for `CODE ISSUE`
-- `ai_bug_title`, `ai_bug_severity`, `ai_bug_component`, and `ai_bug_description` for `PRODUCT BUG`
-- `ai_jira_match_<n>_*` fields when Jira matching is enabled and relevant matches are found
-- a human-readable summary in `system-out`
-
-The service also adds a `report_url` property to the first `<testsuite>` so the artifact can link back to the full JJI report:
-
-```131:148:src/jenkins_job_insight/xml_enrichment.py
     # Add report_url to the first testsuite only
     if report_url:
         first_testsuite = next(root.iter("testsuite"), None)
-        # If root itself is a testsuite, use it
         if first_testsuite is None and root.tag == "testsuite":
             first_testsuite = root
         if first_testsuite is not None:
@@ -268,50 +269,110 @@ The service also adds a `report_url` property to the first `<testsuite>` so the 
                 ts_props = ET.Element("properties")
                 first_testsuite.insert(0, ts_props)
             _add_property(ts_props, "report_url", report_url)
-        else:
-            logger.warning(
-                "Could not add report_url: no testsuite element found in XML"
-            )
 
     return ET.tostring(root, encoding="unicode", xml_declaration=True)
 ```
 
-> **Note:** Only the first `<testsuite>` gets `report_url`. That matters if your test runner emits a multi-suite JUnit document.
+The testcase-level annotations come from `_inject_analysis()`:
 
-## Absolute Links vs Relative Links
+```226:297:src/jenkins_job_insight/xml_enrichment.py
+properties = testcase.find("properties")
+if properties is None:
+    properties = ET.SubElement(testcase, "properties")
 
-Whether `report_url` is an absolute URL or a relative path depends on the server's `PUBLIC_BASE_URL` setting:
+_add_property(properties, "ai_classification", analysis.get("classification", ""))
+_add_property(properties, "ai_details", analysis.get("details", ""))
 
-```105:109:src/jenkins_job_insight/config.py
-    # Trusted public base URL — used for result_url and tracker links.
-    # When set, _extract_base_url() returns this value verbatim.
-    # When unset, _extract_base_url() returns an empty string (relative
-    # URLs only) — request Host / X-Forwarded-* headers are never trusted.
-    public_base_url: str | None = None
+affected = analysis.get("affected_tests", [])
+if affected:
+    _add_property(properties, "ai_affected_tests", ", ".join(affected))
+
+code_fix = analysis.get("code_fix")
+if code_fix and isinstance(code_fix, dict):
+    _add_property(properties, "ai_code_fix_file", code_fix.get("file", ""))
+    _add_property(properties, "ai_code_fix_line", str(code_fix.get("line", "")))
+    _add_property(properties, "ai_code_fix_change", code_fix.get("change", ""))
+
+bug_report = analysis.get("product_bug_report")
+if bug_report and isinstance(bug_report, dict):
+    _add_property(properties, "ai_bug_title", bug_report.get("title", ""))
+    _add_property(properties, "ai_bug_severity", bug_report.get("severity", ""))
+    _add_property(properties, "ai_bug_component", bug_report.get("component", ""))
+    _add_property(
+        properties, "ai_bug_description", bug_report.get("description", "")
+    )
+
+# ... jira match properties are added here when available ...
+
+text = _format_analysis_text(analysis)
+if text:
+    system_out = testcase.find("system-out")
+    if system_out is None:
+        system_out = ET.SubElement(testcase, "system-out")
+        system_out.text = text
+    else:
+        existing = system_out.text or ""
+        system_out.text = (
+            f"{existing}\n\n--- AI Analysis ---\n{text}" if existing else text
+        )
 ```
 
-If `PUBLIC_BASE_URL` is set, rewritten XML will contain fully qualified links such as `https://your-jji.example.com/results/<job_id>`. If it is not set, the XML gets a relative `report_url` like `/results/<job_id>`.
+### XML annotations you can rely on
 
-> **Tip:** Set `PUBLIC_BASE_URL` on the JJI server if you archive JUnit XML outside the service itself and want the embedded report link to be clickable everywhere.
+| XML location | Added data | When it appears |
+| --- | --- | --- |
+| First `testsuite` `properties` | `report_url` | When JJI stores the analysis result |
+| `testcase` `properties` | `ai_classification`, `ai_details` | For analyzed failures |
+| `testcase` `properties` | `ai_affected_tests` | When one analysis applies to multiple tests |
+| `testcase` `properties` | `ai_code_fix_file`, `ai_code_fix_line`, `ai_code_fix_change` | For `CODE ISSUE` results |
+| `testcase` `properties` | `ai_bug_title`, `ai_bug_severity`, `ai_bug_component`, `ai_bug_description` | For `PRODUCT BUG` results |
+| `testcase` `properties` | `ai_jira_match_<n>_*` | When Jira matching is enabled and relevant matches are found |
+| `testcase` `system-out` | Human-readable AI summary | When JJI has formatted analysis text |
+
+By default, the stored-result link written into `report_url` is a relative path such as `/results/<job_id>`. That makes the XML artifact self-contained while still pointing back to the full JJI result.
+
+> **Tip:** Rewriting the same JUnit file means you can keep publishing the artifact you already use. Tools that surface testcase properties or `system-out` can show the AI annotations without needing a second report format.
+
+> **Note:** If a testcase already has `system-out`, JJI appends the AI section after `--- AI Analysis ---` instead of replacing the original text.
+
+## Response Behavior to Expect
+
+In raw-XML mode, a successful `POST /analyze-failures` response includes:
+
+- `job_id`
+- `status`
+- `summary`
+- `ai_provider`
+- `ai_model`
+- `failures`
+- `enriched_xml`
+
+A few behaviors are worth knowing:
+
+- If the XML contains no failing `testcase` elements, JJI returns `completed` and echoes the original XML back as `enriched_xml`.
+- If the XML is malformed, the endpoint returns HTTP `400`.
+- If a request sends both `raw_xml` and `failures`, or sends neither, validation returns HTTP `422`.
+- The result is stored, so the XML can link back to the JJI result page.
+
+> **Note:** The rewritten document stays valid XML. The enrichment tests parse the result again with `ElementTree` after injection.
 
 ## Troubleshooting
 
-If the XML is not being rewritten, check these first:
+- If nothing changes, make sure you passed both `--junitxml=...` and `--analyze-with-ai`.
+- If pytest exits `0`, the helper skips the request by design.
+- If you run `--collectonly` or `--setupplan`, the helper disables itself during setup.
+- If `JJI_SERVER`, `JJI_AI_PROVIDER`, or `JJI_AI_MODEL` is missing, the helper disables itself and leaves the XML untouched.
+- If `JJI_TIMEOUT` is not an integer, the helper falls back to `600` seconds.
+- If the network request fails or the server does not return `enriched_xml`, the original XML file is preserved.
+- If your XML contains no failures, JJI stores a result but returns the original XML unchanged.
 
-- `--analyze-with-ai` was passed.
-- `--junitxml=...` was passed and the file exists where pytest wrote it.
-- `JJI_SERVER`, `JJI_AI_PROVIDER`, and `JJI_AI_MODEL` are all set in the pytest environment.
-- The JJI server is reachable from the machine running pytest.
-- The server has working AI provider authentication configured.
-- `JJI_TIMEOUT` is high enough for your XML size and chosen model.
+This bundled example is the simplest way to attach AI analysis directly to the JUnit artifact your CI already understands: one pytest flag, one POST request, and one rewritten XML file with structured annotations plus a backlink to the full JJI report.
 
-If you still see an unchanged XML file, that is usually by design. The bundled helper leaves the existing file alone when:
 
-- the request to `/analyze-failures` fails
-- the response does not include `enriched_xml`
-- the run was fully green and pytest exited `0`
-- the run was a dry run such as `--collectonly` or `--setupplan`
+## Related Pages
 
-## Summary
-
-Use this bundled example when you want your existing pytest JUnit XML artifact to carry AI analysis with it. The flow is intentionally simple: pytest writes XML, the helper posts `raw_xml` to `/analyze-failures`, and the service returns a rewritten XML artifact containing AI annotations and a backlink to the full JJI report.
+- [Analyze Raw Failures and JUnit XML](direct-failure-analysis.html)
+- [POST /analyze-failures](api-post-analyze-failures.html)
+- [Schemas and Data Models](api-schemas-and-models.html)
+- [Troubleshooting](troubleshooting.html)
+- [Development and Testing](development-and-testing.html)

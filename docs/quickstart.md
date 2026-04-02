@@ -28,6 +28,12 @@ AI_MODEL=your-model-name
 # Option 1: Direct API key (simplest)
 ANTHROPIC_API_KEY=your-anthropic-api-key
 
+# --- AI CLI Timeout ---
+
+# Timeout for AI CLI calls in minutes (default: 10)
+# Increase for slower models like gpt-5.2
+# AI_CLI_TIMEOUT=10
+
 # ===================
 # Peer Analysis (Optional)
 # ===================
@@ -50,6 +56,8 @@ The health check returns:
 If you prefer a local process instead of Docker, set the same environment variables, run `uv sync`, build the frontend with `cd frontend && npm install && npm run build`, then start the API with `uv run jenkins-job-insight`. Without `frontend/dist`, the JSON API still works but the browser UI returns `Frontend not built`.
 
 > **Warning:** `JENKINS_URL`, `JENKINS_USER`, and `JENKINS_PASSWORD` no longer have to be server-wide settings. For the quickest first run, put them in `.env`; otherwise, send `jenkins_url`, `jenkins_user`, and `jenkins_password` in the `POST /analyze` body. If your Jenkins uses a self-signed certificate, set `JENKINS_SSL_VERIFY=false` or send `"jenkins_ssl_verify": false` in the request.
+
+> **Note:** If you enable `PEER_AI_CONFIGS`, every provider listed there must also be installed and authenticated in the same runtime.
 
 ## Submit your first request
 
@@ -87,7 +95,7 @@ If you want optional multi-AI consensus on that same request, add `peer_ai_confi
 }
 ```
 
-> **Tip:** `peer_ai_configs` is optional. Omit it for the normal single-AI flow. When you do use peers, `peer_analysis_max_rounds` defaults to `3` and accepts `1` through `10`.
+> **Tip:** `peer_ai_configs` is optional. Omit it to keep the server default; if the server is not configured with `PEER_AI_CONFIGS`, that means the normal single-AI flow. Send `"peer_ai_configs": []` to disable peer analysis for one request while keeping the server default in place. When you do use peers, `peer_analysis_max_rounds` defaults to `3` and accepts `1` through `10`.
 
 Send it to `POST /analyze`:
 
@@ -286,3 +294,12 @@ A good first run usually ends with three things:
 3. A readable browser report at the same `result_url`, with `/status/{job_id}` handling the in-progress view until the report is ready.
 
 Once you have that working, the next natural step is to open `http://localhost:8000/` after registering once to browse the dashboard, or use `POST /analyze-failures` if you already have raw failures or JUnit XML instead of a Jenkins build.
+
+
+## Related Pages
+
+- [Installation](installation.html)
+- [Run Locally](run-locally.html)
+- [Analyze Jenkins Jobs](analyze-jenkins-jobs.html)
+- [Analyze Raw Failures and JUnit XML](direct-failure-analysis.html)
+- [HTML Reports and Dashboard](html-reports-and-dashboard.html)

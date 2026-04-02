@@ -262,7 +262,7 @@
                     ⚡ docs<span class="brand-accent">fy</span>
                 </a>
                 
-                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                <a href="https://github.com/myk-org/jenkins-job-insight.git" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight.git">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
                     <span class="github-stars" id="github-stars"></span>
                 </a>
@@ -364,7 +364,7 @@
 <p><strong>Note:</strong> Most analysis settings can be defined globally with environment variables and overridden per request. That includes the AI provider and model, peer analysis settings, Jira settings, AI timeouts, artifact handling, Jenkins monitoring controls, and the optional test repository URL. Jenkins connection settings can also be supplied per request instead of at server startup.</p>
 </blockquote>
 <h2 id="main-outputs">Main outputs</h2>
-<p>Every analysis gets a <code>job_id</code> and is stored for later retrieval. For Jenkins jobs, <code>POST /analyze</code> returns a queued response by default and includes a canonical <code>result_url</code> pointing at <code>/results/{job_id}</code>. That same route serves JSON to API clients and the React report UI to browsers. Jobs move through <code>waiting</code>, <code>pending</code>, <code>running</code>, <code>completed</code>, or <code>failed</code>.</p>
+<p>Every analysis gets a <code>job_id</code> and is stored for later retrieval. For Jenkins jobs, <code>POST /analyze</code> is async-only: it returns a queued response and includes a canonical <code>result_url</code> pointing at <code>/results/{job_id}</code>. That same route serves JSON to API clients and the React report UI to browsers. Jobs move through <code>waiting</code>, <code>pending</code>, <code>running</code>, <code>completed</code>, or <code>failed</code>.</p>
 <p>The core result is structured rather than free-form text. Each failure still carries structured <code>analysis</code>, and when peer analysis is enabled it can also include the debate trail from the participating AIs. The current model in <code>src/jenkins_job_insight/models.py</code> is:</p>
 <div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">FailureAnalysis</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
     <span class="n">test_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">&quot;Name of the failed test&quot;</span><span class="p">)</span>
@@ -418,7 +418,7 @@
 <li><code>gemini</code></li>
 <li><code>cursor</code></li>
 </ul>
-<p>The provider and model can be configured globally with environment variables or passed in the request body. Optional peer analysis uses the same provider names for additional reviewer models. Relevant lines from <code>.env.example</code> now include:</p>
+<p>The AI setup has two layers. <code>AI_PROVIDER</code> and <code>AI_MODEL</code> choose the primary AI that produces the final analysis, and you can still override both per request. <code>PEER_AI_CONFIGS</code> and <code>PEER_ANALYSIS_MAX_ROUNDS</code> optionally add peer reviewers for consensus analysis. Relevant lines from <code>.env.example</code> now include:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">AI_PROVIDER</span><span class="o">=</span>claude
 
 <span class="c1"># AI model to use (required, applies to any provider)</span>
@@ -464,7 +464,10 @@
 <span class="c1"># PEER_ANALYSIS_MAX_ROUNDS=3</span>
 </code></pre></div>
 
-<p>For server-wide peer defaults, use <code>PEER_AI_CONFIGS</code> as a comma-separated <code>provider:model</code> list. For per-request overrides, send <code>peer_ai_configs</code> as a JSON array and <code>peer_analysis_max_rounds</code> as an integer.</p>
+<p>Use <code>PEER_AI_CONFIGS</code> as a comma-separated <code>provider:model</code> list for server defaults. In request bodies, use <code>peer_ai_configs</code> as a JSON array and <code>peer_analysis_max_rounds</code> as an integer from <code>1</code> to <code>10</code>. Omit <code>peer_ai_configs</code> to inherit the server default, or send <code>peer_ai_configs: []</code> to disable peer analysis for one request while keeping the server default in place.</p>
+<blockquote>
+<p><strong>Note:</strong> If you enable peer analysis, every provider listed in <code>PEER_AI_CONFIGS</code> or <code>peer_ai_configs</code> must also be installed and authenticated in the same runtime.</p>
+</blockquote>
 <p>Jira is optional and supports both Cloud and Server/DC:</p>
 <ul>
 <li>Jira Cloud: set <code>JIRA_URL</code>, <code>JIRA_EMAIL</code>, and <code>JIRA_API_TOKEN</code></li>
@@ -483,14 +486,14 @@
 <li>Optionally clones your test repository for source-level context</li>
 <li>Recursively analyzes failed child jobs in pipeline or orchestrator builds</li>
 </ul>
-<p>By default, Jenkins analysis returns a <code>job_id</code> immediately. With <code>wait_for_completion</code> enabled (the default), the service can accept a build that is still running, store the job in <code>waiting</code>, poll Jenkins until the build reaches a terminal state, and then start the analysis automatically.</p>
+<p><code>POST /analyze</code> is async-only and returns a <code>job_id</code> immediately. With <code>wait_for_completion</code> enabled (the default), the service can accept a build that is still running, store the job in <code>waiting</code>, poll Jenkins until the build reaches a terminal state, and then start the analysis automatically.</p>
 <p>You can then:</p>
 <ul>
 <li>Poll <code>GET /results/{job_id}</code> for JSON status</li>
 <li>Open <code>/results/{job_id}</code> in a browser; if the analysis is still in progress, the app redirects you to <code>/status/{job_id}</code></li>
 <li>Set <code>wait_for_completion</code> to <code>false</code> when you do not want the service to monitor a running build</li>
 </ul>
-<p>If you need the full result immediately, use <code>?sync=true</code>.</p>
+<p>If you need a single request/response flow, use <code>POST /analyze-failures</code> instead.</p>
 <p>For pipeline-style jobs, the top-level result may mostly be a summary, with the actual failure details stored under <code>child_job_analyses</code>.</p>
 <h3 id="analyze-raw-failures-or-junit-xml">Analyze raw failures or JUnit XML</h3>
 <p>Use <code>POST /analyze-failures</code> when you already have failure data outside Jenkins, or when your test runner emits JUnit XML.</p>
@@ -522,7 +525,7 @@
 <h3 id="add-peer-analysis-when-you-want-consensus">Add peer analysis when you want consensus</h3>
 <p>Single-AI analysis remains the default. When you want a second opinion, you can add peer providers to either <code>POST /analyze</code> or <code>POST /analyze-failures</code>. The main AI analyzes first, peer AIs review that result in parallel, and the service records whether consensus was reached within the configured number of rounds.</p>
 <p>The CLI exposes the same workflow:</p>
-<div class="highlight"><pre><span></span><code>jji<span class="w"> </span>analyze<span class="w"> </span>--job-name<span class="w"> </span>my-job<span class="w"> </span>--build-number<span class="w"> </span><span class="m">1</span><span class="w"> </span>--peers<span class="w"> </span>cursor:gpt-5,gemini:2.5-pro<span class="w"> </span>--peer-analysis-max-rounds<span class="w"> </span><span class="m">5</span>
+<div class="highlight"><pre><span></span><code>jji<span class="w"> </span>analyze<span class="w"> </span>--job-name<span class="w"> </span>my-job<span class="w"> </span>--build-number<span class="w"> </span><span class="m">1</span><span class="w"> </span>--peers<span class="w"> </span><span class="s2">&quot;cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro&quot;</span><span class="w"> </span>--peer-analysis-max-rounds<span class="w"> </span><span class="m">5</span>
 </code></pre></div>
 
 <p>In stored results, each affected failure can include <code>peer_debate</code>, and the report UI shows both a Peer Analysis summary and a per-failure round-by-round timeline. While a Jenkins-backed run is still processing, the status page also shows peer-review and main-AI revision phases as they happen.</p>
@@ -588,6 +591,14 @@
 <li><code>/docs</code> to explore the API</li>
 <li><code>/dashboard</code> to browse stored analyses</li>
 </ul>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="#">Quickstart</a></li>
+<li><a href="#">Architecture and Project Structure</a></li>
+<li><a href="#">API Overview</a></li>
+<li><a href="#">Configuration Reference</a></li>
+<li><a href="#">HTML Reports and Dashboard</a></li>
+</ul>
                 </div>
             </article>
             <nav class="page-nav">
@@ -620,6 +631,7 @@
 </ul>
 </li>
 <li><a href="#basic-container-configuration">Basic container configuration</a></li>
+<li><a href="#related-pages">Related Pages</a></li>
 </ul>
 </div>
 
@@ -630,9 +642,13 @@
         </main>
 
         <footer class="page-footer">
+            
+            <span class="footer-version">Generated from version 2.1.0</span>
+            <span class="footer-sep">&middot;</span>
+            
             Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
-            <span class="footer-sep">·</span>
-            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+            <span class="footer-sep">&middot;</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> &middot; <a href="llms-full.txt">llms-full.txt</a></span>
         </footer>
     </div>
 

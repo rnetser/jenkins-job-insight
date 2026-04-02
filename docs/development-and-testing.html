@@ -262,7 +262,7 @@
                     ⚡ docs<span class="brand-accent">fy</span>
                 </a>
                 
-                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                <a href="https://github.com/myk-org/jenkins-job-insight.git" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight.git">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
                     <span class="github-stars" id="github-stars"></span>
                 </a>
@@ -329,14 +329,14 @@ npm<span class="w"> </span>run<span class="w"> </span>typecheck
 
 <p>The <code>pytest</code> suite is broad. It is not just a handful of unit tests:</p>
 <ul>
-<li><code>tests/test_main.py</code> exercises the FastAPI app, including health checks, analysis endpoints, history, comments, review state, issue preview/creation, waiting logic, OpenAPI output, and SPA routes.</li>
+<li><code>tests/test_main.py</code> exercises the FastAPI app, including health checks, analysis endpoints, persisted <code>request_params</code>, <code>PUBLIC_BASE_URL</code> handling, <code>peer_ai_configs</code> / <code>peer_analysis_max_rounds</code> request overrides, history, comments, review state, issue preview/creation, waiting logic, OpenAPI output, and SPA routes.</li>
 <li><code>tests/test_cli_main.py</code>, <code>tests/test_cli_client.py</code>, <code>tests/test_cli_config.py</code>, and <code>tests/test_cli_output.py</code> cover the <code>jji</code> CLI end to end: command wiring, HTTP transport, config resolution, and output formatting.</li>
 <li><code>tests/test_analyzer.py</code> and <code>tests/test_peer_analysis.py</code> cover AI CLI orchestration, JSON parsing and retry behavior, plus the multi-AI debate loop and consensus rules.</li>
 <li><code>tests/test_storage.py</code>, <code>tests/test_history.py</code>, and <code>tests/test_comments.py</code> cover SQLite storage, historical aggregation, comments, and review state.</li>
-<li><code>tests/test_models.py</code>, <code>tests/test_config.py</code>, and <code>tests/test_encryption.py</code> cover validation, settings, and redaction/encryption behavior.</li>
-<li><code>tests/test_jira.py</code>, <code>tests/test_jenkins.py</code>, <code>tests/test_jenkins_artifacts.py</code>, <code>tests/test_bug_creation.py</code>, <code>tests/test_repository.py</code>, and <code>tests/test_xml_enrichment.py</code> cover integrations and supporting utilities.</li>
+<li><code>tests/test_models.py</code>, <code>tests/test_config.py</code>, and <code>tests/test_encryption.py</code> cover validation, settings, peer-analysis config parsing and <code>peer_analysis_max_rounds</code> bounds, plus redaction/encryption behavior.</li>
+<li><code>tests/test_jira.py</code>, <code>tests/test_jenkins.py</code>, <code>tests/test_jenkins_artifacts.py</code>, <code>tests/test_bug_creation.py</code>, <code>tests/test_repository.py</code>, and <code>tests/test_xml_enrichment.py</code> cover integrations, repository cloning and URL validation, SSL retry behavior, and supporting utilities.</li>
 </ul>
-<p>Most backend tests avoid live network calls. Instead, they patch external boundaries such as Jenkins clients, HTTP transport, AI CLI calls, and temporary SQLite databases. That keeps the suite fast and predictable.</p>
+<p>Most backend tests avoid live network calls. Instead, they patch external boundaries such as Jenkins clients, HTTP transport, AI CLI calls, Git clone operations, and temporary SQLite databases. That keeps the suite fast and predictable.</p>
 <p>The peer-analysis tests use the same approach. They build <code>PeerRound</code> values directly and assert consensus behavior in-process, which keeps the debate-loop coverage fast and deterministic.</p>
 <div class="highlight"><pre><span></span><code>    <span class="k">def</span><span class="w"> </span><span class="nf">test_check_consensus_disagreement</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;At least one peer disagrees -&gt; False.&quot;&quot;&quot;</span>
@@ -472,6 +472,27 @@ uvx<span class="w"> </span>--with<span class="w"> </span>tox-uv<span class="w"> 
 <p>Current frontend tests live close to the code they validate, especially in <code>frontend/src/lib/__tests__/</code> and <code>frontend/src/pages/report/__tests__/</code>. For example, <code>frontend/src/lib/__tests__/peerDebate.test.ts</code> covers the helper that groups peer-analysis rounds for the report UI.</p>
 <h2 id="pre-commit-linting-and-formatting">Pre-commit, Linting, and Formatting</h2>
 <p><code>pre-commit</code> is the umbrella check for repository hygiene. It combines generic file-safety hooks with Python linting, formatting, typing, and secret scanning.</p>
+<div class="highlight"><pre><span></span><code><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">repo</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://github.com/pre-commit/pre-commit-hooks</span>
+<span class="w">    </span><span class="nt">rev</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v6.0.0</span>
+<span class="w">    </span><span class="nt">hooks</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">check-added-large-files</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">check-docstring-first</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">check-executables-have-shebangs</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">check-merge-conflict</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">check-symlinks</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">detect-private-key</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mixed-line-ending</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">debug-statements</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">trailing-whitespace</span>
+<span class="w">        </span><span class="nt">args</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">--markdown-linebreak-ext=md</span><span class="p p-Indicator">]</span><span class="w"> </span><span class="c1"># Do not process Markdown files.</span>
+<span class="w">        </span><span class="nt">exclude</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">^docs/</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">end-of-file-fixer</span>
+<span class="w">        </span><span class="nt">exclude</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">^docs/</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">check-ast</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">check-builtin-literals</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">check-toml</span>
+</code></pre></div>
+
 <div class="highlight"><pre><span></span><code><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">repo</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://github.com/PyCQA/flake8</span>
 <span class="w">    </span><span class="nt">rev</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">7.3.0</span>
 <span class="w">    </span><span class="nt">hooks</span><span class="p">:</span>
@@ -515,7 +536,7 @@ uvx<span class="w"> </span>--with<span class="w"> </span>tox-uv<span class="w"> 
 <span class="w">          </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eslint@9.38.0</span>
 </code></pre></div>
 
-<p>On top of the language-specific tools above, the same file also enables housekeeping hooks such as <code>check-added-large-files</code>, <code>check-merge-conflict</code>, <code>detect-private-key</code>, <code>debug-statements</code>, <code>trailing-whitespace</code>, and <code>end-of-file-fixer</code>.</p>
+<p>On top of the language-specific tools above, the same file also enables housekeeping hooks such as <code>check-added-large-files</code>, <code>check-merge-conflict</code>, <code>detect-private-key</code>, <code>debug-statements</code>, <code>trailing-whitespace</code>, and <code>end-of-file-fixer</code>. The <code>trailing-whitespace</code> and <code>end-of-file-fixer</code> hooks now exclude <code>docs/</code>, so checked-in Markdown and generated HTML under <code>docs/</code> are left alone by those automatic cleanups.</p>
 <p>For Python, linting is intentionally split:</p>
 <ul>
 <li><code>ruff</code> is the main Python linter.</li>
@@ -541,7 +562,7 @@ per-file-ignores =
 
 <p>For the frontend, linting lives in <code>frontend/package.json</code> and <code>frontend/eslint.config.js</code>. The checked-in ESLint config targets <code>**/*.{ts,tsx}</code>, ignores <code>dist/</code>, and layers <code>typescript-eslint</code>, React Hooks, and React Refresh rules on top of the base JavaScript rules.</p>
 <blockquote>
-<p><strong>Warning:</strong> The checked-in <code>eslint</code> pre-commit hook still only matches <code>.js</code> files, and it now explicitly skips <code>docs/</code> as well as <code>eslint.config.js</code>. Most frontend code in this repository lives in <code>.ts</code> and <code>.tsx</code>, so <code>pre-commit run --all-files</code> is not a complete frontend lint check by itself. Run <code>cd frontend &amp;&amp; npm run lint</code> when you change React or TypeScript code. If you edit JavaScript under <code>docs/</code>, remember that this hook will not check it.</p>
+<p><strong>Warning:</strong> The checked-in <code>eslint</code> pre-commit hook still only matches <code>.js</code> files, and it excludes both <code>eslint.config.js</code> and everything under <code>docs/</code>. Most frontend code in this repository lives in <code>.ts</code> and <code>.tsx</code>, so <code>pre-commit run --all-files</code> is not a complete frontend lint check by itself. Run <code>cd frontend &amp;&amp; npm run lint</code> when you change React or TypeScript code. If you edit files under <code>docs/</code>, remember that <code>trailing-whitespace</code> and <code>end-of-file-fixer</code> also skip that directory, and any JavaScript there bypasses the checked-in ESLint hook as well. Secret scanners and the other repo-wide hooks still run.</p>
 </blockquote>
 <p>To make the hooks automatic in your local clone, run this once:</p>
 <div class="highlight"><pre><span></span><code>pre-commit<span class="w"> </span>install
@@ -702,6 +723,14 @@ npm<span class="w"> </span>run<span class="w"> </span>build
 <blockquote>
 <p><strong>Tip:</strong> When you add or change an API endpoint, keep the CLI in sync. In this repository that usually means updating the backend route in <code>src/jenkins_job_insight/main.py</code>, the client in <code>src/jenkins_job_insight/cli/client.py</code>, the command in <code>src/jenkins_job_insight/cli/main.py</code>, and the matching tests in <code>tests/test_cli_client.py</code> and <code>tests/test_cli_main.py</code>.</p>
 </blockquote>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="#">Architecture and Project Structure</a></li>
+<li><a href="#">Run Locally</a></li>
+<li><a href="#">Pytest JUnit XML Integration</a></li>
+<li><a href="#">API Overview</a></li>
+<li><a href="#">Troubleshooting</a></li>
+</ul>
                 </div>
             </article>
             <nav class="page-nav">
@@ -728,6 +757,7 @@ npm<span class="w"> </span>run<span class="w"> </span>build
 <li><a href="#typing">Typing</a></li>
 <li><a href="#secret-scanning">Secret Scanning</a></li>
 <li><a href="#repository-layout-for-maintainers">Repository Layout for Maintainers</a></li>
+<li><a href="#related-pages">Related Pages</a></li>
 </ul>
 </div>
 
@@ -738,9 +768,13 @@ npm<span class="w"> </span>run<span class="w"> </span>build
         </main>
 
         <footer class="page-footer">
+            
+            <span class="footer-version">Generated from version 2.1.0</span>
+            <span class="footer-sep">&middot;</span>
+            
             Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
-            <span class="footer-sep">·</span>
-            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+            <span class="footer-sep">&middot;</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> &middot; <a href="llms-full.txt">llms-full.txt</a></span>
         </footer>
     </div>
 

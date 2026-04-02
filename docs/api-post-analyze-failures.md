@@ -1,21 +1,39 @@
 # POST /analyze-failures
 
-Use this endpoint when you already have failing test data and want AI analysis without talking to Jenkins. It accepts either a list of direct failure records or a raw JUnit XML document. In both cases, the response is synchronous JSON. When you send `raw_xml`, the response also includes `enriched_xml`, which is the original JUnit XML with the analysis written back into it.
+Use `POST /analyze-failures` when you already have failure data and want the final AI analysis back in a single HTTP call. It does not fetch anything from Jenkins, but it does reuse the same grouped-analysis pipeline, stores the result, and returns a `job_id` plus a `result_url` you can open later.
 
-> **Note:** `POST /analyze-failures` is synchronous only. It does not queue background work, does not use `callback_url`, and does not support the `?sync=` query style used by `POST /analyze`.
+> **Note:** This endpoint is synchronous. A successful HTTP response already contains the finished analysis body. You do not get a queued-job response from this route.
 
-## Input Modes
+The immediate response is the direct-failure result shape, not the Jenkins job result shape. That means the `POST` response does **not** include top-level Jenkins fields like `job_name`, `build_number`, or `jenkins_url`.
 
-Send exactly one of these fields:
+## Request Body
 
-- `failures`: best when your CI or test harness already knows which tests failed.
-- `raw_xml`: best when you already produce JUnit XML and want the service to parse it and return enriched XML.
+Send exactly one of `failures` or `raw_xml`:
 
-> **Tip:** If your pipeline already writes JUnit XML, prefer `raw_xml`. You get the normal structured JSON response plus an XML report you can write back to disk.
+```409:426:src/jenkins_job_insight/models.py
+class AnalyzeFailuresRequest(BaseAnalysisRequest):
+    """Request payload for direct failure analysis (no Jenkins)."""
 
-### `failures`
+    failures: list[TestFailure] | None = Field(
+        default=None, description="Raw test failures to analyze"
+    )
+    raw_xml: Annotated[str, Field(max_length=50_000_000)] | None = Field(
+        default=None,
+        description="Raw JUnit XML content to extract failures from and enrich with analysis results",
+    )
 
-Each item in `failures` follows this shape:
+    @model_validator(mode="after")
+    def check_input_source(self) -> "AnalyzeFailuresRequest":
+        if self.failures and self.raw_xml:
+            raise ValueError("Provide either 'failures' or 'raw_xml', not both")
+        if not self.failures and not self.raw_xml:
+            raise ValueError("Either 'failures' or 'raw_xml' must be provided")
+        return self
+```
+
+### Direct Failures: `failures`
+
+Use `failures` when your test runner or CI system already knows which tests failed.
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -25,11 +43,9 @@ Each item in `failures` follows this shape:
 | `duration` | number | No | Defaults to `0.0` |
 | `status` | string | No | Defaults to `FAILED` |
 
-At minimum, only `test_name` is required, but you should send `error_message` and `stack_trace` whenever you have them. The service uses those fields to group identical failures and avoid re-analyzing the same error multiple times.
-
 Actual request example from the test suite:
 
-```401:413:tests/test_main.py
+```368:380:tests/test_main.py
 response = test_client.post(
     "/analyze-failures",
     json={
@@ -46,13 +62,17 @@ response = test_client.post(
 )
 ```
 
-### `raw_xml`
+> **Tip:** Include both `error_message` and `stack_trace` whenever you can. The endpoint uses them to group identical failures, so better raw input usually means fewer duplicate AI calls and cleaner results.
 
-`raw_xml` is a string containing JUnit XML. The service looks for `<testcase>` elements with either a `<failure>` or `<error>` child, builds failure records from them, analyzes the results, and returns `enriched_xml`.
+> **Note:** `duration` and input `status` are accepted on input, but they are not echoed back in the analysis result. The response `failures[]` array uses the analysis result shape, not the input `TestFailure` shape.
+
+### Raw JUnit XML: `raw_xml`
+
+Use `raw_xml` when you already produce JUnit XML and want the service to both analyze failures and write the result back into an XML report.
 
 Actual XML sample used by the endpoint tests:
 
-```685:693:tests/test_main.py
+```648:656:tests/test_main.py
 SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <testsuite name="TestSuite" tests="2" failures="1" errors="0">
     <testcase classname="tests.test_auth" name="test_login" time="0.5">
@@ -64,145 +84,144 @@ SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 </testsuite>"""
 ```
 
-When extracting failures from XML, the service uses these rules:
+When `raw_xml` is used, the service:
 
-- It reads both `<failure>` and `<error>` elements.
-- It builds `test_name` from `classname + "." + name` when `classname` is present, or just `name` when `classname` is missing.
-- It sets `status` to `FAILED` for `<failure>` and `ERROR` for `<error>`.
-- It uses the XML element's `message` attribute as `error_message` when available.
-- If `message` is missing, it falls back to the first line of the element text.
-- Malformed XML is rejected with `400`.
+- scans `<testcase>` elements for `<failure>` and `<error>` children
+- builds `test_name` as `classname.name` when `classname` exists, or just `name` when it does not
+- sets extracted failure `status` to `FAILED` for `<failure>` and `ERROR` for `<error>`
+- uses the XML element's `message` attribute as `error_message` when present
+- falls back to the first line of the element text when `message` is missing
+- rejects malformed XML with `400`
+- limits `raw_xml` to `50,000,000` characters
 
-Actual extraction behavior from the XML tests:
+> **Tip:** If your CI already emits JUnit XML, `raw_xml` is usually the better fit because you get both structured JSON and an `enriched_xml` document you can save back to disk.
 
-```75:78:tests/test_xml_enrichment.py
-failures = extract_failures_from_xml(JUNIT_XML_WITH_ERROR)
-assert len(failures) == 1
-assert failures[0]["status"] == "ERROR"
-assert failures[0]["error_message"] == "NullPointerException"
-```
+## Common Request Options
 
-`raw_xml` is limited to `50,000,000` characters.
+These options work in both input modes.
 
-## Configuration
-
-These shared request fields are available in both modes:
-
-| Field | Type | Notes |
+| Field | Type | What it does |
 | --- | --- | --- |
-| `ai_provider` | `claude` \| `gemini` \| `cursor` | Required unless configured globally with `AI_PROVIDER` |
-| `ai_model` | string | Required unless configured globally with `AI_MODEL` |
-| `tests_repo_url` | URL | If set, the service clones the repo and lets the AI inspect the code |
-| `raw_prompt` | string | Extra instructions appended to the AI prompt |
-| `ai_cli_timeout` | positive integer | Timeout in minutes for AI CLI calls |
-| `peer_ai_configs` | array of objects | Optional peer reviewers for consensus analysis. Each item must include `ai_provider` and `ai_model`; valid peer providers are `claude`, `gemini`, and `cursor`. Omit the field to inherit the server default from `PEER_AI_CONFIGS`; send `[]` to disable peer analysis for this request. |
-| `peer_analysis_max_rounds` | integer `1-10` | Maximum debate rounds when peer analysis is enabled. Model default is `3`; when omitted, the server may use `PEER_ANALYSIS_MAX_ROUNDS` instead. |
-| `enable_jira` | boolean | Enables or disables Jira matching for this request |
-| `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, `jira_max_results` | various | Per-request Jira overrides that take precedence over environment defaults |
+| `ai_provider` | `claude` \| `gemini` \| `cursor` | AI provider to use. Required unless the server already has `AI_PROVIDER` configured. |
+| `ai_model` | string | AI model to use. Required unless the server already has `AI_MODEL` configured. |
+| `tests_repo_url` | URL | Clones one repository and makes it available to the AI for code exploration. |
+| `additional_repos` | array of `{name, url}` | Adds extra repositories to the AI workspace. |
+| `raw_prompt` | string | Appends extra instructions to the AI prompt. |
+| `ai_cli_timeout` | positive integer | Timeout for AI CLI calls, in minutes. |
+| `peer_ai_configs` | array of `{ai_provider, ai_model}` | Adds peer reviewers for consensus-style analysis. |
+| `peer_analysis_max_rounds` | integer `1-10` | Maximum peer debate rounds. |
+| `enable_jira` | boolean | Forces Jira matching on or off for this request. |
+| `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, `jira_max_results` | mixed | Per-request Jira overrides. |
 
-Global defaults come from environment variables. The shipped `.env.example` shows the core AI settings:
+`additional_repos` request-side validation is strict:
 
-```14:19:.env.example
-# Choose AI provider (required): "claude", "gemini", or "cursor"
-AI_PROVIDER=claude
+- every entry needs a unique `name`
+- `name` cannot contain `/`, `\`, or `..`
+- `name` cannot start with `.`
+- `build-artifacts` is reserved and cannot be used
+- `url` must be a valid URL
 
-# AI model to use (required, applies to any provider)
-# Can also be set per-request in webhook body
-AI_MODEL=your-model-name
-```
+> **Note:** Omit `peer_ai_configs` to inherit the server default from `PEER_AI_CONFIGS`. Send `[]` to disable peer review for this request.
 
-Peer-analysis defaults can also come from `.env.example`:
-
-```52:57:.env.example
-# ===================
-# Peer Analysis (Optional)
-# ===================
-# Enable multi-AI consensus by configuring peer AI providers
-# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
-# PEER_ANALYSIS_MAX_ROUNDS=3
-```
-
-If you want repository context or Jira enrichment by default, the same `.env.example` also defines `TESTS_REPO_URL` and the `JIRA_*` variables. If you want absolute links in responses and enriched XML, also set `PUBLIC_BASE_URL`.
+> **Note:** If you leave `enable_jira` unset, Jira matching only runs when the server is fully configured with Jira URL, credentials, and project key.
 
 ## Validation
 
-| Case | Status | What happens |
+### `422` request-body validation errors
+
+These are rejected before the handler starts running analysis:
+
+- both `failures` and `raw_xml` were provided
+- neither `failures` nor `raw_xml` was provided
+- `failures` was an empty array
+- `raw_xml` exceeded the `50,000,000` character limit
+- request-body `ai_provider` was not one of `claude`, `gemini`, or `cursor`
+- request-body `tests_repo_url` or repo URLs were invalid
+- `peer_ai_configs` contained an invalid provider or blank `ai_model`
+- `peer_analysis_max_rounds` was outside `1-10`
+- `additional_repos` had invalid names or duplicate names
+
+### `400` handler or effective-config errors
+
+These come from runtime validation after the request body itself is accepted:
+
+- no effective AI provider was available after combining request fields and server defaults
+- no effective AI model was available after combining request fields and server defaults
+- `raw_xml` was malformed and could not be parsed
+
+> **Warning:** `failures: []` is rejected with `422`, but a valid JUnit XML document with zero failing testcases is **not** an error. In that case the endpoint returns `200` with `status: "completed"` and the original XML.
+
+## Processing Flow
+
+```mermaid
+flowchart LR
+    A[POST /analyze-failures] --> B{Input mode}
+    B -->|failures| C[Use provided failure objects]
+    B -->|raw_xml| D[Parse JUnit XML]
+    D --> E[Extract failing testcases]
+    C --> F[Group by error signature]
+    E --> F
+    F --> G[Create analysis workspace]
+    G --> H[Clone tests_repo_url and additional_repos if configured]
+    H --> I[Analyze each unique group in parallel]
+    I --> J[Optional peer review]
+    J --> K[Optional Jira matching for PRODUCT BUG results]
+    K --> L{raw_xml supplied?}
+    L -->|yes| M[Inject analysis into XML and add report_url]
+    L -->|no| N[Skip XML enrichment]
+    M --> O[Save result]
+    N --> O
+    O --> P[Return final JSON response]
+```
+
+Failures are deduplicated by hashing the error message plus the first five lines of the stack trace:
+
+```273:291:src/jenkins_job_insight/analyzer.py
+def get_failure_signature(failure: TestFailure) -> str:
+    """Create a signature for grouping identical failures.
+
+    Uses error message and first few lines of stack trace to identify
+    failures that are essentially the same issue.
+    """
+    # Use error message and first 5 lines of stack trace for deduplication.
+    # Intentionally limited to 5 lines: different stack depths for the same
+    # root cause (e.g., varying call-site depth) should still collapse into
+    # one group so the AI analyzes each unique error only once.
+    stack_lines = failure.stack_trace.split("\n")[:5]
+    signature_text = f"{failure.error_message}|{'|'.join(stack_lines)}"
+    return hashlib.sha256(signature_text.encode()).hexdigest()
+```
+
+That has a few practical effects:
+
+- tests with the same underlying error are analyzed once and share the same final analysis
+- unique error groups are analyzed in parallel
+- repository context is cloned into a temporary workspace when available
+- repository clone failures are best-effort warnings, not hard request failures
+- peer review adds a `peer_debate` trail when enabled
+- Jira matching can enrich `PRODUCT BUG` results with `jira_matches`
+
+> **Tip:** Treat `summary` as human-readable text. If you are automating against this endpoint, use structured fields like `status`, `failures[]`, `error_signature`, and `analysis.classification` instead of parsing the summary string.
+
+## Response Body
+
+A successful `POST /analyze-failures` request returns `200` with these top-level fields:
+
+| Field | Type | Notes |
 | --- | --- | --- |
-| Valid request | `200` | Returns a completed or failed analysis body |
-| Missing AI provider and no `AI_PROVIDER` configured | `400` | Returns an error explaining that an AI provider is required |
-| Missing AI model and no `AI_MODEL` configured | `400` | Returns an error explaining that an AI model is required |
-| Invalid XML in `raw_xml` | `400` | Returns `Invalid XML: ...` |
-| Both `failures` and `raw_xml` provided | `422` | Request is rejected by validation |
-| Neither `failures` nor `raw_xml` provided | `422` | Request is rejected by validation |
-| `failures: []` | `422` | Treated as missing input and rejected |
-| Invalid `peer_ai_configs` entry | `422` | Each entry must include a supported `ai_provider` and a non-empty `ai_model` |
-| `peer_analysis_max_rounds` outside `1-10` | `422` | Request body validation fails |
-| Invalid `tests_repo_url` or other field types | `422` | Request body validation fails |
+| `job_id` | string | Unique ID for the stored result |
+| `status` | `completed` \| `failed` | Final status for this synchronous request |
+| `summary` | string | Human-readable summary |
+| `ai_provider` | string | Provider used for analysis |
+| `ai_model` | string | Model used for analysis |
+| `failures` | array | Analyzed failure results |
+| `enriched_xml` | string or `null` | Present only for `raw_xml` mode |
+| `base_url` | string | `PUBLIC_BASE_URL` when configured, otherwise `""` |
+| `result_url` | string | Stored result URL, absolute when `PUBLIC_BASE_URL` is set and relative otherwise |
 
-> **Warning:** `failures` and `raw_xml` are mutually exclusive. Send one or the other, never both.
+A failure item in the response looks like this in the test fixtures:
 
-## Processing
-
-This endpoint reuses the same core failure-analysis logic as the Jenkins flow, but without any Jenkins API calls.
-
-- Failures are grouped by an error signature built from `error_message` plus the first five lines of the stack trace.
-- Each unique signature is analyzed once.
-- The same analysis result is then applied to every failure in that group.
-- If `tests_repo_url` is set, the repository is cloned and made available to the AI for code lookups.
-- If Jira is enabled and a failure is classified as `PRODUCT BUG`, the service can attach matching Jira issues to the structured bug report.
-
-That means multiple tests can legitimately return the same analysis if they failed for the same underlying reason.
-
-## Responses
-
-### Completed response
-
-A successful run returns `200` with these top-level fields:
-
-| Field | Meaning |
-| --- | --- |
-| `job_id` | Unique ID for this analysis |
-| `status` | `completed` in this shape |
-| `summary` | High-level summary, including total failures and unique error count |
-| `ai_provider` | The provider used for analysis |
-| `ai_model` | The model used for analysis |
-| `failures` | Array of analyzed failures |
-| `enriched_xml` | String when `raw_xml` was sent, `null` when `failures` was sent |
-| `base_url` | Trusted public base URL from `PUBLIC_BASE_URL`, or `""` when no public base URL is configured |
-| `result_url` | Canonical stored-result URL (`/results/{job_id}`). API clients get JSON from this path, and browsers use the same path for the report UI |
-
-> **Note:** `status: completed` means the request finished. If some unique error groups analyze successfully and others fail, the response can still be `completed`; use `summary` and the `failures` array to see how many analyses succeeded.
-
-Each item in `failures` contains:
-
-| Field | Meaning |
-| --- | --- |
-| `test_name` | Failed test name |
-| `error` | Error message stored on the analyzed failure |
-| `error_signature` | SHA-256 signature used for deduplication |
-| `analysis.classification` | `CODE ISSUE` or `PRODUCT BUG` |
-| `analysis.affected_tests` | Other tests covered by the same analysis |
-| `analysis.details` | Free-form explanation |
-| `analysis.artifacts_evidence` | Evidence text when the AI returns it |
-| `analysis.code_fix` | Present for `CODE ISSUE` results |
-| `analysis.product_bug_report` | Present for `PRODUCT BUG` results |
-| `peer_debate` | Peer-review consensus trail when peer analysis was enabled |
-
-`analysis.code_fix` and `analysis.product_bug_report` are mutually exclusive.
-
-When peer analysis runs, `peer_debate` adds:
-
-- `consensus_reached`
-- `rounds_used`
-- `max_rounds`
-- `ai_configs`
-- `rounds`
-
-Each `rounds` entry records the round number, provider/model, participant role (`orchestrator` or `peer`), that round's classification and details, and `agrees_with_orchestrator` when a peer vote counted toward consensus.
-
-A structured `PRODUCT BUG` analysis looks like this in the test fixtures:
-
-```74:88:tests/conftest.py
+```75:89:tests/conftest.py
 return FailureAnalysis(
     test_name="test_login_success",
     error="AssertionError: Expected 200, got 500",
@@ -221,96 +240,173 @@ return FailureAnalysis(
 )
 ```
 
-For `PRODUCT BUG` results, `analysis.product_bug_report` can also contain:
+Each `failures[]` item contains:
 
-- `title`
-- `severity`
-- `component`
-- `description`
-- `evidence`
-- `jira_search_keywords`
-- `jira_matches`
+| Field | Type | Notes |
+| --- | --- | --- |
+| `test_name` | string | Failed test name |
+| `error` | string | Error message used for this analyzed failure |
+| `error_signature` | string | SHA-256 signature used for deduplication |
+| `analysis.classification` | string | `CODE ISSUE` or `PRODUCT BUG` |
+| `analysis.affected_tests` | array of strings | Tests covered by the same analysis |
+| `analysis.details` | string | Main explanation |
+| `analysis.artifacts_evidence` | string | Evidence text when available |
+| `analysis.code_fix` | object | Present only for `CODE ISSUE` |
+| `analysis.product_bug_report` | object | Present only for `PRODUCT BUG` |
+| `peer_debate` | object | Present only when peer analysis was enabled |
 
-When Jira matching runs, each `jira_matches` entry includes `key`, `summary`, `status`, `priority`, `url`, and `score`.
+`analysis.code_fix` and `analysis.product_bug_report` are mutually exclusive. When a field does not apply, it is omitted from the JSON rather than returned as `false`.
 
-### No failures found in raw XML
+If peer review runs, `peer_debate` adds:
 
-If the XML is valid but contains no failing testcases, the endpoint still returns `200`, but it skips AI analysis.
+- `consensus_reached`
+- `rounds_used`
+- `max_rounds`
+- `ai_configs`
+- `rounds`
 
-In that case:
+Each round records the provider, model, role (`orchestrator` or `peer`), classification, details, and whether the peer agreed with the orchestrator.
 
-- `status` is `completed`
-- `summary` says no test failures were found
-- `failures` is empty
-- `enriched_xml` is the original XML string
-- `ai_provider` and `ai_model` are left empty because no AI analysis ran
+### Important response cases
 
-### Analysis failure after validation
+- Valid analysis result: `200` with `status: "completed"`.
+- Runtime analysis failure: `200` with `status: "failed"` and a summary such as `Analysis failed: ...`.
+- Valid XML with no failing testcases: `200` with `status: "completed"`, empty `failures`, and the original XML returned in `enriched_xml`.
+- Partial group failure: the response can still be `completed` if at least some unique error groups finished successfully.
 
-If the request validates but analysis itself fails, the endpoint still returns `200`, with a body like this at a high level:
+> **Warning:** Do not rely on HTTP status alone. Runtime analysis errors come back as `200` with `status: "failed"` in the JSON body.
 
-- `status`: `failed`
-- `summary`: `Analysis failed: ...`
-- `failures`: empty list
-- `base_url` and `result_url` present
-- `enriched_xml`: `null`
+> **Note:** If some unique error groups succeed and others fail, the overall response can still be `completed`. Check `summary` and the actual `failures[]` array before assuming every submitted failure was analyzed.
 
-Validation problems still use `400` or `422`; this `failed` response is for runtime analysis errors after the request has already been accepted.
+### Saved result at `result_url`
 
-> **Note:** `base_url` comes only from `PUBLIC_BASE_URL`. When `PUBLIC_BASE_URL` is unset, `base_url` is `""` and `result_url` is returned as a relative path such as `/results/{job_id}`. Forwarded host and proto headers are intentionally ignored.
+This endpoint also saves the analysis so you can fetch it later from `GET /results/{job_id}`.
+
+That saved result is wrapped under `result`, alongside timestamps and overall status. For direct-failure analysis, the stored `jenkins_url` is empty. Saved `request_params` are preserved for later viewing, but sensitive values are redacted from HTTP responses.
 
 ## Enriched XML
 
-`enriched_xml` is only produced when you send `raw_xml`.
+`enriched_xml` is returned only in `raw_xml` mode.
 
-For each matched `<testcase>`, the service injects structured properties under `<properties>`:
+- If `raw_xml` contained failing testcases and analysis ran, `enriched_xml` is the original XML plus injected AI metadata.
+- If `raw_xml` was valid but had no failures, `enriched_xml` is the original XML unchanged.
+- If you used direct `failures` mode, `enriched_xml` is `null`.
 
-- `ai_classification`
-- `ai_details`
-- `ai_affected_tests`
-- `ai_code_fix_file`
-- `ai_code_fix_line`
-- `ai_code_fix_change`
-- `ai_bug_title`
-- `ai_bug_severity`
-- `ai_bug_component`
-- `ai_bug_description`
-- `ai_jira_match_<n>_key`
-- `ai_jira_match_<n>_summary`
-- `ai_jira_match_<n>_status`
-- `ai_jira_match_<n>_url`
-- `ai_jira_match_<n>_priority`
-- `ai_jira_match_<n>_score`
+The XML enrichment code injects structured properties into each matching `<testcase>`:
 
-It also adds a human-readable summary to `<system-out>`:
+```237:297:src/jenkins_job_insight/xml_enrichment.py
+properties = testcase.find("properties")
+if properties is None:
+    properties = ET.SubElement(testcase, "properties")
 
-- If no `<system-out>` exists, one is created.
-- If one already exists, the AI output is appended under `--- AI Analysis ---`.
+_add_property(properties, "ai_classification", analysis.get("classification", ""))
+_add_property(properties, "ai_details", analysis.get("details", ""))
 
-At the suite level, the service adds a `report_url` property to the first `<testsuite>` in the document. It points to `/results/{job_id}` by default, or to an absolute URL when `PUBLIC_BASE_URL` is configured.
+affected = analysis.get("affected_tests", [])
+if affected:
+    _add_property(properties, "ai_affected_tests", ", ".join(affected))
 
-Actual XML enrichment test coverage:
+code_fix = analysis.get("code_fix")
+if code_fix and isinstance(code_fix, dict):
+    _add_property(properties, "ai_code_fix_file", code_fix.get("file", ""))
+    _add_property(properties, "ai_code_fix_line", str(code_fix.get("line", "")))
+    _add_property(properties, "ai_code_fix_change", code_fix.get("change", ""))
 
-```124:133:tests/test_xml_enrichment.py
-enriched = apply_analysis_to_xml(
-    JUNIT_XML_WITH_FAILURES, analysis_map, "http://server/results/job-1"
-)
-root = ET.fromstring(enriched)
-for testsuite in root.iter("testsuite"):
-    ts_props = testsuite.find("properties")
-    assert ts_props is not None
-    report_props = [p for p in ts_props if p.get("name") == "report_url"]
-    assert len(report_props) == 1
-    assert report_props[0].get("value") == "http://server/results/job-1"
+bug_report = analysis.get("product_bug_report")
+if bug_report and isinstance(bug_report, dict):
+    _add_property(properties, "ai_bug_title", bug_report.get("title", ""))
+    _add_property(properties, "ai_bug_severity", bug_report.get("severity", ""))
+    _add_property(properties, "ai_bug_component", bug_report.get("component", ""))
+    _add_property(
+        properties, "ai_bug_description", bug_report.get("description", "")
+    )
+
+    jira_matches = bug_report.get("jira_matches", [])
+    for idx, match in enumerate(jira_matches):
+        if isinstance(match, dict):
+            _add_property(
+                properties, f"ai_jira_match_{idx}_key", match.get("key", "")
+            )
+            # ... additional Jira match properties omitted for brevity ...
+
+text = _format_analysis_text(analysis)
+if text:
+    system_out = testcase.find("system-out")
+    if system_out is None:
+        system_out = ET.SubElement(testcase, "system-out")
+        system_out.text = text
+    else:
+        existing = system_out.text or ""
+        system_out.text = (
+            f"{existing}\n\n--- AI Analysis ---\n{text}" if existing else text
+        )
 ```
 
-> **Note:** Peer-analysis metadata is not written into XML. Even when `failures[].peer_debate` is present in the JSON response, `enriched_xml` still contains only the final analysis properties listed above.
+In practice, that means:
 
-In `failures` mode, none of this XML enrichment happens, so `enriched_xml` is `null`.
+- Core testcase properties: `ai_classification`, `ai_details`, `ai_affected_tests`
+- Code-fix properties: `ai_code_fix_file`, `ai_code_fix_line`, `ai_code_fix_change`
+- Product-bug properties: `ai_bug_title`, `ai_bug_severity`, `ai_bug_component`, `ai_bug_description`
+- Jira-match properties: `ai_jira_match_<n>_key`, `ai_jira_match_<n>_summary`, `ai_jira_match_<n>_status`, `ai_jira_match_<n>_url`, `ai_jira_match_<n>_priority`, `ai_jira_match_<n>_score`
 
-## Integration Example
+It also adds:
 
-The repository includes a working pytest/JUnit XML example that reads a JUnit report, posts it to `POST /analyze-failures`, and writes the returned `enriched_xml` back to the same file:
+- a human-readable analysis summary under `<system-out>`
+- a testsuite-level `report_url` property on the first `<testsuite>`
+
+A few details matter here:
+
+- testcase matching is done by exact `(classname, name)` pairs derived from the analyzed `test_name`
+- if a testcase already has `<system-out>`, the AI text is appended under `--- AI Analysis ---`
+- `report_url` is `/results/{job_id}` by default, or an absolute URL when `PUBLIC_BASE_URL` is configured
+
+> **Note:** `enriched_xml` is a summary layer, not a lossless copy of the JSON response. Fields such as `error_signature`, `peer_debate`, `artifacts_evidence`, `product_bug_report.evidence`, and `jira_search_keywords` stay in JSON only.
+
+> **Note:** Absolute links come only from `PUBLIC_BASE_URL`. When it is unset, `base_url` is `""`, `result_url` is relative, and the XML `report_url` is also relative. The server does not trust `Host` or `X-Forwarded-*` headers to invent a public URL.
+
+## Configuration
+
+At minimum, the server needs an AI provider and model, unless you send both in the request body.
+
+Actual defaults from `.env.example`:
+
+```14:19:.env.example
+# Choose AI provider (required): "claude", "gemini", or "cursor"
+AI_PROVIDER=claude
+
+# AI model to use (required, applies to any provider)
+# Can also be set per-request in webhook body
+AI_MODEL=your-model-name
+```
+
+Optional peer-analysis defaults from `.env.example`:
+
+```52:57:.env.example
+# ===================
+# Peer Analysis (Optional)
+# ===================
+# Enable multi-AI consensus by configuring peer AI providers
+# PEER_AI_CONFIGS=cursor:gpt-5.4-xhigh,gemini:gemini-2.5-pro
+# PEER_ANALYSIS_MAX_ROUNDS=3
+```
+
+You can also configure server-side defaults for:
+
+- `TESTS_REPO_URL`
+- `AI_CLI_TIMEOUT`
+- `JIRA_URL`, `JIRA_PAT`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`, `JIRA_SSL_VERIFY`, `JIRA_MAX_RESULTS`
+- `ADDITIONAL_REPOS`
+- `PUBLIC_BASE_URL`
+
+`PUBLIC_BASE_URL` is especially important for this endpoint because it controls:
+
+- the `base_url` field in the JSON response
+- whether `result_url` is absolute or relative
+- whether `report_url` in `enriched_xml` is absolute or relative
+
+## CI / Pytest Integration
+
+The repository includes a checked-in helper that reads a JUnit XML file, posts it to `POST /analyze-failures`, and writes the returned `enriched_xml` back to disk:
 
 ```93:122:examples/pytest-junitxml/conftest_junit_ai_utils.py
 server_url = os.environ.get("JJI_SERVER", "")
@@ -347,6 +443,17 @@ else:
 
 This is a good pattern to follow in CI:
 
-- Keep the original XML if the request fails.
-- Only overwrite the report when `enriched_xml` is present.
-- Use `raw_xml` mode when you want enriched machine-readable test reports, not just a JSON analysis response.
+- keep the original XML if the request fails
+- only overwrite the report when `enriched_xml` is present
+- prefer `raw_xml` mode when you want a machine-readable enriched report, not just a JSON response
+
+> **Tip:** In the checked-in container setup, the API is served on `http://localhost:8000`, so `JJI_SERVER=http://localhost:8000` is the expected local default.
+
+
+## Related Pages
+
+- [Analyze Raw Failures and JUnit XML](direct-failure-analysis.html)
+- [Pytest JUnit XML Integration](pytest-junitxml-integration.html)
+- [API Overview](api-overview.html)
+- [Results, Reports, and Dashboard Endpoints](api-results-and-dashboard.html)
+- [Schemas and Data Models](api-schemas-and-models.html)

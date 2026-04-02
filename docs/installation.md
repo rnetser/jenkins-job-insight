@@ -5,7 +5,7 @@
 ```1:27:pyproject.toml
 [project]
 name = "jenkins-job-insight"
-version = "2.0.0"
+version = "2.1.0"
 description = "Jenkins job insight and analysis tool"
 requires-python = ">=3.12"
 dependencies = [
@@ -94,13 +94,13 @@ Use the provider you plan to run:
 - `gemini`: authenticate with `GEMINI_API_KEY`, or run `gemini auth login`.
 - `cursor`: `.env.example` documents `CURSOR_API_KEY` as the local auth variable.
 
-> **Note:** The application expects the selected AI CLI to already be installed and authenticated before you start analyzing jobs. For provider-specific setup steps, see [AI Provider Setup](https://myk-org.github.io/jenkins-job-insight/ai-provider-setup.html).
+> **Note:** The application expects the selected AI CLI to already be installed and authenticated before you start analyzing jobs. If you enable `PEER_AI_CONFIGS`, every provider listed there must also be installed and authenticated in the same runtime. For provider-specific setup steps, see [AI Provider Setup](https://myk-org.github.io/jenkins-job-insight/ai-provider-setup.html).
 
 ## Configure Your Environment
 
 The settings model supports a local `.env` file:
 
-```16:19:src/jenkins_job_insight/config.py
+```83:87:src/jenkins_job_insight/config.py
 model_config = SettingsConfigDict(
     env_file=".env",
     env_file_encoding="utf-8",
@@ -180,7 +180,7 @@ If you only plan to analyze raw failures or raw JUnit XML through `/analyze-fail
 
 > **Warning:** For local package installs, set `AI_PROVIDER` and `AI_MODEL` in the environment that starts the server. `src/jenkins_job_insight/main.py` reads them directly from `os.environ`, so relying on `.env` alone is not the safest local setup.
 
-```86:87:src/jenkins_job_insight/main.py
+```88:89:src/jenkins_job_insight/main.py
 AI_PROVIDER = os.getenv("AI_PROVIDER", "").lower()
 AI_MODEL = os.getenv("AI_MODEL", "")
 ```
@@ -214,7 +214,7 @@ tests = ["pytest", "pytest-asyncio"]
 
 If you want the local React dashboard and report pages too, you also need Node.js and npm so you can install the frontend dependencies and run the `build` script once from `frontend/`. The server serves `frontend/dist`, and it returns `Frontend not built` if that bundle is missing:
 
-```424:431:src/jenkins_job_insight/main.py
+```454:461:src/jenkins_job_insight/main.py
 # React frontend static assets
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 if _FRONTEND_DIR.is_dir():
@@ -225,7 +225,7 @@ if _FRONTEND_DIR.is_dir():
     )
 ```
 
-```2282:2287:src/jenkins_job_insight/main.py
+```2468:2473:src/jenkins_job_insight/main.py
 def _serve_spa() -> HTMLResponse:
     """Read and serve the React SPA index.html."""
     index_file = _FRONTEND_DIR / "index.html"
@@ -254,7 +254,7 @@ The frontend scripts are defined in `frontend/package.json`:
 
 After installation and environment setup, start the application with `jenkins-job-insight`. The entry point launches Uvicorn, binds to `0.0.0.0`, and uses `PORT` if you set it. If you do not set `PORT`, the app defaults to `8000`.
 
-```1952:1958:src/jenkins_job_insight/main.py
+```2494:2501:src/jenkins_job_insight/main.py
 def run() -> None:
     """Entry point for the CLI."""
     import uvicorn
@@ -267,7 +267,7 @@ def run() -> None:
 
 The service exposes a simple health endpoint:
 
-```1936:1939:src/jenkins_job_insight/main.py
+```2452:2455:src/jenkins_job_insight/main.py
 @app.get("/health")
 async def health_check() -> dict:
     """Health check endpoint."""
@@ -293,7 +293,7 @@ ai_cli_timeout = 10
 
 Once that file is in place, `--server dev` or `--server prod` can use the named server entries from the same config file instead of a raw URL.
 
-```167:204:src/jenkins_job_insight/cli/main.py
+```168:205:src/jenkins_job_insight/cli/main.py
 @app.callback()
 def main_callback(
     ctx: typer.Context,
@@ -335,3 +335,12 @@ def main_callback(
 ```
 
 > **Tip:** Set `JJI_SERVER` to your local server and run `jji health` as your first smoke test. If that returns `healthy`, the local install, server process, and CLI are all wired up correctly.
+
+
+## Related Pages
+
+- [Run Locally](run-locally.html)
+- [Container Deployment](container-deployment.html)
+- [AI Provider Setup](ai-provider-setup.html)
+- [Quickstart](quickstart.html)
+- [Configuration Reference](configuration-reference.html)

@@ -14,7 +14,7 @@ The response still includes `job_id`, `base_url`, and `result_url`, so you can r
 
 Use this mode when another tool has already parsed your test results and you just want JJI to analyze the failures.
 
-```401:413:tests/test_main.py
+```368:381:tests/test_main.py
 response = test_client.post(
     "/analyze-failures",
     json={
@@ -46,7 +46,7 @@ Use this mode when you already have a JUnit XML artifact and want JJI to both an
 
 The tests include a small JUnit example like this:
 
-```618:626:tests/test_main.py
+```648:656:tests/test_main.py
 SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <testsuite name="TestSuite" tests="2" failures="1" errors="0">
     <testcase classname="tests.test_auth" name="test_login" time="0.5">
@@ -140,11 +140,13 @@ A few behaviors are worth knowing:
 
 `POST /analyze-failures` reuses the same deduplication logic as Jenkins-backed analysis. JJI hashes the `error_message` plus the first five stack-trace lines, analyzes one representative failure per unique signature, and then applies that result to every failure in the group.
 
-```124:142:src/jenkins_job_insight/analyzer.py
+```273:291:src/jenkins_job_insight/analyzer.py
 def get_failure_signature(failure: TestFailure) -> str:
+    # ... docstring omitted ...
     # Use error message and first 5 lines of stack trace for deduplication.
     # Intentionally limited to 5 lines: different stack depths for the same
-    # root cause should still collapse into one group.
+    # root cause (e.g., varying call-site depth) should still collapse into
+    # one group so the AI analyzes each unique error only once.
     stack_lines = failure.stack_trace.split("\n")[:5]
     signature_text = f"{failure.error_message}|{'|'.join(stack_lines)}"
     return hashlib.sha256(signature_text.encode()).hexdigest()
@@ -233,7 +235,8 @@ AI_MODEL=your-model-name
 ```
 
 Useful per-request overrides for `POST /analyze-failures` are:
-- `tests_repo_url`: clone the tests repository and let the AI inspect real code
+- `tests_repo_url`: clone the main tests repository and let the AI inspect real code
+- `additional_repos`: JSON array of `{name, url}` repositories cloned alongside `tests_repo_url` and exposed to the AI as extra source context. Omit it to inherit the server default from `ADDITIONAL_REPOS` using `name:url,name:url` format; send `[]` to disable extra repo context for this request. Each `name` becomes a workspace subdirectory, so names must be unique
 - `raw_prompt`: append extra instructions to the AI prompt
 - `ai_cli_timeout`: override the AI CLI timeout in minutes
 - `peer_ai_configs`: JSON array of `{ai_provider, ai_model}` peer reviewers for consensus analysis. Omit it to inherit the server default from `PEER_AI_CONFIGS`; send `[]` to disable peer analysis for just this request
@@ -241,9 +244,11 @@ Useful per-request overrides for `POST /analyze-failures` are:
 - `enable_jira`: turn Jira matching on or off for this request
 - `jira_url`, `jira_email`, `jira_api_token`, `jira_pat`, `jira_project_key`, `jira_ssl_verify`, `jira_max_results`: override Jira settings for this request
 
+> **Tip:** Use `tests_repo_url` for the main test repository and `additional_repos` for supporting repositories such as product or infrastructure code. JJI clones them into one workspace before it analyzes the failure groups, and analysis still continues if one of those clones fails.
+
 The test suite includes a direct `POST /analyze-failures` example with peer reviewers:
 
-```3081:3097:tests/test_main.py
+```3122:3139:tests/test_main.py
 response = test_client.post(
     "/analyze-failures",
     json={
@@ -305,7 +310,7 @@ The repository already includes a ready-to-copy example under `examples/pytest-j
 
 The rewrite step in the example helper is:
 
-```111:115:examples/pytest-junitxml/conftest_junit_ai_utils.py
+```118:122:examples/pytest-junitxml/conftest_junit_ai_utils.py
 if enriched_xml := result.get("enriched_xml"):
     xml_path.write_text(enriched_xml)
     logger.info("JUnit XML enriched with AI analysis: %s", xml_path)
@@ -325,3 +330,12 @@ This is the easiest way to keep your existing JUnit-based tooling while attachin
 - `raw_xml` with no failures returns the original XML unchanged as `enriched_xml`.
 
 If you only need analyzed JSON, send `failures`. If you want the AI annotations embedded back into a JUnit artifact, send `raw_xml`.
+
+
+## Related Pages
+
+- [POST /analyze-failures](api-post-analyze-failures.html)
+- [Pytest JUnit XML Integration](pytest-junitxml-integration.html)
+- [Quickstart](quickstart.html)
+- [Jira-Assisted Bug Triage](jira-assisted-bug-triage.html)
+- [Jenkins, Repository Context, and Prompts](jenkins-repository-and-prompts.html)

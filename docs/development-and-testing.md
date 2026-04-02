@@ -51,14 +51,14 @@ uv run --extra tests pytest tests/ -q
 
 The `pytest` suite is broad. It is not just a handful of unit tests:
 
-- `tests/test_main.py` exercises the FastAPI app, including health checks, analysis endpoints, history, comments, review state, issue preview/creation, waiting logic, OpenAPI output, and SPA routes.
+- `tests/test_main.py` exercises the FastAPI app, including health checks, analysis endpoints, persisted `request_params`, `PUBLIC_BASE_URL` handling, `peer_ai_configs` / `peer_analysis_max_rounds` request overrides, history, comments, review state, issue preview/creation, waiting logic, OpenAPI output, and SPA routes.
 - `tests/test_cli_main.py`, `tests/test_cli_client.py`, `tests/test_cli_config.py`, and `tests/test_cli_output.py` cover the `jji` CLI end to end: command wiring, HTTP transport, config resolution, and output formatting.
 - `tests/test_analyzer.py` and `tests/test_peer_analysis.py` cover AI CLI orchestration, JSON parsing and retry behavior, plus the multi-AI debate loop and consensus rules.
 - `tests/test_storage.py`, `tests/test_history.py`, and `tests/test_comments.py` cover SQLite storage, historical aggregation, comments, and review state.
-- `tests/test_models.py`, `tests/test_config.py`, and `tests/test_encryption.py` cover validation, settings, and redaction/encryption behavior.
-- `tests/test_jira.py`, `tests/test_jenkins.py`, `tests/test_jenkins_artifacts.py`, `tests/test_bug_creation.py`, `tests/test_repository.py`, and `tests/test_xml_enrichment.py` cover integrations and supporting utilities.
+- `tests/test_models.py`, `tests/test_config.py`, and `tests/test_encryption.py` cover validation, settings, peer-analysis config parsing and `peer_analysis_max_rounds` bounds, plus redaction/encryption behavior.
+- `tests/test_jira.py`, `tests/test_jenkins.py`, `tests/test_jenkins_artifacts.py`, `tests/test_bug_creation.py`, `tests/test_repository.py`, and `tests/test_xml_enrichment.py` cover integrations, repository cloning and URL validation, SSL retry behavior, and supporting utilities.
 
-Most backend tests avoid live network calls. Instead, they patch external boundaries such as Jenkins clients, HTTP transport, AI CLI calls, and temporary SQLite databases. That keeps the suite fast and predictable.
+Most backend tests avoid live network calls. Instead, they patch external boundaries such as Jenkins clients, HTTP transport, AI CLI calls, Git clone operations, and temporary SQLite databases. That keeps the suite fast and predictable.
 
 The peer-analysis tests use the same approach. They build `PeerRound` values directly and assert consensus behavior in-process, which keeps the debate-loop coverage fast and deterministic.
 
@@ -209,7 +209,29 @@ Current frontend tests live close to the code they validate, especially in `fron
 
 `pre-commit` is the umbrella check for repository hygiene. It combines generic file-safety hooks with Python linting, formatting, typing, and secret scanning.
 
-```28:68:.pre-commit-config.yaml
+```10:25:.pre-commit-config.yaml
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-docstring-first
+      - id: check-executables-have-shebangs
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: detect-private-key
+      - id: mixed-line-ending
+      - id: debug-statements
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md] # Do not process Markdown files.
+        exclude: ^docs/
+      - id: end-of-file-fixer
+        exclude: ^docs/
+      - id: check-ast
+      - id: check-builtin-literals
+      - id: check-toml
+```
+
+```30:70:.pre-commit-config.yaml
   - repo: https://github.com/PyCQA/flake8
     rev: 7.3.0
     hooks:
@@ -253,7 +275,7 @@ Current frontend tests live close to the code they validate, especially in `fron
           - eslint@9.38.0
 ```
 
-On top of the language-specific tools above, the same file also enables housekeeping hooks such as `check-added-large-files`, `check-merge-conflict`, `detect-private-key`, `debug-statements`, `trailing-whitespace`, and `end-of-file-fixer`.
+On top of the language-specific tools above, the same file also enables housekeeping hooks such as `check-added-large-files`, `check-merge-conflict`, `detect-private-key`, `debug-statements`, `trailing-whitespace`, and `end-of-file-fixer`. The `trailing-whitespace` and `end-of-file-fixer` hooks now exclude `docs/`, so checked-in Markdown and generated HTML under `docs/` are left alone by those automatic cleanups.
 
 For Python, linting is intentionally split:
 
@@ -282,7 +304,7 @@ per-file-ignores =
 
 For the frontend, linting lives in `frontend/package.json` and `frontend/eslint.config.js`. The checked-in ESLint config targets `**/*.{ts,tsx}`, ignores `dist/`, and layers `typescript-eslint`, React Hooks, and React Refresh rules on top of the base JavaScript rules.
 
-> **Warning:** The checked-in `eslint` pre-commit hook still only matches `.js` files, and it now explicitly skips `docs/` as well as `eslint.config.js`. Most frontend code in this repository lives in `.ts` and `.tsx`, so `pre-commit run --all-files` is not a complete frontend lint check by itself. Run `cd frontend && npm run lint` when you change React or TypeScript code. If you edit JavaScript under `docs/`, remember that this hook will not check it.
+> **Warning:** The checked-in `eslint` pre-commit hook still only matches `.js` files, and it excludes both `eslint.config.js` and everything under `docs/`. Most frontend code in this repository lives in `.ts` and `.tsx`, so `pre-commit run --all-files` is not a complete frontend lint check by itself. Run `cd frontend && npm run lint` when you change React or TypeScript code. If you edit files under `docs/`, remember that `trailing-whitespace` and `end-of-file-fixer` also skip that directory, and any JavaScript there bypasses the checked-in ESLint hook as well. Secret scanners and the other repo-wide hooks still run.
 
 To make the hooks automatic in your local clone, run this once:
 
@@ -411,3 +433,12 @@ A few practical navigation rules help:
 - Check `examples/pytest-junitxml/` if you want to see how this project can plug into someone else’s `pytest` workflow.
 
 > **Tip:** When you add or change an API endpoint, keep the CLI in sync. In this repository that usually means updating the backend route in `src/jenkins_job_insight/main.py`, the client in `src/jenkins_job_insight/cli/client.py`, the command in `src/jenkins_job_insight/cli/main.py`, and the matching tests in `tests/test_cli_client.py` and `tests/test_cli_main.py`.
+
+
+## Related Pages
+
+- [Architecture and Project Structure](architecture-and-project-structure.html)
+- [Run Locally](run-locally.html)
+- [Pytest JUnit XML Integration](pytest-junitxml-integration.html)
+- [API Overview](api-overview.html)
+- [Troubleshooting](troubleshooting.html)

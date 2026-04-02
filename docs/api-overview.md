@@ -1,21 +1,48 @@
 # API Overview
 
-`jenkins-job-insight` exposes a JSON API for analyzing Jenkins failures, storing the results, and giving you both machine-friendly and browser-friendly views of the same job. A single result can contain top-level failures plus nested `child_job_analyses` when a pipeline fans out into child jobs.
+`jenkins-job-insight` exposes a FastAPI JSON API for submitting analyses, polling stored results, reviewing failures, searching history, and optionally creating follow-up GitHub or Jira issues. The same application also serves the React UI and the generated API docs, so one server handles both people-facing pages and machine-facing JSON.
 
-Most users touch four parts of the API:
+The API is built around stored analysis records. Whether you submit a Jenkins build or raw failures, JJI creates a job record, attaches review and history data to it, and exposes that same result through automation-friendly endpoints and browser-friendly pages.
 
-- submit work with `POST /analyze` or `POST /analyze-failures`
-- fetch stored output from `GET /results/{job_id}` or browse the React report and status routes at `/results/{job_id}` and `/status/{job_id}`
-- triage failures with comments, review state, classifications, and issue creation endpoints
-- explore the live schema in `GET /openapi.json` and Swagger UI in `GET /docs`
+## At a Glance
 
-## Primary Workflows
+| Area | Main routes | What they are for |
+| --- | --- | --- |
+| Submission | `POST /analyze`, `POST /analyze-failures` | Start a Jenkins-backed analysis or analyze a failure list/JUnit XML directly |
+| Results | `GET /results`, `GET /results/<job_id>`, `DELETE /results/<job_id>` | List jobs, fetch one stored result, or delete a job and its related data |
+| Dashboard and discovery | `GET /api/dashboard`, `GET /api/capabilities`, `GET /ai-configs`, `GET /health` | Feed the UI, advertise enabled issue workflows, list known AI configs, and support probes |
+| Review workflow | Comment, review, override, and enrichment routes under `/results/<job_id>/...` | Add discussion, mark failures reviewed, override root-cause classification, and enrich comment links |
+| Issue workflows | GitHub preview/create routes and Jira preview/create routes under `/results/<job_id>/...` | Draft and create follow-up issues from a stored failure |
+| History | `GET /history/failures`, `GET /history/test/<test_name>`, `GET /history/search`, `GET /history/stats/<job_name>`, `POST /history/classify` | Browse recurring failures, inspect one test, find matching signatures, get job-level stats, and add history labels |
 
-Use `POST /analyze` when the service can reach Jenkins directly. Required fields are `job_name` and `build_number`, and `job_name` can include folder-style Jenkins paths such as `folder/job-name`. The endpoint is asynchronous only: it returns `202 Accepted`, a new `job_id`, and a `result_url` you can poll or open. When `wait_for_completion` is enabled and Jenkins connectivity is configured, the stored job is written as `waiting` immediately so the service can monitor Jenkins and resume that monitoring after a restart; otherwise it starts as `pending`. `poll_interval_minutes` and `max_wait_minutes` still control that monitoring window.
+> **Tip:** Use `GET /results` when you want a small recent-jobs list. Use `GET /api/dashboard` when you want the richer, UI-style summary feed with review, comment, and failure counts.
 
-The repository’s test suite exercises that async contract directly:
+## Submitting Analysis Jobs
 
-```130:145:tests/test_main.py
+Most analysis settings can come either from the request body or from server defaults. The sample environment file shows the basics JJI expects for Jenkins-backed analysis:
+
+```4:19:.env.example
+JENKINS_URL=https://jenkins.example.com
+JENKINS_USER=your-username
+JENKINS_PASSWORD=your-api-token
+JENKINS_SSL_VERIFY=true
+
+# ===================
+# AI CLI Configuration
+# ===================
+# Choose AI provider (required): "claude", "gemini", or "cursor"
+AI_PROVIDER=claude
+
+# AI model to use (required, applies to any provider)
+# Can also be set per-request in webhook body
+AI_MODEL=your-model-name
+```
+
+### `POST /analyze`
+
+Use `POST /analyze` when JJI should go to Jenkins, gather the available context, and analyze the build asynchronously. The response is always `202 Accepted`, and it returns immediately with a new `job_id` plus link metadata you can poll or open later.
+
+```131:145:tests/test_main.py
 response = test_client.post(
     "/analyze",
     json={
@@ -33,15 +60,23 @@ assert data["base_url"] == ""
 assert data["result_url"].startswith("/results/")
 ```
 
-Use `POST /analyze-failures` when you already have failure objects or raw JUnit XML and do not need Jenkins lookups. This route is synchronous only, but it still creates a stored `job_id`, so `GET /results/{job_id}` works afterward just like it does for Jenkins-backed analysis. It also reuses the same grouped-failure analysis flow, so repeated failures are deduplicated before AI analysis.
+That immediate `queued` response is only the submission acknowledgment. The stored job then moves through the normal job states described below.
 
-The request must contain exactly one of `failures` or `raw_xml`. When you send XML, the response can include `enriched_xml`:
+### `POST /analyze-failures`
 
-```661:674:tests/test_main.py
+Use `POST /analyze-failures` when you already have failure data or raw JUnit XML and do not need JJI to talk to Jenkins first. This route runs synchronously, but it still creates and stores a `job_id`, so the finished result can be revisited later just like a Jenkins-backed analysis.
+
+```368:391:tests/test_main.py
 response = test_client.post(
     "/analyze-failures",
     json={
-        "raw_xml": self.SAMPLE_XML,
+        "failures": [
+            {
+                "test_name": "test_foo",
+                "error_message": "assert False",
+                "stack_trace": "File test.py, line 10",
+            }
+        ],
         "ai_provider": "claude",
         "ai_model": "test-model",
     },
@@ -49,243 +84,372 @@ response = test_client.post(
 assert response.status_code == 200
 data = response.json()
 assert data["status"] == "completed"
-assert data["enriched_xml"] is not None
-assert "<?xml" in data["enriched_xml"]
+assert data["ai_provider"] == "claude"
+assert data["ai_model"] == "test-model"
+assert "job_id" in data
 assert len(data["failures"]) == 1
+assert data["failures"][0]["test_name"] == "test_foo"
+assert data["base_url"] == ""
+assert data["result_url"].startswith("/results/")
 ```
 
-> **Note:** `POST /analyze` returns `status: "queued"` in its immediate response. That is a submission state, not a stored job state.
+If you send `raw_xml`, JJI extracts failures first and can return `enriched_xml` with the analysis written back into the report.
 
-## Endpoint Summary
+> **Tip:** If your test runner already emits JUnit XML, `POST /analyze-failures` is the simplest API path to integrate.
 
-### Analysis And Results
+```mermaid
+sequenceDiagram
+    participant Client
+    participant JJI
+    participant Storage
+    participant Jenkins
+    participant AI
 
-| Endpoint | Use it for | Notes |
-| --- | --- | --- |
-| `POST /analyze` | Analyze a Jenkins job/build. | Async only. Returns `202` with `status: "queued"`. When `wait_for_completion` is enabled and Jenkins connectivity is configured, the stored job is written as `waiting` immediately; otherwise it starts as `pending`. Optional `peer_ai_configs` and `peer_analysis_max_rounds` enable multi-AI consensus analysis for this request. |
-| `POST /analyze-failures` | Analyze raw failures or JUnit XML without Jenkins. | Synchronous only. Accepts either `failures` or `raw_xml`, not both. Supports the same optional peer-analysis fields as `/analyze`, and returned failures can include `peer_debate` when peers are used. |
-| `GET /results/{job_id}` | Fetch the stored JSON result for a job. | JSON clients get the stored wrapper plus `base_url`, `result_url`, and `capabilities`; the response status is `202` while the job is `pending`, `waiting`, or `running`. Browser requests redirect to `/status/{job_id}` while work is in progress and otherwise load the React report UI. |
-| `GET /results` | List recent analysis jobs. | Returns recent `job_id`, `jenkins_url`, `status`, and timestamp fields. |
-| `DELETE /results/{job_id}` | Delete a job and related stored data. | Removes the job, comments, review state, history rows, and classifications. |
+    Client->>JJI: POST /analyze
+    JJI->>Storage: Save job as pending or waiting
+    JJI-->>Client: 202 + job_id + result_url
 
-### Review, Comments, And Issue Workflows
+    alt wait_for_completion and Jenkins configured
+        JJI->>Storage: status = waiting
+        JJI->>Jenkins: Poll build until terminal
+    end
 
-| Endpoint | Use it for | Notes |
-| --- | --- | --- |
-| `GET /results/{job_id}/comments` | Fetch comments and review state together. | Returns both `comments` and `reviews` in one response. |
-| `POST /results/{job_id}/comments` | Add a comment to a specific failed test. | Returns `201` with the new comment ID. |
-| `DELETE /results/{job_id}/comments/{comment_id}` | Delete a comment. | Uses the built-in username cookie for UI/CLI identity. |
-| `PUT /results/{job_id}/reviewed` | Mark a failure reviewed or unreviewed. | Works for top-level and child-job failures. |
-| `GET /results/{job_id}/review-status` | Get a lightweight review summary. | Returns `total_failures`, `reviewed_count`, and `comment_count`. |
-| `PUT /results/{job_id}/override-classification` | Override the main analysis classification. | Switches a failure between `CODE ISSUE` and `PRODUCT BUG`. |
-| `POST /results/{job_id}/enrich-comments` | Resolve live GitHub PR and Jira statuses mentioned in comments. | Best-effort enrichment; failures are swallowed rather than crashing the request. |
-| `POST /results/{job_id}/preview-github-issue` | Draft a GitHub issue body from a failure. | Can also search for similar existing GitHub issues. |
-| `POST /results/{job_id}/create-github-issue` | Create the GitHub issue. | Uses server-side GitHub config, returns `201`, and auto-adds a comment with the created issue URL. |
-| `POST /results/{job_id}/preview-jira-bug` | Draft a Jira bug from a failure. | Can also search for similar Jira issues. |
-| `POST /results/{job_id}/create-jira-bug` | Create the Jira bug. | Uses server-side Jira config, returns `201`, and auto-adds a comment with the created bug URL. |
+    JJI->>Storage: status = running
+    JJI->>AI: Analyze failures
+    JJI->>Storage: status = completed or failed
 
-> **Warning:** For any endpoint that targets a failure inside a child job, send both `child_job_name` and `child_build_number`. Sending only one is rejected with validation errors.
-
-### History And Classifications
-
-| Endpoint | Use it for | Notes |
-| --- | --- | --- |
-| `GET /history/failures` | Browse paginated failure history. | Supports `search`, `job_name`, `classification`, `limit`, and `offset`. |
-| `GET /history/test/{test_name}` | Inspect the history of one test. | Returns recent runs, comments, classification breakdown, and failure-rate fields. |
-| `GET /history/search` | Find all tests that failed with the same error signature. | Requires the `signature` query parameter. |
-| `GET /history/stats/{job_name}` | Get aggregate statistics for one job. | Includes overall failure rate, common failures, and a recent trend summary. |
-| `GET /history/trends` | Get time-series failure data. | Supports `daily` and `weekly` grouping. |
-| `POST /history/classify` | Add a historical label to a test. | Allowed labels are `FLAKY`, `REGRESSION`, `INFRASTRUCTURE`, `KNOWN_BUG`, and `INTERMITTENT`. `KNOWN_BUG` requires `references`. |
-| `GET /history/classifications` | Query saved historical classifications. | Useful for dashboards, UI filters, and custom clients. |
-
-> **Note:** Historical labels like `FLAKY`, `REGRESSION`, and `KNOWN_BUG` are separate from the main analysis classification. The history API stores test-history labels, while `PUT /results/{job_id}/override-classification` only switches the primary analysis result between `CODE ISSUE` and `PRODUCT BUG`.
-
-### Browser, Health, And Documentation Endpoints
-
-| Endpoint | Use it for | Notes |
-| --- | --- | --- |
-| `GET /api/dashboard` | Fetch dashboard rows as JSON. | Used by the React dashboard. |
-| `GET /api/capabilities` | Discover which server-side issue workflows are available. | Returns `github_issues` and `jira_bugs` booleans. |
-| `GET /ai-configs` | List distinct `ai_provider` and `ai_model` pairs from completed jobs. | Useful for clients that want to present known-working configs. |
-| `GET /health` | Health check. | Used by the container health checks. |
-| `GET /docs` | Open Swagger UI. | Generated automatically by FastAPI. |
-| `GET /openapi.json` | Fetch the OpenAPI schema. | Generated automatically by FastAPI. |
-
-The browser UI is a React app rooted at `GET /`. The frontend route table shows the main browser views:
-
-```15:24:frontend/src/App.tsx
-<BrowserRouter basename="/">
-  <Routes>
-    <Route path="/register" element={<RegisterPage />} />
-    <Route element={<Layout />}>
-      <Route index element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-      <Route path="/dashboard" element={<Navigate to="/" replace />} />
-      <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />
-      <Route path="/history/test/:testName" element={<ProtectedRoute><TestHistoryPage /></ProtectedRoute>} />
-      <Route path="/results/:jobId" element={<ProtectedRoute><ReportPage /></ProtectedRoute>} />
-      <Route path="/status/:jobId" element={<ProtectedRoute><StatusPage /></ProtectedRoute>} />
+    loop Client polling
+        Client->>JJI: GET /results/<job_id>
+        JJI->>Storage: Load latest row
+        JJI-->>Client: 202 while in progress, 200 when terminal
+    end
 ```
 
-> **Warning:** Browser identity is client-side. The frontend stores `jji_username` as a cookie for attribution, not as an authentication boundary, and the service still does not expose token-based API authentication. Treat it as a trusted-network tool.
-
-Across the API, the common response patterns are predictable: validation problems surface as `422`, not-found conditions as `404`, failure-specific operations against still-running jobs can return `202`, failed analysis jobs can return `409`, and upstream GitHub or Jira failures surface as `502`.
+> **Note:** `POST /analyze-failures` skips the Jenkins wait and returns its final body in the original request, but it still follows the same stored-job pattern under the hood.
 
 ## Job States
 
-The API uses one immediate submission word and five stored job states:
+JJI uses one submission-only word and five stored job states. The stored enum is defined in the result model:
 
-- `queued`: returned by `POST /analyze` to say the request was accepted and a `job_id` was allocated
-- `pending`: a result row exists, but background analysis has not started processing the job yet
-- `waiting`: the request has been accepted and the service is in the Jenkins-monitoring phase; with `wait_for_completion` enabled and Jenkins connectivity configured, `POST /analyze` writes this state immediately so the job can resume safely after a restart
-- `running`: analysis is actively in progress
-- `completed`: the final result is available
-- `failed`: the analysis did not complete successfully
+```374:385:src/jenkins_job_insight/models.py
+class AnalysisResult(BaseModel):
+    """Complete analysis result for a Jenkins job."""
 
-> **Note:** `queued` is only the immediate submission response. Stored job objects themselves use `pending`, `waiting`, `running`, `completed`, and `failed`.
-
-The initial persisted state for async Jenkins analysis is chosen before the background task starts:
-
-```1021:1039:src/jenkins_job_insight/main.py
-initial_result: dict = {
-    "job_name": body.job_name,
-    "build_number": body.build_number,
-}
-can_resume_wait = merged.wait_for_completion and bool(merged.jenkins_url)
-if can_resume_wait:
-    initial_result["request_params"] = _build_request_params(
-        body,
-        merged,
-        body.ai_provider or AI_PROVIDER,
-        body.ai_model or AI_MODEL,
-        peer_ai_configs_resolved=resolved_peers,
+    job_id: str = Field(description="Unique identifier for the analysis job")
+    job_name: str = Field(default="", description="Jenkins job name")
+    build_number: int = Field(default=0, description="Jenkins build number")
+    jenkins_url: HttpUrl | None = Field(
+        default=None,
+        description="URL of the analyzed Jenkins job (None for non-Jenkins analysis)",
     )
-await save_result(
-    job_id,
-    jenkins_url,
-    "waiting" if can_resume_wait else "pending",
-    initial_result,
-)
+    status: Literal["pending", "waiting", "running", "completed", "failed"] = Field(
+        description="Current status of the analysis"
+    )
 ```
 
-`POST /analyze-failures` is synchronous, so its response model only uses `completed` or `failed`. It still persists a job row and internally follows the simpler `pending` -> `running` -> `completed` or `failed` flow. If a browser opens `GET /results/{job_id}` while a job is `pending`, `waiting`, or `running`, the server redirects to `/status/{job_id}`; once the job is done, the same route serves the React report view.
+- `queued` is the immediate submit response from `POST /analyze`.
+- `pending` means a job row exists, but analysis has not started yet.
+- `waiting` means JJI accepted the request and is still monitoring Jenkins before analysis begins.
+- `running` means analysis is actively executing.
+- `completed` means the final result is stored and ready to read.
+- `failed` means the job reached a terminal error state.
 
-## Absolute URLs In Responses
+> **Note:** `queued` is not a stored state. It is just the initial `POST /analyze` response body.
 
-The API still attaches `base_url` and `result_url` to submission and result responses, but it no longer emits `html_report_url`. `GET /results/{job_id}` also adds a `capabilities` object so clients can tell whether GitHub issue creation and Jira bug creation are enabled on the server.
+The worker code makes the `waiting` and `running` transitions explicit:
 
-Absolute link generation is now opt-in. The configuration model documents the rule directly:
+```830:867:src/jenkins_job_insight/main.py
+if settings.wait_for_completion and settings.jenkins_url:
+    await update_status(job_id, "waiting")
+    await _safe_update_progress_phase("waiting_for_jenkins")
 
-```70:74:src/jenkins_job_insight/config.py
-# Trusted public base URL — used for result_url and tracker links.
-# When set, _extract_base_url() returns this value verbatim.
-# When unset, _extract_base_url() returns an empty string (relative
-# URLs only) — request Host / X-Forwarded-* headers are never trusted.
-public_base_url: str | None = None
+    completed, wait_error = await _wait_for_jenkins_completion(
+        jenkins_url=settings.jenkins_url,
+        job_name=body.job_name,
+        build_number=body.build_number,
+        jenkins_user=settings.jenkins_user,
+        jenkins_password=settings.jenkins_password,
+        jenkins_ssl_verify=settings.jenkins_ssl_verify,
+        poll_interval_minutes=settings.poll_interval_minutes,
+        max_wait_minutes=settings.max_wait_minutes,
+    )
+
+    if not completed:
+        await update_status(
+            job_id,
+            "failed",
+            {
+                "job_name": body.job_name,
+                "build_number": body.build_number,
+                "error": wait_error,
+            },
+        )
+        return
+
+await update_status(job_id, "running")
+await _safe_update_progress_phase("analyzing")
 ```
 
-Set `PUBLIC_BASE_URL` when you want absolute links in API responses or tracker previews. If you leave it unset, `base_url` is empty and `result_url` remains relative, such as `/results/{job_id}`.
+Startup recovery is state-aware too. Waiting jobs are preserved for resumption, but orphaned `pending` and `running` rows are marked `failed` because their in-process background task is gone.
 
-> **Tip:** If you want `preview-github-issue` or `preview-jira-bug` to include clickable report links, configure `PUBLIC_BASE_URL` and send `include_links: true`. Without a public base URL, the service omits those report links rather than trusting request headers.
+```624:652:tests/test_storage.py
+with patch.object(storage, "DB_PATH", setup_test_db):
+    await storage.save_result("p1", "http://j/1", "pending")
+    await storage.save_result("r1", "http://j/2", "running")
+    await storage.save_result(
+        "w1",
+        "http://j/3",
+        "waiting",
+        {
+            "job_name": "w",
+            "build_number": 1,
+            "request_params": {
+                "tests_repo_url": "https://example.invalid/tests",
+            },
+        },
+    )
+    await storage.save_result(
+        "c1", "http://j/4", "completed", {"summary": "ok"}
+    )
 
-## OpenAPI And Swagger
+    waiting = await storage.mark_stale_results_failed()
+    assert len(waiting) == 1
+    assert waiting[0]["job_id"] == "w1"
 
-You do not need to hand-maintain API docs. The app uses FastAPI's generated schema and Swagger UI, so new request and response fields such as `peer_ai_configs`, `peer_analysis_max_rounds`, and `peer_debate` appear in the live schema automatically:
-
-```95:105:src/jenkins_job_insight/models.py
-peer_ai_configs: list[AiConfigEntry] | None = Field(
-    default=None,
-    description=(
-        "List of peer AI configs for consensus analysis. "
-        "Omit to inherit the server default; send [] to disable peer analysis "
-        "for this request. Each peer reviews the main AI's analysis."
-    ),
-)
-peer_analysis_max_rounds: Annotated[int, Field(ge=1, le=10)] = Field(
-    default=3,
-    description="Maximum debate rounds for peer analysis",
-)
+    assert (await storage.get_result("p1"))["status"] == "failed"
+    assert (await storage.get_result("r1"))["status"] == "failed"
+    assert (await storage.get_result("w1"))["status"] == "waiting"
+    assert (await storage.get_result("c1"))["status"] == "completed"
 ```
 
-```278:285:src/jenkins_job_insight/models.py
-error_signature: str = Field(
-    default="",
-    description="SHA-256 hash of error + stack trace for deduplication",
-)
-peer_debate: PeerDebate | None = Field(
-    default=None,
-    description="Peer debate trail (present only when peer analysis was used)",
-)
+## Results, Review, and History
+
+Once a job exists, you usually read it through one of three views:
+
+- `GET /results` for a lightweight recent-jobs list
+- `GET /api/dashboard` for a richer summary feed used by the UI
+- the per-job result route, which returns the full stored payload for JSON clients and doubles as the browser report URL
+
+`GET /results` defaults to `50` items and caps `limit` at `100`. The per-job JSON response adds capability flags and uses HTTP `202` while work is still in flight:
+
+```1347:1355:src/jenkins_job_insight/main.py
+_attach_result_links(result, _extract_base_url(), job_id)
+settings = get_settings()
+result["capabilities"] = {
+    "github_issues": settings.github_issues_enabled,
+    "jira_bugs": settings.jira_enabled,
+}
+if result.get("status") in IN_PROGRESS_STATUSES:
+    response.status_code = 202
+return result
 ```
 
-The repository tests still verify both `GET /openapi.json` and `GET /docs`, and the generated schema reports title `Jenkins Job Insight` with version `0.1.0`:
+Use `/ai-configs` when you want the distinct provider/model pairs already seen in completed analyses.
 
-```934:943:tests/test_main.py
-response = test_client.get("/openapi.json")
+### Review and collaboration endpoints
+
+The comment reader deliberately returns both discussion and review state together, which keeps the UI and API client logic simple.
+
+```1142:1147:tests/test_main.py
+response = test_client.get("/results/job-test-2/comments")
 assert response.status_code == 200
-schema = response.json()
-assert schema["info"]["title"] == "Jenkins Job Insight"
-assert schema["info"]["version"] == "0.1.0"
-
-response = test_client.get("/docs")
-assert response.status_code == 200
+data = response.json()
+assert "comments" in data
+assert "reviews" in data
+assert len(data["comments"]) == 1
 ```
 
-The browser landing page is `GET /` (with `/dashboard` as a client-side alias), not `GET /docs`. Swagger covers the FastAPI JSON endpoints only; browser routes such as `/results/{job_id}`, `/status/{job_id}`, `/history`, and `/register` are handled by the React SPA and are not listed as separate OpenAPI operations.
+Manual root-cause overrides are applied to the whole grouped failure signature, not just the one row you clicked:
 
-> **Note:** Browser requests without a `jji_username` cookie can still be redirected to `/register` before they reach `/docs` or `/openapi.json`, because HTML-style requests pass through the same username middleware as the rest of the web UI.
+```1889:1895:src/jenkins_job_insight/storage.py
+) -> list[str]:
+    """Override the classification of a failure in failure_history.
 
-```443:461:src/jenkins_job_insight/main.py
-async def dispatch(self, request: Request, call_next):
-    path = request.url.path
-    # Allow register page, health check, static assets, and API paths without auth
-    if (
-        path in ("/register", "/health", "/favicon.ico", "/api")
-        or path.startswith("/register")
-        or path.startswith("/assets/")
-        or path.startswith("/api/")
-    ):
-        return await call_next(request)
-
-    username = request.cookies.get("jji_username", "")
-    request.state.username = username
-
-    # Only redirect browser (HTML) requests without auth
-    if not username:
-        accept = request.headers.get("accept", "")
-        if "text/html" in accept:
-            return RedirectResponse(url="/register", status_code=303)
+    Updates ALL failure_history rows sharing the same error_signature
+    (within the same job) so that grouped failures stay in sync.
+    Also inserts a test_classifications entry so the AI can learn from
+    human overrides.
 ```
 
-> **Tip:** With the default local container setup, use `curl` for a quick schema check at [http://localhost:8000/openapi.json](http://localhost:8000/openapi.json). For Swagger UI at [http://localhost:8000/docs](http://localhost:8000/docs), register any username in the web app first if your browser is redirected to `/register`.
+### Issue preview and creation
 
-## Configuration
+Issue workflows are server-capability-driven. Use `GET /api/capabilities` if your own client needs to decide whether GitHub or Jira actions should be shown.
 
-At minimum, the service needs an AI provider and model. For Jenkins-backed `POST /analyze` calls, Jenkins connectivity can be configured on the server or supplied per request. The checked-in environment template shows a typical Jenkins-backed setup:
+```2289:2300:src/jenkins_job_insight/main.py
+@app.get("/api/capabilities")
+async def get_capabilities(settings: Settings = Depends(get_settings)) -> dict:
+    """Report which post-analysis automation features are available.
 
-```6:19:.env.example
-JENKINS_URL=https://jenkins.example.com
-JENKINS_USER=your-username
-JENKINS_PASSWORD=your-api-token
-JENKINS_SSL_VERIFY=true
-
-# ===================
-# AI CLI Configuration
-# ===================
-# Choose AI provider (required): "claude", "gemini", or "cursor"
-AI_PROVIDER=claude
-
-# AI model to use (required, applies to any provider)
-# Can also be set per-request in webhook body
-AI_MODEL=your-model-name
+    These capabilities indicate whether the server is configured to
+    automatically create GitHub issues or Jira bugs from analysis results.
+    They require server-level credentials (GITHUB_TOKEN, JIRA_API_TOKEN, etc.)
+    and cannot be provided per-request.
+    """
+    return {
+        "github_issues": settings.github_issues_enabled,
+        "jira_bugs": settings.jira_enabled,
+    }
 ```
 
-Analysis requests can override many environment-backed defaults per request, including AI settings, Jenkins connectivity, Jira options, artifact download limits, `tests_repo_url`, and the Jenkins monitoring controls `wait_for_completion`, `poll_interval_minutes`, and `max_wait_minutes`. Absolute API links come from the server-level `PUBLIC_BASE_URL` setting, not from request headers.
+Preview endpoints draft content and can return duplicate suggestions. Create endpoints actually create the issue and automatically add a tracker comment back onto the result.
 
-> **Note:** Analysis endpoints support per-request overrides, but the issue preview/create flows use server-level GitHub and Jira configuration rather than caller-supplied credentials.
+The create endpoints are intentionally classification-aware:
 
-For local deployment, the checked-in Compose file serves the React UI and REST API together on port `8000` and uses `GET /health` as its liveness check:
+- GitHub issue creation is for `CODE ISSUE` results.
+- Jira bug creation is for `PRODUCT BUG` results.
+- If you call the wrong tracker for the current classification, the API returns `422` and tells you which tracker to use instead.
 
-```33:60:docker-compose.yaml
+> **Warning:** Issue preview/create routes use server-level GitHub and Jira configuration. They do not let each caller supply its own repository target or tracker credentials.
+
+### Two classification systems
+
+JJI has two related but different classification layers:
+
+- Root-cause classification: `CODE ISSUE` or `PRODUCT BUG`
+- Historical labels: `FLAKY`, `REGRESSION`, `INFRASTRUCTURE`, `KNOWN_BUG`, `INTERMITTENT`
+
+The read-side classifications lookup is intentionally limited to the root-cause layer; the broader history labels are meant to surface through the failure-history APIs instead.
+
+```1688:1700:src/jenkins_job_insight/storage.py
+"""Get visible test classifications in the primary (override) domain.
+
+Only returns classifications with visible=1 **and** a primary
+classification (CODE ISSUE / PRODUCT BUG).  History-system labels
+(FLAKY, REGRESSION, etc.) written by ``set_test_classification()``
+are intentionally excluded because they belong to the history
+domain and are consumed via ``failure_history`` queries (e.g.
+``get_all_failures()``, ``get_test_history()``), not here.
+
+The ``_PRIMARY_CLASSIFICATIONS_SQL`` filter is intentional: the
+``POST /history/classify`` endpoint writes history labels that are
+never meant to appear in this reader.  History labels are consumed
+via ``GET /history/failures`` instead.
+```
+
+For day-to-day use, that means:
+
+- Use result-level override endpoints when you want to change JJI's root-cause answer.
+- Use `POST /history/classify` when you want to record a broader history label like `FLAKY` or `KNOWN_BUG`.
+- Use `GET /history/failures` for paginated browsing, `GET /history/test/<test_name>` for per-test drill-down, `GET /history/search` for matching error signatures, and `GET /history/stats/<job_name>` for aggregate job-level trends.
+
+> **Warning:** The `jji_username` cookie is a lightweight identity mechanism for UI flow and attribution, not a full authentication boundary. Deploy JJI on a trusted network.
+
+## Absolute URLs in Responses
+
+Submission and result responses add two helper fields:
+
+- `base_url`: the trusted public base URL for this deployment, or `""` if none is configured
+- `result_url`: the canonical link to the stored result/report
+
+The URL builder trusts only `PUBLIC_BASE_URL`:
+
+```146:164:src/jenkins_job_insight/main.py
+def _extract_base_url() -> str:
+    """Extract the external base URL for building public-facing links.
+
+    When ``PUBLIC_BASE_URL`` is set, it is used directly as the trusted
+    origin.  Otherwise the function returns an empty string so that
+    callers produce relative URLs, avoiding host-header injection.
+
+    Returns:
+        Base URL without trailing slash (e.g. "https://example.com"),
+        or an empty string when no trusted origin is configured.
+    """
+    settings = get_settings()
+    if settings.public_base_url:
+        return settings.public_base_url.rstrip("/")
+
+    logger.debug(
+        "PUBLIC_BASE_URL is not set; returning empty base URL (relative paths)"
+    )
+    return ""
+```
+
+The tests show the absolute-URL case clearly:
+
+```240:263:tests/test_main.py
+os.environ["PUBLIC_BASE_URL"] = "https://myapp.example.com"
+get_settings.cache_clear()
+try:
+    with patch.object(storage, "DB_PATH", temp_db_path):
+        from starlette.testclient import TestClient
+        from jenkins_job_insight.main import app
+
+        with (
+            TestClient(app) as client,
+            patch("jenkins_job_insight.main.process_analysis_with_id"),
+        ):
+            response = client.post(
+                "/analyze",
+                json=self._analyze_body(),
+                headers={
+                    "X-Forwarded-Proto": "https",
+                    "X-Forwarded-Host": "other.example.com",
+                },
+            )
+            assert response.status_code == 202
+            data = response.json()
+            assert data["base_url"] == "https://myapp.example.com"
+            assert data["result_url"].startswith(
+                "https://myapp.example.com/results/"
+            )
+```
+
+That same link strategy is reused when JJI enriches JUnit XML. The first `testsuite` gets a `report_url` property pointing back to the stored result:
+
+```131:142:src/jenkins_job_insight/xml_enrichment.py
+# Add report_url to the first testsuite only
+if report_url:
+    first_testsuite = next(root.iter("testsuite"), None)
+    # If root itself is a testsuite, use it
+    if first_testsuite is None and root.tag == "testsuite":
+        first_testsuite = root
+    if first_testsuite is not None:
+        ts_props = first_testsuite.find("properties")
+        if ts_props is None:
+            ts_props = ET.Element("properties")
+            first_testsuite.insert(0, ts_props)
+        _add_property(ts_props, "report_url", report_url)
+```
+
+> **Warning:** Forwarded `Host` or `X-Forwarded-*` headers are not used to build public links. If you want absolute URLs in API responses, issue previews, or enriched XML, set `PUBLIC_BASE_URL` explicitly.
+
+> **Tip:** `PUBLIC_BASE_URL` is especially important when JJI sits behind a reverse proxy, ingress, or non-default public port.
+
+## OpenAPI and Swagger
+
+The API documentation is generated from the FastAPI app itself. The application metadata currently sets the OpenAPI title to `Jenkins Job Insight` and the schema version to `0.1.0`.
+
+```447:452:src/jenkins_job_insight/main.py
+app = FastAPI(
+    title="Jenkins Job Insight",
+    description="Analyzes Jenkins job failures and classifies them as code or product issues",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+```
+
+The test suite verifies both the raw schema and the Swagger UI:
+
+```962:973:tests/test_main.py
+def test_openapi_schema_available(self, test_client) -> None:
+    """Test that OpenAPI schema is available."""
+    response = test_client.get("/openapi.json")
+    assert response.status_code == 200
+    schema = response.json()
+    assert schema["info"]["title"] == "Jenkins Job Insight"
+    assert schema["info"]["version"] == "0.1.0"
+
+def test_docs_available(self, test_client) -> None:
+    """Test that docs endpoint is available."""
+    response = test_client.get("/docs")
+    assert response.status_code == 200
+```
+
+In the default local setup, the same port serves the API, the UI, and the docs:
+
+```32:56:docker-compose.yaml
+# Ports: Web UI + API served on the same port
 ports:
   - "8000:8000"   # Web UI (React) + REST API
   # Dev mode: Vite HMR for frontend hot-reload (uncomment with DEV_MODE=true)
@@ -310,10 +474,23 @@ restart: unless-stopped
 # Verifies the service is responding on /health endpoint
 healthcheck:
   test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-  interval: 30s
-  timeout: 10s
-  retries: 3
-  start_period: 10s
 ```
 
-That same Compose setup also persists the SQLite-backed application data under `./data`, so analysis history and stored results survive container restarts.
+That makes these the most useful discovery URLs in a local deployment:
+
+- [http://localhost:8000/openapi.json](http://localhost:8000/openapi.json) for tooling and raw schema inspection
+- [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger UI
+- [http://localhost:8000/health](http://localhost:8000/health) for a fast smoke test
+
+> **Note:** JJI uses the same lightweight username-cookie flow for browser pages. If a browser visit to `/docs` lands on `/register`, register a username once and reopen the docs page.
+
+> **Tip:** Swagger is the fastest way to explore request and response shapes for the JSON API, while the per-job report pages and dashboard are better for interactive human triage.
+
+
+## Related Pages
+
+- [POST /analyze](api-post-analyze.html)
+- [POST /analyze-failures](api-post-analyze-failures.html)
+- [Results, Reports, and Dashboard Endpoints](api-results-and-dashboard.html)
+- [Schemas and Data Models](api-schemas-and-models.html)
+- [Overview](overview.html)

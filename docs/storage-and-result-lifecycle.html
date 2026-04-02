@@ -262,7 +262,7 @@
                     ⚡ docs<span class="brand-accent">fy</span>
                 </a>
                 
-                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                <a href="https://github.com/myk-org/jenkins-job-insight.git" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight.git">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
                     <span class="github-stars" id="github-stars"></span>
                 </a>
@@ -287,126 +287,110 @@
                          user-supplied input. XSS risk is minimal and accepted since
                          the AI generates the content, not end users. -->
                     <h1 id="storage-and-result-lifecycle">Storage and Result Lifecycle</h1>
-<p>Jenkins Job Insight persists analysis data in SQLite. If you preserve the data directory, you preserve past results, comments, review state, classifications, failure history, and lifecycle timestamps across restarts.</p>
-<p>The most important thing to know is this: the SQLite database is the source of truth. The web UI reads stored results from <code>/results/{job_id}</code>, and there is no separate on-disk HTML report cache anymore.</p>
-<h2 id="default-storage-locations">Default Storage Locations</h2>
-<p>By default, the database lives at <code>/data/results.db</code>. There is no separate <code>/data/reports</code> cache directory anymore. The user-facing report route is <code>/results/{job_id}</code>, and it reads the stored SQLite result instead of a cached HTML file.</p>
+<p>Jenkins Job Insight (JJI) stores analysis state in SQLite. That database is the source of truth for queued jobs, finished results, comments, review state, classifications, and history. The web UI does not read a standalone per-report HTML file; it reads stored data and renders the report on demand.</p>
+<blockquote>
+<p><strong>Note:</strong> The canonical report URL is <code>/results/{job_id}</code>. JJI does not generate a separate per-job HTML artifact that needs to be cached, copied, or cleaned up.</p>
+</blockquote>
+<h2 id="quick-reference">Quick Reference</h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Default / behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SQLite database</td>
+<td><code>/data/results.db</code></td>
+</tr>
+<tr>
+<td>Browser report URL</td>
+<td><code>/results/{job_id}</code></td>
+</tr>
+<tr>
+<td>In-progress browser URL</td>
+<td><code>/status/{job_id}</code></td>
+</tr>
+<tr>
+<td>Result lookup API</td>
+<td><code>GET /results/{job_id}</code></td>
+</tr>
+<tr>
+<td>Dashboard API</td>
+<td><code>GET /api/dashboard</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="where-jji-stores-data">Where JJI Stores Data</h2>
+<p><code>src/jenkins_job_insight/storage.py</code> sets the default database path directly:</p>
 <div class="highlight"><pre><span></span><code><span class="n">DB_PATH</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_PATH&quot;</span><span class="p">,</span> <span class="s2">&quot;/data/results.db&quot;</span><span class="p">))</span>
 </code></pre></div>
 
-<p>The <code>results</code> table is still created in that file at startup, and JJI now keeps lifecycle metadata such as <code>analysis_started_at</code> in SQLite itself.</p>
-<div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">init_db</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Initialize the database schema.</span>
-
-<span class="sd">    Creates the results table if it does not exist.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Initializing database at </span><span class="si">{</span><span class="n">DB_PATH</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-    <span class="n">DB_PATH</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-    <span class="k">async</span> <span class="k">with</span> <span class="n">aiosqlite</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">DB_PATH</span><span class="p">)</span> <span class="k">as</span> <span class="n">db</span><span class="p">:</span>
-        <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">            CREATE TABLE IF NOT EXISTS results (</span>
-<span class="s2">                job_id TEXT PRIMARY KEY,</span>
-<span class="s2">                jenkins_url TEXT,</span>
-<span class="s2">                status TEXT,</span>
-<span class="s2">                result_json TEXT,</span>
-<span class="s2">                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,</span>
-<span class="s2">                analysis_started_at TIMESTAMP</span>
-<span class="s2">            )</span>
-<span class="s2">        &quot;&quot;&quot;</span><span class="p">)</span>
-</code></pre></div>
-
-<p>With the provided Docker Compose setup, the host <code>./data</code> directory is mounted into the container at <code>/data</code>, so the SQLite database survives container restarts.</p>
+<p>The default container deployment is built around that location. In <code>docker-compose.yaml</code>, the host <code>./data</code> directory is mounted into the container at <code>/data</code>, so the database survives container restarts:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Persist SQLite database across container restarts</span>
 <span class="c1"># The ./data directory on host maps to /data in container</span>
 <span class="nt">volumes</span><span class="p">:</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./data:/data</span>
 </code></pre></div>
 
-<blockquote>
-<p><strong>Note:</strong> The service creates the database parent directory automatically at startup and runs schema creation plus migrations for you.</p>
-<p><strong>Tip:</strong> If you set <code>DB_PATH</code>, only the SQLite file moves. There is no sibling report cache directory to move with it.</p>
-</blockquote>
-<h2 id="what-gets-stored">What Gets Stored</h2>
-<p>Jenkins Job Insight stores more than just the final analysis summary. In practice, SQLite holds:</p>
+<p>That single database holds more than just the final AI summary. JJI creates tables for:</p>
 <ul>
-<li>One <code>results</code> row per analysis, keyed by <code>job_id</code></li>
-<li>The current job status</li>
-<li>The serialized JSON payload for the result</li>
-<li>User comments on failures</li>
-<li>Reviewed/unreviewed state</li>
-<li>Manual and AI-generated test classifications</li>
-<li>Flattened failure history used by the History pages and queries</li>
+<li><code>results</code>: one row per analysis job, including status, timestamps, Jenkins URL, and the stored result payload</li>
+<li><code>comments</code>: free-form comments attached to failures</li>
+<li><code>failure_reviews</code>: reviewed/not reviewed state for each failure</li>
+<li><code>test_classifications</code>: classifications and human overrides</li>
+<li><code>failure_history</code>: flattened historical failure data used by history and trend views</li>
 </ul>
-<p>Direct <code>POST /analyze-failures</code> runs use the same persistence layer. They are stored in the same <code>results</code> table; they just do not have a Jenkins URL.</p>
-<p>There is no separate HTML report file anymore. Browser report views are driven by the stored SQLite result at <code>/results/{job_id}</code>.</p>
-<p>For Jenkins jobs in the <code>waiting</code> state, JJI stores an encrypted <code>request_params</code> payload inside <code>result_json</code> so the background task can be reconstructed after a restart. That payload now includes the resolved peer AI configuration, the peer-analysis round limit, and a <code>wait_started_at</code> timestamp so resumed jobs keep the original wait deadline instead of starting over.</p>
-<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_build_request_params</span><span class="p">(</span>
-    <span class="n">body</span><span class="p">:</span> <span class="n">AnalyzeRequest</span><span class="p">,</span>
-    <span class="n">merged</span><span class="p">:</span> <span class="n">Settings</span><span class="p">,</span>
-    <span class="n">ai_provider</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-    <span class="n">ai_model</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-    <span class="n">peer_ai_configs_resolved</span><span class="p">:</span> <span class="nb">list</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
-    <span class="n">params</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="c1"># ... other persisted request settings ...</span>
-        <span class="s2">&quot;peer_ai_configs&quot;</span><span class="p">:</span> <span class="p">[</span>
-            <span class="n">c</span><span class="o">.</span><span class="n">model_dump</span><span class="p">()</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="s2">&quot;model_dump&quot;</span><span class="p">)</span> <span class="k">else</span> <span class="n">c</span>
-            <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="p">(</span><span class="n">peer_ai_configs_resolved</span> <span class="ow">or</span> <span class="p">[])</span>
-        <span class="p">],</span>
-        <span class="s2">&quot;peer_analysis_max_rounds&quot;</span><span class="p">:</span> <span class="n">merged</span><span class="o">.</span><span class="n">peer_analysis_max_rounds</span><span class="p">,</span>
-        <span class="s2">&quot;wait_started_at&quot;</span><span class="p">:</span> <span class="n">_time</span><span class="o">.</span><span class="n">time</span><span class="p">(),</span>
-    <span class="p">}</span>
-    <span class="k">return</span> <span class="n">encrypt_sensitive_fields</span><span class="p">(</span><span class="n">params</span><span class="p">)</span>
-</code></pre></div>
-
-<p>JJI also persists <code>progress_phase</code> and a timestamped <code>progress_log</code> inside <code>result_json</code>, so the status view can restore the same in-progress timeline after a refresh.</p>
-<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_make_progress_phase_patcher</span><span class="p">(</span><span class="n">phase</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="nb">dict</span><span class="p">],</span> <span class="kc">None</span><span class="p">]:</span>
-    <span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">_patcher</span><span class="p">(</span><span class="n">d</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">d</span><span class="p">[</span><span class="s2">&quot;progress_phase&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">phase</span>
-        <span class="n">progress_log</span> <span class="o">=</span> <span class="n">d</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;progress_log&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">progress_log</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
-            <span class="n">progress_log</span> <span class="o">=</span> <span class="p">[]</span>
-            <span class="n">d</span><span class="p">[</span><span class="s2">&quot;progress_log&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">progress_log</span>
-        <span class="n">progress_log</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-            <span class="p">{</span><span class="s2">&quot;phase&quot;</span><span class="p">:</span> <span class="n">phase</span><span class="p">,</span> <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()}</span>
-        <span class="p">)</span>
-
-    <span class="k">return</span> <span class="n">_patcher</span>
-</code></pre></div>
-
-<h2 id="result-state-lifecycle">Result State Lifecycle</h2>
-<p>For persisted jobs, the state model now includes an explicit Jenkins-monitoring phase:</p>
-<ul>
-<li><code>pending</code>: the job record exists, but analysis work has not started yet</li>
-<li><code>waiting</code>: JJI has accepted the request and is polling Jenkins for the target build to finish</li>
-<li><code>running</code>: AI analysis is actively in progress</li>
-<li><code>completed</code>: the final JSON result has been written successfully</li>
-<li><code>failed</code>: waiting or analysis ended with an error, and the stored payload contains error details</li>
-</ul>
-<p>For asynchronous <code>POST /analyze</code>, JJI writes the row immediately. When <code>WAIT_FOR_COMPLETION=true</code> and Jenkins connectivity is available, the initial persisted state is <code>waiting</code>; otherwise it starts as <code>pending</code>. JJI now validates and resolves peer AI settings before saving the resumable payload so a restarted job uses the same provider/model mix that was queued originally.</p>
-<div class="highlight"><pre><span></span><code><span class="n">job_id</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">())</span>
-<span class="n">merged</span> <span class="o">=</span> <span class="n">_merge_settings</span><span class="p">(</span><span class="n">body</span><span class="p">,</span> <span class="n">settings</span><span class="p">)</span>
-
-<span class="c1"># Validate peer configs early -- fail fast before returning 202.</span>
-<span class="n">resolved_peers</span> <span class="o">=</span> <span class="n">_validate_peer_configs</span><span class="p">(</span><span class="n">body</span><span class="p">,</span> <span class="n">merged</span><span class="p">)</span>
-<span class="n">jenkins_url</span> <span class="o">=</span> <span class="n">build_jenkins_url</span><span class="p">(</span>
-    <span class="n">merged</span><span class="o">.</span><span class="n">jenkins_url</span><span class="p">,</span> <span class="n">body</span><span class="o">.</span><span class="n">job_name</span><span class="p">,</span> <span class="n">body</span><span class="o">.</span><span class="n">build_number</span>
+<p>The central table is <code>results</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="n">job_id</span><span class="w"> </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="p">,</span>
+<span class="w">    </span><span class="n">jenkins_url</span><span class="w"> </span><span class="nb">TEXT</span><span class="p">,</span>
+<span class="w">    </span><span class="n">status</span><span class="w"> </span><span class="nb">TEXT</span><span class="p">,</span>
+<span class="w">    </span><span class="n">result_json</span><span class="w"> </span><span class="nb">TEXT</span><span class="p">,</span>
+<span class="w">    </span><span class="n">created_at</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">,</span>
+<span class="w">    </span><span class="n">analysis_started_at</span><span class="w"> </span><span class="k">TIMESTAMP</span>
 <span class="p">)</span>
-<span class="n">initial_result</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;job_name&quot;</span><span class="p">:</span> <span class="n">body</span><span class="o">.</span><span class="n">job_name</span><span class="p">,</span>
-    <span class="s2">&quot;build_number&quot;</span><span class="p">:</span> <span class="n">body</span><span class="o">.</span><span class="n">build_number</span><span class="p">,</span>
-<span class="p">}</span>
-<span class="n">can_resume_wait</span> <span class="o">=</span> <span class="n">merged</span><span class="o">.</span><span class="n">wait_for_completion</span> <span class="ow">and</span> <span class="nb">bool</span><span class="p">(</span><span class="n">merged</span><span class="o">.</span><span class="n">jenkins_url</span><span class="p">)</span>
-<span class="k">if</span> <span class="n">can_resume_wait</span><span class="p">:</span>
-    <span class="n">initial_result</span><span class="p">[</span><span class="s2">&quot;request_params&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">_build_request_params</span><span class="p">(</span>
-        <span class="n">body</span><span class="p">,</span>
-        <span class="n">merged</span><span class="p">,</span>
-        <span class="n">body</span><span class="o">.</span><span class="n">ai_provider</span> <span class="ow">or</span> <span class="n">AI_PROVIDER</span><span class="p">,</span>
-        <span class="n">body</span><span class="o">.</span><span class="n">ai_model</span> <span class="ow">or</span> <span class="n">AI_MODEL</span><span class="p">,</span>
-        <span class="n">peer_ai_configs_resolved</span><span class="o">=</span><span class="n">resolved_peers</span><span class="p">,</span>
-    <span class="p">)</span>
+</code></pre></div>
+
+<p>JJI also persists the request parameters needed to recover a waiting job after restart. Sensitive values inside those stored parameters are encrypted at rest. If <code>JJI_ENCRYPTION_KEY</code> is unset, JJI creates a local key file under <code>$XDG_DATA_HOME/jji/.encryption_key</code> or <code>~/.local/share/jji/.encryption_key</code>.</p>
+<blockquote>
+<p><strong>Tip:</strong> If you want the database somewhere else, set <code>DB_PATH</code> in the server environment. Only the database location changes. The user-facing report URL still stays under <code>/results/{job_id}</code>.</p>
+</blockquote>
+<h2 id="result-states">Result States</h2>
+<p>In practice, JJI uses five result states:</p>
+<table>
+<thead>
+<tr>
+<th>State</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pending</code></td>
+<td>The job has been accepted and stored, but AI analysis has not started yet.</td>
+</tr>
+<tr>
+<td><code>waiting</code></td>
+<td>JJI is waiting for the Jenkins build to finish before analysis begins.</td>
+</tr>
+<tr>
+<td><code>running</code></td>
+<td>AI analysis is in progress.</td>
+</tr>
+<tr>
+<td><code>completed</code></td>
+<td>Analysis finished successfully and the result is fully stored.</td>
+</tr>
+<tr>
+<td><code>failed</code></td>
+<td>JJI could not finish the analysis. The stored result includes an error message.</td>
+</tr>
+</tbody>
+</table>
+<p>The initial state depends on whether JJI can wait on Jenkins before analyzing. In <code>src/jenkins_job_insight/main.py</code>, the request is stored immediately as either <code>waiting</code> or <code>pending</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="n">can_resume_wait</span> <span class="o">=</span> <span class="n">merged</span><span class="o">.</span><span class="n">wait_for_completion</span> <span class="ow">and</span> <span class="nb">bool</span><span class="p">(</span><span class="n">merged</span><span class="o">.</span><span class="n">jenkins_url</span><span class="p">)</span>
 <span class="k">await</span> <span class="n">save_result</span><span class="p">(</span>
     <span class="n">job_id</span><span class="p">,</span>
     <span class="n">jenkins_url</span><span class="p">,</span>
@@ -415,176 +399,132 @@
 <span class="p">)</span>
 </code></pre></div>
 
-<p>Once background work begins, JJI updates the same row in place. <code>analysis_started_at</code> is stamped the first time the job reaches <code>running</code>, and <code>completed_at</code> is stamped the first time it reaches <code>completed</code>.</p>
-<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_build_status_update_clause</span><span class="p">(</span>
-    <span class="n">status</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-    <span class="n">result_json</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">list</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Build the SET clause parts and params for a status update.</span>
-
-<span class="sd">    Returns the set-clause fragments and the corresponding parameter list.</span>
-<span class="sd">    The caller must append the trailing ``job_id`` parameter.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">set_parts</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;status = ?&quot;</span><span class="p">]</span>
-    <span class="n">params</span><span class="p">:</span> <span class="nb">list</span> <span class="o">=</span> <span class="p">[</span><span class="n">status</span><span class="p">]</span>
-
-    <span class="k">if</span> <span class="n">result_json</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">set_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;result_json = ?&quot;</span><span class="p">)</span>
-        <span class="n">params</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">result_json</span><span class="p">)</span>
-
-    <span class="k">if</span> <span class="n">status</span> <span class="o">==</span> <span class="s2">&quot;running&quot;</span><span class="p">:</span>
-        <span class="n">set_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-            <span class="s2">&quot;analysis_started_at = COALESCE(analysis_started_at, CURRENT_TIMESTAMP)&quot;</span>
-        <span class="p">)</span>
-    <span class="k">if</span> <span class="n">status</span> <span class="o">==</span> <span class="s2">&quot;completed&quot;</span><span class="p">:</span>
-        <span class="n">set_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)&quot;</span><span class="p">)</span>
+<p>Once analysis actually starts, JJI records lifecycle timestamps automatically:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="n">status</span> <span class="o">==</span> <span class="s2">&quot;running&quot;</span><span class="p">:</span>
+    <span class="n">set_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="s2">&quot;analysis_started_at = COALESCE(analysis_started_at, CURRENT_TIMESTAMP)&quot;</span>
+    <span class="p">)</span>
+<span class="k">if</span> <span class="n">status</span> <span class="o">==</span> <span class="s2">&quot;completed&quot;</span><span class="p">:</span>
+    <span class="n">set_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)&quot;</span><span class="p">)</span>
 </code></pre></div>
 
-<p>Direct <code>POST /analyze-failures</code> runs use the same persistence layer, but they skip <code>waiting</code> and follow the simpler <code>pending</code> -&gt; <code>running</code> -&gt; <code>completed</code> or <code>failed</code> flow.</p>
+<p>That means:</p>
+<ul>
+<li><code>created_at</code> tells you when the row was first inserted</li>
+<li><code>analysis_started_at</code> tells you when work really began</li>
+<li><code>completed_at</code> tells you when the final successful result was saved</li>
+</ul>
+<p>The dashboard and report page use those timestamps to show duration and recency.</p>
 <blockquote>
-<p><strong>Note:</strong> On startup, orphaned <code>pending</code> and <code>running</code> rows are still marked <code>failed</code>, but <code>waiting</code> rows are resumed only when their stored payload is actually usable. A <code>waiting</code> row must have valid JSON plus <code>job_name</code>, <code>build_number</code>, and a non-empty <code>request_params</code> object; otherwise JJI marks it <code>failed</code> as unrecoverable instead of leaving it stuck in <code>waiting</code>.</p>
+<p><strong>Note:</strong> <code>/analyze-failures</code> does not use <code>waiting</code>. It goes straight through <code>pending -&gt; running -&gt; completed</code> or <code>failed</code>, because there is no Jenkins build to poll.</p>
 </blockquote>
+<h2 id="end-to-end-lifecycle">End-to-End Lifecycle</h2>
+<div class="mermaid-diagram"><svg id="my-svg" width="100%" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" class="flowchart" style="max-width: 980.34px; background-color: transparent;" viewBox="0.5 0 980.33984375 1753.828125" role="graphics-document document" aria-roledescription="flowchart-v2"><style>#my-svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;fill:#333;}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#my-svg .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#my-svg .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#my-svg .error-icon{fill:#552222;}#my-svg .error-text{fill:#552222;stroke:#552222;}#my-svg .edge-thickness-normal{stroke-width:1px;}#my-svg .edge-thickness-thick{stroke-width:3.5px;}#my-svg .edge-pattern-solid{stroke-dasharray:0;}#my-svg .edge-thickness-invisible{stroke-width:0;fill:none;}#my-svg .edge-pattern-dashed{stroke-dasharray:3;}#my-svg .edge-pattern-dotted{stroke-dasharray:2;}#my-svg .marker{fill:#333333;stroke:#333333;}#my-svg .marker.cross{stroke:#333333;}#my-svg svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;}#my-svg p{margin:0;}#my-svg .label{font-family:"trebuchet ms",verdana,arial,sans-serif;color:#333;}#my-svg .cluster-label text{fill:#333;}#my-svg .cluster-label span{color:#333;}#my-svg .cluster-label span p{background-color:transparent;}#my-svg .label text,#my-svg span{fill:#333;color:#333;}#my-svg .node rect,#my-svg .node circle,#my-svg .node ellipse,#my-svg .node polygon,#my-svg .node path{fill:#ECECFF;stroke:#9370DB;stroke-width:1px;}#my-svg .rough-node .label text,#my-svg .node .label text,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-anchor:middle;}#my-svg .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#my-svg .rough-node .label,#my-svg .node .label,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-align:center;}#my-svg .node.clickable{cursor:pointer;}#my-svg .root .anchor path{fill:#333333!important;stroke-width:0;stroke:#333333;}#my-svg .arrowheadPath{fill:#333333;}#my-svg .edgePath .path{stroke:#333333;stroke-width:1px;}#my-svg .flowchart-link{stroke:#333333;fill:none;}#my-svg .edgeLabel{background-color:rgba(232,232,232, 0.8);text-align:center;}#my-svg .edgeLabel p{background-color:rgba(232,232,232, 0.8);}#my-svg .edgeLabel rect{opacity:0.5;background-color:rgba(232,232,232, 0.8);fill:rgba(232,232,232, 0.8);}#my-svg .labelBkg{background-color:rgba(232, 232, 232, 0.5);}#my-svg .cluster rect{fill:#ffffde;stroke:#aaaa33;stroke-width:1px;}#my-svg .cluster text{fill:#333;}#my-svg .cluster span{color:#333;}#my-svg div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:12px;background:hsl(80, 100%, 96.2745098039%);border:1px solid #aaaa33;border-radius:2px;pointer-events:none;z-index:100;}#my-svg .flowchartTitleText{text-anchor:middle;font-size:18px;fill:#333;}#my-svg rect.text{fill:none;stroke-width:0;}#my-svg .icon-shape,#my-svg .image-shape{background-color:rgba(232,232,232, 0.8);text-align:center;}#my-svg .icon-shape p,#my-svg .image-shape p{background-color:rgba(232,232,232, 0.8);padding:2px;}#my-svg .icon-shape .label rect,#my-svg .image-shape .label rect{opacity:0.5;background-color:rgba(232,232,232, 0.8);fill:rgba(232,232,232, 0.8);}#my-svg .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#my-svg .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#my-svg .node .neo-node{stroke:#9370DB;}#my-svg [data-look="neo"].node rect,#my-svg [data-look="neo"].cluster rect,#my-svg [data-look="neo"].node polygon{stroke:#9370DB;filter:drop-shadow(1px 2px 2px rgba(185, 185, 185, 1));}#my-svg [data-look="neo"].node path{stroke:#9370DB;stroke-width:1px;}#my-svg [data-look="neo"].node .outer-path{filter:drop-shadow(1px 2px 2px rgba(185, 185, 185, 1));}#my-svg [data-look="neo"].node .neo-line path{stroke:#9370DB;filter:none;}#my-svg [data-look="neo"].node circle{stroke:#9370DB;filter:drop-shadow(1px 2px 2px rgba(185, 185, 185, 1));}#my-svg [data-look="neo"].node circle .state-start{fill:#000000;}#my-svg [data-look="neo"].icon-shape .icon{fill:#9370DB;filter:drop-shadow(1px 2px 2px rgba(185, 185, 185, 1));}#my-svg [data-look="neo"].icon-shape .icon-neo path{stroke:#9370DB;filter:drop-shadow(1px 2px 2px rgba(185, 185, 185, 1));}#my-svg :root{--mermaid-font-family:"trebuchet ms",verdana,arial,sans-serif;}</style><g><marker id="my-svg_flowchart-v2-pointEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-pointStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="4.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 5 L 10 10 L 10 0 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-pointEnd-margin" class="marker flowchart-v2" viewBox="0 0 11.5 14" refX="11.5" refY="7" markerUnits="userSpaceOnUse" markerWidth="10.5" markerHeight="14" orient="auto"><path d="M 0 0 L 11.5 7 L 0 14 z" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-pointStart-margin" class="marker flowchart-v2" viewBox="0 0 11.5 14" refX="1" refY="7" markerUnits="userSpaceOnUse" markerWidth="11.5" markerHeight="14" orient="auto"><polygon points="0,7 11.5,14 11.5,0" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="11" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-1" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleEnd-margin" class="marker flowchart-v2" viewBox="0 0 10 10" refY="5" refX="12.25" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleStart-margin" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-2" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 0; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossEnd" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="12" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossStart" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="-1" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossEnd-margin" class="marker cross flowchart-v2" viewBox="0 0 15 15" refX="17.7" refY="7.5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto"><path d="M 1,1 L 14,14 M 1,14 L 14,1" class="arrowMarkerPath" style="stroke-width: 2.5;"/></marker><marker id="my-svg_flowchart-v2-crossStart-margin" class="marker cross flowchart-v2" viewBox="0 0 15 15" refX="-3.5" refY="7.5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto"><path d="M 1,1 L 14,14 M 1,14 L 14,1" class="arrowMarkerPath" style="stroke-width: 2.5; stroke-dasharray: 1, 0;"/></marker><g class="root"><g class="clusters"/><g class="edgePaths"><path d="M255.109,62L255.109,66.167C255.109,70.333,255.109,78.667,255.109,93.225C255.109,107.784,255.109,128.568,255.109,138.96L255.109,149.352" id="my-svg-L_A_B_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_A_B_0" data-points="W3sieCI6MjU1LjEwOTM3NSwieSI6NjJ9LHsieCI6MjU1LjEwOTM3NSwieSI6ODd9LHsieCI6MjU1LjEwOTM3NSwieSI6MTUzLjM1MTU2MjV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M255.109,231.352L255.109,246.41C255.109,261.469,255.109,291.586,255.109,314.145C255.109,336.703,255.109,351.703,255.109,359.203L255.109,366.703" id="my-svg-L_B_C_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_B_C_0" data-points="W3sieCI6MjU1LjEwOTM3NSwieSI6MjMxLjM1MTU2MjV9LHsieCI6MjU1LjEwOTM3NSwieSI6MzIxLjcwMzEyNX0seyJ4IjoyNTUuMTA5Mzc1LCJ5IjozNzAuNzAzMTI1fV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M192.822,610.416L181.203,626.964C169.584,643.511,146.347,676.607,134.728,698.655C123.109,720.703,123.109,731.703,123.109,737.203L123.109,742.703" id="my-svg-L_C_D_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_C_D_0" data-points="W3sieCI6MTkyLjgyMTg3NSwieSI6NjEwLjQxNTYyNX0seyJ4IjoxMjMuMTA5Mzc1LCJ5Ijo3MDkuNzAzMTI1fSx7IngiOjEyMy4xMDkzNzUsInkiOjc0Ni43MDMxMjV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M317.397,610.416L329.016,626.964C340.634,643.511,363.872,676.607,375.491,703.822C387.109,731.036,387.109,752.37,387.109,771.703C387.109,791.036,387.109,808.37,387.109,835.221C387.109,862.073,387.109,898.443,387.109,916.628L387.109,934.813" id="my-svg-L_C_E_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_C_E_0" data-points="W3sieCI6MzE3LjM5Njg3NSwieSI6NjEwLjQxNTYyNX0seyJ4IjozODcuMTA5Mzc1LCJ5Ijo3MDkuNzAzMTI1fSx7IngiOjM4Ny4xMDkzNzUsInkiOjc3My43MDMxMjV9LHsieCI6Mzg3LjEwOTM3NSwieSI6ODI1LjcwMzEyNX0seyJ4IjozODcuMTA5Mzc1LCJ5Ijo5MzguODEyNX1d" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M123.109,800.703L123.109,804.87C123.109,809.036,123.109,817.37,123.109,825.036C123.109,832.703,123.109,839.703,123.109,843.203L123.109,846.703" id="my-svg-L_D_F_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_D_F_0" data-points="W3sieCI6MTIzLjEwOTM3NSwieSI6ODAwLjcwMzEyNX0seyJ4IjoxMjMuMTA5Mzc1LCJ5Ijo4MjUuNzAzMTI1fSx7IngiOjEyMy4xMDkzNzUsInkiOjg1MC43MDMxMjV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M111.59,1069.403L110.691,1077.489C109.792,1085.576,107.994,1101.749,107.095,1120.502C106.195,1139.255,106.195,1160.589,106.195,1179.922C106.195,1199.255,106.195,1216.589,106.195,1233.922C106.195,1251.255,106.195,1268.589,106.195,1285.922C106.195,1303.255,106.195,1320.589,106.195,1343.997C106.195,1367.406,106.195,1396.891,106.195,1428.375C106.195,1459.859,106.195,1493.344,107.487,1515.603C108.779,1537.863,111.363,1548.898,112.654,1554.416L113.946,1559.933" id="my-svg-L_F_G_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_F_G_0" data-points="W3sieCI6MTExLjU5MDQ1NjcyNTIxMzc3LCJ5IjoxMDY5LjQwMjk1NjcyNTIxMzd9LHsieCI6MTA2LjE5NTMxMjUsInkiOjExMTcuOTIxODc1fSx7IngiOjEwNi4xOTUzMTI1LCJ5IjoxMTgxLjkyMTg3NX0seyJ4IjoxMDYuMTk1MzEyNSwieSI6MTIzMy45MjE4NzV9LHsieCI6MTA2LjE5NTMxMjUsInkiOjEyODUuOTIxODc1fSx7IngiOjEwNi4xOTUzMTI1LCJ5IjoxMzM3LjkyMTg3NX0seyJ4IjoxMDYuMTk1MzEyNSwieSI6MTQyNi4zNzV9LHsieCI6MTA2LjE5NTMxMjUsInkiOjE1MjYuODI4MTI1fSx7IngiOjExNC44NTgxNTQyOTY4NzUsInkiOjE1NjMuODI4MTI1fV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M169.255,1034.776L178.528,1048.634C187.8,1062.491,206.345,1090.207,227.737,1109.94C249.128,1129.674,273.366,1141.425,285.485,1147.301L297.604,1153.177" id="my-svg-L_F_H_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_F_H_0" data-points="W3sieCI6MTY5LjI1NTEzNTg5Mjk3ODAyLCJ5IjoxMDM0Ljc3NjExNDEwNzAyMn0seyJ4IjoyMjQuODkwNjI1LCJ5IjoxMTE3LjkyMTg3NX0seyJ4IjozMDEuMjAzMTI1LCJ5IjoxMTU0LjkyMTg3NX1d" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M387.109,992.813L387.109,1013.664C387.109,1034.516,387.109,1076.219,384.482,1102.634C381.855,1129.05,376.601,1140.177,373.974,1145.741L371.347,1151.305" id="my-svg-L_E_H_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_E_H_0" data-points="W3sieCI6Mzg3LjEwOTM3NSwieSI6OTkyLjgxMjV9LHsieCI6Mzg3LjEwOTM3NSwieSI6MTExNy45MjE4NzV9LHsieCI6MzY5LjYzOTE2MDE1NjI1LCJ5IjoxMTU0LjkyMTg3NX1d" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M356.891,1208.922L356.891,1213.089C356.891,1217.255,356.891,1225.589,356.891,1233.255C356.891,1240.922,356.891,1247.922,356.891,1251.422L356.891,1254.922" id="my-svg-L_H_I_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_H_I_0" data-points="W3sieCI6MzU2Ljg5MDYyNSwieSI6MTIwOC45MjE4NzV9LHsieCI6MzU2Ljg5MDYyNSwieSI6MTIzMy45MjE4NzV9LHsieCI6MzU2Ljg5MDYyNSwieSI6MTI1OC45MjE4NzV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M356.891,1312.922L356.891,1317.089C356.891,1321.255,356.891,1329.589,356.891,1337.255C356.891,1344.922,356.891,1351.922,356.891,1355.422L356.891,1358.922" id="my-svg-L_I_J_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_I_J_0" data-points="W3sieCI6MzU2Ljg5MDYyNSwieSI6MTMxMi45MjE4NzV9LHsieCI6MzU2Ljg5MDYyNSwieSI6MTMzNy45MjE4NzV9LHsieCI6MzU2Ljg5MDYyNSwieSI6MTM2Mi45MjE4NzV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M320.633,1453.57L304.354,1465.78C288.075,1477.989,255.518,1502.409,229.997,1520.43C204.476,1538.452,185.99,1550.075,176.748,1555.887L167.505,1561.699" id="my-svg-L_J_G_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_J_G_0" data-points="W3sieCI6MzIwLjYzMjYwMjg3MTU3MDk1LCJ5IjoxNDUzLjU3MDEwMjg3MTU3MX0seyJ4IjoyMjIuOTYwOTM3NSwieSI6MTUyNi44MjgxMjV9LHsieCI6MTY0LjExODY1MjM0Mzc1LCJ5IjoxNTYzLjgyODEyNX1d" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M368.247,1478.471L370.004,1486.531C371.761,1494.59,375.275,1510.709,377.032,1524.269C378.789,1537.828,378.789,1548.828,378.789,1554.328L378.789,1559.828" id="my-svg-L_J_K_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_J_K_0" data-points="W3sieCI6MzY4LjI0NzQ0MTg5Mzg3NjUsInkiOjE0NzguNDcxMzA4MTA2MTIzNH0seyJ4IjozNzguNzg5MDYyNSwieSI6MTUyNi44MjgxMjV9LHsieCI6Mzc4Ljc4OTA2MjUsInkiOjE1NjMuODI4MTI1fV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M299.842,1617.828L287.658,1621.995C275.475,1626.161,251.109,1634.495,238.925,1644.161C226.742,1653.828,226.742,1664.828,226.742,1670.328L226.742,1675.828" id="my-svg-L_K_L_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_K_L_0" data-points="W3sieCI6Mjk5Ljg0MTY0NjYzNDYxNTM2LCJ5IjoxNjE3LjgyODEyNX0seyJ4IjoyMjYuNzQyMTg3NSwieSI6MTY0Mi44MjgxMjV9LHsieCI6MjI2Ljc0MjE4NzUsInkiOjE2NzkuODI4MTI1fV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M457.736,1617.828L469.92,1621.995C482.103,1626.161,506.469,1634.495,518.653,1642.161C530.836,1649.828,530.836,1656.828,530.836,1660.328L530.836,1663.828" id="my-svg-L_K_M_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_K_M_0" data-points="W3sieCI6NDU3LjczNjQ3ODM2NTM4NDY0LCJ5IjoxNjE3LjgyODEyNX0seyJ4Ijo1MzAuODM1OTM3NSwieSI6MTY0Mi44MjgxMjV9LHsieCI6NTMwLjgzNTkzNzUsInkiOjE2NjcuODI4MTI1fV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M637.824,62L637.824,66.167C637.824,70.333,637.824,78.667,637.824,86.333C637.824,94,637.824,101,637.824,104.5L637.824,108" id="my-svg-L_N_O_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_N_O_0" data-points="W3sieCI6NjM3LjgyNDIxODc1LCJ5Ijo2Mn0seyJ4Ijo2MzcuODI0MjE4NzUsInkiOjg3fSx7IngiOjYzNy44MjQyMTg3NSwieSI6MTEyfV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M589.353,224.232L564.654,240.477C539.956,256.723,490.558,289.213,479.741,333.693C468.924,378.173,496.688,434.643,510.57,462.878L524.452,491.114" id="my-svg-L_O_P_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_O_P_0" data-points="W3sieCI6NTg5LjM1MzMzNzMwMjMwMDUsInkiOjIyNC4yMzIyNDM1NTIzMDA1fSx7IngiOjQ0MS4xNjAxNTYyNSwieSI6MzIxLjcwMzEyNX0seyJ4Ijo1MjYuMjE3MzYzMjgxMjUsInkiOjQ5NC43MDMxMjV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M688.967,221.561L718.19,238.251C747.414,254.941,805.861,288.322,835.085,333.179C864.309,378.036,864.309,434.37,864.309,462.536L864.309,490.703" id="my-svg-L_O_Q_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_O_Q_0" data-points="W3sieCI6Njg4Ljk2NjgxNDI0MjAxOTMsInkiOjIyMS41NjA1Mjk1MDc5ODA3Nn0seyJ4Ijo4NjQuMzA4NTkzNzUsInkiOjMyMS43MDMxMjV9LHsieCI6ODY0LjMwODU5Mzc1LCJ5Ijo0OTQuNzAzMTI1fV0=" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M637.824,272.703L637.824,280.87C637.824,289.036,637.824,305.37,623.942,341.772C610.06,378.173,582.296,434.643,568.414,462.878L554.532,491.114" id="my-svg-L_O_P_2" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_O_P_2" data-points="W3sieCI6NjM3LjgyNDIxODc1LCJ5IjoyNzIuNzAzMTI1fSx7IngiOjYzNy44MjQyMTg3NSwieSI6MzIxLjcwMzEyNX0seyJ4Ijo1NTIuNzY3MDExNzE4NzUsInkiOjQ5NC43MDMxMjV9XQ==" data-look="classic" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/></g><g class="edgeLabels"><g class="edgeLabel"><g class="label" data-id="L_A_B_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_B_C_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(123.109375, 709.703125)"><g class="label" data-id="L_C_D_0" transform="translate(-13.828125, -12)"><foreignObject width="27.65625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>yes</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(387.109375, 773.703125)"><g class="label" data-id="L_C_E_0" transform="translate(-9.96875, -12)"><foreignObject width="19.9375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>no</p></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_D_F_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(106.1953125, 1285.921875)"><g class="label" data-id="L_F_G_0" transform="translate(-9.96875, -12)"><foreignObject width="19.9375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>no</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(220.65483, 1111.5916)"><g class="label" data-id="L_F_H_0" transform="translate(-13.828125, -12)"><foreignObject width="27.65625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>yes</p></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_E_H_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_H_I_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_I_J_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(243.994, 1511.05241)"><g class="label" data-id="L_J_G_0" transform="translate(-9.96875, -12)"><foreignObject width="19.9375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>no</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(378.7890625, 1526.828125)"><g class="label" data-id="L_J_K_0" transform="translate(-13.828125, -12)"><foreignObject width="27.65625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>yes</p></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_K_L_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_K_M_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_N_O_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(444.55846, 328.61501)"><g class="label" data-id="L_O_P_0" transform="translate(-76.6640625, -12)"><foreignObject width="153.328125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>pending or running</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(864.30859375, 321.703125)"><g class="label" data-id="L_O_Q_0" transform="translate(-100, -24)"><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="edgeLabel"><p>waiting with usable request_params</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(637.82421875, 321.703125)"><g class="label" data-id="L_O_P_2" transform="translate(-100, -24)"><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="edgeLabel"><p>waiting without usable request_params</p></span></div></foreignObject></g></g></g><g class="nodes"><g class="node default" id="my-svg-flowchart-A-0" data-look="classic" transform="translate(255.109375, 35)"><rect class="basic label-container" style="" x="-87.28125" y="-27" width="174.5625" height="54"/><g class="label" style="" transform="translate(-57.28125, -12)"><rect/><foreignObject width="114.5625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>POST /analyze</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-B-1" data-look="classic" transform="translate(255.109375, 192.3515625)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Insert results row in SQLite</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-C-3" data-look="classic" transform="translate(255.109375, 521.703125)"><polygon points="151,0 302,-151 151,-302 0,-151" class="label-container" transform="translate(-150.5, 151)"/><g class="label" style="" transform="translate(-100, -36)"><rect/><foreignObject width="200" height="72"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>wait_for_completion<br />and Jenkins URL available?</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-D-5" data-look="classic" transform="translate(123.109375, 773.703125)"><rect class="basic label-container" style="" x="-95.546875" y="-27" width="191.09375" height="54"/><g class="label" style="" transform="translate(-65.546875, -12)"><rect/><foreignObject width="131.09375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>status = waiting</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-E-7" data-look="classic" transform="translate(387.109375, 965.8125)"><rect class="basic label-container" style="" x="-98.890625" y="-27" width="197.78125" height="54"/><g class="label" style="" transform="translate(-68.890625, -12)"><rect/><foreignObject width="137.78125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>status = pending</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-F-9" data-look="classic" transform="translate(123.109375, 965.8125)"><polygon points="115.109375,0 230.21875,-115.109375 115.109375,-230.21875 0,-115.109375" class="label-container" transform="translate(-114.609375, 115.109375)"/><g class="label" style="" transform="translate(-88.109375, -12)"><rect/><foreignObject width="176.21875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Jenkins build finishes?</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-G-11" data-look="classic" transform="translate(121.1796875, 1590.828125)"><rect class="basic label-container" style="" x="-88.5390625" y="-27" width="177.078125" height="54"/><g class="label" style="" transform="translate(-58.5390625, -12)"><rect/><foreignObject width="117.078125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>status = failed</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-H-13" data-look="classic" transform="translate(356.890625, 1181.921875)"><rect class="basic label-container" style="" x="-97.2421875" y="-27" width="194.484375" height="54"/><g class="label" style="" transform="translate(-67.2421875, -12)"><rect/><foreignObject width="134.484375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>status = running</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-I-17" data-look="classic" transform="translate(356.890625, 1285.921875)"><rect class="basic label-container" style="" x="-72.765625" y="-27" width="145.53125" height="54"/><g class="label" style="" transform="translate(-42.765625, -12)"><rect/><foreignObject width="85.53125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>AI analysis</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-J-19" data-look="classic" transform="translate(356.890625, 1426.375)"><polygon points="63.453125,0 126.90625,-63.453125 63.453125,-126.90625 0,-63.453125" class="label-container" transform="translate(-62.953125, 63.453125)"/><g class="label" style="" transform="translate(-36.453125, -12)"><rect/><foreignObject width="72.90625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Success?</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-K-23" data-look="classic" transform="translate(378.7890625, 1590.828125)"><rect class="basic label-container" style="" x="-108.8203125" y="-27" width="217.640625" height="54"/><g class="label" style="" transform="translate(-78.8203125, -12)"><rect/><foreignObject width="157.640625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>status = completed</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-L-25" data-look="classic" transform="translate(226.7421875, 1706.828125)"><rect class="basic label-container" style="" x="-124.09375" y="-27" width="248.1875" height="54"/><g class="label" style="" transform="translate(-94.09375, -12)"><rect/><foreignObject width="188.1875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Populate failure_history</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-M-27" data-look="classic" transform="translate(530.8359375, 1706.828125)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Make classifications visible</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-N-28" data-look="classic" transform="translate(637.82421875, 35)"><rect class="basic label-container" style="" x="-85.4453125" y="-27" width="170.890625" height="54"/><g class="label" style="" transform="translate(-55.4453125, -12)"><rect/><foreignObject width="110.890625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Server restart</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-O-29" data-look="classic" transform="translate(637.82421875, 192.3515625)"><polygon points="80.3515625,0 160.703125,-80.3515625 80.3515625,-160.703125 0,-80.3515625" class="label-container" transform="translate(-79.8515625, 80.3515625)"/><g class="label" style="" transform="translate(-53.3515625, -12)"><rect/><foreignObject width="106.703125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Stored status</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-P-31" data-look="classic" transform="translate(539.4921875, 521.703125)"><rect class="basic label-container" style="" x="-74.4375" y="-27" width="148.875" height="54"/><g class="label" style="" transform="translate(-44.4375, -12)"><rect/><foreignObject width="88.875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Mark failed</p></span></div></foreignObject></g></g><g class="node default" id="my-svg-flowchart-Q-33" data-look="classic" transform="translate(864.30859375, 521.703125)"><rect class="basic label-container" style="" x="-108.53125" y="-27" width="217.0625" height="54"/><g class="label" style="" transform="translate(-78.53125, -12)"><rect/><foreignObject width="157.0625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Resume waiting job</p></span></div></foreignObject></g></g></g></g></g><defs><filter id="my-svg-drop-shadow" height="130%" width="130%"><feDropShadow dx="4" dy="4" stdDeviation="0" flood-opacity="0.06" flood-color="#000000"/></filter></defs><defs><filter id="my-svg-drop-shadow-small" height="150%" width="150%"><feDropShadow dx="2" dy="2" stdDeviation="0" flood-opacity="0.06" flood-color="#000000"/></filter></defs></svg></div>
+
+<p>A few user-visible details are worth knowing:</p>
+<ul>
+<li>JJI stores the row before background work starts, so the job is visible immediately in the UI, API, and CLI.</li>
+<li>While a job is active, JJI also stores progress phases like <code>waiting_for_jenkins</code>, <code>analyzing</code>, <code>enriching_jira</code>, and <code>saving</code>.</li>
+<li>Because those progress entries are stored in the result payload, refreshing <code>/status/{job_id}</code> does not lose the step history.</li>
+<li>When a job reaches <code>completed</code>, JJI flattens top-level and child-job failures into <code>failure_history</code>, which is what powers history and trend views.</li>
+<li>On startup, JJI backfills missing <code>failure_history</code> rows from older completed results.</li>
+</ul>
+<h2 id="what-survives-a-restart">What Survives a Restart</h2>
+<p>Completed data survives because it is stored in SQLite, not kept only in memory.</p>
+<p>In-progress work is handled differently. On startup, JJI deliberately marks <code>pending</code> and <code>running</code> jobs as failed, because their original background tasks are gone:</p>
 <div class="highlight"><pre><span></span><code><span class="n">cursor</span> <span class="o">=</span> <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
     <span class="s2">&quot;UPDATE results SET status = &#39;failed&#39; &quot;</span>
     <span class="s2">&quot;WHERE status IN (&#39;pending&#39;, &#39;running&#39;)&quot;</span>
 <span class="p">)</span>
+</code></pre></div>
 
-<span class="n">cursor</span> <span class="o">=</span> <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+<p><code>waiting</code> jobs are special. JJI tries to resume them by reading the stored request parameters:</p>
+<div class="highlight"><pre><span></span><code><span class="n">cursor</span> <span class="o">=</span> <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
     <span class="s2">&quot;SELECT job_id, result_json FROM results WHERE status = &#39;waiting&#39;&quot;</span>
 <span class="p">)</span>
-<span class="n">rows</span> <span class="o">=</span> <span class="k">await</span> <span class="n">cursor</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()</span>
-<span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;result_json&quot;</span><span class="p">]:</span>
-        <span class="n">result_data</span> <span class="o">=</span> <span class="n">parse_result_json</span><span class="p">(</span>
-            <span class="n">row</span><span class="p">[</span><span class="s2">&quot;result_json&quot;</span><span class="p">],</span> <span class="n">job_id</span><span class="o">=</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;job_id&quot;</span><span class="p">]</span>
-        <span class="p">)</span>
-        <span class="n">stored_params</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">result_data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;request_params&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="n">result_data</span> <span class="k">else</span> <span class="kc">None</span>
-        <span class="p">)</span>
-        <span class="n">is_resumable</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">result_data</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">stored_params</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span>
-            <span class="ow">and</span> <span class="nb">bool</span><span class="p">(</span><span class="n">stored_params</span><span class="p">)</span>
-            <span class="ow">and</span> <span class="s2">&quot;job_name&quot;</span> <span class="ow">in</span> <span class="n">result_data</span>
-            <span class="ow">and</span> <span class="s2">&quot;build_number&quot;</span> <span class="ow">in</span> <span class="n">result_data</span>
-        <span class="p">)</span>
-        <span class="k">if</span> <span class="n">is_resumable</span><span class="p">:</span>
-            <span class="n">waiting_jobs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                <span class="p">{</span><span class="s2">&quot;job_id&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;job_id&quot;</span><span class="p">],</span> <span class="s2">&quot;result_data&quot;</span><span class="p">:</span> <span class="n">result_data</span><span class="p">}</span>
-            <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
-                <span class="s2">&quot;UPDATE results SET status = &#39;failed&#39; WHERE job_id = ?&quot;</span><span class="p">,</span>
-                <span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;job_id&quot;</span><span class="p">],),</span>
-            <span class="p">)</span>
 </code></pre></div>
 
-<p>When a <code>waiting</code> job is resumed, JJI subtracts the already-elapsed wait time from <code>MAX_WAIT_MINUTES</code>. If the deadline already passed while the service was down, the resumed job is marked <code>failed</code> immediately.</p>
-<div class="highlight"><pre><span></span><code><span class="n">raw_wait_started_at</span> <span class="o">=</span> <span class="n">params</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;wait_started_at&quot;</span><span class="p">)</span>
-<span class="n">wait_started_at</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-<span class="k">if</span> <span class="n">raw_wait_started_at</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">try</span><span class="p">:</span>
-        <span class="n">wait_started_at</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">raw_wait_started_at</span><span class="p">)</span>
-    <span class="k">except</span> <span class="p">(</span><span class="ne">TypeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">):</span>
-        <span class="k">await</span> <span class="n">_fail_resumed_waiting_job</span><span class="p">(</span>
-            <span class="n">job</span><span class="p">[</span><span class="s2">&quot;job_id&quot;</span><span class="p">],</span>
-            <span class="n">result_data</span><span class="p">,</span>
-            <span class="sa">f</span><span class="s2">&quot;Cannot resume: malformed wait_started_at value: </span><span class="si">{</span><span class="n">raw_wait_started_at</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="k">continue</span>
-
-<span class="k">if</span> <span class="n">merged</span><span class="o">.</span><span class="n">max_wait_minutes</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">wait_started_at</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="n">elapsed_minutes</span> <span class="o">=</span> <span class="p">(</span><span class="n">_time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">wait_started_at</span><span class="p">)</span> <span class="o">/</span> <span class="mi">60</span>
-    <span class="n">remaining</span> <span class="o">=</span> <span class="n">merged</span><span class="o">.</span><span class="n">max_wait_minutes</span> <span class="o">-</span> <span class="n">elapsed_minutes</span>
-    <span class="k">if</span> <span class="n">remaining</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">await</span> <span class="n">_fail_resumed_waiting_job</span><span class="p">(</span>
-            <span class="n">job</span><span class="p">[</span><span class="s2">&quot;job_id&quot;</span><span class="p">],</span>
-            <span class="n">result_data</span><span class="p">,</span>
-            <span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Timed out waiting for Jenkins job &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">result_data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;job_name&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2"> #</span><span class="si">{</span><span class="n">result_data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;build_number&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2"> &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;after </span><span class="si">{</span><span class="n">merged</span><span class="o">.</span><span class="n">max_wait_minutes</span><span class="si">}</span><span class="s2"> minutes (deadline passed during restart)&quot;</span>
-            <span class="p">),</span>
-        <span class="p">)</span>
-        <span class="k">continue</span>
-</code></pre></div>
-
-<h2 id="result-route-and-browser-behavior">Result Route and Browser Behavior</h2>
-<p>The browser-facing report path is now <code>/results/{job_id}</code>. There is no separate <code>.html</code> endpoint and no on-disk HTML cache. Instead, JJI uses content negotiation on the same route: browsers get the React app, while API clients get JSON.</p>
-<div class="highlight"><pre><span></span><code><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/results/</span><span class="si">{job_id}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">response_model</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">get_job_result</span><span class="p">(</span><span class="n">request</span><span class="p">:</span> <span class="n">Request</span><span class="p">,</span> <span class="n">job_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">response</span><span class="p">:</span> <span class="n">Response</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Retrieve stored result by job_id, or serve SPA for browser requests.&quot;&quot;&quot;</span>
-    <span class="c1"># Content negotiation: browsers requesting HTML get the SPA</span>
-    <span class="n">accept</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;accept&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
-    <span class="k">if</span> <span class="s2">&quot;text/html&quot;</span> <span class="ow">in</span> <span class="n">accept</span> <span class="ow">and</span> <span class="s2">&quot;application/json&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">accept</span><span class="p">:</span>
-        <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">get_result</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">result</span> <span class="ow">and</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
-            <span class="k">return</span> <span class="n">RedirectResponse</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;/status/</span><span class="si">{</span><span class="n">job_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">status_code</span><span class="o">=</span><span class="mi">302</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">_serve_spa</span><span class="p">()</span>
-
-    <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;GET /results/</span><span class="si">{</span><span class="n">job_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<p>If the stored payload is incomplete or unusable, that waiting job is also marked <code>failed</code> instead of being resumed.</p>
+<blockquote>
+<p><strong>Warning:</strong> <code>pending</code> and <code>running</code> jobs are not resumed after a restart. Only <code>waiting</code> jobs are candidates for recovery.</p>
+<p><strong>Warning:</strong> Waiting-job recovery depends on the stored request parameters remaining readable. If you change the encryption key used for stored secrets, a previously waiting job may fail instead of resuming.</p>
+</blockquote>
+<h2 id="report-urls-and-html-behavior">Report URLs and HTML Behavior</h2>
+<p>The report route is <code>/results/{job_id}</code>. That same path serves two different use cases:</p>
+<ul>
+<li>Browser navigation: JJI serves the React app</li>
+<li>API or CLI access: JJI returns JSON from SQLite</li>
+</ul>
+<p>The backend decides which behavior to use through content negotiation:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="s2">&quot;text/html&quot;</span> <span class="ow">in</span> <span class="n">accept</span> <span class="ow">and</span> <span class="s2">&quot;application/json&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">accept</span><span class="p">:</span>
     <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">get_result</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">result</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="n">HTTPException</span><span class="p">(</span><span class="n">status_code</span><span class="o">=</span><span class="mi">404</span><span class="p">,</span> <span class="n">detail</span><span class="o">=</span><span class="s2">&quot;Job not found&quot;</span><span class="p">)</span>
-    <span class="n">_attach_result_links</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">_extract_base_url</span><span class="p">(),</span> <span class="n">job_id</span><span class="p">)</span>
-    <span class="n">settings</span> <span class="o">=</span> <span class="n">get_settings</span><span class="p">()</span>
-    <span class="n">result</span><span class="p">[</span><span class="s2">&quot;capabilities&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;github_issues&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">github_issues_enabled</span><span class="p">,</span>
-        <span class="s2">&quot;jira_bugs&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">jira_enabled</span><span class="p">,</span>
-    <span class="p">}</span>
-    <span class="k">if</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
-        <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">=</span> <span class="mi">202</span>
-    <span class="k">return</span> <span class="n">result</span>
+    <span class="k">if</span> <span class="n">result</span> <span class="ow">and</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">RedirectResponse</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;/status/</span><span class="si">{</span><span class="n">job_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">status_code</span><span class="o">=</span><span class="mi">302</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">_serve_spa</span><span class="p">()</span>
+
+<span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">get_result</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
+    <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">=</span> <span class="mi">202</span>
 </code></pre></div>
 
-<p>When a browser opens an in-progress job, the backend sends it to <code>/status/{job_id}</code>. That page polls the JSON result endpoint until the job completes, then returns the user to the report route.</p>
-<div class="highlight"><pre><span></span><code>async function poll() {
-  if (inFlight || cancelled) return
-  inFlight = true
-  try {
-    const res = await api.get&lt;ResultResponse&gt;(`/results/${jobId}`)
-    if (cancelled) return
-    setError(&#39;&#39;)
-    setData(res)
-    if (res.status === &#39;completed&#39;) {
-      stopPolling()
-      navigate(`/results/${jobId}`, { replace: true })
-    } else if (res.status === &#39;failed&#39;) {
-      stopPolling()
-      setTerminalErrorKind(&#39;failed&#39;)
-      setError(res.result?.error ?? &#39;Analysis failed&#39;)
-    }
+<p>This has a few practical consequences:</p>
+<ul>
+<li>If a browser opens an in-progress result, JJI sends it to <code>/status/{job_id}</code>.</li>
+<li>If a script, API client, or <code>jji</code> requests the same job as JSON, it gets the stored row from SQLite.</li>
+<li>In-progress JSON responses return HTTP <code>202</code>, which makes them easy to poll.</li>
+</ul>
+<p>The frontend status page then polls the same stored result until it finishes:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">POLL_MS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">10</span><span class="nx">_000</span>
+
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;completed&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">stopPolling</span><span class="p">()</span>
+<span class="w">  </span><span class="nx">navigate</span><span class="p">(</span><span class="sb">`/results/</span><span class="si">${</span><span class="nx">jobId</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">replace</span><span class="o">:</span><span class="w"> </span><span class="kt">true</span><span class="w"> </span><span class="p">})</span>
+<span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;failed&#39;</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">stopPolling</span><span class="p">()</span>
+<span class="w">  </span><span class="nx">setTerminalErrorKind</span><span class="p">(</span><span class="s1">&#39;failed&#39;</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">setError</span><span class="p">(</span><span class="nx">res</span><span class="p">.</span><span class="nx">result</span><span class="o">?</span><span class="p">.</span><span class="nx">error</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s1">&#39;Analysis failed&#39;</span><span class="p">)</span>
+<span class="p">}</span>
 </code></pre></div>
 
+<h2 id="html-report-caching">HTML Report Caching</h2>
+<p>JJI does not cache per-job HTML report files. Instead:</p>
+<ul>
+<li>the app shell comes from the built React frontend</li>
+<li>the report content comes from live API reads against SQLite</li>
+</ul>
+<p>That means there is no separate report artifact to invalidate when data changes. Comments, review toggles, classifications, and history-related updates are persisted in SQLite and shown the next time the UI fetches the latest data.</p>
+<p>This is why the report experience stays current without a "rebuild report" step:</p>
+<ul>
+<li>the browser report page loads the stored result from <code>/results/{job_id}</code></li>
+<li>comments and reviews are loaded from <code>/results/{job_id}/comments</code></li>
+<li>dashboard rows are built from SQLite via <code>/api/dashboard</code></li>
+</ul>
 <blockquote>
-<p><strong>Tip:</strong> API responses now include <code>result_url</code> instead of <code>html_report_url</code>. If <code>PUBLIC_BASE_URL</code> is unset, that link is intentionally relative, for example <code>/results/{job_id}</code>.</p>
+<p><strong>Note:</strong> The static frontend assets are built once, but individual analysis reports are not stored as standalone HTML files. A report is rendered from the latest stored data each time it is opened.</p>
 </blockquote>
-<h2 id="cleanup">Cleanup</h2>
-<p>Because there is no filesystem report cache anymore, JJI does not need a cache invalidation step when comments, review state, or classifications change. Those updates live in SQLite and are reflected the next time the UI fetches the latest result and comment data.</p>
-<p>When you delete a job, JJI removes the stored result and its related database records. There is no cached report file to clean up.</p>
-<div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">delete_job</span><span class="p">(</span><span class="n">job_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Delete an analyzed job and all its related data.&quot;&quot;&quot;</span>
-    <span class="k">async</span> <span class="k">with</span> <span class="n">aiosqlite</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">DB_PATH</span><span class="p">)</span> <span class="k">as</span> <span class="n">db</span><span class="p">:</span>
-        <span class="c1"># Delete from all related tables</span>
-        <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;DELETE FROM comments WHERE job_id = ?&quot;</span><span class="p">,</span> <span class="p">(</span><span class="n">job_id</span><span class="p">,))</span>
-        <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;DELETE FROM failure_reviews WHERE job_id = ?&quot;</span><span class="p">,</span> <span class="p">(</span><span class="n">job_id</span><span class="p">,))</span>
-        <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;DELETE FROM failure_history WHERE job_id = ?&quot;</span><span class="p">,</span> <span class="p">(</span><span class="n">job_id</span><span class="p">,))</span>
-        <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;DELETE FROM test_classifications WHERE job_id = ?&quot;</span><span class="p">,</span> <span class="p">(</span><span class="n">job_id</span><span class="p">,))</span>
-        <span class="n">cursor</span> <span class="o">=</span> <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;DELETE FROM results WHERE job_id = ?&quot;</span><span class="p">,</span> <span class="p">(</span><span class="n">job_id</span><span class="p">,))</span>
-        <span class="n">job_existed</span> <span class="o">=</span> <span class="n">cursor</span><span class="o">.</span><span class="n">rowcount</span> <span class="o">&gt;</span> <span class="mi">0</span>
-        <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">commit</span><span class="p">()</span>
-
-        <span class="k">return</span> <span class="n">job_existed</span>
+<p>If you want links returned by the API to be absolute instead of relative, set <code>PUBLIC_BASE_URL</code>. When it is not set, JJI intentionally returns relative links such as <code>/results/{job_id}</code>.</p>
+<blockquote>
+<p><strong>Tip:</strong> Set <code>PUBLIC_BASE_URL</code> when JJI sits behind a reverse proxy or external hostname and you want shareable absolute <code>result_url</code> values in API responses and issue previews.</p>
+</blockquote>
+<h2 id="deletion-and-cleanup">Deletion and Cleanup</h2>
+<p>Deleting a job removes the stored result and all related database records for that <code>job_id</code>, including comments, review state, classifications, and failure history.</p>
+<p>Because the report is derived from SQLite data, cleanup is straightforward: once those database rows are gone, the report is gone too.</p>
+<h2 id="useful-commands">Useful Commands</h2>
+<p>If you want to inspect stored lifecycle data from the CLI, these are the main commands:</p>
+<div class="highlight"><pre><span></span><code>jji<span class="w"> </span>status<span class="w"> </span>&lt;job_id&gt;
+jji<span class="w"> </span>results<span class="w"> </span>show<span class="w"> </span>&lt;job_id&gt;
+jji<span class="w"> </span>results<span class="w"> </span>dashboard
 </code></pre></div>
 
-<blockquote>
-<p><strong>Warning:</strong> Deleting a job removes the stored JSON result, related comments, reviews, failure history, and classifications. There is no separate cached report artifact to keep.</p>
-</blockquote>
-<h2 id="historical-failure-data">Historical Failure Data</h2>
-<p>Completed analyses are also flattened into <code>failure_history</code>, which powers the History UI and history-related API queries. On startup, the service backfills missing history rows from older completed results, so existing completed analyses can still appear in history after upgrades or schema changes.</p>
-<blockquote>
-<p><strong>Note:</strong> Only completed results are backfilled into historical failure data. Jobs in <code>waiting</code>, <code>pending</code>, <code>running</code>, or <code>failed</code> states are not treated as historical runs.</p>
-</blockquote>
+<p>Use <code>jji status</code> when you only care about the current state, <code>jji results show</code> when you want the stored result payload, and <code>jji results dashboard</code> when you want the persisted run list with summary metadata.</p>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="#">Results, Reports, and Dashboard Endpoints</a></li>
+<li><a href="#">HTML Reports and Dashboard</a></li>
+<li><a href="#">Architecture and Project Structure</a></li>
+<li><a href="#">Pipeline Analysis and Failure Deduplication</a></li>
+<li><a href="#">Reverse Proxy and Base URL Handling</a></li>
+</ul>
                 </div>
             </article>
             <nav class="page-nav">
@@ -607,12 +547,16 @@
                     <h3>On this page</h3>
                     <div class="toc">
 <ul>
-<li><a href="#default-storage-locations">Default Storage Locations</a></li>
-<li><a href="#what-gets-stored">What Gets Stored</a></li>
-<li><a href="#result-state-lifecycle">Result State Lifecycle</a></li>
-<li><a href="#result-route-and-browser-behavior">Result Route and Browser Behavior</a></li>
-<li><a href="#cleanup">Cleanup</a></li>
-<li><a href="#historical-failure-data">Historical Failure Data</a></li>
+<li><a href="#quick-reference">Quick Reference</a></li>
+<li><a href="#where-jji-stores-data">Where JJI Stores Data</a></li>
+<li><a href="#result-states">Result States</a></li>
+<li><a href="#end-to-end-lifecycle">End-to-End Lifecycle</a></li>
+<li><a href="#what-survives-a-restart">What Survives a Restart</a></li>
+<li><a href="#report-urls-and-html-behavior">Report URLs and HTML Behavior</a></li>
+<li><a href="#html-report-caching">HTML Report Caching</a></li>
+<li><a href="#deletion-and-cleanup">Deletion and Cleanup</a></li>
+<li><a href="#useful-commands">Useful Commands</a></li>
+<li><a href="#related-pages">Related Pages</a></li>
 </ul>
 </div>
 
@@ -623,9 +567,13 @@
         </main>
 
         <footer class="page-footer">
+            
+            <span class="footer-version">Generated from version 2.1.0</span>
+            <span class="footer-sep">&middot;</span>
+            
             Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
-            <span class="footer-sep">·</span>
-            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+            <span class="footer-sep">&middot;</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> &middot; <a href="llms-full.txt">llms-full.txt</a></span>
         </footer>
     </div>
 

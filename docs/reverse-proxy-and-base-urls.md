@@ -14,7 +14,7 @@ The simplest production setup is:
 
 JJI no longer calculates `base_url` from `Host` or `X-Forwarded-*` request headers. The current implementation trusts only the server-side `PUBLIC_BASE_URL` setting. When that setting is unset, JJI returns an empty `base_url` and builds relative links instead of guessing from request metadata.
 
-```105:109:src/jenkins_job_insight/config.py
+```144:148:src/jenkins_job_insight/config.py
 # Trusted public base URL — used for result_url and tracker links.
 # When set, _extract_base_url() returns this value verbatim.
 # When unset, _extract_base_url() returns an empty string (relative
@@ -22,7 +22,7 @@ JJI no longer calculates `base_url` from `Host` or `X-Forwarded-*` request heade
 public_base_url: str | None = None
 ```
 
-```143:161:src/jenkins_job_insight/main.py
+```146:164:src/jenkins_job_insight/main.py
 def _extract_base_url() -> str:
     settings = get_settings()
     if settings.public_base_url:
@@ -50,7 +50,7 @@ The tests in `tests/test_main.py` cover both branches: `PUBLIC_BASE_URL` wins wh
 
 JJI now attaches only `base_url` and `result_url` to API responses. There is no separate `html_report_url` field anymore. The canonical browser/API report route is `/results/{job_id}`.
 
-```198:203:src/jenkins_job_insight/main.py
+```201:206:src/jenkins_job_insight/main.py
 def _attach_result_links(payload: dict, base_url: str, job_id: str) -> dict:
     payload["base_url"] = base_url
     result_url = f"{base_url}/results/{job_id}"
@@ -66,7 +66,7 @@ That gives you:
 
 Browsers and JSON clients share the same `GET /results/{job_id}` endpoint. Browsers get the React app, and in-progress jobs are redirected to `/status/{job_id}`:
 
-```1224:1247:src/jenkins_job_insight/main.py
+```1332:1347:src/jenkins_job_insight/main.py
 @app.get("/results/{job_id}", response_model=None)
 async def get_job_result(request: Request, job_id: str, response: Response):
     accept = request.headers.get("accept", "")
@@ -85,7 +85,7 @@ Other report links follow the same pattern:
 - otherwise the report link included in those previews falls back to `/results/{job_id}`
 - enriched JUnit XML writes a `report_url` property on the first `testsuite`
 
-```164:195:src/jenkins_job_insight/main.py
+```167:193:src/jenkins_job_insight/main.py
 def _build_report_context(
     include_links: bool,
     base_url: str,
@@ -182,3 +182,12 @@ In practice, that means:
 - Your proxy sends `X-Forwarded-Proto` and `X-Forwarded-Host`, but the returned links do not change: expected. JJI ignores forwarded headers for public link construction.
 - Enriched XML or bug previews contain a relative report link: `PUBLIC_BASE_URL` is unset, or a preview request used `include_links=false`.
 - A `/jji` or other prefixed deployment loads inconsistently, refreshes to 404, or misses assets: the frontend is still built for `/`, so the proxy is not rewriting the prefix in a way the SPA can use.
+
+
+## Related Pages
+
+- [Container Deployment](container-deployment.html)
+- [Results, Reports, and Dashboard Endpoints](api-results-and-dashboard.html)
+- [Storage and Result Lifecycle](storage-and-result-lifecycle.html)
+- [HTML Reports and Dashboard](html-reports-and-dashboard.html)
+- [Troubleshooting](troubleshooting.html)

@@ -168,3 +168,12 @@ In day-to-day use, the simplest way to think about it is:
 > **Tip:** Put long-lived project rules in `JOB_INSIGHT_PROMPT.md`, and reserve `raw_prompt` for temporary, incident-specific, or experiment-specific guidance.
 
 > **Warning:** A `JOB_INSIGHT_PROMPT.md` file in a subdirectory will not be discovered automatically. The lookup is for the cloned repo root only.
+
+
+## Related Pages
+
+- [Analyze Jenkins Jobs](analyze-jenkins-jobs.html)
+- [Analyze Raw Failures and JUnit XML](direct-failure-analysis.html)
+- [Configuration Reference](configuration-reference.html)
+- [Pipeline Analysis and Failure Deduplication](pipeline-analysis-and-failure-deduplication.html)
+- [Architecture and Project Structure](architecture-and-project-structure.html)

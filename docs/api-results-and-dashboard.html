@@ -262,7 +262,7 @@
                     ⚡ docs<span class="brand-accent">fy</span>
                 </a>
                 
-                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                <a href="https://github.com/myk-org/jenkins-job-insight.git" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight.git">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
                     <span class="github-stars" id="github-stars"></span>
                 </a>
@@ -287,99 +287,99 @@
                          user-supplied input. XSS risk is minimal and accepted since
                          the AI generates the content, not end users. -->
                     <h1 id="results-reports-and-dashboard-endpoints">Results, Reports, and Dashboard Endpoints</h1>
-<p>These endpoints are where you read and browse analysis output after a job has been submitted. Use <code>/health</code> for probes, <code>/results</code> for a lightweight recent-jobs list, <code>/results/{job_id}</code> for full JSON retrieval, <code>/status/{job_id}</code> for the in-browser waiting screen, and <code>/dashboard</code> or <code>/</code> for the React dashboard. The browser UI is now a single-page app, so <code>/dashboard</code> and <code>/results/{job_id}</code> load the frontend shell and then call supporting JSON endpoints.</p>
-<p>Use <code>/results</code>, <code>/results/{job_id}</code>, and <code>/api/dashboard</code> for automation. Use <code>/</code>, <code>/dashboard</code>, <code>/results/{job_id}</code>, and <code>/status/{job_id}</code> when a human is browsing results in a browser.</p>
-<h2 id="quick-reference">Quick Reference</h2>
+<p><code>jenkins-job-insight</code> serves results in two layers:</p>
+<ul>
+<li>JSON endpoints for scripts, integrations, and the <code>jji</code> CLI</li>
+<li>Browser routes for the built-in React UI</li>
+</ul>
+<p>The key path is <code>GET /results/{job_id}</code>. It is intentionally dual-purpose: API-style requests get JSON, while browser-style HTML requests open the interactive report page.</p>
+<blockquote>
+<p><strong>Note:</strong> Browser navigation without a <code>jji_username</code> cookie is redirected to <code>/register</code>. JSON clients are not redirected, and that cookie is used for attribution in the UI rather than full authentication.</p>
+</blockquote>
+<h2 id="at-a-glance">At a Glance</h2>
 <table>
 <thead>
 <tr>
-<th>Endpoint</th>
-<th>Response type</th>
-<th>Best for</th>
+<th>Route</th>
+<th>Type</th>
+<th>Use it when you want to...</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>GET /health</code></td>
 <td>JSON</td>
-<td>Liveness and readiness checks</td>
+<td>Probe the service or verify it is up</td>
 </tr>
 <tr>
 <td><code>GET /results</code></td>
 <td>JSON array</td>
-<td>Listing recent jobs without loading full result payloads</td>
+<td>List recent analyses quickly</td>
 </tr>
 <tr>
 <td><code>GET /results/{job_id}</code></td>
-<td>JSON object for API clients, SPA route for browsers</td>
-<td>Full result retrieval and the browser report route</td>
-</tr>
-<tr>
-<td><code>GET /status/{job_id}</code></td>
-<td>SPA route</td>
-<td>Watching queued, waiting, or running jobs in a browser</td>
+<td>JSON or browser route</td>
+<td>Fetch one full result or open the report page</td>
 </tr>
 <tr>
 <td><code>GET /api/dashboard</code></td>
 <td>JSON array</td>
-<td>Dashboard data for the React UI, CLI, or custom tooling</td>
+<td>Get the dashboard summary feed</td>
 </tr>
 <tr>
 <td><code>GET /dashboard</code></td>
-<td>SPA route</td>
-<td>Opening the dashboard in a browser</td>
+<td>Browser route</td>
+<td>Open the dashboard in a browser</td>
+</tr>
+<tr>
+<td><code>GET /status/{job_id}</code></td>
+<td>Browser route</td>
+<td>Watch a queued or running analysis</td>
 </tr>
 </tbody>
 </table>
-<h2 id="url-generation-and-browser-behavior">URL Generation and Browser Behavior</h2>
-<p>The service no longer trusts <code>Host</code> or <code>X-Forwarded-*</code> headers when building public links. Instead, <code>base_url</code> and <code>result_url</code> are derived only from <code>PUBLIC_BASE_URL</code>. If that setting is not configured, the API returns an empty <code>base_url</code> and relative links such as <code>/results/{job_id}</code>.</p>
-<p>Codebase example:</p>
-<div class="highlight"><pre><span></span><code><span class="n">settings</span> <span class="o">=</span> <span class="n">get_settings</span><span class="p">()</span>
-<span class="k">if</span> <span class="n">settings</span><span class="o">.</span><span class="n">public_base_url</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">settings</span><span class="o">.</span><span class="n">public_base_url</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code>flowchart TD
+    A[Automation or jji CLI] --&gt; B[GET /health]
+    A --&gt; C[GET /results]
+    A --&gt; D[GET /results/{job_id}]
+    A --&gt; E[GET /api/dashboard]
 
-<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
-    <span class="s2">&quot;PUBLIC_BASE_URL is not set; returning empty base URL (relative paths)&quot;</span>
-<span class="p">)</span>
-<span class="k">return</span> <span class="s2">&quot;&quot;</span>
+    F[Browser opens / or /dashboard] --&gt; G[React SPA]
+    G --&gt; E
+
+    H[Browser opens /results/{job_id}] --&gt; I{Job still active?}
+    I -- Yes --&gt; J[/status/{job_id}/]
+    J --&gt; D
+    I -- No --&gt; K[Report SPA]
+    K --&gt; D
+    K --&gt; L[GET /results/{job_id}/comments]
+    K --&gt; M[POST /results/{job_id}/enrich-comments]
+    K --&gt; N[GET /ai-configs]
 </code></pre></div>
 
-<blockquote>
-<p><strong>Tip:</strong> If you want absolute <code>result_url</code> values or clickable tracker links in issue previews, set <code>PUBLIC_BASE_URL</code>. Reverse-proxy headers alone are no longer enough.</p>
-</blockquote>
-<p>Browser routes still keep the lightweight username flow. HTML requests without a <code>jji_username</code> cookie are redirected to <code>/register</code>, while <code>/health</code>, <code>/favicon.ico</code>, <code>/api/*</code>, and <code>/assets/*</code> remain accessible without that cookie.</p>
-<blockquote>
-<p><strong>Note:</strong> The <code>jji_username</code> cookie is still a UI convenience on a trusted network, not a full authentication boundary.</p>
-</blockquote>
 <h2 id="get-health">GET <code>/health</code></h2>
-<p>Use this endpoint for health checks, readiness probes, and simple smoke tests.</p>
+<p>Use this endpoint for liveness checks, readiness checks, smoke tests, and simple monitoring.</p>
 <p>What to expect:</p>
 <ul>
 <li><code>200 OK</code> with <code>{"status": "healthy"}</code></li>
 <li><code>GET</code> only</li>
 <li>No username cookie required</li>
-<li>Safe for container and orchestrator probes</li>
+<li>Safe for container and load-balancer probes</li>
 </ul>
-<p>Example from the test suite:</p>
-<div class="highlight"><pre><span></span><code><span class="n">response</span> <span class="o">=</span> <span class="n">test_client</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/health&quot;</span><span class="p">)</span>
-<span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span>
-<span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">json</span><span class="p">()</span> <span class="o">==</span> <span class="p">{</span><span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;healthy&quot;</span><span class="p">}</span>
-</code></pre></div>
-
-<p>The container image also uses <code>/health</code> for its built-in health check:</p>
+<p>The container image uses this same route for its built-in health check:</p>
 <div class="highlight"><pre><span></span><code><span class="k">HEALTHCHECK</span><span class="w"> </span>--interval<span class="o">=</span>30s<span class="w"> </span>--timeout<span class="o">=</span>5s<span class="w"> </span>--start-period<span class="o">=</span>10s<span class="w"> </span>--retries<span class="o">=</span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>CMD<span class="w"> </span>curl<span class="w"> </span>-f<span class="w"> </span>http://localhost:<span class="si">${</span><span class="nv">PORT</span><span class="k">:-</span><span class="nv">8000</span><span class="si">}</span>/health<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
 </code></pre></div>
 
 <h2 id="get-results">GET <code>/results</code></h2>
-<p>Use <code>/results</code> when you want a fast, lightweight list of recent analyses. It is intentionally small and does not return the full stored result payload.</p>
+<p>Use <code>GET /results</code> when you want a lightweight list of recent analysis jobs without loading the full stored payload for each one.</p>
 <p>Query parameters:</p>
 <table>
 <thead>
 <tr>
 <th>Parameter</th>
 <th>Default</th>
-<th>Limits</th>
+<th>Limit</th>
 <th>Meaning</th>
 </tr>
 </thead>
@@ -387,42 +387,19 @@
 <tr>
 <td><code>limit</code></td>
 <td><code>50</code></td>
-<td>Maximum <code>100</code></td>
+<td>max <code>100</code></td>
 <td>Number of recent jobs to return</td>
 </tr>
 </tbody>
 </table>
-<p>Response fields for each item:</p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>job_id</code></td>
-<td>Analysis job ID</td>
-</tr>
-<tr>
-<td><code>jenkins_url</code></td>
-<td>Jenkins build URL when the analysis came from Jenkins</td>
-</tr>
-<tr>
-<td><code>status</code></td>
-<td><code>waiting</code>, <code>pending</code>, <code>running</code>, <code>completed</code>, or <code>failed</code></td>
-</tr>
-<tr>
-<td><code>created_at</code></td>
-<td>When the job record was created</td>
-</tr>
-</tbody>
-</table>
-<blockquote>
-<p><strong>Note:</strong> <code>waiting</code> means the service accepted the job and is polling Jenkins for build completion before AI analysis starts.</p>
-</blockquote>
-<p>The storage query shows exactly how small this endpoint is:</p>
+<p>Each item contains only:</p>
+<ul>
+<li><code>job_id</code></li>
+<li><code>jenkins_url</code></li>
+<li><code>status</code></li>
+<li><code>created_at</code></li>
+</ul>
+<p>That lightweight shape is enforced directly in storage:</p>
 <div class="highlight"><pre><span></span><code><span class="n">cursor</span> <span class="o">=</span> <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    SELECT job_id, jenkins_url, status, created_at</span>
@@ -438,194 +415,42 @@
 
 <p>Practical behavior:</p>
 <ul>
-<li>Results are ordered newest first by <code>created_at</code></li>
+<li>Results are ordered newest first</li>
 <li>An empty database returns <code>[]</code></li>
-<li>Requests above the max, such as <code>/results?limit=200</code>, are rejected with a <code>422</code> validation error</li>
+<li>Values above <code>limit=100</code> are rejected with <code>422</code></li>
 </ul>
 <blockquote>
-<p><strong>Tip:</strong> Reach for <code>/results</code> first in automation. If you need the actual analysis payload, follow up with <code>GET /results/{job_id}</code>.</p>
+<p><strong>Tip:</strong> Start with <code>GET /results</code> for polling or simple automation. Only call <code>GET /results/{job_id}</code> when you actually need the stored analysis body.</p>
 </blockquote>
 <h2 id="get-resultsjob_id">GET <code>/results/{job_id}</code></h2>
-<p>Use this endpoint when you need the stored JSON for one analysis job. API clients always get JSON. Browser requests that prefer HTML use this same path as the report route: the server serves the React app, and if the job is still in progress it redirects the browser to <code>/status/{job_id}</code> first.</p>
-<p>The core handler shows the split behavior:</p>
-<div class="highlight"><pre><span></span><code><span class="n">accept</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;accept&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
-<span class="k">if</span> <span class="s2">&quot;text/html&quot;</span> <span class="ow">in</span> <span class="n">accept</span> <span class="ow">and</span> <span class="s2">&quot;application/json&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">accept</span><span class="p">:</span>
+<p>This is the main results endpoint.</p>
+<p>For API clients, it returns the full stored wrapper for one job. For browser requests that prefer HTML, the same path opens the built-in report UI. If the job is still active, the browser is sent to <code>GET /status/{job_id}</code> first.</p>
+<p>The route handler shows that split behavior clearly:</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/results/</span><span class="si">{job_id}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">response_model</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">get_job_result</span><span class="p">(</span><span class="n">request</span><span class="p">:</span> <span class="n">Request</span><span class="p">,</span> <span class="n">job_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">response</span><span class="p">:</span> <span class="n">Response</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Retrieve stored result by job_id, or serve SPA for browser requests.&quot;&quot;&quot;</span>
+    <span class="n">accept</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">headers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;accept&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">&quot;text/html&quot;</span> <span class="ow">in</span> <span class="n">accept</span> <span class="ow">and</span> <span class="s2">&quot;application/json&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">accept</span><span class="p">:</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">get_result</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">result</span> <span class="ow">and</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">RedirectResponse</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;/status/</span><span class="si">{</span><span class="n">job_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">status_code</span><span class="o">=</span><span class="mi">302</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">_serve_spa</span><span class="p">()</span>
+
     <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">get_result</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">result</span> <span class="ow">and</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">RedirectResponse</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;/status/</span><span class="si">{</span><span class="n">job_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">status_code</span><span class="o">=</span><span class="mi">302</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">_serve_spa</span><span class="p">()</span>
-
-<span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">get_result</span><span class="p">(</span><span class="n">job_id</span><span class="p">)</span>
-<span class="k">if</span> <span class="ow">not</span> <span class="n">result</span><span class="p">:</span>
-    <span class="k">raise</span> <span class="n">HTTPException</span><span class="p">(</span><span class="n">status_code</span><span class="o">=</span><span class="mi">404</span><span class="p">,</span> <span class="n">detail</span><span class="o">=</span><span class="s2">&quot;Job not found&quot;</span><span class="p">)</span>
-<span class="n">_attach_result_links</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">_extract_base_url</span><span class="p">(),</span> <span class="n">job_id</span><span class="p">)</span>
-<span class="n">settings</span> <span class="o">=</span> <span class="n">get_settings</span><span class="p">()</span>
-<span class="n">result</span><span class="p">[</span><span class="s2">&quot;capabilities&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;github_issues&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">github_issues_enabled</span><span class="p">,</span>
-    <span class="s2">&quot;jira_bugs&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">jira_enabled</span><span class="p">,</span>
-<span class="p">}</span>
-<span class="k">if</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
-    <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">=</span> <span class="mi">202</span>
-<span class="k">return</span> <span class="n">result</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">result</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="n">HTTPException</span><span class="p">(</span><span class="n">status_code</span><span class="o">=</span><span class="mi">404</span><span class="p">,</span> <span class="n">detail</span><span class="o">=</span><span class="s2">&quot;Job not found&quot;</span><span class="p">)</span>
+    <span class="n">_attach_result_links</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">_extract_base_url</span><span class="p">(),</span> <span class="n">job_id</span><span class="p">)</span>
+    <span class="n">settings</span> <span class="o">=</span> <span class="n">get_settings</span><span class="p">()</span>
+    <span class="n">result</span><span class="p">[</span><span class="s2">&quot;capabilities&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;github_issues&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">github_issues_enabled</span><span class="p">,</span>
+        <span class="s2">&quot;jira_bugs&quot;</span><span class="p">:</span> <span class="n">settings</span><span class="o">.</span><span class="n">jira_enabled</span><span class="p">,</span>
+    <span class="p">}</span>
+    <span class="k">if</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;status&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="n">IN_PROGRESS_STATUSES</span><span class="p">:</span>
+        <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">=</span> <span class="mi">202</span>
+    <span class="k">return</span> <span class="n">result</span>
 </code></pre></div>
 
-<p>Top-level fields you should expect in the JSON response:</p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>job_id</code></td>
-<td>The analysis job ID</td>
-</tr>
-<tr>
-<td><code>jenkins_url</code></td>
-<td>Original Jenkins build URL, if any</td>
-</tr>
-<tr>
-<td><code>status</code></td>
-<td>Current job state: <code>waiting</code>, <code>pending</code>, <code>running</code>, <code>completed</code>, or <code>failed</code></td>
-</tr>
-<tr>
-<td><code>created_at</code></td>
-<td>When the job record was created</td>
-</tr>
-<tr>
-<td><code>analysis_started_at</code></td>
-<td>When analysis work actually started, if available</td>
-</tr>
-<tr>
-<td><code>completed_at</code></td>
-<td>When the job reached a terminal state, if available</td>
-</tr>
-<tr>
-<td><code>base_url</code></td>
-<td>Trusted public base URL from <code>PUBLIC_BASE_URL</code>, or <code>""</code> when unset</td>
-</tr>
-<tr>
-<td><code>result_url</code></td>
-<td>Canonical URL for this job result</td>
-</tr>
-<tr>
-<td><code>capabilities</code></td>
-<td>Feature flags such as <code>github_issues</code> and <code>jira_bugs</code></td>
-</tr>
-<tr>
-<td><code>result</code></td>
-<td>The stored analysis payload, if one has been persisted</td>
-</tr>
-</tbody>
-</table>
-<p>For Jenkins-backed analyses, <code>result</code> usually includes fields such as <code>job_name</code>, <code>build_number</code>, <code>summary</code>, <code>ai_provider</code>, <code>ai_model</code>, <code>failures</code>, and <code>child_job_analyses</code>. While a job is still <code>waiting</code> or <code>running</code>, the same payload can also include <code>request_params</code>, <code>progress_phase</code>, and <code>progress_log</code>. Those fields let JJI resume waiting jobs after a restart and let the status page show refresh-safe progress details.</p>
-<p>Sensitive values inside <code>request_params</code> are stripped before the response is returned. If peer analysis was used for a failure group, each affected failure can also include <code>peer_debate</code>, which records the participating AI configs, the round-by-round debate trail, and whether consensus was reached. Direct failure analyses created through <code>/analyze-failures</code> keep a smaller payload.</p>
-<p>Codebase examples:</p>
-<div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">get_result</span><span class="p">(</span><span class="n">job_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">strip_sensitive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="c1"># ... existing code ...</span>
-    <span class="n">parsed</span> <span class="o">=</span> <span class="n">parse_result_json</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;result_json&quot;</span><span class="p">],</span> <span class="n">job_id</span><span class="o">=</span><span class="n">job_id</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">parsed</span> <span class="ow">and</span> <span class="n">strip_sensitive</span><span class="p">:</span>
-        <span class="n">parsed</span> <span class="o">=</span> <span class="n">strip_sensitive_from_response</span><span class="p">(</span><span class="n">parsed</span><span class="p">)</span>
-</code></pre></div>
-
-<div class="highlight"><pre><span></span><code><span class="n">peer_debate</span> <span class="o">=</span> <span class="n">PeerDebate</span><span class="p">(</span>
-    <span class="n">consensus_reached</span><span class="o">=</span><span class="n">consensus_reached</span><span class="p">,</span>
-    <span class="n">rounds_used</span><span class="o">=</span><span class="n">rounds_used</span><span class="p">,</span>
-    <span class="n">max_rounds</span><span class="o">=</span><span class="n">max_rounds</span><span class="p">,</span>
-    <span class="n">ai_configs</span><span class="o">=</span><span class="p">[</span>
-        <span class="n">AiConfigEntry</span><span class="p">(</span>
-            <span class="n">ai_provider</span><span class="o">=</span><span class="n">main_ai_provider</span><span class="p">,</span>  <span class="c1"># type: ignore[arg-type]</span>
-            <span class="n">ai_model</span><span class="o">=</span><span class="n">main_ai_model</span><span class="p">,</span>
-        <span class="p">),</span>
-        <span class="o">*</span><span class="n">peer_ai_configs</span><span class="p">,</span>
-    <span class="p">],</span>
-    <span class="n">rounds</span><span class="o">=</span><span class="n">all_rounds</span><span class="p">,</span>
-<span class="p">)</span>
-</code></pre></div>
-
-<p>Example from the current test suite:</p>
-<div class="highlight"><pre><span></span><code><span class="n">response</span> <span class="o">=</span> <span class="n">test_client</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/results/job-123&quot;</span><span class="p">)</span>
-<span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span>
-<span class="n">data</span> <span class="o">=</span> <span class="n">response</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
-<span class="k">assert</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;job_id&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;job-123&quot;</span>
-<span class="k">assert</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;base_url&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;&quot;</span>
-<span class="k">assert</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;result_url&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;/results/job-123&quot;</span>
-</code></pre></div>
-
-<p>Important behavior:</p>
-<ul>
-<li>Missing jobs return <code>404</code></li>
-<li>In-progress JSON responses return <code>202 Accepted</code></li>
-<li>Browser requests for completed or failed jobs use this same route as the report page</li>
-<li>Browser requests for <code>waiting</code>, <code>pending</code>, or <code>running</code> jobs are redirected to <code>/status/{job_id}</code></li>
-<li>In a browser, the route loads the interactive report UI with grouped failures, child-job sections, peer-analysis summaries and debate timelines when available, comments, review toggles, classification overrides, and issue preview/create actions</li>
-<li>The response always includes <code>base_url</code> and <code>result_url</code></li>
-<li>The response also includes <code>capabilities</code> so the report UI can decide whether GitHub and Jira actions should be shown</li>
-</ul>
-<blockquote>
-<p><strong>Note:</strong> There is no separate <code>/results/{job_id}.html</code> route anymore. Open <code>/results/{job_id}</code> in a browser for the report page, and use the same path with <code>Accept: application/json</code> for automation.</p>
-</blockquote>
-<h2 id="get-statusjob_id">GET <code>/status/{job_id}</code></h2>
-<p>Use this browser-only route when a job is still <code>waiting</code>, <code>pending</code>, or <code>running</code>. The server sends people here automatically when they open <code>/results/{job_id}</code> in a browser before analysis is finished.</p>
-<p>The status page polls <code>GET /results/{job_id}</code> every 10 seconds, redirects to the report route when the job completes, and reads <code>result.progress_log</code>, <code>result.progress_phase</code>, and <code>result.request_params</code> from the same response so the UI can show progress, the main AI, and configured peers while the job is still in flight.</p>
-<div class="highlight"><pre><span></span><code>// Derive stepLog from server-persisted progress_log (survives F5 refresh)
-const rawProgressLog = data?.result?.progress_log
-const progressLog = Array.isArray(rawProgressLog) ? rawProgressLog : []
-const stepLog: StepLogEntry[] = useMemo(
-  () =&gt; progressLog.map(entry =&gt; ({
-    phase: entry.phase,
-    label: getPhaseLabel(entry.phase) ?? entry.phase,
-    timestamp: new Date(entry.timestamp * 1000).toLocaleTimeString(),
-  })),
-  [progressLog],
-)
-
-// ... existing code ...
-
-const params = data?.result?.request_params
-const mainAi = params?.ai_provider &amp;&amp; params?.ai_model
-  ? `${params.ai_provider} / ${params.ai_model}`
-  : null
-const peers = params?.peer_ai_configs
-const progressPhase = data?.result?.progress_phase
-</code></pre></div>
-
-<p>What the page shows in practice:</p>
-<ul>
-<li><code>waiting</code> when the service is polling Jenkins for build completion</li>
-<li><code>pending</code> when the job is queued for analysis</li>
-<li><code>running</code> while AI analysis is in progress</li>
-<li>A refresh-safe progress panel driven by <code>result.progress_log</code></li>
-<li>Server-reported phases such as <code>waiting_for_jenkins</code>, <code>analyzing</code>, <code>analyzing_failures</code>, <code>analyzing_child_jobs</code>, <code>enriching_jira</code>, and <code>saving</code></li>
-<li>Peer-analysis phases such as <code>peer_review_round_1</code> and <code>orchestrator_revising_round_1</code>, with group suffixes like <code>(group 2/3)</code> when multiple failure groups are being debated</li>
-<li>The main AI provider/model and any configured peers when <code>result.request_params</code> is present</li>
-<li>A dedicated timeout-style terminal state for AI analysis timeouts, even though the underlying API status remains <code>failed</code></li>
-<li>A terminal error view for other <code>failed</code>, <code>404</code>, or <code>403</code> cases</li>
-<li>The Jenkins build link, queued timestamp, and current status badge when that data is available</li>
-</ul>
-<blockquote>
-<p><strong>Note:</strong> <code>/status/{job_id}</code> is a browser route served by the React app. For scripts and automation, keep polling <code>GET /results/{job_id}</code> instead.</p>
-</blockquote>
-<h2 id="get-dashboard">GET <code>/dashboard</code></h2>
-<p><code>/dashboard</code> is now a browser route in the React app, not a fully server-rendered HTML index. Opening <code>/</code> or <code>/dashboard</code> loads the SPA shell; once the client router is running, <code>/dashboard</code> redirects to <code>/</code>.</p>
-<p>The dashboard data itself comes from <code>GET /api/dashboard</code>, which returns the precomputed summary rows used by the web UI and the CLI.</p>
-<p>Codebase example:</p>
-<div class="highlight"><pre><span></span><code><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/api/dashboard&quot;</span><span class="p">)</span>
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">api_dashboard</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return dashboard job list as JSON for the React frontend.&quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="k">await</span> <span class="n">list_results_for_dashboard</span><span class="p">()</span>
-</code></pre></div>
-
-<div class="highlight"><pre><span></span><code><span class="n">DEFAULT_DASHBOARD_LIMIT</span> <span class="o">=</span> <span class="mi">500</span>
-
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">list_results_for_dashboard</span><span class="p">(</span>
-    <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">DEFAULT_DASHBOARD_LIMIT</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]:</span>
-</code></pre></div>
-
-<p>Response fields from <code>/api/dashboard</code>:</p>
+<p>Top-level response fields:</p>
 <table>
 <thead>
 <tr>
@@ -640,39 +465,149 @@ const progressPhase = data?.result?.progress_phase
 </tr>
 <tr>
 <td><code>jenkins_url</code></td>
-<td>Jenkins build URL when one is available</td>
+<td>Jenkins build URL, when the job came from Jenkins</td>
 </tr>
 <tr>
 <td><code>status</code></td>
-<td>Current job state</td>
+<td><code>waiting</code>, <code>pending</code>, <code>running</code>, <code>completed</code>, or <code>failed</code></td>
 </tr>
 <tr>
 <td><code>created_at</code></td>
-<td>When the job record was created</td>
-</tr>
-<tr>
-<td><code>completed_at</code></td>
-<td>When the job completed or failed, if available</td>
+<td>When the record was created</td>
 </tr>
 <tr>
 <td><code>analysis_started_at</code></td>
-<td>When analysis work started, if available</td>
+<td>When AI analysis actually started, if available</td>
+</tr>
+<tr>
+<td><code>completed_at</code></td>
+<td>When the job finished or failed, if available</td>
+</tr>
+<tr>
+<td><code>base_url</code></td>
+<td>Trusted public base URL, or <code>""</code> when unset</td>
+</tr>
+<tr>
+<td><code>result_url</code></td>
+<td>Canonical result URL for this job</td>
+</tr>
+<tr>
+<td><code>capabilities</code></td>
+<td>Feature flags such as <code>github_issues</code> and <code>jira_bugs</code></td>
+</tr>
+<tr>
+<td><code>result</code></td>
+<td>The stored analysis payload, or <code>null</code> if no body has been persisted yet</td>
+</tr>
+</tbody>
+</table>
+<p>Inside <code>result</code>, you will usually see fields such as <code>job_name</code>, <code>build_number</code>, <code>summary</code>, <code>ai_provider</code>, <code>ai_model</code>, <code>failures</code>, and <code>child_job_analyses</code>. While a job is still active, the same payload can also carry <code>request_params</code>, <code>progress_phase</code>, and <code>progress_log</code>, which is how the status page survives refreshes. Direct analyses created through <code>/analyze-failures</code> use the same wrapper, but typically omit Jenkins-specific fields.</p>
+<p>In the browser report, repeated failures are grouped by <code>error_signature</code>, so one report card can represent a whole root-cause group instead of repeating the same failure many times:</p>
+<div class="highlight"><pre><span></span><code><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">groupingKey</span><span class="p">(</span><span class="nx">failure</span><span class="o">:</span><span class="w"> </span><span class="kt">FailureAnalysis</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">failure</span><span class="p">.</span><span class="nx">error_signature</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="sb">`unique-</span><span class="si">${</span><span class="nx">failure</span><span class="p">.</span><span class="nx">test_name</span><span class="si">}</span><span class="sb">`</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Useful status behavior:</p>
+<ul>
+<li>Active jobs return <code>202 Accepted</code> to JSON clients</li>
+<li>Completed and failed jobs return <code>200</code></li>
+<li>Missing jobs return <code>404</code> to JSON clients</li>
+<li>Browsers are redirected to <code>/status/{job_id}</code> for <code>waiting</code>, <code>pending</code>, and <code>running</code> jobs</li>
+</ul>
+<h3 id="about-get-resultsjob_idhtml">About <code>GET /results/{job_id}.html</code></h3>
+<blockquote>
+<p><strong>Warning:</strong> There is no special <code>GET /results/{job_id}.html</code> route in the current codebase. Use <code>GET /results/{job_id}</code> for both the browser report and the JSON API.</p>
+<p><strong>Tip:</strong> If a browser-oriented HTTP client hands you the report UI instead of JSON, send <code>Accept: application/json</code>.</p>
+</blockquote>
+<h3 id="public-urls-and-result_url">Public URLs and <code>result_url</code></h3>
+<p><code>base_url</code> and <code>result_url</code> are built only from <code>PUBLIC_BASE_URL</code>. Forwarded headers are intentionally ignored.</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_extract_base_url</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Extract the external base URL for building public-facing links.&quot;&quot;&quot;</span>
+    <span class="n">settings</span> <span class="o">=</span> <span class="n">get_settings</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">settings</span><span class="o">.</span><span class="n">public_base_url</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">settings</span><span class="o">.</span><span class="n">public_base_url</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+        <span class="s2">&quot;PUBLIC_BASE_URL is not set; returning empty base URL (relative paths)&quot;</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="s2">&quot;&quot;</span>
+</code></pre></div>
+
+<p>What that means in practice:</p>
+<ul>
+<li>If <code>PUBLIC_BASE_URL</code> is set, <code>result_url</code> is absolute, such as <code>https://jji.example.com/results/&lt;job_id&gt;</code></li>
+<li>If it is not set, <code>base_url</code> is <code>""</code> and <code>result_url</code> is relative, such as <code>/results/&lt;job_id&gt;</code></li>
+</ul>
+<h2 id="get-statusjob_id">GET <code>/status/{job_id}</code></h2>
+<p><code>GET /status/{job_id}</code> is a browser route, not a JSON API. It exists to show progress while an analysis is still active.</p>
+<p>The page polls <code>GET /results/{job_id}</code> every 10 seconds and automatically moves to the report once the job completes. While it is open, it can show:</p>
+<ul>
+<li>queued, waiting, and running state</li>
+<li>the Jenkins job name and build number</li>
+<li>the main AI and configured peers, when stored</li>
+<li>a persisted progress timeline from <code>result.progress_log</code></li>
+<li>a user-friendly timeout state, even though the underlying API status remains <code>failed</code></li>
+</ul>
+<blockquote>
+<p><strong>Note:</strong> For scripts and CLI tooling, keep polling <code>GET /results/{job_id}</code> instead of trying to automate the browser status route.</p>
+</blockquote>
+<h2 id="get-dashboard-and-get-apidashboard">GET <code>/dashboard</code> and GET <code>/api/dashboard</code></h2>
+<p><code>GET /dashboard</code> is a browser route. It opens the React dashboard UI. The actual dashboard data comes from <code>GET /api/dashboard</code>.</p>
+<p>Important distinction:</p>
+<ul>
+<li>Use <code>GET /dashboard</code> or <code>GET /</code> when a human is opening the web UI</li>
+<li>Use <code>GET /api/dashboard</code> when a script, integration, or CLI command needs the dashboard dataset</li>
+</ul>
+<p>Once the SPA loads, the client router redirects <code>/dashboard</code> to <code>/</code>. The browser dashboard then refreshes <code>GET /api/dashboard</code> every 10 seconds.</p>
+<p><code>GET /api/dashboard</code> returns a richer summary row than <code>GET /results</code>. Each item can include:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>job_id</code></td>
+<td>Analysis job ID</td>
+</tr>
+<tr>
+<td><code>jenkins_url</code></td>
+<td>Jenkins build URL, when available</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>Job status</td>
+</tr>
+<tr>
+<td><code>created_at</code></td>
+<td>Record creation time</td>
+</tr>
+<tr>
+<td><code>completed_at</code></td>
+<td>Finish time, if available</td>
+</tr>
+<tr>
+<td><code>analysis_started_at</code></td>
+<td>Analysis start time, if available</td>
 </tr>
 <tr>
 <td><code>reviewed_count</code></td>
-<td>Number of reviewed failures for the job</td>
+<td>Number of reviewed failures</td>
 </tr>
 <tr>
 <td><code>comment_count</code></td>
-<td>Number of comments attached to the job</td>
+<td>Number of comments on the job</td>
 </tr>
 <tr>
 <td><code>job_name</code></td>
-<td>Jenkins job name when stored in the result payload</td>
+<td>Jenkins job name, when stored</td>
 </tr>
 <tr>
 <td><code>build_number</code></td>
-<td>Jenkins build number when available</td>
+<td>Jenkins build number, when stored</td>
 </tr>
 <tr>
 <td><code>failure_count</code></td>
@@ -680,352 +615,302 @@ const progressPhase = data?.result?.progress_phase
 </tr>
 <tr>
 <td><code>child_job_count</code></td>
-<td>Number of direct child job analyses when present</td>
+<td>Number of direct child job analyses</td>
 </tr>
 <tr>
 <td><code>summary</code></td>
-<td>Stored analysis summary when available</td>
+<td>Stored summary, when available</td>
 </tr>
 <tr>
 <td><code>error</code></td>
-<td>Stored terminal error message when available</td>
+<td>Stored terminal error, when available</td>
 </tr>
 </tbody>
 </table>
-<p>The dashboard page fetches that JSON on load, refreshes it every 10 seconds, and keeps sort state in <code>sessionStorage</code>, so a reload in the same browser tab keeps the selected sort column and direction.</p>
-<div class="highlight"><pre><span></span><code><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">useTableSort</span><span class="p">(</span>
-<span class="w">  </span><span class="nx">storagePrefix</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span>
-<span class="w">  </span><span class="nx">defaultKey</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span>
-<span class="w">  </span><span class="nx">defaultDir</span><span class="o">:</span><span class="w"> </span><span class="kt">SortDirection</span><span class="p">,</span>
-<span class="w">  </span><span class="nx">descDefaultKeys</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">[]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[],</span>
-<span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">sortKey</span><span class="p">,</span><span class="w"> </span><span class="nx">setSortKey</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">useSessionState</span><span class="p">(</span><span class="sb">`</span><span class="si">${</span><span class="nx">storagePrefix</span><span class="si">}</span><span class="sb">.sortKey`</span><span class="p">,</span><span class="w"> </span><span class="nx">defaultKey</span><span class="p">)</span>
-<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="p">[</span><span class="nx">sortDir</span><span class="p">,</span><span class="w"> </span><span class="nx">setSortDir</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">useSessionState</span><span class="o">&lt;</span><span class="nx">SortDirection</span><span class="o">&gt;</span><span class="p">(</span><span class="sb">`</span><span class="si">${</span><span class="nx">storagePrefix</span><span class="si">}</span><span class="sb">.sortDir`</span><span class="p">,</span><span class="w"> </span><span class="nx">defaultDir</span><span class="p">)</span>
-
-<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">handleSort</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">useCallback</span><span class="p">(</span>
-<span class="w">    </span><span class="p">(</span><span class="nx">key</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">key</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="nx">sortKey</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nx">setSortDir</span><span class="p">(</span><span class="nx">sortDir</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s1">&#39;asc&#39;</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;desc&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;asc&#39;</span><span class="p">)</span>
-<span class="w">      </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nx">setSortKey</span><span class="p">(</span><span class="nx">key</span><span class="p">)</span>
-<span class="w">        </span><span class="nx">setSortDir</span><span class="p">(</span><span class="nx">descDefaultKeys</span><span class="p">.</span><span class="nx">includes</span><span class="p">(</span><span class="nx">key</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="s1">&#39;desc&#39;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">&#39;asc&#39;</span><span class="p">)</span>
-<span class="w">      </span><span class="p">}</span>
-<span class="w">    </span><span class="p">},</span>
-<span class="w">    </span><span class="p">[</span><span class="nx">sortKey</span><span class="p">,</span><span class="w"> </span><span class="nx">sortDir</span><span class="p">,</span><span class="w"> </span><span class="nx">setSortKey</span><span class="p">,</span><span class="w"> </span><span class="nx">setSortDir</span><span class="p">,</span><span class="w"> </span><span class="nx">descDefaultKeys</span><span class="p">],</span>
-<span class="w">  </span><span class="p">)</span>
-
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">sortKey</span><span class="p">,</span><span class="w"> </span><span class="nx">sortDir</span><span class="p">,</span><span class="w"> </span><span class="nx">handleSort</span><span class="w"> </span><span class="p">}</span>
+<p>The backend builds that summary by combining table counts with selected fields from the stored result body:</p>
+<div class="highlight"><pre><span></span><code><span class="n">entry</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;job_id&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;job_id&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;jenkins_url&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;jenkins_url&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;status&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;created_at&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;created_at&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;completed_at&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;completed_at&quot;</span><span class="p">]</span>
+    <span class="k">if</span> <span class="s2">&quot;completed_at&quot;</span> <span class="ow">in</span> <span class="n">row</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+    <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="s2">&quot;analysis_started_at&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;analysis_started_at&quot;</span><span class="p">]</span>
+    <span class="k">if</span> <span class="s2">&quot;analysis_started_at&quot;</span> <span class="ow">in</span> <span class="n">row</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+    <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="s2">&quot;reviewed_count&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;reviewed_count&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;comment_count&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;comment_count&quot;</span><span class="p">],</span>
 <span class="p">}</span>
+<span class="n">result_data</span> <span class="o">=</span> <span class="n">parse_result_json</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;result_json&quot;</span><span class="p">],</span> <span class="n">job_id</span><span class="o">=</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;job_id&quot;</span><span class="p">])</span>
+<span class="k">if</span> <span class="n">result_data</span><span class="p">:</span>
+    <span class="n">entry</span><span class="p">[</span><span class="s2">&quot;job_name&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">result_data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;job_name&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">&quot;build_number&quot;</span> <span class="ow">in</span> <span class="n">result_data</span><span class="p">:</span>
+        <span class="n">entry</span><span class="p">[</span><span class="s2">&quot;build_number&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">result_data</span><span class="p">[</span><span class="s2">&quot;build_number&quot;</span><span class="p">]</span>
+    <span class="n">entry</span><span class="p">[</span><span class="s2">&quot;failure_count&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">count_all_failures</span><span class="p">(</span><span class="n">result_data</span><span class="p">)</span>
+    <span class="n">child_jobs</span> <span class="o">=</span> <span class="n">result_data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;child_job_analyses&quot;</span><span class="p">,</span> <span class="p">[])</span>
+    <span class="k">if</span> <span class="n">child_jobs</span><span class="p">:</span>
+        <span class="n">entry</span><span class="p">[</span><span class="s2">&quot;child_job_count&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">child_jobs</span><span class="p">)</span>
 </code></pre></div>
 
-<p>What the browser dashboard shows:</p>
+<p>Current dashboard behavior that matters to users:</p>
 <ul>
-<li>Client-side filtering by job name or job ID, plus a status filter with <code>All statuses</code>, <code>completed</code>, <code>running</code>, <code>waiting</code>, <code>pending</code>, <code>failed</code>, and a derived <code>timeout</code> view for failed AI timeouts; the API still returns <code>status: failed</code></li>
-<li>Sortable <code>Job</code>, <code>Status</code>, <code>Failures</code>, <code>Reviewed</code>, <code>Comments</code>, <code>Children</code>, and <code>Created</code> columns</li>
-<li>Session-scoped sort persistence, so the selected sort order survives a refresh in the same browser tab</li>
-<li>Client-side pagination with 10, 20, or 50 rows per page</li>
-<li>Failure, review, comment, and child-job counts</li>
-<li>Relative creation timestamps with full timestamps in tooltips, plus analysis duration when both <code>analysis_started_at</code> and <code>completed_at</code> are available</li>
-<li>Row navigation to <code>/status/{job_id}</code> for <code>waiting</code>, <code>pending</code>, and <code>running</code> jobs, or <code>/results/{job_id}</code> for terminal jobs</li>
-<li>A delete action that calls <code>DELETE /results/{job_id}</code></li>
+<li>The server returns a default dashboard batch of <code>500</code> jobs</li>
+<li>The React UI handles search, sorting, and pagination client-side</li>
+<li>Clicking an active job opens <code>GET /status/{job_id}</code></li>
+<li>Clicking a finished job opens <code>GET /results/{job_id}</code></li>
 </ul>
 <blockquote>
-<p><strong>Note:</strong> The old server-side <code>limit</code> query parameter and <code>Load last</code> control are gone. <code>/api/dashboard</code> currently returns the server's default dashboard batch (<code>500</code> rows), and the React app filters, sorts, and paginates that data in memory.</p>
+<p><strong>Note:</strong> The UI can show <code>timeout</code> as a convenience label, but the API still reports <code>status: failed</code>. That label is derived from the stored error or summary text on the client side.</p>
 </blockquote>
-<h2 id="supporting-endpoints-for-reports-and-dashboard">Supporting Endpoints for Reports and Dashboard</h2>
-<p>The React report and dashboard routes are backed by several smaller JSON endpoints. The report page is interactive: comments, review state, classifications, issue previews, issue creation, and dashboard summary data are loaded or updated live.</p>
+<h2 id="supporting-endpoints-for-interactive-reports">Supporting Endpoints For Interactive Reports</h2>
+<p>The browser report page is not just a static viewer. It uses smaller JSON endpoints for discussion, review workflow, issue creation, and feature detection.</p>
 <table>
 <thead>
 <tr>
 <th>Method</th>
 <th>Endpoint</th>
-<th>What it does</th>
+<th>Purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>GET</code></td>
-<td><code>/api/dashboard</code></td>
-<td>Returns dashboard rows as JSON for the React UI and <code>jji results dashboard</code></td>
-</tr>
-<tr>
-<td><code>GET</code></td>
 <td><code>/results/{job_id}/comments</code></td>
-<td>Returns all comments and review state for a job</td>
+<td>Load comments and review state together</td>
 </tr>
 <tr>
 <td><code>POST</code></td>
 <td><code>/results/{job_id}/comments</code></td>
-<td>Adds a comment to a specific failure</td>
+<td>Add a comment to a failure</td>
 </tr>
 <tr>
 <td><code>DELETE</code></td>
 <td><code>/results/{job_id}/comments/{comment_id}</code></td>
-<td>Deletes a comment</td>
+<td>Delete a comment</td>
 </tr>
 <tr>
 <td><code>PUT</code></td>
 <td><code>/results/{job_id}/reviewed</code></td>
-<td>Marks a failure reviewed or unreviewed</td>
+<td>Mark a failure reviewed or not reviewed</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
 <td><code>/results/{job_id}/review-status</code></td>
-<td>Returns lightweight counts for failures, reviews, and comments</td>
+<td>Return counts for total failures, reviewed failures, and comments</td>
 </tr>
 <tr>
 <td><code>POST</code></td>
 <td><code>/results/{job_id}/enrich-comments</code></td>
-<td>Resolves GitHub PR and Jira status badges from comment text</td>
+<td>Add live GitHub or Jira status badges to tracker links found in comments</td>
 </tr>
 <tr>
 <td><code>PUT</code></td>
 <td><code>/results/{job_id}/override-classification</code></td>
-<td>Changes a failure group to <code>CODE ISSUE</code> or <code>PRODUCT BUG</code></td>
-</tr>
-<tr>
-<td><code>GET</code></td>
-<td><code>/history/classifications</code></td>
-<td>Returns visible classifications used for badges in the report UI</td>
-</tr>
-<tr>
-<td><code>GET</code></td>
-<td><code>/ai-configs</code></td>
-<td>Returns distinct AI provider/model pairs from completed analyses</td>
+<td>Change the primary root-cause label shown in the report</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
 <td><code>/api/capabilities</code></td>
-<td>Returns whether GitHub issue creation and Jira bug creation are enabled on this server</td>
+<td>Report whether GitHub and Jira issue creation are enabled on this server</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/ai-configs</code></td>
+<td>Return distinct provider/model pairs from completed analyses</td>
 </tr>
 <tr>
 <td><code>POST</code></td>
 <td><code>/results/{job_id}/preview-github-issue</code></td>
-<td>Generates a GitHub issue draft and duplicate suggestions</td>
+<td>Generate a GitHub issue draft and similar-issue suggestions</td>
 </tr>
 <tr>
 <td><code>POST</code></td>
 <td><code>/results/{job_id}/preview-jira-bug</code></td>
-<td>Generates a Jira bug draft and duplicate suggestions</td>
+<td>Generate a Jira bug draft and similar-issue suggestions</td>
 </tr>
 <tr>
 <td><code>POST</code></td>
 <td><code>/results/{job_id}/create-github-issue</code></td>
-<td>Creates a GitHub issue and auto-adds its URL as a comment</td>
+<td>Create a GitHub issue and add a tracker comment to the report</td>
 </tr>
 <tr>
 <td><code>POST</code></td>
 <td><code>/results/{job_id}/create-jira-bug</code></td>
-<td>Creates a Jira bug and auto-adds its URL as a comment</td>
+<td>Create a Jira bug and add a tracker comment to the report</td>
 </tr>
 <tr>
 <td><code>DELETE</code></td>
 <td><code>/results/{job_id}</code></td>
-<td>Deletes the job, related metadata, and discussion data</td>
+<td>Delete the job and all related stored data</td>
 </tr>
 </tbody>
 </table>
-<h3 id="comments-and-review-state">Comments and Review State</h3>
-<p>Use these endpoints when you want to layer human workflow onto an analysis report.</p>
-<p>A lightweight review summary looks like this in the test suite:</p>
-<div class="highlight"><pre><span></span><code><span class="n">response</span> <span class="o">=</span> <span class="n">test_client</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/results/job-rs-1/review-status&quot;</span><span class="p">)</span>
-<span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span>
-<span class="n">data</span> <span class="o">=</span> <span class="n">response</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
-<span class="k">assert</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;total_failures&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">2</span>
-<span class="k">assert</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;reviewed_count&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span>
-<span class="k">assert</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;comment_count&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span>
-</code></pre></div>
-
+<h3 id="comments-and-review-state">Comments and review state</h3>
+<p>Use these endpoints when you want the report to double as a review surface.</p>
 <p>Useful details:</p>
 <ul>
 <li><code>GET /results/{job_id}/comments</code> returns both <code>comments</code> and <code>reviews</code> in one response</li>
-<li>If nothing has been commented or reviewed yet, the response is simply empty collections</li>
-<li><code>GET /results/{job_id}/review-status</code> is a good fit when you need counts but not the full comment list</li>
-<li><code>POST /results/{job_id}/comments</code> validates that the <code>test_name</code> actually exists in the stored result</li>
-<li><code>POST /results/{job_id}/enrich-comments</code> is what adds live status badges such as GitHub PR <code>OPEN</code> or <code>MERGED</code>, or Jira ticket status</li>
-<li>Child-job-scoped actions use <code>child_job_name</code> and <code>child_build_number</code>, and those two fields must be supplied together</li>
-<li>The React report page reads comments and review state live from these endpoints instead of rebuilding a separate HTML report</li>
+<li><code>GET /results/{job_id}/review-status</code> is the lightweight counts-only version</li>
+<li><code>total_failures</code> in that review summary follows the same full-failure counting used elsewhere, so nested child-job failures are included</li>
+<li><code>POST /results/{job_id}/enrich-comments</code> is best-effort enrichment for tracker links found in comments</li>
+<li>The browser report refreshes comments while it is open, so new discussion and tracker badges show up without reloading the whole report</li>
 </ul>
-<blockquote>
-<p><strong>Note:</strong> The report UI fetches comments and reviews after the page loads, and comment refreshes continue in the browser while the report is open.</p>
-</blockquote>
-<h3 id="classifications-issue-previews-and-issue-creation">Classifications, Issue Previews, and Issue Creation</h3>
-<p>These endpoints turn a report into a workflow surface.</p>
-<p>What they do:</p>
+<h3 id="issue-previews-issue-creation-and-feature-flags">Issue previews, issue creation, and feature flags</h3>
+<p>The report UI previews tracker content first, then creates the issue, then refreshes comments so the server-added tracker link appears immediately:</p>
+<div class="highlight"><pre><span></span><code>api
+  .post&lt;PreviewIssueResponse&gt;(`/results/${jobId}/${previewPath}`, {
+    test_name: testName,
+    include_links: includeLinks,
+    ai_provider: aiProvider ?? &#39;&#39;,
+    ai_model: aiModel ?? &#39;&#39;,
+    // ... existing code ...
+  })
+  .then((res) =&gt; {
+    setTitle(res.title)
+    setBody(res.body)
+    setSimilar(res.similar_issues ?? [])
+    setPhase(&#39;preview&#39;)
+  })
+
+async function handleCreate() {
+  const res = await api.post&lt;CreateIssueResponse&gt;(`/results/${jobId}/${createPath}`, {
+    test_name: testName,
+    title,
+    body,
+    // ... existing code ...
+  })
+  setCreatedUrl(res.url)
+
+  api.get&lt;CommentsAndReviews&gt;(`/results/${jobId}/comments`)
+    .then((commentsRes) =&gt; dispatch({ type: &#39;SET_COMMENTS_AND_REVIEWS&#39;, payload: commentsRes }))
+    .catch(() =&gt; {})
+</code></pre></div>
+
+<p>Practical rules:</p>
 <ul>
-<li><code>PUT /results/{job_id}/override-classification</code> accepts only <code>CODE ISSUE</code> or <code>PRODUCT BUG</code></li>
-<li>Overrides apply to the failure group for that job, not just a single row, so grouped failures stay in sync</li>
-<li><code>GET /history/classifications?job_id=...</code> is how the report and dashboard render human and AI classification badges</li>
-<li><code>GET /ai-configs</code> returns only provider/model pairs from completed analyses, which the report UI uses as known-working choices</li>
+<li><code>GET /api/capabilities</code> is the quickest way to ask whether GitHub and Jira creation are enabled</li>
+<li><code>GET /results/{job_id}</code> already includes the same <code>capabilities</code> object, so the report page does not need a second lookup</li>
 <li>Preview endpoints return <code>title</code>, <code>body</code>, and <code>similar_issues</code></li>
-<li>Create endpoints return created issue metadata and auto-add a comment linking back to the created issue</li>
-<li>Preview requests take <code>test_name</code> and optionally <code>child_job_name</code>, <code>child_build_number</code>, <code>include_links</code>, <code>ai_provider</code>, and <code>ai_model</code></li>
-<li>Create requests take <code>test_name</code>, <code>title</code>, <code>body</code>, and optional child-job scope</li>
-<li>External GitHub or Jira API failures are surfaced as <code>502</code>, which makes integration outages easier to distinguish from local validation errors</li>
+<li>Create endpoints return the created tracker URL, the tracker identifier (<code>number</code> for GitHub or <code>key</code> for Jira), and a <code>comment_id</code></li>
+<li>GitHub issue creation only works for results currently classified as <code>CODE ISSUE</code></li>
+<li>Jira bug creation only works for results currently classified as <code>PRODUCT BUG</code></li>
+<li>These tracker actions depend on server-side deployment settings, not request-supplied credentials</li>
+<li><code>GET /ai-configs</code> only returns provider/model pairs from completed analyses</li>
 </ul>
-<p>The <code>ai-configs</code> endpoint is intentionally based on completed results only:</p>
-<div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">get_ai_configs</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Get distinct AI provider/model pairs from completed analysis results.</span>
-
-<span class="sd">    Queries the results table for unique (ai_provider, ai_model) combinations</span>
-<span class="sd">    from successfully completed analyses. These represent known-working configs.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">async</span> <span class="k">with</span> <span class="n">aiosqlite</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">DB_PATH</span><span class="p">)</span> <span class="k">as</span> <span class="n">db</span><span class="p">:</span>
-        <span class="n">cursor</span> <span class="o">=</span> <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
-<span class="w">            </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">            SELECT DISTINCT</span>
-<span class="sd">                json_extract(result_json, &#39;$.ai_provider&#39;) as ai_provider,</span>
-<span class="sd">                json_extract(result_json, &#39;$.ai_model&#39;) as ai_model</span>
-<span class="sd">            FROM results</span>
-<span class="sd">            WHERE status = &#39;completed&#39;</span>
-<span class="sd">              AND json_extract(result_json, &#39;$.ai_provider&#39;) IS NOT NULL</span>
-<span class="sd">              AND json_extract(result_json, &#39;$.ai_provider&#39;) != &#39;&#39;</span>
-<span class="sd">              AND json_extract(result_json, &#39;$.ai_model&#39;) IS NOT NULL</span>
-<span class="sd">              AND json_extract(result_json, &#39;$.ai_model&#39;) != &#39;&#39;</span>
-<span class="sd">            ORDER BY ai_provider, ai_model</span>
-<span class="sd">            &quot;&quot;&quot;</span>
-        <span class="p">)</span>
-        <span class="n">rows</span> <span class="o">=</span> <span class="k">await</span> <span class="n">cursor</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()</span>
-        <span class="k">return</span> <span class="p">[{</span><span class="s2">&quot;ai_provider&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="s2">&quot;ai_model&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="mi">1</span><span class="p">]}</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">]</span>
-</code></pre></div>
-
-<p>A real create-issue test from the codebase shows the expected request shape and response behavior:</p>
-<div class="highlight"><pre><span></span><code><span class="n">response</span> <span class="o">=</span> <span class="n">test_client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span>
-    <span class="s2">&quot;/results/job-create-gh/create-github-issue&quot;</span><span class="p">,</span>
-    <span class="n">json</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">&quot;test_name&quot;</span><span class="p">:</span> <span class="s2">&quot;test_login_success&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;title&quot;</span><span class="p">:</span> <span class="s2">&quot;Bug: login fails&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;body&quot;</span><span class="p">:</span> <span class="s2">&quot;## Details</span><span class="se">\n</span><span class="s2">Login returns 500&quot;</span><span class="p">,</span>
-    <span class="p">},</span>
-<span class="p">)</span>
-<span class="k">assert</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">201</span>
-<span class="n">data</span> <span class="o">=</span> <span class="n">response</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
-<span class="k">assert</span> <span class="s2">&quot;https://github.com&quot;</span> <span class="ow">in</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;url&quot;</span><span class="p">]</span>
-<span class="k">assert</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;comment_id&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span>
-</code></pre></div>
-
-<p>Do not confuse the two classification systems:</p>
+<h3 id="deleting-results">Deleting results</h3>
+<p><code>DELETE /results/{job_id}</code> removes the result itself and the stored review workflow around it.</p>
+<p>That includes:</p>
 <ul>
-<li><code>override-classification</code> changes the main root-cause label between <code>CODE ISSUE</code> and <code>PRODUCT BUG</code></li>
-<li><code>/history/classifications</code> supplies broader tags such as <code>FLAKY</code>, <code>REGRESSION</code>, <code>KNOWN_BUG</code>, <code>INFRASTRUCTURE</code>, and <code>INTERMITTENT</code></li>
+<li>comments</li>
+<li>review state</li>
+<li>failure history</li>
+<li>saved classifications</li>
+<li>the result row itself</li>
 </ul>
-<h2 id="deleting-results">Deleting Results</h2>
-<p><code>DELETE /results/{job_id}</code> is the one destructive endpoint in this family. The dashboard uses it for its delete button.</p>
-<p>What happens on delete:</p>
-<ul>
-<li>The job record is removed</li>
-<li>Related comments are removed</li>
-<li>Review state is removed</li>
-<li>Failure history is removed</li>
-<li>Test classifications are removed</li>
-</ul>
-<p>Without a username cookie, delete returns <code>401</code> with <code>Please register a username first</code>. Missing jobs return <code>404</code>.</p>
 <blockquote>
-<p><strong>Warning:</strong> The app treats <code>jji_username</code> as a convenience on a trusted network, not a real authentication boundary. Deletion and some other write actions check the cookie, but the code explicitly does not treat it as security.</p>
+<p><strong>Warning:</strong> Deleting a result is permanent. Without a registered username in the built-in UI, the server returns <code>401</code>.</p>
 </blockquote>
-<p>If you are using the CLI, pass a username with <code>--user</code> or set <code>JJI_USERNAME</code> so delete actions have the cookie they expect.</p>
-<h2 id="cli-equivalents">CLI Equivalents</h2>
-<p>Most of the core results and dashboard endpoints also have direct <code>jji</code> commands:</p>
-<ul>
-<li><code>jji health</code></li>
-<li><code>jji results list</code></li>
-<li><code>jji results dashboard</code></li>
-<li><code>jji results show JOB_ID</code></li>
-<li><code>jji status JOB_ID</code></li>
-<li><code>jji results review-status JOB_ID</code></li>
-<li><code>jji results delete JOB_ID</code></li>
-<li><code>jji comments list JOB_ID</code></li>
-<li><code>jji ai-configs</code></li>
-</ul>
-<p>Useful CLI behavior:</p>
-<ul>
-<li>Set the server with <code>--server</code> or <code>JJI_SERVER</code></li>
-<li><code>--server</code> can be a full URL or a named profile from <code>~/.config/jji/config.toml</code></li>
-<li>Add <code>--json</code> to print raw JSON instead of the default table output</li>
-<li>Use <code>--user</code> or <code>JJI_USERNAME</code> for delete and other user-attributed actions</li>
-</ul>
-<h2 id="configuration-that-affects-these-endpoints">Configuration That Affects These Endpoints</h2>
-<p>The results, report, and dashboard endpoints depend on three main pieces of configuration: where data is stored, how the service is exposed, and whether optional GitHub/Jira integrations are enabled.</p>
-<h3 id="storage-and-frontend-assets">Storage and Frontend Assets</h3>
-<p>The persistent data behind these endpoints lives in SQLite. By default the database is <code>/data/results.db</code>. The React UI is built ahead of time and shipped inside the container image at <code>/app/frontend/dist</code>; it is not generated lazily per job and there is no separate on-disk HTML report cache anymore.</p>
-<p>Codebase examples:</p>
-<div class="highlight"><pre><span></span><code><span class="n">DB_PATH</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;DB_PATH&quot;</span><span class="p">,</span> <span class="s2">&quot;/data/results.db&quot;</span><span class="p">))</span>
-</code></pre></div>
-
-<div class="highlight"><pre><span></span><code><span class="c"># Copy built frontend assets from frontend builder</span>
-<span class="k">COPY</span><span class="w"> </span>--chown<span class="o">=</span>appuser:0<span class="w"> </span>--from<span class="o">=</span>frontend-builder<span class="w"> </span>/frontend/dist<span class="w"> </span>/app/frontend/dist
-</code></pre></div>
-
-<p>The default Compose file still persists <code>/data</code> on the host:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Ports: Web UI + API served on the same port</span>
-<span class="nt">ports</span><span class="p">:</span>
-<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8000:8000&quot;</span><span class="w">   </span><span class="c1"># Web UI (React) + REST API</span>
-
-<span class="c1"># Persist SQLite database across container restarts</span>
-<span class="c1"># The ./data directory on host maps to /data in container</span>
-<span class="nt">volumes</span><span class="p">:</span>
-<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./data:/data</span>
-</code></pre></div>
-
-<p>Mounting <code>/data</code> preserves stored results, comments, reviews, failure history, and classifications. Rebuilding or redeploying the image updates the frontend assets.</p>
-<h3 id="github-and-jira-integration">GitHub and Jira Integration</h3>
-<p>The result and report endpoints expose GitHub and Jira actions only when those integrations are actually configured. The explicit enable flags only override auto-detection; they do not bypass missing URLs or credentials. The same <code>GITHUB_TOKEN</code> is also used to enrich GitHub PR status in comments for private repositories.</p>
+<h2 id="configuration-that-changes-what-users-see">Configuration That Changes What Users See</h2>
+<p>A few settings directly affect the results, report, and dashboard experience.</p>
 <table>
 <thead>
 <tr>
-<th>Integration</th>
-<th>Required settings</th>
-<th>Optional explicit toggle</th>
+<th>Setting</th>
+<th>What it affects</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>GitHub issue creation</td>
-<td><code>TESTS_REPO_URL</code> and <code>GITHUB_TOKEN</code></td>
-<td><code>ENABLE_GITHUB_ISSUES</code></td>
+<td><code>PUBLIC_BASE_URL</code></td>
+<td>Controls <code>base_url</code> and <code>result_url</code> in API responses</td>
 </tr>
 <tr>
-<td>Jira bug creation and Jira matching</td>
-<td><code>JIRA_URL</code>, valid Jira credentials, and <code>JIRA_PROJECT_KEY</code></td>
-<td><code>ENABLE_JIRA</code></td>
+<td><code>DB_PATH</code></td>
+<td>Controls where results are stored</td>
+</tr>
+<tr>
+<td><code>PORT</code></td>
+<td>Controls the port that serves both the API and the browser UI</td>
+</tr>
+<tr>
+<td><code>TESTS_REPO_URL</code>, <code>GITHUB_TOKEN</code>, optional <code>ENABLE_GITHUB_ISSUES</code></td>
+<td>Enable GitHub issue preview and creation</td>
+</tr>
+<tr>
+<td><code>JIRA_URL</code>, Jira credentials, <code>JIRA_PROJECT_KEY</code>, optional <code>ENABLE_JIRA</code></td>
+<td>Enable Jira preview and creation</td>
 </tr>
 </tbody>
 </table>
-<p>The enablement rules are enforced in configuration code:</p>
-<div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">enable_jira</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">:</span>
-    <span class="k">return</span> <span class="kc">False</span>
-<span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">jira_url</span><span class="p">:</span>
-    <span class="c1"># ... warning omitted ...</span>
-    <span class="k">return</span> <span class="kc">False</span>
-<span class="n">_</span><span class="p">,</span> <span class="n">token_value</span> <span class="o">=</span> <span class="n">_resolve_jira_auth</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
-<span class="k">if</span> <span class="ow">not</span> <span class="n">token_value</span><span class="p">:</span>
-    <span class="c1"># ... warning omitted ...</span>
-    <span class="k">return</span> <span class="kc">False</span>
-<span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">jira_project_key</span><span class="p">:</span>
-    <span class="c1"># ... warning omitted ...</span>
-    <span class="k">return</span> <span class="kc">False</span>
-<span class="k">return</span> <span class="kc">True</span>
-
-<span class="c1"># ... GitHub toggle ...</span>
-<span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">enable_github_issues</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">:</span>
-    <span class="k">return</span> <span class="kc">False</span>
-<span class="n">tests_repo_url</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tests_repo_url</span><span class="p">)</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">tests_repo_url</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
-<span class="n">github_token</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">github_token</span><span class="o">.</span><span class="n">get_secret_value</span><span class="p">()</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">github_token</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
-<span class="k">return</span> <span class="nb">bool</span><span class="p">(</span><span class="n">tests_repo_url</span> <span class="ow">and</span> <span class="n">github_token</span><span class="p">)</span>
-</code></pre></div>
-
+<p>The default database file is <code>/data/results.db</code>. In the provided container setup, <code>docker-compose.yaml</code> mounts <code>./data:/data</code>, so results survive restarts. The same deployment also serves both the API and the browser UI on port <code>8000</code>.</p>
+<p>The browser UI is shipped as built frontend assets inside the container image, which is why routes such as <code>/dashboard</code> and <code>/results/{job_id}</code> work without a separate frontend deployment.</p>
 <blockquote>
-<p><strong>Note:</strong> <code>GET /results/{job_id}</code> includes a <code>capabilities</code> object with <code>github_issues</code> and <code>jira_bugs</code>, so the report UI can hide unavailable actions without making extra guesses.</p>
+<p><strong>Note:</strong> If you run the backend without the built <code>frontend/dist</code> assets present, browser routes return <code>404</code> with <code>Frontend not built</code>.</p>
 </blockquote>
-<h3 id="port-and-health-checks">Port and Health Checks</h3>
-<p>By default, the service runs on port <code>8000</code>. The container entrypoint respects <code>PORT</code> if you override it, and the built-in Docker health check uses <code>/health</code> on that port.</p>
-<h2 id="api-discovery">API Discovery</h2>
-<p>If you want to inspect the live schema instead of reading hand-written docs:</p>
+<h2 id="cli-equivalents">CLI Equivalents</h2>
+<p>The <code>jji</code> CLI wraps the same core endpoints:</p>
+<table>
+<thead>
+<tr>
+<th>CLI command</th>
+<th>Endpoint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jji health</code></td>
+<td><code>GET /health</code></td>
+</tr>
+<tr>
+<td><code>jji results list</code></td>
+<td><code>GET /results</code></td>
+</tr>
+<tr>
+<td><code>jji results show JOB_ID</code></td>
+<td><code>GET /results/{job_id}</code></td>
+</tr>
+<tr>
+<td><code>jji results dashboard</code></td>
+<td><code>GET /api/dashboard</code></td>
+</tr>
+<tr>
+<td><code>jji status JOB_ID</code></td>
+<td><code>GET /results/{job_id}</code></td>
+</tr>
+<tr>
+<td><code>jji results review-status JOB_ID</code></td>
+<td><code>GET /results/{job_id}/review-status</code></td>
+</tr>
+<tr>
+<td><code>jji results delete JOB_ID</code></td>
+<td><code>DELETE /results/{job_id}</code></td>
+</tr>
+</tbody>
+</table>
+<p>Helpful CLI details:</p>
 <ul>
-<li><code>GET /docs</code> provides the Swagger UI</li>
-<li><code>GET /openapi.json</code> provides the OpenAPI schema</li>
+<li>Add <code>--json</code> if you want the raw API response instead of table output</li>
+<li>Use a configured server profile or <code>--server &lt;url&gt;</code> to target a specific deployment</li>
+<li>If you need username-backed actions such as delete, configure a username in your CLI profile or pass <code>--user</code></li>
 </ul>
-<p>Most people start at <code>/</code> or <code>/dashboard</code> and follow links into <code>/results/{job_id}</code> or <code>/status/{job_id}</code>. Most automation starts at <code>/results</code> and <code>/results/{job_id}</code>, with <code>/api/dashboard</code> as a convenient pre-aggregated summary feed when you do not need the full stored payload. The browser-only SPA routes are served outside the OpenAPI schema, so Swagger is mainly useful for the JSON endpoints.</p>
+<h2 id="live-api-discovery">Live API Discovery</h2>
+<p>If you want the live schema as served by your current deployment:</p>
+<ul>
+<li><code>GET /docs</code> opens Swagger UI</li>
+<li><code>GET /openapi.json</code> returns the OpenAPI schema</li>
+</ul>
+<blockquote>
+<p><strong>Tip:</strong> Use Swagger for the JSON endpoints. Browser-only SPA routes such as <code>GET /dashboard</code> and <code>GET /status/{job_id}</code> are part of the built-in UI, not the OpenAPI contract.</p>
+</blockquote>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="#">HTML Reports and Dashboard</a></li>
+<li><a href="#">Storage and Result Lifecycle</a></li>
+<li><a href="#">API Overview</a></li>
+<li><a href="#">POST /analyze</a></li>
+<li><a href="#">POST /analyze-failures</a></li>
+</ul>
                 </div>
             </article>
             <nav class="page-nav">
@@ -1048,27 +933,26 @@ const progressPhase = data?.result?.progress_phase
                     <h3>On this page</h3>
                     <div class="toc">
 <ul>
-<li><a href="#quick-reference">Quick Reference</a></li>
-<li><a href="#url-generation-and-browser-behavior">URL Generation and Browser Behavior</a></li>
+<li><a href="#at-a-glance">At a Glance</a></li>
 <li><a href="#get-health">GET /health</a></li>
 <li><a href="#get-results">GET /results</a></li>
-<li><a href="#get-resultsjob_id">GET /results/{job_id}</a></li>
+<li><a href="#get-resultsjob_id">GET /results/{job_id}</a><ul>
+<li><a href="#about-get-resultsjob_idhtml">About GET /results/{job_id}.html</a></li>
+<li><a href="#public-urls-and-result_url">Public URLs and result_url</a></li>
+</ul>
+</li>
 <li><a href="#get-statusjob_id">GET /status/{job_id}</a></li>
-<li><a href="#get-dashboard">GET /dashboard</a></li>
-<li><a href="#supporting-endpoints-for-reports-and-dashboard">Supporting Endpoints for Reports and Dashboard</a><ul>
-<li><a href="#comments-and-review-state">Comments and Review State</a></li>
-<li><a href="#classifications-issue-previews-and-issue-creation">Classifications, Issue Previews, and Issue Creation</a></li>
+<li><a href="#get-dashboard-and-get-apidashboard">GET /dashboard and GET /api/dashboard</a></li>
+<li><a href="#supporting-endpoints-for-interactive-reports">Supporting Endpoints For Interactive Reports</a><ul>
+<li><a href="#comments-and-review-state">Comments and review state</a></li>
+<li><a href="#issue-previews-issue-creation-and-feature-flags">Issue previews, issue creation, and feature flags</a></li>
+<li><a href="#deleting-results">Deleting results</a></li>
 </ul>
 </li>
-<li><a href="#deleting-results">Deleting Results</a></li>
+<li><a href="#configuration-that-changes-what-users-see">Configuration That Changes What Users See</a></li>
 <li><a href="#cli-equivalents">CLI Equivalents</a></li>
-<li><a href="#configuration-that-affects-these-endpoints">Configuration That Affects These Endpoints</a><ul>
-<li><a href="#storage-and-frontend-assets">Storage and Frontend Assets</a></li>
-<li><a href="#github-and-jira-integration">GitHub and Jira Integration</a></li>
-<li><a href="#port-and-health-checks">Port and Health Checks</a></li>
-</ul>
-</li>
-<li><a href="#api-discovery">API Discovery</a></li>
+<li><a href="#live-api-discovery">Live API Discovery</a></li>
+<li><a href="#related-pages">Related Pages</a></li>
 </ul>
 </div>
 
@@ -1079,9 +963,13 @@ const progressPhase = data?.result?.progress_phase
         </main>
 
         <footer class="page-footer">
+            
+            <span class="footer-version">Generated from version 2.1.0</span>
+            <span class="footer-sep">&middot;</span>
+            
             Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
-            <span class="footer-sep">·</span>
-            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+            <span class="footer-sep">&middot;</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> &middot; <a href="llms-full.txt">llms-full.txt</a></span>
         </footer>
     </div>
 

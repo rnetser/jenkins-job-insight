@@ -262,7 +262,7 @@
                     ⚡ docs<span class="brand-accent">fy</span>
                 </a>
                 
-                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                <a href="https://github.com/myk-org/jenkins-job-insight.git" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight.git">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
                     <span class="github-stars" id="github-stars"></span>
                 </a>
@@ -415,9 +415,11 @@
 <h2 id="how-deduplication-works">How Deduplication Works</h2>
 <p><code>POST /analyze-failures</code> reuses the same deduplication logic as Jenkins-backed analysis. JJI hashes the <code>error_message</code> plus the first five stack-trace lines, analyzes one representative failure per unique signature, and then applies that result to every failure in the group.</p>
 <div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_failure_signature</span><span class="p">(</span><span class="n">failure</span><span class="p">:</span> <span class="n">TestFailure</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="c1"># ... docstring omitted ...</span>
     <span class="c1"># Use error message and first 5 lines of stack trace for deduplication.</span>
     <span class="c1"># Intentionally limited to 5 lines: different stack depths for the same</span>
-    <span class="c1"># root cause should still collapse into one group.</span>
+    <span class="c1"># root cause (e.g., varying call-site depth) should still collapse into</span>
+    <span class="c1"># one group so the AI analyzes each unique error only once.</span>
     <span class="n">stack_lines</span> <span class="o">=</span> <span class="n">failure</span><span class="o">.</span><span class="n">stack_trace</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)[:</span><span class="mi">5</span><span class="p">]</span>
     <span class="n">signature_text</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">failure</span><span class="o">.</span><span class="n">error_message</span><span class="si">}</span><span class="s2">|</span><span class="si">{</span><span class="s1">&#39;|&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">stack_lines</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
     <span class="k">return</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha256</span><span class="p">(</span><span class="n">signature_text</span><span class="o">.</span><span class="n">encode</span><span class="p">())</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">()</span>
@@ -499,7 +501,8 @@ AI_MODEL=your-model-name
 
 <p>Useful per-request overrides for <code>POST /analyze-failures</code> are:</p>
 <ul>
-<li><code>tests_repo_url</code>: clone the tests repository and let the AI inspect real code</li>
+<li><code>tests_repo_url</code>: clone the main tests repository and let the AI inspect real code</li>
+<li><code>additional_repos</code>: JSON array of <code>{name, url}</code> repositories cloned alongside <code>tests_repo_url</code> and exposed to the AI as extra source context. Omit it to inherit the server default from <code>ADDITIONAL_REPOS</code> using <code>name:url,name:url</code> format; send <code>[]</code> to disable extra repo context for this request. Each <code>name</code> becomes a workspace subdirectory, so names must be unique</li>
 <li><code>raw_prompt</code>: append extra instructions to the AI prompt</li>
 <li><code>ai_cli_timeout</code>: override the AI CLI timeout in minutes</li>
 <li><code>peer_ai_configs</code>: JSON array of <code>{ai_provider, ai_model}</code> peer reviewers for consensus analysis. Omit it to inherit the server default from <code>PEER_AI_CONFIGS</code>; send <code>[]</code> to disable peer analysis for just this request</li>
@@ -507,6 +510,9 @@ AI_MODEL=your-model-name
 <li><code>enable_jira</code>: turn Jira matching on or off for this request</li>
 <li><code>jira_url</code>, <code>jira_email</code>, <code>jira_api_token</code>, <code>jira_pat</code>, <code>jira_project_key</code>, <code>jira_ssl_verify</code>, <code>jira_max_results</code>: override Jira settings for this request</li>
 </ul>
+<blockquote>
+<p><strong>Tip:</strong> Use <code>tests_repo_url</code> for the main test repository and <code>additional_repos</code> for supporting repositories such as product or infrastructure code. JJI clones them into one workspace before it analyzes the failure groups, and analysis still continues if one of those clones fails.</p>
+</blockquote>
 <p>The test suite includes a direct <code>POST /analyze-failures</code> example with peer reviewers:</p>
 <div class="highlight"><pre><span></span><code><span class="n">response</span> <span class="o">=</span> <span class="n">test_client</span><span class="o">.</span><span class="n">post</span><span class="p">(</span>
     <span class="s2">&quot;/analyze-failures&quot;</span><span class="p">,</span>
@@ -583,6 +589,14 @@ AI_MODEL=your-model-name
 <li><code>raw_xml</code> with no failures returns the original XML unchanged as <code>enriched_xml</code>.</li>
 </ul>
 <p>If you only need analyzed JSON, send <code>failures</code>. If you want the AI annotations embedded back into a JUnit artifact, send <code>raw_xml</code>.</p>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="#">POST /analyze-failures</a></li>
+<li><a href="#">Pytest JUnit XML Integration</a></li>
+<li><a href="#">Quickstart</a></li>
+<li><a href="#">Jira-Assisted Bug Triage</a></li>
+<li><a href="#">Jenkins, Repository Context, and Prompts</a></li>
+</ul>
                 </div>
             </article>
             <nav class="page-nav">
@@ -616,6 +630,7 @@ AI_MODEL=your-model-name
 <li><a href="#configuration-and-request-overrides">Configuration and Request Overrides</a></li>
 <li><a href="#pytest-and-junit-xml-automation">Pytest and JUnit XML Automation</a></li>
 <li><a href="#common-failure-cases">Common Failure Cases</a></li>
+<li><a href="#related-pages">Related Pages</a></li>
 </ul>
 </div>
 
@@ -626,9 +641,13 @@ AI_MODEL=your-model-name
         </main>
 
         <footer class="page-footer">
+            
+            <span class="footer-version">Generated from version 2.1.0</span>
+            <span class="footer-sep">&middot;</span>
+            
             Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
-            <span class="footer-sep">·</span>
-            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+            <span class="footer-sep">&middot;</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> &middot; <a href="llms-full.txt">llms-full.txt</a></span>
         </footer>
     </div>
 

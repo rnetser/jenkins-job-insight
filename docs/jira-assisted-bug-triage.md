@@ -35,7 +35,7 @@ After post-processing, the same `product_bug_report` can also include `jira_matc
 ## Turn It On
 Jira support is optional, but Jira matching now turns on only when the service has a complete Jira setup: instance URL, valid credentials, and a `JIRA_PROJECT_KEY`.
 
-```110:132:src/jenkins_job_insight/config.py
+```184:206:src/jenkins_job_insight/config.py
     @property
     def jira_enabled(self) -> bool:
         """Check if Jira integration is enabled and configured with valid credentials."""
@@ -63,7 +63,7 @@ Jira support is optional, but Jira matching now turns on only when the service h
 
 In practice:
 - Use `JIRA_URL` to point at your Jira instance.
-- Use `JIRA_PROJECT_KEY` whenever you want Jira matching. It is required, and enabled searches are always scoped to that project.
+- Use `JIRA_PROJECT_KEY` whenever you want Jira matching. It is required, enabled searches are always scoped to that project, and the same key is used later if you create a Jira bug from the report page.
 - For Jira Cloud, set `JIRA_EMAIL` plus `JIRA_API_TOKEN`.
 - For Jira Server/Data Center, set `JIRA_PAT`.
 - If you are on Server/Data Center and do not have a PAT, `JIRA_API_TOKEN` can still work as a fallback only when `JIRA_EMAIL` is not set.
@@ -91,7 +91,7 @@ enable_jira = true
 
 If you use the CLI, `jji analyze` still exposes `--jira` and `--no-jira`, and it can also forward `enable_jira` from `~/.config/jji/config.toml`:
 
-```555:622:src/jenkins_job_insight/cli/main.py
+```560:627:src/jenkins_job_insight/cli/main.py
 # Start from config defaults (lowest priority), then overlay CLI flags.
 extras: dict = {}
 cfg = _state.get("server_config")
@@ -109,7 +109,7 @@ if jira is not None:
     extras["enable_jira"] = jira
 ```
 
-Use `jji analyze --job-name my-job --build-number 27 --jira` to force Jira on for one run, or `--no-jira` to skip it even when the selected CLI profile enables it. If you leave both flags off, `jji` uses any `enable_jira` value from its config file; otherwise the server falls back to its own default or auto-detection.
+Use `jji analyze --job-name my-job --build-number 27 --jira` to force Jira on for one run, or `--no-jira` to skip it even when the selected CLI profile enables it. If you leave both flags off, `jji` uses any `enable_jira` value from its config file; otherwise the server falls back to its own default or auto-detection. The CLI also supports Jira-specific per-run overrides such as `--jira-url`, `--jira-email`, `--jira-api-token`, `--jira-pat`, `--jira-project-key`, `--jira-ssl-verify` or `--no-jira-ssl-verify`, and `--jira-max-results`.
 
 The same toggle exists in API requests as `enable_jira`, and it still lives on the shared analysis request model, so it works for both `/analyze` and `/analyze-failures`. Send `true` to force Jira on for one request, `false` to skip it, or omit it to follow the merged server setting, which may be an explicit `ENABLE_JIRA` choice or auto-detection from complete Jira config.
 
@@ -122,7 +122,7 @@ The matching flow has two phases.
 
 First, the AI analysis is told to generate short, specific Jira search keywords as part of every `PRODUCT BUG` report:
 
-```81:103:src/jenkins_job_insight/analyzer.py
+```223:245:src/jenkins_job_insight/analyzer.py
 If PRODUCT BUG:
 {
   "classification": "PRODUCT BUG",
@@ -179,6 +179,7 @@ A few details matter here:
 - Because Jira matching now requires `JIRA_PROJECT_KEY`, enabled searches are scoped to that project.
 - The initial Jira query searches issue summaries, not full-text descriptions.
 - The returned candidates still include description, status, priority, and browse URL for review.
+- JQL-reserved characters are stripped from keywords before they are sent to Jira.
 - Jira Cloud descriptions returned as Atlassian Document Format are flattened to plain text before later relevance filtering.
 - The search is ordered by `updated DESC`, so fresher bug reports are preferred.
 
@@ -305,9 +306,9 @@ The intended flow is simple:
 3. Reuse an existing Jira issue if one already describes the same defect.
 4. Only preview and create a new Jira bug when those attached matches do not fit.
 
-The preview step adds another safety net. After `jenkins-job-insight` generates the Jira summary and description, it performs one more best-effort duplicate search using the generated title and returns those hits as `similar_issues`:
+The preview step adds another safety net. After `jenkins-job-insight` generates the Jira summary and description, it performs one more best-effort duplicate search using the generated title and returns up to five hits as `similar_issues`:
 
-```1431:1449:src/jenkins_job_insight/main.py
+```1873:1891:src/jenkins_job_insight/main.py
 # Duplicate detection (best-effort: failures must not break preview)
 similar: list[dict] = []
 if settings.jira_enabled:
@@ -345,3 +346,12 @@ When you do create a Jira bug, `src/jenkins_job_insight/main.py` only allows tha
 - If you already export enriched XML downstream, the `ai_jira_match_*` properties are the cleanest machine-readable source of truth.
 
 > **Tip:** If many tests fail because of the same product defect, `jenkins-job-insight` reuses one Jira search across all failures that share the same keyword set. That keeps triage fast and keeps the attached matches consistent across related failures.
+
+
+## Related Pages
+
+- [Jira Integration](jira-integration.html)
+- [Analyze Raw Failures and JUnit XML](direct-failure-analysis.html)
+- [Analyze Jenkins Jobs](analyze-jenkins-jobs.html)
+- [HTML Reports and Dashboard](html-reports-and-dashboard.html)
+- [Results, Reports, and Dashboard Endpoints](api-results-and-dashboard.html)

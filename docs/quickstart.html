@@ -262,7 +262,7 @@
                     ⚡ docs<span class="brand-accent">fy</span>
                 </a>
                 
-                <a href="https://github.com/myk-org/jenkins-job-insight" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight">
+                <a href="https://github.com/myk-org/jenkins-job-insight.git" target="_blank" rel="noopener noreferrer" class="top-bar-github" id="github-link" data-repo-url="https://github.com/myk-org/jenkins-job-insight.git">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
                     <span class="github-stars" id="github-stars"></span>
                 </a>
@@ -312,6 +312,12 @@ AI_MODEL=your-model-name
 # Option 1: Direct API key (simplest)
 ANTHROPIC_API_KEY=your-anthropic-api-key
 
+# --- AI CLI Timeout ---
+
+# Timeout for AI CLI calls in minutes (default: 10)
+# Increase for slower models like gpt-5.2
+# AI_CLI_TIMEOUT=10
+
 # ===================
 # Peer Analysis (Optional)
 # ===================
@@ -331,6 +337,7 @@ curl<span class="w"> </span>http://localhost:8000/health
 <p>If you prefer a local process instead of Docker, set the same environment variables, run <code>uv sync</code>, build the frontend with <code>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</code>, then start the API with <code>uv run jenkins-job-insight</code>. Without <code>frontend/dist</code>, the JSON API still works but the browser UI returns <code>Frontend not built</code>.</p>
 <blockquote>
 <p><strong>Warning:</strong> <code>JENKINS_URL</code>, <code>JENKINS_USER</code>, and <code>JENKINS_PASSWORD</code> no longer have to be server-wide settings. For the quickest first run, put them in <code>.env</code>; otherwise, send <code>jenkins_url</code>, <code>jenkins_user</code>, and <code>jenkins_password</code> in the <code>POST /analyze</code> body. If your Jenkins uses a self-signed certificate, set <code>JENKINS_SSL_VERIFY=false</code> or send <code>"jenkins_ssl_verify": false</code> in the request.</p>
+<p><strong>Note:</strong> If you enable <code>PEER_AI_CONFIGS</code>, every provider listed there must also be installed and authenticated in the same runtime.</p>
 </blockquote>
 <h2 id="submit-your-first-request">Submit your first request</h2>
 <p>Use a failed build number for your first run. If the build actually passed, the service returns a completed result with the summary <code>Build passed successfully. No failures to analyze.</code> You can also submit a still-running build: with the default <code>"wait_for_completion": true</code>, the service watches Jenkins until the build finishes, then starts analysis.</p>
@@ -363,7 +370,7 @@ curl<span class="w"> </span>http://localhost:8000/health
 </code></pre></div>
 
 <blockquote>
-<p><strong>Tip:</strong> <code>peer_ai_configs</code> is optional. Omit it for the normal single-AI flow. When you do use peers, <code>peer_analysis_max_rounds</code> defaults to <code>3</code> and accepts <code>1</code> through <code>10</code>.</p>
+<p><strong>Tip:</strong> <code>peer_ai_configs</code> is optional. Omit it to keep the server default; if the server is not configured with <code>PEER_AI_CONFIGS</code>, that means the normal single-AI flow. Send <code>"peer_ai_configs": []</code> to disable peer analysis for one request while keeping the server default in place. When you do use peers, <code>peer_analysis_max_rounds</code> defaults to <code>3</code> and accepts <code>1</code> through <code>10</code>.</p>
 </blockquote>
 <p>Send it to <code>POST /analyze</code>:</p>
 <div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;http://localhost:8000/analyze&quot;</span><span class="w"> </span><span class="se">\</span>
@@ -533,6 +540,14 @@ jji<span class="w"> </span>analyze<span class="w"> </span>--job-name<span class=
 <li>A readable browser report at the same <code>result_url</code>, with <code>/status/{job_id}</code> handling the in-progress view until the report is ready.</li>
 </ol>
 <p>Once you have that working, the next natural step is to open <code>http://localhost:8000/</code> after registering once to browse the dashboard, or use <code>POST /analyze-failures</code> if you already have raw failures or JUnit XML instead of a Jenkins build.</p>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="#">Installation</a></li>
+<li><a href="#">Run Locally</a></li>
+<li><a href="#">Analyze Jenkins Jobs</a></li>
+<li><a href="#">Analyze Raw Failures and JUnit XML</a></li>
+<li><a href="#">HTML Reports and Dashboard</a></li>
+</ul>
                 </div>
             </article>
             <nav class="page-nav">
@@ -562,6 +577,7 @@ jji<span class="w"> </span>analyze<span class="w"> </span>--job-name<span class=
 <li><a href="#open-the-report-page">Open the report page</a></li>
 <li><a href="#use-the-cli-instead">Use the CLI instead</a></li>
 <li><a href="#what-a-first-successful-run-looks-like">What a first successful run looks like</a></li>
+<li><a href="#related-pages">Related Pages</a></li>
 </ul>
 </div>
 
@@ -572,9 +588,13 @@ jji<span class="w"> </span>analyze<span class="w"> </span>--job-name<span class=
         </main>
 
         <footer class="page-footer">
+            
+            <span class="footer-version">Generated from version 2.1.0</span>
+            <span class="footer-sep">&middot;</span>
+            
             Generated with <a href="https://github.com/myk-org/docsfy" target="_blank" rel="noopener">docs<span class="brand-accent">fy</span></a>
-            <span class="footer-sep">·</span>
-            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> · <a href="llms-full.txt">llms-full.txt</a></span>
+            <span class="footer-sep">&middot;</span>
+            <span class="footer-llm">LLM-friendly: <a href="llms.txt">llms.txt</a> &middot; <a href="llms-full.txt">llms-full.txt</a></span>
         </footer>
     </div>
 
