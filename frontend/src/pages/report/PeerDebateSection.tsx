@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { PeerDebate } from '@/types'
+import type { RepoUrl } from '@/lib/autoLink'
 import { Badge } from '@/components/ui/badge'
 import { PeerRoundEntry } from '@/components/shared/PeerRoundEntry'
 import { groupPeerRounds } from '@/lib/peerDebate'
@@ -7,9 +8,10 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 
 interface PeerDebateSectionProps {
   debate: PeerDebate
+  repoUrls: RepoUrl[]
 }
 
-export function PeerDebateSection({ debate }: PeerDebateSectionProps) {
+export function PeerDebateSection({ debate, repoUrls }: PeerDebateSectionProps) {
   const [expanded, setExpanded] = useState(false)
 
   const groupedRounds = groupPeerRounds(debate.rounds)
@@ -47,7 +49,7 @@ export function PeerDebateSection({ debate }: PeerDebateSectionProps) {
               </p>
               <div className="space-y-2">
                 {entries.map((entry, i) => (
-                  <PeerRoundEntry key={`${entry.role}-${entry.ai_provider}-${i}`} entry={entry} />
+                  <PeerRoundEntry key={`${entry.role}-${entry.ai_provider}-${i}`} entry={entry} repoUrls={repoUrls} />
                 ))}
               </div>
             </div>

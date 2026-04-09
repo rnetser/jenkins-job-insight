@@ -39,7 +39,7 @@ class TestAnalyzeRequest:
         )
         assert request.job_name == "test"
         assert request.build_number == 123
-        assert str(request.tests_repo_url) == "https://github.com/example/repo"
+        assert request.tests_repo_url == "https://github.com/example/repo"
 
     def test_analyze_request_without_tests_repo_url(self) -> None:
         """Test creating AnalyzeRequest without tests_repo_url (now optional)."""
@@ -51,14 +51,22 @@ class TestAnalyzeRequest:
         assert request.build_number == 123
         assert request.tests_repo_url is None
 
-    def test_analyze_request_invalid_tests_repo_url(self) -> None:
-        """Test that invalid repo URL raises ValidationError."""
-        with pytest.raises(ValidationError):
-            AnalyzeRequest(
-                job_name="test",
-                build_number=123,
-                tests_repo_url="not-a-valid-url",
-            )
+    def test_analyze_request_accepts_any_tests_repo_url_string(self) -> None:
+        """Test that tests_repo_url accepts any string (no URL validation)."""
+        request = AnalyzeRequest(
+            job_name="test",
+            build_number=123,
+            tests_repo_url="https://github.com/org/repo:develop",
+        )
+        assert request.tests_repo_url == "https://github.com/org/repo:develop"
+
+        # Also verify a non-URL string is accepted
+        request2 = AnalyzeRequest(
+            job_name="test",
+            build_number=123,
+            tests_repo_url="not-a-valid-url",
+        )
+        assert request2.tests_repo_url == "not-a-valid-url"
 
     def test_wait_for_completion_defaults(self) -> None:
         """Test wait_for_completion fields have correct defaults."""
@@ -878,6 +886,20 @@ class TestAdditionalRepo:
         """Reserved name 'build-artifacts' must be rejected."""
         with pytest.raises(ValidationError):
             AdditionalRepo(name="build-artifacts", url="https://github.com/org/repo")
+
+    def test_ref_whitespace_stripped(self) -> None:
+        """Leading/trailing whitespace in ref is stripped."""
+        repo = AdditionalRepo(
+            name="infra", url="https://github.com/org/infra", ref="  main  "
+        )
+        assert repo.ref == "main"
+
+    def test_ref_whitespace_only_becomes_empty(self) -> None:
+        """Whitespace-only ref is stripped to empty string."""
+        repo = AdditionalRepo(
+            name="infra", url="https://github.com/org/infra", ref="   "
+        )
+        assert repo.ref == ""
 
 
 class TestAdditionalReposDuplicateNames:

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
-import { parseApiTimestamp, isAnalysisTimeout, formatDuration, formatTimestamp, repoNameFromUrl } from '@/lib/utils'
+import { parseApiTimestamp, isAnalysisTimeout, formatDuration, formatTimestamp } from '@/lib/utils'
+import { buildRepoUrls, type RepoUrl } from '@/lib/autoLink'
 import { groupFailures } from '@/lib/grouping'
 import { useExpandCollapseAll } from '@/lib/useExpandCollapseAll'
 import type { ResultResponse, CommentsAndReviews, AiConfig } from '@/types'
@@ -286,6 +287,10 @@ function ReportContent() {
     () => (result ? collectAllTestKeys(result.failures ?? [], result.child_job_analyses ?? []) : []),
     [result],
   )
+  const repoUrls = useMemo<RepoUrl[]>(
+    () => buildRepoUrls(result?.request_params),
+    [result?.request_params],
+  )
   const reviewedCount = allTestKeys.filter((k) => state.reviews[k]?.reviewed).length
 
   /** Format the AI provider/model label for display. */
@@ -420,39 +425,26 @@ function ReportContent() {
               {formatAiLabel(result.ai_provider, result.ai_model)}
             </span>
           )}
-          {(() => {
-            const allRepos: Array<{name: string; url: string}> = []
-            const testsUrl = result.request_params?.tests_repo_url
-            if (testsUrl) {
-              const name = repoNameFromUrl(String(testsUrl))
-              allRepos.push({ name, url: String(testsUrl) })
-            }
-            const additional = result.request_params?.additional_repos
-            if (additional) {
-              allRepos.push(...additional)
-            }
-            if (allRepos.length === 0) return null
-            return (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="inline-flex items-center gap-1 cursor-default">
-                    <FolderGit2 className="h-3 w-3" />
-                    {allRepos.length} repo{allRepos.length !== 1 ? 's' : ''}: {allRepos.map(r => r.name).join(', ')}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent className="max-w-sm">
-                  <div className="flex flex-col gap-1">
-                    {allRepos.map((r) => (
-                      <div key={`${r.name}::${r.url}`} className="flex flex-col">
-                        <span className="font-medium">{r.name}</span>
-                        <span className="text-text-tertiary break-all">{r.url}</span>
-                      </div>
-                    ))}
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            )
-          })()}
+          {repoUrls.length > 0 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center gap-1 cursor-default">
+                  <FolderGit2 className="h-3 w-3" />
+                  {repoUrls.length} repo{repoUrls.length !== 1 ? 's' : ''}: {repoUrls.map(r => r.name).join(', ')}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-sm">
+                <div className="flex flex-col gap-1">
+                  {repoUrls.map((r) => (
+                    <div key={`${r.name}::${r.url}`} className="flex flex-col">
+                      <span className="font-medium">{r.name}</span>
+                      <span className="text-text-tertiary break-all">{r.url}</span>
+                    </div>
+                  ))}
+                </div>
+              </TooltipContent>
+            </Tooltip>
+          )}
           {state.completedAt && (
             <span className="inline-flex items-center gap-1">
               <Clock className="h-3 w-3" />
@@ -473,6 +465,7 @@ function ReportContent() {
       <PeerAnalysisSummary
         failures={result.failures ?? []}
         childJobAnalyses={result.child_job_analyses ?? []}
+        repoUrls={repoUrls}
       />
 
       {/* ---- Top-level failures ---- */}

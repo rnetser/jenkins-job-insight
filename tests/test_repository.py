@@ -549,3 +549,123 @@ class TestRedactUrl:
         from jenkins_job_insight.repository import _redact_url
 
         assert _redact_url("git://github.com/org/repo") == "git://github.com/org/repo"
+
+
+class TestCloneBranchParameter:
+    """Tests for passing branch parameter through clone functions."""
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_with_ssl_retry_passes_branch(
+        self, mock_repo: MagicMock, tmp_path
+    ) -> None:
+        """_clone_with_ssl_retry passes branch to Repo.clone_from when non-empty."""
+        from jenkins_job_insight.repository import _clone_with_ssl_retry
+
+        clone_dir = tmp_path / "repo"
+        clone_dir.mkdir()
+        _clone_with_ssl_retry(
+            "https://example.com/repo", clone_dir, depth=1, branch="develop"
+        )
+        mock_repo.clone_from.assert_called_once_with(
+            "https://example.com/repo", clone_dir, depth=1, branch="develop"
+        )
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_with_ssl_retry_no_branch_when_empty(
+        self, mock_repo: MagicMock, tmp_path
+    ) -> None:
+        """_clone_with_ssl_retry does NOT pass branch when empty string."""
+        from jenkins_job_insight.repository import _clone_with_ssl_retry
+
+        clone_dir = tmp_path / "repo"
+        clone_dir.mkdir()
+        _clone_with_ssl_retry("https://example.com/repo", clone_dir, depth=1, branch="")
+        mock_repo.clone_from.assert_called_once_with(
+            "https://example.com/repo", clone_dir, depth=1
+        )
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_with_ssl_retry_default_no_branch(
+        self, mock_repo: MagicMock, tmp_path
+    ) -> None:
+        """_clone_with_ssl_retry without branch arg does not pass branch."""
+        from jenkins_job_insight.repository import _clone_with_ssl_retry
+
+        clone_dir = tmp_path / "repo"
+        clone_dir.mkdir()
+        _clone_with_ssl_retry("https://example.com/repo", clone_dir, depth=1)
+        mock_repo.clone_from.assert_called_once_with(
+            "https://example.com/repo", clone_dir, depth=1
+        )
+
+    def test_clone_with_ssl_retry_passes_branch_on_ssl_retry(self, tmp_path) -> None:
+        """branch is passed in BOTH the initial and SSL retry Repo.clone_from calls."""
+        from jenkins_job_insight.repository import _clone_with_ssl_retry
+
+        with patch("jenkins_job_insight.repository.Repo.clone_from") as mock_clone:
+            mock_clone.side_effect = [
+                GitCommandError(
+                    "git clone",
+                    128,
+                    stderr="SSL certificate problem",
+                ),
+                MagicMock(),
+            ]
+            target = tmp_path / "repo"
+            target.mkdir()
+            _clone_with_ssl_retry(
+                "https://example.com/repo", target, depth=1, branch="main"
+            )
+
+            assert mock_clone.call_count == 2
+            # First call should have branch
+            first_call = mock_clone.call_args_list[0]
+            assert first_call[1].get("branch") == "main"
+            # Second (retry) call should also have branch
+            second_call = mock_clone.call_args_list[1]
+            assert second_call[1].get("branch") == "main"
+            assert second_call[1].get("env", {}).get("GIT_SSL_NO_VERIFY") == "1"
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_into_passes_branch(self, mock_repo: MagicMock, tmp_path) -> None:
+        """clone_into forwards branch to _clone_with_ssl_retry."""
+        manager = RepositoryManager()
+        target = tmp_path / "my-repo"
+        manager.clone_into(
+            "https://github.com/org/repo", target, depth=1, branch="feature-x"
+        )
+        mock_repo.clone_from.assert_called_once_with(
+            "https://github.com/org/repo", target, depth=1, branch="feature-x"
+        )
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_into_no_branch_when_empty(
+        self, mock_repo: MagicMock, tmp_path
+    ) -> None:
+        """clone_into does not pass branch when empty string."""
+        manager = RepositoryManager()
+        target = tmp_path / "my-repo"
+        manager.clone_into("https://github.com/org/repo", target, depth=1, branch="")
+        mock_repo.clone_from.assert_called_once_with(
+            "https://github.com/org/repo", target, depth=1
+        )
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_passes_branch(self, mock_repo: MagicMock) -> None:
+        """clone forwards branch to _clone_with_ssl_retry."""
+        manager = RepositoryManager()
+        manager.clone("https://github.com/org/repo", depth=50, branch="release-1.0")
+        mock_repo.clone_from.assert_called_once()
+        call_kwargs = mock_repo.clone_from.call_args[1]
+        assert call_kwargs["branch"] == "release-1.0"
+        manager.cleanup()
+
+    @patch("jenkins_job_insight.repository.Repo")
+    def test_clone_no_branch_when_empty(self, mock_repo: MagicMock) -> None:
+        """clone does not pass branch when empty string."""
+        manager = RepositoryManager()
+        manager.clone("https://github.com/org/repo", depth=50, branch="")
+        mock_repo.clone_from.assert_called_once()
+        call_kwargs = mock_repo.clone_from.call_args[1]
+        assert "branch" not in call_kwargs
+        manager.cleanup()

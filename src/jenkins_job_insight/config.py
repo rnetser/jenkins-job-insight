@@ -2,6 +2,7 @@
 
 import os
 from functools import lru_cache
+from urllib.parse import urlsplit, urlunsplit
 
 from ai_cli_runner import VALID_AI_PROVIDERS
 from pydantic import Field, SecretStr, model_validator
@@ -59,13 +60,15 @@ def parse_additional_repos(raw: str) -> list[dict]:
             raise ValueError(
                 f"Invalid additional repo at position {i + 1}: '{entry}' (expected 'name:url')"
             )
-        name, url = entry.split(":", 1)
-        name, url = name.strip(), url.strip()
+        name, url_raw = entry.split(":", 1)
+        name = name.strip()
+        url_raw = url_raw.strip()
         if not name:
             raise ValueError(f"Empty name at position {i + 1}: '{entry}'")
-        if not url:
+        if not url_raw:
             raise ValueError(f"Empty URL at position {i + 1}: '{entry}'")
-        result.append({"name": name, "url": url})
+        url, ref = parse_repo_ref(url_raw)
+        result.append({"name": name, "url": url, "ref": ref})
 
     names = [r["name"] for r in result]
     dupes = [n for n in names if names.count(n) > 1]
@@ -75,6 +78,32 @@ def parse_additional_repos(raw: str) -> list[dict]:
         )
 
     return result
+
+
+def parse_repo_ref(raw: str) -> tuple[str, str]:
+    """Extract git ref from a URL string.
+
+    Format: 'url:ref' where ref is appended after the repo path with a colon.
+    Examples:
+        'https://github.com/org/repo:develop' -> ('https://github.com/org/repo', 'develop')
+        'https://github.com/org/repo:feature/foo' -> ('https://github.com/org/repo', 'feature/foo')
+        'https://github.com/org/repo' -> ('https://github.com/org/repo', '')
+        'https://gitlab.internal:8443/org/repo:v1.0.0' -> ('https://gitlab.internal:8443/org/repo', 'v1.0.0')
+        '' -> ('', '')
+    """
+    if not raw or not raw.strip():
+        return ("", "")
+    raw = raw.strip()
+
+    parts = urlsplit(raw)
+    path = parts.path or ""
+    if ":" in path:
+        repo_path, ref = path.split(":", 1)
+        clean_url = urlunsplit(
+            (parts.scheme, parts.netloc, repo_path, parts.query, parts.fragment)
+        )
+        return (clean_url, ref)
+    return (raw, "")
 
 
 class Settings(BaseSettings):

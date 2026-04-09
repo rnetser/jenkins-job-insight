@@ -28,7 +28,12 @@ from jenkins_job_insight.analyzer import (
     format_exception_with_type,
     get_failure_signature,
 )
-from jenkins_job_insight.config import Settings, get_settings, parse_peer_configs
+from jenkins_job_insight.config import (
+    Settings,
+    get_settings,
+    parse_peer_configs,
+    parse_repo_ref,
+)
 from jenkins_job_insight.encryption import (
     SENSITIVE_KEYS,
     decrypt_sensitive_fields,
@@ -206,6 +211,13 @@ def _attach_result_links(payload: dict, base_url: str, job_id: str) -> dict:
     return payload
 
 
+def _recompose_repo_spec(url: str, ref: str) -> str:
+    """Recompose 'url:ref' from stored components. Returns url alone when ref is empty."""
+    if not url:
+        return ""
+    return f"{url}:{ref}" if ref else url
+
+
 def _reconstruct_from_params(
     result_data: dict,
 ) -> tuple[AnalyzeRequest, Settings]:
@@ -236,7 +248,10 @@ def _reconstruct_from_params(
         max_wait_minutes=params.get("max_wait_minutes", 0),
         enable_jira=params.get("enable_jira"),
         raw_prompt=params.get("raw_prompt") or None,
-        tests_repo_url=params.get("tests_repo_url") or None,
+        tests_repo_url=_recompose_repo_spec(
+            params.get("tests_repo_url", ""), params.get("tests_repo_ref", "")
+        )
+        or None,
         peer_ai_configs=(
             params["peer_ai_configs"] if "peer_ai_configs" in params else []
         ),
@@ -272,8 +287,11 @@ def _reconstruct_from_params(
             overrides[field] = params[field]
 
     # Tests repo URL
-    if params.get("tests_repo_url"):
-        overrides["tests_repo_url"] = params["tests_repo_url"]
+    recomposed = _recompose_repo_spec(
+        params.get("tests_repo_url", ""), params.get("tests_repo_ref", "")
+    )
+    if recomposed:
+        overrides["tests_repo_url"] = recomposed
 
     # SecretStr fields
     if params.get("jira_api_token"):
@@ -949,6 +967,7 @@ def _build_base_request_params(
     peer_ai_configs_resolved: list | None = None,
     *,
     tests_repo_url: str = "",
+    tests_repo_ref: str = "",
     additional_repos: list | None = None,
 ) -> dict:
     """Serialize the common request parameters shared by all analysis endpoints.
@@ -982,6 +1001,7 @@ def _build_base_request_params(
         if additional_repos is not None
         else None,
         "tests_repo_url": tests_repo_url,
+        "tests_repo_ref": tests_repo_ref,
     }
 
 
@@ -1013,12 +1033,14 @@ def _build_request_params(
         if merged.tests_repo_url
         else ""
     )
+    resolved_tests_repo, tests_repo_ref = parse_repo_ref(resolved_tests_repo)
     resolved_additional = resolve_additional_repos(body, merged)
     params = _build_base_request_params(
         ai_provider,
         ai_model,
         peer_ai_configs_resolved,
         tests_repo_url=resolved_tests_repo,
+        tests_repo_ref=tests_repo_ref,
         additional_repos=resolved_additional,
     )
     params.update(
@@ -1169,7 +1191,8 @@ async def analyze_failures(
 
     # Resolve repos early so _build_base_request_params captures effective values
     # (including env-var / config-file defaults, not just request-body values).
-    tests_repo_url = body.tests_repo_url or merged.tests_repo_url
+    tests_repo_url_raw = str(body.tests_repo_url or merged.tests_repo_url or "")
+    tests_repo_url, tests_repo_ref = parse_repo_ref(tests_repo_url_raw)
     additional_repos_list = resolve_additional_repos(body, merged)
 
     job_id = str(uuid.uuid4())
@@ -1184,7 +1207,8 @@ async def analyze_failures(
             ai_provider,
             ai_model,
             peer_ai_configs,
-            tests_repo_url=str(tests_repo_url) if tests_repo_url else "",
+            tests_repo_url=tests_repo_url,
+            tests_repo_ref=tests_repo_ref,
             additional_repos=additional_repos_list or None,
         ),
     }
@@ -1220,6 +1244,7 @@ async def analyze_failures(
                     str(tests_repo_url),
                     repo_path / repo_name,
                     depth=50,
+                    branch=tests_repo_ref,
                 )
                 cloned_repos[repo_name] = repo_path / repo_name
             except Exception as e:
