@@ -281,6 +281,16 @@ describe('autoLinkAnalysis', () => {
     expect(link?.href).toBe('https://github.com/org/my-repo/blob/v2.0.0/conftest.py')
   })
 
+  it('skips unmatched file paths in multi-repo mode', () => {
+    const repos: RepoUrl[] = [
+      { name: 'tests', url: 'https://github.com/org/tests', ref: 'main' },
+      { name: 'infra', url: 'https://github.com/org/infra', ref: 'develop' },
+    ]
+    const segments = autoLinkAnalysis('see conftest.py for setup', repos)
+    // conftest.py doesn't match any repo prefix, so it should NOT be linked
+    expect(segments).toEqual([{ type: 'text', text: 'see conftest.py for setup' }])
+  })
+
   it('does not match version-string directory paths', () => {
     const segments = autoLinkAnalysis('Python 3.11/path.py is broken', repo)
     // Should NOT match any substring of '3.11/path.py' — the dot and digit
@@ -304,5 +314,30 @@ describe('autoLinkAnalysis', () => {
 describe('matchRepo', () => {
   it('throws when repos is empty', () => {
     expect(() => matchRepo('some/file.py', [])).toThrow('matchRepo requires at least one repo')
+  })
+
+  it('returns repo with prefixMatched true when path starts with repo name', () => {
+    const repos: RepoUrl[] = [
+      { name: 'tests', url: 'https://github.com/org/tests', ref: 'main' },
+      { name: 'infra', url: 'https://github.com/org/infra', ref: 'develop' },
+    ]
+    const result = matchRepo('infra/config.yaml', repos)
+    expect(result).toEqual({ repo: repos[1], prefixMatched: true })
+  })
+
+  it('falls back to first repo in single-repo mode when no prefix matches', () => {
+    const repos: RepoUrl[] = [{ name: 'my-repo', url: 'https://github.com/org/my-repo', ref: 'main' }]
+    const result = matchRepo('conftest.py', repos)
+    expect(result).toEqual({ repo: repos[0], prefixMatched: false })
+  })
+
+  it('returns no repo in multi-repo mode when no prefix matches', () => {
+    const repos: RepoUrl[] = [
+      { name: 'tests', url: 'https://github.com/org/tests', ref: 'main' },
+      { name: 'infra', url: 'https://github.com/org/infra', ref: 'develop' },
+    ]
+    const result = matchRepo('conftest.py', repos)
+    expect(result).toEqual({ prefixMatched: false })
+    expect(result.repo).toBeUndefined()
   })
 })

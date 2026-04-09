@@ -90,12 +90,17 @@ export function deduplicateMatches(matches: LinkMatch[]): LinkMatch[] {
   return result
 }
 
+/** Clone a RegExp to reset its lastIndex (required for stateful `g` flag regexes). */
+function cloneRegex(pattern: RegExp): RegExp {
+  return new RegExp(pattern.source, pattern.flags)
+}
+
 /** Run all URL matchers (GitHub PRs, issues, Jira, generic) and push results into matches. */
 function collectUrlMatches(text: string, matches: LinkMatch[]) {
-  collectMatches(text, new RegExp(GITHUB_PR_RE.source, GITHUB_PR_RE.flags), matches, (m) => `${m[1]}#${m[2]}`)
-  collectMatches(text, new RegExp(GITHUB_ISSUE_RE.source, GITHUB_ISSUE_RE.flags), matches, (m) => `${m[1]}#${m[2]}`)
-  collectMatches(text, new RegExp(JIRA_BROWSE_RE.source, JIRA_BROWSE_RE.flags), matches, (m) => m[1])
-  collectMatches(text, new RegExp(GENERIC_URL_RE.source, GENERIC_URL_RE.flags), matches, (m) => trimTrailingPunctuation(m[0]))
+  collectMatches(text, cloneRegex(GITHUB_PR_RE), matches, (m) => `${m[1]}#${m[2]}`)
+  collectMatches(text, cloneRegex(GITHUB_ISSUE_RE), matches, (m) => `${m[1]}#${m[2]}`)
+  collectMatches(text, cloneRegex(JIRA_BROWSE_RE), matches, (m) => m[1])
+  collectMatches(text, cloneRegex(GENERIC_URL_RE), matches, (m) => trimTrailingPunctuation(m[0]))
 }
 
 /**
@@ -132,13 +137,15 @@ export function buildRepoUrls(requestParams?: {
   return urls
 }
 
-/** Match a file path to the repo whose name is a prefix of the path. Falls back to first repo. */
-export function matchRepo(filePath: string, repos: RepoUrl[]): { repo: RepoUrl; prefixMatched: boolean } {
+/** Match a file path to the repo whose name is a prefix of the path. Falls back to first repo only in single-repo mode. */
+export function matchRepo(filePath: string, repos: RepoUrl[]): { repo?: RepoUrl; prefixMatched: boolean } {
   if (repos.length === 0) throw new Error('matchRepo requires at least one repo')
   for (const repo of repos) {
     if (filePath.startsWith(repo.name + '/')) return { repo, prefixMatched: true }
   }
-  return { repo: repos[0], prefixMatched: false }
+  return repos.length === 1
+    ? { repo: repos[0], prefixMatched: false }
+    : { prefixMatched: false }
 }
 
 /** Convert plain text to link segments by detecting URLs AND file paths (for analysis text). */
@@ -150,12 +157,13 @@ export function autoLinkAnalysis(text: string, repoUrls: RepoUrl[]): LinkSegment
 
   // File-path matcher (only if we have repo URLs to link to)
   if (repoUrls.length > 0) {
-    for (const m of text.matchAll(new RegExp(FILE_PATH_RE.source, FILE_PATH_RE.flags))) {
+    for (const m of text.matchAll(cloneRegex(FILE_PATH_RE))) {
       const start = m.index!
       const fullMatch = m[0]
       const lineNumber = m[1] // capture group for :lineNumber
       const filePath = lineNumber ? fullMatch.slice(0, fullMatch.lastIndexOf(':')) : fullMatch
       const { repo, prefixMatched } = matchRepo(filePath, repoUrls)
+      if (!repo) continue
       const relPath = prefixMatched ? filePath.slice(repo.name.length + 1) : filePath
       const href = buildFileUrl(repo.url, relPath, lineNumber, repo.ref)
       matches.push({ start, end: start + fullMatch.length, text: fullMatch, href })
