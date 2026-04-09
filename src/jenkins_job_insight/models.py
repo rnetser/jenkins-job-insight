@@ -39,6 +39,15 @@ class AdditionalRepo(BaseModel):
         min_length=1, description="Descriptive name (used as cloned directory name)"
     )
     url: HttpUrl = Field(description="Repository URL to clone")
+    ref: str = Field(
+        default="",
+        description="Git ref (branch/tag) for clone checkout and UI file links; empty = remote default branch",
+    )
+
+    @field_validator("ref")
+    @classmethod
+    def ref_strip(cls, v: str) -> str:
+        return v.strip()
 
     @field_validator("name")
     @classmethod
@@ -60,7 +69,7 @@ class AdditionalRepo(BaseModel):
 class BaseAnalysisRequest(BaseModel):
     """Shared fields for all analysis request types."""
 
-    tests_repo_url: HttpUrl | None = Field(
+    tests_repo_url: str | None = Field(
         default=None,
         description="URL of the tests repository (overrides env var default)",
     )

@@ -1,14 +1,17 @@
 import { useState } from 'react'
 import type { PeerRound } from '@/types'
+import type { RepoUrl } from '@/lib/autoLink'
 import { Badge } from '@/components/ui/badge'
 import { ClassificationBadge } from '@/components/shared/ClassificationBadge'
+import { LinkedText } from '@/components/shared/LinkedText'
 
 interface PeerRoundEntryProps {
   entry: PeerRound
+  repoUrls: RepoUrl[]
   compact?: boolean
 }
 
-export function PeerRoundEntry({ entry, compact = false }: PeerRoundEntryProps) {
+export function PeerRoundEntry({ entry, repoUrls, compact = false }: PeerRoundEntryProps) {
   const [detailsExpanded, setDetailsExpanded] = useState(false)
   const isOrchestrator = entry.role === 'orchestrator'
 
@@ -36,7 +39,9 @@ export function PeerRoundEntry({ entry, compact = false }: PeerRoundEntryProps) 
       </div>
       {entry.details && (
         <div>
-          <p className="text-xs text-text-secondary whitespace-pre-wrap">{displayDetails}</p>
+          <p className="text-xs text-text-secondary whitespace-pre-wrap">
+            <LinkedText text={displayDetails} repoUrls={repoUrls} />
+          </p>
           {needsTruncation && (
             <button
               type="button"

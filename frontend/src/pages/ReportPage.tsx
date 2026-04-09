@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { parseApiTimestamp, isAnalysisTimeout, formatDuration, formatTimestamp, repoNameFromUrl } from '@/lib/utils'
+import { buildRepoUrls, type RepoUrl } from '@/lib/autoLink'
 import { groupFailures } from '@/lib/grouping'
 import { useExpandCollapseAll } from '@/lib/useExpandCollapseAll'
 import type { ResultResponse, CommentsAndReviews, AiConfig } from '@/types'
@@ -286,6 +287,10 @@ function ReportContent() {
     () => (result ? collectAllTestKeys(result.failures ?? [], result.child_job_analyses ?? []) : []),
     [result],
   )
+  const repoUrls = useMemo<RepoUrl[]>(
+    () => buildRepoUrls(result?.request_params),
+    [result?.request_params?.tests_repo_url, result?.request_params?.tests_repo_ref, result?.request_params?.additional_repos],
+  )
   const reviewedCount = allTestKeys.filter((k) => state.reviews[k]?.reviewed).length
 
   /** Format the AI provider/model label for display. */
@@ -473,6 +478,7 @@ function ReportContent() {
       <PeerAnalysisSummary
         failures={result.failures ?? []}
         childJobAnalyses={result.child_job_analyses ?? []}
+        repoUrls={repoUrls}
       />
 
       {/* ---- Top-level failures ---- */}

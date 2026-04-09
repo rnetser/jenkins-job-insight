@@ -19,7 +19,7 @@ import jenkins
 from fastapi import HTTPException
 from simple_logger.logger import get_logger
 
-from jenkins_job_insight.config import Settings, parse_additional_repos
+from jenkins_job_insight.config import Settings, parse_additional_repos, parse_repo_ref
 from jenkins_job_insight.jenkins_artifacts import (
     ERROR_PATTERN,
     cleanup_extract_dir,
@@ -87,7 +87,11 @@ async def clone_additional_repos(
         target = repo_path / ar.name
         try:
             await asyncio.to_thread(
-                repo_manager.clone_into, str(ar.url), target, depth=1
+                repo_manager.clone_into,
+                str(ar.url),
+                target,
+                depth=1,
+                branch=ar.ref,
             )
             cloned[ar.name] = target
             logger.info(f"Cloned additional repo '{ar.name}' into {target}")
@@ -211,8 +215,8 @@ If CODE ISSUE:
 {
   "classification": "CODE ISSUE",
   "affected_tests": ["test_name_1", "test_name_2"],
-  "details": "Your detailed analysis of what caused this failure",
-  "artifacts_evidence": "VERBATIM lines from files under build-artifacts/ that support your analysis. Format each line as [file-path]: content. Example: [build-artifacts/logs/app.log]: 2026-03-16 INFO Service started successfully. Include evidence showing the product is healthy or that the test code caused the failure.",
+  "details": "Your detailed analysis of what caused this failure. Use paragraph breaks (double newlines) to separate sections: root cause identification, evidence from logs/code, and impact assessment. Do NOT write one continuous paragraph.",
+  "artifacts_evidence": "VERBATIM lines from files under build-artifacts/ that support your analysis. Format each line as [file-path]: content. Example: [build-artifacts/logs/app.log]: 2026-03-16 INFO Service started successfully. Include evidence showing the product is healthy or that the test code caused the failure. Separate distinct artifact entries with paragraph breaks (double newlines).",
   "code_fix": {
     "file": "exact/file/path.py",
     "line": "line number",
@@ -224,13 +228,13 @@ If PRODUCT BUG:
 {
   "classification": "PRODUCT BUG",
   "affected_tests": ["test_name_1", "test_name_2"],
-  "details": "Your detailed analysis of what caused this failure",
-  "artifacts_evidence": "VERBATIM lines from files under build-artifacts/ that prove the product defect. Format each line as [file-path]: content. Example: [build-artifacts/logs/error.log]: 2026-03-16 ERROR NullPointerException in AuthService. Include the specific log lines showing the product failure.",
+  "details": "Your detailed analysis of what caused this failure. Use paragraph breaks (double newlines) to separate sections: root cause identification, evidence from logs/code, and impact assessment. Do NOT write one continuous paragraph.",
+  "artifacts_evidence": "VERBATIM lines from files under build-artifacts/ that prove the product defect. Format each line as [file-path]: content. Example: [build-artifacts/logs/error.log]: 2026-03-16 ERROR NullPointerException in AuthService. Include the specific log lines showing the product failure. Separate distinct artifact entries with paragraph breaks (double newlines).",
   "product_bug_report": {
     "title": "concise bug title",
     "severity": "critical/high/medium/low",
     "component": "affected component",
-    "description": "what product behavior is broken",
+    "description": "what product behavior is broken. Use paragraph breaks between sections.",
     "evidence": "relevant log snippets",
     "jira_search_keywords": ["specific error symptom", "component + behavior", "error type"]
   }
@@ -1540,18 +1544,20 @@ async def analyze_job(
 
             if tests_repo_url:
                 try:
+                    clean_tests_url, tests_ref = parse_repo_ref(str(tests_repo_url))
                     repo_name = derive_test_repo_name(
-                        str(tests_repo_url), additional_repos_list
+                        clean_tests_url, additional_repos_list
                     )
-                    logger.info(f"Cloning test repository: {tests_repo_url}")
+                    logger.info(f"Cloning test repository: {clean_tests_url}")
                     await asyncio.to_thread(
                         repo_manager.clone_into,
-                        str(tests_repo_url),
+                        clean_tests_url,
                         repo_path / repo_name,
                         depth=50,
+                        branch=tests_ref,
                     )
                     cloned_repos[repo_name] = repo_path / repo_name
-                    repo_context = f"\nTest repository cloned from: {tests_repo_url} (at {repo_name}/)"
+                    repo_context = f"\nTest repository cloned from: {clean_tests_url} (at {repo_name}/)"
                 except Exception as e:
                     logger.warning(f"Failed to clone repository: {e}")
                     repo_context = f"\nFailed to clone repo: {e}"

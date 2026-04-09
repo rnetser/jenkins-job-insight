@@ -107,10 +107,22 @@ def _validate_repo_url(repo_url: str | HttpUrl) -> None:
         )
 
 
-def _clone_with_ssl_retry(repo_url: str, clone_dir: Path, depth: int) -> None:
-    """Clone a repo, retrying without SSL verification on cert errors."""
+def _clone_with_ssl_retry(
+    repo_url: str, clone_dir: Path, depth: int, branch: str = ""
+) -> None:
+    """Clone a repo, retrying without SSL verification on cert errors.
+
+    Args:
+        repo_url: Repository URL to clone.
+        clone_dir: Target directory for the clone.
+        depth: Number of commits to fetch.
+        branch: Git ref (branch/tag) to check out. Empty string means default branch.
+    """
+    kwargs: dict[str, object] = {"depth": depth}
+    if branch:
+        kwargs["branch"] = branch
     try:
-        Repo.clone_from(repo_url, clone_dir, depth=depth)
+        Repo.clone_from(repo_url, clone_dir, **kwargs)
     except GitCommandError as exc:
         stderr = str(exc)
         if (
@@ -129,7 +141,7 @@ def _clone_with_ssl_retry(repo_url: str, clone_dir: Path, depth: int) -> None:
             Repo.clone_from(
                 repo_url,
                 clone_dir,
-                depth=depth,
+                **kwargs,
                 env={"GIT_SSL_NO_VERIFY": "1"},
             )
         else:
@@ -145,7 +157,7 @@ class RepositoryManager:
         self.base_path.mkdir(parents=True, exist_ok=True)
         self.temp_dirs: list[Path] = []
 
-    def clone(self, repo_url: str | HttpUrl, depth: int = 50) -> Path:
+    def clone(self, repo_url: str | HttpUrl, depth: int = 50, branch: str = "") -> Path:
         """Clone repository to a unique temporary directory.
 
         Each clone gets a UUID-based directory to support parallel webhook calls.
@@ -153,6 +165,7 @@ class RepositoryManager:
         Args:
             repo_url: URL of the git repository to clone (string or HttpUrl).
             depth: Number of commits to fetch for git history context.
+            branch: Git ref (branch/tag) to check out. Empty string means default branch.
 
         Returns:
             Path to the cloned repository.
@@ -167,11 +180,15 @@ class RepositoryManager:
         clone_dir.mkdir(parents=True, exist_ok=True)
         self.temp_dirs.append(clone_dir)
         logger.info(f"Cloning repository to {clone_dir}")
-        _clone_with_ssl_retry(str(repo_url), clone_dir, depth)
+        _clone_with_ssl_retry(str(repo_url), clone_dir, depth, branch=branch)
         return clone_dir
 
     def clone_into(
-        self, repo_url: str | HttpUrl, target_dir: Path, depth: int = 1
+        self,
+        repo_url: str | HttpUrl,
+        target_dir: Path,
+        depth: int = 1,
+        branch: str = "",
     ) -> Path:
         """Clone repository into a specific target directory.
 
@@ -184,6 +201,7 @@ class RepositoryManager:
             repo_url: URL of the git repository to clone.
             target_dir: Exact directory to clone into.
             depth: Number of commits to fetch (default 1 for shallow).
+            branch: Git ref (branch/tag) to check out. Empty string means default branch.
 
         Returns:
             Path to the cloned repository (same as target_dir).
@@ -194,7 +212,7 @@ class RepositoryManager:
         _validate_repo_url(repo_url)
         target_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Cloning repository into {target_dir}")
-        _clone_with_ssl_retry(str(repo_url), target_dir, depth)
+        _clone_with_ssl_retry(str(repo_url), target_dir, depth, branch=branch)
         return target_dir
 
     def create_workspace(self) -> Path:

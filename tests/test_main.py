@@ -156,17 +156,18 @@ class TestAnalyzeEndpoint:
         )
         assert response.status_code == 422
 
-    def test_analyze_invalid_tests_repo_url(self, test_client) -> None:
-        """Test that invalid repo URL returns 422."""
+    def test_analyze_accepts_tests_repo_url_with_ref(self, test_client) -> None:
+        """Test that tests_repo_url with ':ref' suffix is accepted (no URL validation)."""
         response = test_client.post(
             "/analyze",
             json={
                 "job_name": "test",
                 "build_number": 123,
-                "tests_repo_url": "not-a-valid-url",
+                "tests_repo_url": "https://github.com/org/repo:develop",
             },
         )
-        assert response.status_code == 422
+        # 400 from missing AI config, not 422 from URL validation
+        assert response.status_code == 400
 
     def test_analyze_missing_required_field(self, test_client) -> None:
         """Test that missing required field returns 422."""

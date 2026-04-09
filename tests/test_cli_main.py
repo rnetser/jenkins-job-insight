@@ -1890,8 +1890,8 @@ class TestAnalyzeAdditionalReposFlags:
         assert result.exit_code == 0
         kwargs = mock_client.analyze.call_args[1]
         assert kwargs["additional_repos"] == [
-            {"name": "infra", "url": "https://github.com/org/infra"},
-            {"name": "product", "url": "https://github.com/org/product"},
+            {"name": "infra", "url": "https://github.com/org/infra", "ref": ""},
+            {"name": "product", "url": "https://github.com/org/product", "ref": ""},
         ]
 
     def test_additional_repos_flag_invalid_format_exits(self, mock_client):
@@ -1948,7 +1948,7 @@ class TestAnalyzeAdditionalReposFlags:
             assert result.exit_code == 0
             kwargs = client.analyze.call_args[1]
             assert kwargs["additional_repos"] == [
-                {"name": "infra", "url": "https://github.com/org/infra"},
+                {"name": "infra", "url": "https://github.com/org/infra", "ref": ""},
             ]
 
 

@@ -11,6 +11,7 @@ from jenkins_job_insight.config import (
     get_settings,
     parse_additional_repos,
     parse_peer_configs,
+    parse_repo_ref,
 )
 
 
@@ -342,19 +343,45 @@ class TestParseAdditionalRepos:
 
     def test_single_repo(self) -> None:
         result = parse_additional_repos("infra:https://github.com/org/infra")
-        assert result == [{"name": "infra", "url": "https://github.com/org/infra"}]
+        assert result == [
+            {"name": "infra", "url": "https://github.com/org/infra", "ref": ""}
+        ]
 
     def test_multiple_repos(self) -> None:
         result = parse_additional_repos(
             "infra:https://github.com/org/infra,product:https://github.com/org/product"
         )
         assert len(result) == 2
-        assert result[0] == {"name": "infra", "url": "https://github.com/org/infra"}
-        assert result[1] == {"name": "product", "url": "https://github.com/org/product"}
+        assert result[0] == {
+            "name": "infra",
+            "url": "https://github.com/org/infra",
+            "ref": "",
+        }
+        assert result[1] == {
+            "name": "product",
+            "url": "https://github.com/org/product",
+            "ref": "",
+        }
 
     def test_whitespace_trimmed(self) -> None:
         result = parse_additional_repos("  infra : https://github.com/org/infra  ")
-        assert result == [{"name": "infra", "url": "https://github.com/org/infra"}]
+        assert result == [
+            {"name": "infra", "url": "https://github.com/org/infra", "ref": ""}
+        ]
+
+    def test_repo_with_branch_ref(self) -> None:
+        """Repo URL with ':branch' extracts ref into result dict."""
+        result = parse_additional_repos("infra:https://github.com/org/infra:develop")
+        assert result == [
+            {"name": "infra", "url": "https://github.com/org/infra", "ref": "develop"}
+        ]
+
+    def test_repo_with_port_and_ref(self) -> None:
+        """Repo URL with port AND ref correctly extracts both."""
+        result = parse_additional_repos("infra:https://gitlab:8443/org/infra:main")
+        assert result == [
+            {"name": "infra", "url": "https://gitlab:8443/org/infra", "ref": "main"}
+        ]
 
     def test_empty_entry_raises(self) -> None:
         with pytest.raises(ValueError, match="Empty entry"):
@@ -389,6 +416,69 @@ class TestParseAdditionalRepos:
         ):
             settings = Settings(_env_file=None)
             assert settings.additional_repos == "infra:https://github.com/org/infra"
+
+
+class TestParseRepoRef:
+    """Tests for parse_repo_ref function."""
+
+    def test_url_without_ref(self) -> None:
+        """URL without ref returns empty ref string."""
+        url, ref = parse_repo_ref("https://github.com/org/repo")
+        assert url == "https://github.com/org/repo"
+        assert ref == ""
+
+    def test_url_with_branch_ref(self) -> None:
+        """URL with ':develop' returns URL and branch ref."""
+        url, ref = parse_repo_ref("https://github.com/org/repo:develop")
+        assert url == "https://github.com/org/repo"
+        assert ref == "develop"
+
+    def test_url_with_tag_ref(self) -> None:
+        """URL with ':v1.0.0' returns URL and tag ref."""
+        url, ref = parse_repo_ref("https://github.com/org/repo:v1.0.0")
+        assert url == "https://github.com/org/repo"
+        assert ref == "v1.0.0"
+
+    def test_url_with_port_and_ref(self) -> None:
+        """URL with port AND ref correctly splits on last segment's colon."""
+        url, ref = parse_repo_ref("https://gitlab.internal:8443/org/repo:main")
+        assert url == "https://gitlab.internal:8443/org/repo"
+        assert ref == "main"
+
+    def test_url_ending_with_git_and_ref(self) -> None:
+        """URL ending with '.git:ref' extracts ref from .git segment."""
+        url, ref = parse_repo_ref("https://github.com/org/repo.git:feature-x")
+        assert url == "https://github.com/org/repo.git"
+        assert ref == "feature-x"
+
+    def test_empty_string(self) -> None:
+        """Empty string returns empty tuple."""
+        url, ref = parse_repo_ref("")
+        assert url == ""
+        assert ref == ""
+
+    def test_whitespace_only(self) -> None:
+        """Whitespace-only string returns empty tuple."""
+        url, ref = parse_repo_ref("   ")
+        assert url == ""
+        assert ref == ""
+
+    def test_url_with_trailing_slash(self) -> None:
+        """URL with trailing slash has no ref (last segment is empty)."""
+        url, ref = parse_repo_ref("https://github.com/org/repo/")
+        assert url == "https://github.com/org/repo/"
+        assert ref == ""
+
+    def test_whitespace_stripped(self) -> None:
+        """Leading/trailing whitespace is stripped before parsing."""
+        url, ref = parse_repo_ref("  https://github.com/org/repo:develop  ")
+        assert url == "https://github.com/org/repo"
+        assert ref == "develop"
+
+    def test_trailing_colon_returns_empty_ref(self) -> None:
+        url, ref = parse_repo_ref("https://github.com/org/repo:")
+        assert url == "https://github.com/org/repo"
+        assert ref == ""
 
 
 class TestPeerSettingsFields:

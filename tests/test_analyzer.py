@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from jenkins_job_insight.analyzer import (
+    _JSON_RESPONSE_SCHEMA,
     _build_resources_section,
     _call_ai_cli_with_retry,
     handle_jenkins_exception,
@@ -1127,7 +1128,7 @@ class TestCloneAdditionalRepos:
 
         manager = MagicMock(spec=RepositoryManager)
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -1169,7 +1170,7 @@ class TestCloneAdditionalRepos:
 
         manager = MagicMock(spec=RepositoryManager)
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -1211,7 +1212,7 @@ class TestCloneAdditionalRepos:
 
         manager = MagicMock(spec=RepositoryManager)
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -1255,7 +1256,7 @@ class TestCloneAdditionalRepos:
             ),
         ]
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             if "bad" in str(url):
                 raise RuntimeError("Clone failed")
             target.mkdir(parents=True, exist_ok=True)
@@ -1303,7 +1304,7 @@ class TestCloneAdditionalRepos:
 
         manager = MagicMock(spec=RepositoryManager)
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -1352,7 +1353,7 @@ class TestCloneAdditionalRepos:
 
         manager = MagicMock(spec=RepositoryManager)
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -1557,7 +1558,7 @@ class TestAnalyzeJobWorkspacePattern:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             clone_into_calls.append({"url": url, "target": target, "depth": depth})
             target.mkdir(parents=True, exist_ok=True)
             # Create .git to simulate a real clone
@@ -1654,7 +1655,7 @@ class TestAnalyzeJobWorkspacePattern:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             clone_into_calls.append({"url": url, "target": target, "depth": depth})
             target.mkdir(parents=True, exist_ok=True)
             (target / ".git").mkdir(exist_ok=True)
@@ -1744,7 +1745,7 @@ class TestAnalyzeJobWorkspacePattern:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             target.mkdir(parents=True, exist_ok=True)
             (target / ".git").mkdir(exist_ok=True)
             return target
@@ -1847,7 +1848,7 @@ class TestAnalyzeJobWorkspacePattern:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             clone_into_calls.append({"url": url, "target": target, "depth": depth})
             target.mkdir(parents=True, exist_ok=True)
             (target / ".git").mkdir(exist_ok=True)
@@ -1964,7 +1965,7 @@ class TestAnalyzeJobWorkspacePattern:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             target.mkdir(parents=True, exist_ok=True)
             (target / ".git").mkdir(exist_ok=True)
             return target
@@ -2044,7 +2045,7 @@ class TestAnalyzeFailuresWorkspacePattern:
         mock_repo_manager.create_workspace.return_value = workspace_dir
         mock_repo_manager.cleanup.return_value = None
 
-        def fake_clone_into(url, target, depth=1):
+        def fake_clone_into(url, target, depth=1, branch=""):
             clone_into_calls.append({"url": url, "target": target, "depth": depth})
             target.mkdir(parents=True, exist_ok=True)
             (target / ".git").mkdir(exist_ok=True)
@@ -2331,3 +2332,305 @@ class TestWorkspaceAlwaysCreated:
         # The annotation should be Path, not Path | None
         assert repo_path_param.annotation is not inspect.Parameter.empty
         assert "None" not in str(repo_path_param.annotation)
+
+
+class TestCloneAdditionalReposPassesRef:
+    """Tests that clone_additional_repos passes ar.ref as branch to clone_into."""
+
+    @pytest.mark.asyncio
+    async def test_ref_passed_as_branch(self, tmp_path) -> None:
+        """AdditionalRepo.ref is forwarded as branch parameter to clone_into."""
+        from jenkins_job_insight.analyzer import clone_additional_repos
+        from jenkins_job_insight.models import AdditionalRepo
+        from jenkins_job_insight.repository import RepositoryManager
+
+        repo_path = tmp_path / "workspace"
+        repo_path.mkdir()
+
+        repos = [
+            AdditionalRepo.model_validate(
+                {
+                    "name": "infra",
+                    "url": "https://github.com/org/infra",
+                    "ref": "develop",
+                }
+            ),
+            AdditionalRepo.model_validate(
+                {"name": "product", "url": "https://github.com/org/product", "ref": ""}
+            ),
+        ]
+
+        manager = MagicMock(spec=RepositoryManager)
+
+        def fake_clone_into(url, target, depth=1, branch=""):
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+
+        manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with patch(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            side_effect=fake_to_thread,
+        ):
+            cloned, _ = await clone_additional_repos(manager, repos, repo_path)
+
+        assert len(cloned) == 2
+        # Check calls: infra should have branch="develop", product should have branch=""
+        calls = manager.clone_into.call_args_list
+        assert len(calls) == 2
+
+        # Find the call for each repo (order may vary due to asyncio.gather)
+        call_args_by_url = {}
+        for call in calls:
+            url = call[0][0] if call[0] else call[1].get("url", "")
+            call_args_by_url[url] = call
+
+        infra_call = call_args_by_url.get("https://github.com/org/infra")
+        assert infra_call is not None
+        # branch should be "develop"
+        assert infra_call[1].get("branch") == "develop" or (
+            len(infra_call[0]) > 3 and infra_call[0][3] == "develop"
+        )
+
+        product_call = call_args_by_url.get("https://github.com/org/product")
+        assert product_call is not None
+        # branch should be "" (empty)
+        assert product_call[1].get("branch", "") == ""
+
+
+class TestAnalyzeJobParsesRepoRef:
+    """Tests that analyze_job parses ref from tests_repo_url before cloning."""
+
+    @pytest.mark.asyncio
+    async def test_tests_repo_url_with_ref_passes_branch_to_clone(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """When tests_repo_url has ':ref', parse it and pass branch to clone_into."""
+        from jenkins_job_insight.analyzer import analyze_job
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest.model_validate(
+            {
+                "job_name": "my-job",
+                "build_number": 123,
+                "tests_repo_url": "https://github.com/org/my-tests:develop",
+            }
+        )
+        settings = Settings()
+        settings_data = settings.model_dump(mode="python")
+        settings_data["jenkins_url"] = "https://jenkins.example.com"
+        settings_data["jenkins_user"] = "user"
+        settings_data["jenkins_password"] = _FAKE_JENKINS_PASSWORD
+        merged = Settings.model_validate(settings_data)
+
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+
+        mock_client = MagicMock()
+        mock_client.get_build_info_safe.return_value = {
+            "result": "FAILURE",
+            "building": False,
+        }
+        mock_client.get_build_console.return_value = "Build failed"
+        mock_client.get_test_report.return_value = None
+        mock_client.session = MagicMock()
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.JenkinsClient",
+            lambda **kwargs: mock_client,
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            fake_to_thread,
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.check_ai_cli_available",
+            AsyncMock(return_value=(True, "")),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
+            AsyncMock(
+                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+            ),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.update_progress_phase",
+            AsyncMock(),
+        )
+
+        clone_into_calls = []
+        mock_repo_manager = MagicMock()
+        mock_repo_manager.create_workspace.return_value = workspace_dir
+
+        def fake_clone_into(url, target, depth=1, branch=""):
+            clone_into_calls.append(
+                {"url": url, "target": target, "depth": depth, "branch": branch}
+            )
+            target.mkdir(parents=True, exist_ok=True)
+            (target / ".git").mkdir(exist_ok=True)
+            return target
+
+        mock_repo_manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.RepositoryManager",
+            lambda: mock_repo_manager,
+        )
+
+        await analyze_job(
+            body,
+            merged,
+            ai_provider="claude",
+            ai_model="test-model",
+            job_id="test-job-id",
+        )
+
+        assert len(clone_into_calls) == 1
+        call = clone_into_calls[0]
+        # URL should be clean (no :develop suffix)
+        assert call["url"] == "https://github.com/org/my-tests"
+        # Branch should be "develop"
+        assert call["branch"] == "develop"
+        # Target should use the clean repo name
+        assert call["target"] == workspace_dir / "my-tests"
+
+    @pytest.mark.asyncio
+    async def test_tests_repo_url_without_ref_no_branch(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """When tests_repo_url has no ':ref', branch is empty string."""
+        from jenkins_job_insight.analyzer import analyze_job
+        from jenkins_job_insight.models import AnalyzeRequest
+
+        body = AnalyzeRequest.model_validate(
+            {
+                "job_name": "my-job",
+                "build_number": 123,
+                "tests_repo_url": "https://github.com/org/my-tests",
+            }
+        )
+        settings = Settings()
+        settings_data = settings.model_dump(mode="python")
+        settings_data["jenkins_url"] = "https://jenkins.example.com"
+        settings_data["jenkins_user"] = "user"
+        settings_data["jenkins_password"] = _FAKE_JENKINS_PASSWORD
+        merged = Settings.model_validate(settings_data)
+
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+
+        mock_client = MagicMock()
+        mock_client.get_build_info_safe.return_value = {
+            "result": "FAILURE",
+            "building": False,
+        }
+        mock_client.get_build_console.return_value = "Build failed"
+        mock_client.get_test_report.return_value = None
+        mock_client.session = MagicMock()
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.JenkinsClient",
+            lambda **kwargs: mock_client,
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.asyncio.to_thread",
+            fake_to_thread,
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.check_ai_cli_available",
+            AsyncMock(return_value=(True, "")),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
+            AsyncMock(
+                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+            ),
+        )
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.update_progress_phase",
+            AsyncMock(),
+        )
+
+        clone_into_calls = []
+        mock_repo_manager = MagicMock()
+        mock_repo_manager.create_workspace.return_value = workspace_dir
+
+        def fake_clone_into(url, target, depth=1, branch=""):
+            clone_into_calls.append(
+                {"url": url, "target": target, "depth": depth, "branch": branch}
+            )
+            target.mkdir(parents=True, exist_ok=True)
+            (target / ".git").mkdir(exist_ok=True)
+            return target
+
+        mock_repo_manager.clone_into = MagicMock(side_effect=fake_clone_into)
+
+        monkeypatch.setattr(
+            "jenkins_job_insight.analyzer.RepositoryManager",
+            lambda: mock_repo_manager,
+        )
+
+        await analyze_job(
+            body,
+            merged,
+            ai_provider="claude",
+            ai_model="test-model",
+            job_id="test-job-id",
+        )
+
+        assert len(clone_into_calls) == 1
+        call = clone_into_calls[0]
+        assert call["url"] == "https://github.com/org/my-tests"
+        assert call["branch"] == ""
+
+
+class TestJsonResponseSchemaParagraphBreaks:
+    """Tests that _JSON_RESPONSE_SCHEMA instructs the AI to use paragraph breaks."""
+
+    def test_code_issue_details_has_paragraph_break_instruction(self) -> None:
+        """CODE ISSUE details field instructs AI to use paragraph breaks."""
+        assert "paragraph breaks" in _JSON_RESPONSE_SCHEMA
+        assert "root cause identification" in _JSON_RESPONSE_SCHEMA
+        assert "Do NOT write one continuous paragraph" in _JSON_RESPONSE_SCHEMA
+
+    def test_product_bug_details_has_paragraph_break_instruction(self) -> None:
+        """PRODUCT BUG details field instructs AI to use paragraph breaks."""
+        assert "If PRODUCT BUG:" in _JSON_RESPONSE_SCHEMA
+        assert "Do NOT write one continuous paragraph" in _JSON_RESPONSE_SCHEMA
+
+    def test_code_issue_artifacts_evidence_has_paragraph_break_instruction(
+        self,
+    ) -> None:
+        """CODE ISSUE artifacts_evidence field instructs AI to separate entries with paragraph breaks."""
+        assert "artifacts_evidence" in _JSON_RESPONSE_SCHEMA
+        assert (
+            "Separate distinct artifact entries with paragraph breaks"
+            in _JSON_RESPONSE_SCHEMA
+        )
+
+    def test_product_bug_artifacts_evidence_has_paragraph_break_instruction(
+        self,
+    ) -> None:
+        """PRODUCT BUG artifacts_evidence field instructs AI to separate entries with paragraph breaks."""
+        assert "artifacts_evidence" in _JSON_RESPONSE_SCHEMA
+        assert (
+            "Separate distinct artifact entries with paragraph breaks"
+            in _JSON_RESPONSE_SCHEMA
+        )
+
+    def test_product_bug_report_description_has_paragraph_break_instruction(
+        self,
+    ) -> None:
+        """product_bug_report description field instructs AI to use paragraph breaks."""
+        assert "paragraph breaks between sections" in _JSON_RESPONSE_SCHEMA

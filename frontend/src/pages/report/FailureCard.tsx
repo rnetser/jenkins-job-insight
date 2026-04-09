@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, type ReactNode } from 'react'
+import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import type { GroupedFailure } from '@/types'
+import { buildFileUrl, buildRepoUrls, matchRepo, type RepoUrl } from '@/lib/autoLink'
 import { isCommentInScope } from '@/lib/grouping'
 import { api } from '@/lib/api'
 import { getUsername } from '@/lib/cookies'
@@ -9,6 +10,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ClassificationBadge } from '@/components/shared/ClassificationBadge'
+import { LinkedText } from '@/components/shared/LinkedText'
 import { PeerDebateSection } from './PeerDebateSection'
 import { ReviewToggle } from './ReviewToggle'
 import { CommentsSection } from './CommentsSection'
@@ -66,6 +68,11 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
   const [includeLinks, setIncludeLinks] = useState(false)
   const [copiedSection, setCopiedSection] = useState<string | null>(null)
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null)
+
+  const repoUrls = useMemo<RepoUrl[]>(
+    () => buildRepoUrls(result?.request_params),
+    [result?.request_params?.tests_repo_url, result?.request_params?.tests_repo_ref, result?.request_params?.additional_repos],
+  )
 
   useEffect(() => {
     return () => {
@@ -274,7 +281,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                     </Badge>
                   ) : undefined}
                 />
-                <div className="rounded-md bg-glow-blue p-3 text-sm text-text-secondary whitespace-pre-wrap">{analysis.details}</div>
+                <div className="rounded-md bg-glow-blue p-3 text-sm text-text-secondary whitespace-pre-wrap"><LinkedText text={analysis.details} repoUrls={repoUrls} /></div>
               </div>
             )}
 
@@ -282,9 +289,9 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             {analysis.artifacts_evidence && (
               <div>
                 <CopyableSectionHeader title="Artifacts Evidence" content={analysis.artifacts_evidence} sectionId="artifacts_evidence" copiedSection={copiedSection} onCopy={copyToClipboard} />
-                <pre className="overflow-x-auto rounded-md bg-surface-elevated p-3 text-xs text-text-secondary font-mono whitespace-pre-wrap max-h-64 overflow-y-auto">
-                  {analysis.artifacts_evidence}
-                </pre>
+                <div className="overflow-x-auto rounded-md bg-surface-elevated p-3 text-xs text-text-secondary font-mono whitespace-pre-wrap max-h-64 overflow-y-auto">
+                  <LinkedText text={analysis.artifacts_evidence} repoUrls={repoUrls} />
+                </div>
               </div>
             )}
 
@@ -304,11 +311,25 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                 <div className="rounded-md bg-glow-green border border-signal-green/20 p-3 text-sm">
                   {analysis.code_fix.file && (
                     <p className="font-mono text-xs text-signal-green">
-                      {analysis.code_fix.file}
-                      {analysis.code_fix.line && `:${analysis.code_fix.line}`}
+                      {repoUrls.length > 0 ? (() => {
+                        const { repo, prefixMatched } = matchRepo(analysis.code_fix.file, repoUrls)
+                        const relPath = prefixMatched ? analysis.code_fix.file.slice(repo.name.length + 1) : analysis.code_fix.file
+                        return (
+                          <a
+                            href={buildFileUrl(repo.url, relPath, analysis.code_fix.line, repo.ref)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-signal-green hover:underline"
+                          >
+                            {analysis.code_fix.file}{analysis.code_fix.line && `:${analysis.code_fix.line}`}
+                          </a>
+                        )
+                      })() : (
+                        <>{analysis.code_fix.file}{analysis.code_fix.line && `:${analysis.code_fix.line}`}</>
+                      )}
                     </p>
                   )}
-                  {analysis.code_fix.change && <p className="mt-1 text-text-secondary whitespace-pre-wrap">{analysis.code_fix.change}</p>}
+                  {analysis.code_fix.change && <p className="mt-1 text-text-secondary whitespace-pre-wrap"><LinkedText text={analysis.code_fix.change} repoUrls={repoUrls} /></p>}
                 </div>
               </div>
             )}
@@ -320,7 +341,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                 <div className="rounded-md bg-glow-orange border border-signal-orange/20 p-3 text-sm space-y-2">
                   {analysis.product_bug_report.title && <p className="font-medium text-text-primary">{analysis.product_bug_report.title}</p>}
                   {analysis.product_bug_report.severity && <Badge variant="warning" className="text-[10px]">{analysis.product_bug_report.severity}</Badge>}
-                  {analysis.product_bug_report.description && <p className="text-text-secondary whitespace-pre-wrap">{analysis.product_bug_report.description}</p>}
+                  {analysis.product_bug_report.description && <p className="text-text-secondary whitespace-pre-wrap"><LinkedText text={analysis.product_bug_report.description} repoUrls={repoUrls} /></p>}
                   {analysis.product_bug_report?.jira_matches?.length > 0 && (
                     <div className="mt-2">
                       <p className="text-xs font-display uppercase tracking-widest text-text-tertiary mb-1">Matching Jira Issues</p>
@@ -341,7 +362,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
             )}
 
             {/* Peer debate trail */}
-            {rep.peer_debate && <PeerDebateSection debate={rep.peer_debate} />}
+            {rep.peer_debate && <PeerDebateSection debate={rep.peer_debate} repoUrls={repoUrls} />}
 
             {/* Actions: classification + AI selector + bug creation */}
             <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-border-muted">

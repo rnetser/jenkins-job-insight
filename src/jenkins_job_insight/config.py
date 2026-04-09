@@ -59,13 +59,15 @@ def parse_additional_repos(raw: str) -> list[dict]:
             raise ValueError(
                 f"Invalid additional repo at position {i + 1}: '{entry}' (expected 'name:url')"
             )
-        name, url = entry.split(":", 1)
-        name, url = name.strip(), url.strip()
+        name, url_raw = entry.split(":", 1)
+        name = name.strip()
+        url_raw = url_raw.strip()
         if not name:
             raise ValueError(f"Empty name at position {i + 1}: '{entry}'")
-        if not url:
+        if not url_raw:
             raise ValueError(f"Empty URL at position {i + 1}: '{entry}'")
-        result.append({"name": name, "url": url})
+        url, ref = parse_repo_ref(url_raw)
+        result.append({"name": name, "url": url, "ref": ref})
 
     names = [r["name"] for r in result]
     dupes = [n for n in names if names.count(n) > 1]
@@ -75,6 +77,31 @@ def parse_additional_repos(raw: str) -> list[dict]:
         )
 
     return result
+
+
+def parse_repo_ref(raw: str) -> tuple[str, str]:
+    """Extract git ref from a URL string.
+
+    Format: 'url:ref' where ref is in the last path segment.
+    Examples:
+        'https://github.com/org/repo:develop' -> ('https://github.com/org/repo', 'develop')
+        'https://github.com/org/repo' -> ('https://github.com/org/repo', '')
+        'https://gitlab.internal:8443/org/repo:v1.0.0' -> ('https://gitlab.internal:8443/org/repo', 'v1.0.0')
+        '' -> ('', '')
+    """
+    if not raw or not raw.strip():
+        return ("", "")
+    raw = raw.strip()
+    last_slash = raw.rfind("/")
+    if last_slash == -1:
+        return (raw, "")
+    last_segment = raw[last_slash + 1 :]
+    if ":" in last_segment:
+        colon_idx = last_segment.index(":")
+        ref = last_segment[colon_idx + 1 :]
+        url = raw[: last_slash + 1] + last_segment[:colon_idx]
+        return (url, ref)
+    return (raw, "")
 
 
 class Settings(BaseSettings):

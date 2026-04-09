@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import type { FailureAnalysis, PeerDebate, ChildJobAnalysis } from '@/types'
+import type { RepoUrl } from '@/lib/autoLink'
 import { Badge } from '@/components/ui/badge'
 import { PeerRoundEntry } from '@/components/shared/PeerRoundEntry'
 import { groupPeerRounds } from '@/lib/peerDebate'
@@ -73,9 +74,10 @@ function getUniqueAiLabels(debates: FailureWithDebate[]): string[] {
 interface PeerAnalysisSummaryProps {
   failures: FailureAnalysis[]
   childJobAnalyses?: ChildJobAnalysis[]
+  repoUrls: RepoUrl[]
 }
 
-export function PeerAnalysisSummary({ failures, childJobAnalyses }: PeerAnalysisSummaryProps) {
+export function PeerAnalysisSummary({ failures, childJobAnalyses, repoUrls }: PeerAnalysisSummaryProps) {
   const [expanded, setExpanded] = useState(false)
 
   const debateFailures = useMemo(
@@ -139,7 +141,7 @@ export function PeerAnalysisSummary({ failures, childJobAnalyses }: PeerAnalysis
       {expanded && (
         <div className="border-t border-border-muted p-4 space-y-4">
           {debateFailures.map(({ id, testName, siblingTestNames, jobLabel, debate }) => (
-            <DebateEntry key={id} testName={testName} siblingTestNames={siblingTestNames} jobLabel={jobLabel} debate={debate} />
+            <DebateEntry key={id} testName={testName} siblingTestNames={siblingTestNames} jobLabel={jobLabel} debate={debate} repoUrls={repoUrls} />
           ))}
         </div>
       )}
@@ -148,7 +150,7 @@ export function PeerAnalysisSummary({ failures, childJobAnalyses }: PeerAnalysis
 }
 
 /** A single failure's debate entry within the summary. */
-function DebateEntry({ testName, siblingTestNames, jobLabel, debate }: { testName: string; siblingTestNames: string[]; jobLabel: string; debate: PeerDebate }) {
+function DebateEntry({ testName, siblingTestNames, jobLabel, debate, repoUrls }: { testName: string; siblingTestNames: string[]; jobLabel: string; debate: PeerDebate; repoUrls: RepoUrl[] }) {
   const [timelineOpen, setTimelineOpen] = useState(false)
   const groupedRounds = useMemo(() => groupPeerRounds(debate.rounds), [debate.rounds])
 
@@ -197,7 +199,7 @@ function DebateEntry({ testName, siblingTestNames, jobLabel, debate }: { testNam
               </p>
               <div className="space-y-2">
                 {entries.map((entry) => (
-                  <PeerRoundEntry key={`r${roundNum}-${entry.role}-${entry.ai_provider}-${entry.ai_model}`} entry={entry} compact />
+                  <PeerRoundEntry key={`r${roundNum}-${entry.role}-${entry.ai_provider}-${entry.ai_model}`} entry={entry} repoUrls={repoUrls} compact />
                 ))}
               </div>
             </div>
