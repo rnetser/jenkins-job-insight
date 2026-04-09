@@ -14,7 +14,7 @@ export function LinkedText({ text, repoUrls, renderLink }: LinkedTextProps) {
   return (
     <>
       {segments.map((seg, i) =>
-        seg.type === 'link' && isSafeHref(seg.href!) ? (
+        seg.type === 'link' && seg.href && isSafeHref(seg.href) ? (
           renderLink ? renderLink(seg, i) : (
             <a key={i} href={seg.href} target="_blank" rel="noopener noreferrer" className="text-text-link hover:underline">
               {seg.text}

@@ -289,7 +289,7 @@ function ReportContent() {
   )
   const repoUrls = useMemo<RepoUrl[]>(
     () => buildRepoUrls(result?.request_params),
-    [result?.request_params?.tests_repo_url, result?.request_params?.tests_repo_ref, result?.request_params?.additional_repos],
+    [result?.request_params],
   )
   const reviewedCount = allTestKeys.filter((k) => state.reviews[k]?.reviewed).length
 
