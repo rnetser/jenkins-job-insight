@@ -71,7 +71,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
 
   const repoUrls = useMemo<RepoUrl[]>(
     () => buildRepoUrls(result?.request_params),
-    [result?.request_params?.tests_repo_url, result?.request_params?.tests_repo_ref, result?.request_params?.additional_repos],
+    [result?.request_params],
   )
 
   useEffect(() => {
