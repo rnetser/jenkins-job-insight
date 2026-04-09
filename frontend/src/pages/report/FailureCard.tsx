@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import type { GroupedFailure } from '@/types'
-import { buildFileUrl, buildRepoUrls, matchRepo, type RepoUrl } from '@/lib/autoLink'
+import { buildFileUrl, buildRepoUrls, isSafeHref, matchRepo, type RepoUrl } from '@/lib/autoLink'
 import { isCommentInScope } from '@/lib/grouping'
 import { api } from '@/lib/api'
 import { getUsername } from '@/lib/cookies'
@@ -313,11 +313,12 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                     <p className="font-mono text-xs text-signal-green">
                       {repoUrls.length > 0 ? (() => {
                         const { repo, prefixMatched } = matchRepo(analysis.code_fix.file, repoUrls)
-                        const canLink = !!repo
                         const relPath = repo && prefixMatched ? analysis.code_fix.file.slice(repo.name.length + 1) : analysis.code_fix.file
+                        const href = repo ? buildFileUrl(repo.url, relPath, analysis.code_fix.line, repo.ref) : ''
+                        const canLink = !!repo && isSafeHref(href)
                         return canLink ? (
                           <a
-                            href={buildFileUrl(repo!.url, relPath, analysis.code_fix.line, repo!.ref)}
+                            href={href}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-signal-green hover:underline"

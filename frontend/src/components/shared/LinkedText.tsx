@@ -1,20 +1,11 @@
 import { useMemo, type ReactNode } from 'react'
-import { autoLinkAnalysis, type RepoUrl, type LinkSegment } from '@/lib/autoLink'
+import { autoLinkAnalysis, isSafeHref, type RepoUrl, type LinkSegment } from '@/lib/autoLink'
 
 interface LinkedTextProps {
   text: string
   repoUrls: RepoUrl[]
   /** Custom renderer for link segments. Must return a React element with a stable `key` (typically the `index` parameter). */
   renderLink?: (seg: LinkSegment, index: number) => ReactNode
-}
-
-function isSafeHref(href: string): boolean {
-  try {
-    const url = new URL(href, 'https://example.invalid')
-    return url.protocol === 'http:' || url.protocol === 'https:'
-  } catch {
-    return false
-  }
 }
 
 export function LinkedText({ text, repoUrls, renderLink }: LinkedTextProps) {

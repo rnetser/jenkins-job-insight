@@ -38,6 +38,16 @@ export interface RepoUrl {
   ref: string
 }
 
+/** Check if a URL is safe to render as a clickable link (HTTP/HTTPS only). */
+export function isSafeHref(href: string): boolean {
+  try {
+    const url = new URL(href, 'https://example.invalid')
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 export function trimTrailingPunctuation(url: string): string {
   let result = url
   while (result.length > 0) {
