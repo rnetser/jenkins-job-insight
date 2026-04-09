@@ -15,13 +15,14 @@ export const GENERIC_URL_RE = /https?:\/\/\S+/g
 
 /**
  * Matches file paths like `conftest.py`, `utils/helpers.py:42`,
- * `path/to/deep/file.yaml`, etc. Uses negative lookbehind for `://`
- * and `/` to avoid matching tails of URLs as file paths.
- * Directory segments exclude dots to avoid matching version strings like `3.11/`.
+ * `path/to/deep/file.yaml`, etc. Uses negative lookbehind for `://`,
+ * `/`, `.`, word characters, and hyphens to avoid matching tails of
+ * URLs, partial words, or fragments from version strings like
+ * `3.11/path.py`.
  * Use new RegExp(...) for stateful operations.
  */
 export const FILE_PATH_RE =
-  /(?<![:\/.])(?:(?:[a-zA-Z0-9_-]+\/)+[a-zA-Z0-9_.-]+|[a-zA-Z0-9_-]+)\.(?:py|yaml|yml|json|cfg|ini|toml|sh|js|ts|go|java|xml|html|md|txt|conf|properties|groovy|rb|rs)(?::(\d+))?/g
+  /(?<![:\\/.\w-])(?:(?:[a-zA-Z0-9_-]+\/)+[a-zA-Z0-9_.-]+|[a-zA-Z0-9_-]+)\.(?:py|yaml|yml|json|cfg|ini|toml|sh|js|ts|go|java|xml|html|md|txt|conf|properties|groovy|rb|rs)(?::(\d+))?/g
 
 export type LinkMatch = { start: number; end: number; text: string; href: string }
 
@@ -133,6 +134,7 @@ export function buildRepoUrls(requestParams?: {
 
 /** Match a file path to the repo whose name is a prefix of the path. Falls back to first repo. */
 export function matchRepo(filePath: string, repos: RepoUrl[]): { repo: RepoUrl; prefixMatched: boolean } {
+  if (repos.length === 0) throw new Error('matchRepo requires at least one repo')
   for (const repo of repos) {
     if (filePath.startsWith(repo.name + '/')) return { repo, prefixMatched: true }
   }

@@ -4,6 +4,7 @@ import {
   deduplicateMatches,
   autoLinkAnalysis,
   buildFileUrl,
+  matchRepo,
   type LinkMatch,
   type RepoUrl,
 } from '../autoLink'
@@ -282,11 +283,26 @@ describe('autoLinkAnalysis', () => {
 
   it('does not match version-string directory paths', () => {
     const segments = autoLinkAnalysis('Python 3.11/path.py is broken', repo)
-    // Should NOT match '3.11/path.py' or '11/path.py' since the dot lookbehind
-    // blocks matches starting right after a dot (the '.' in '3.11').
-    // '1/path.py' still matches (preceded by '1', not a dot).
+    // Should NOT match any substring of '3.11/path.py' — the dot and digit
+    // lookbehinds block matches starting after dots or digits.
+    const links = segments.filter(s => s.type === 'link')
+    expect(links).toHaveLength(0)
+  })
+
+  it('still matches directory paths whose name ends with a digit', () => {
+    const segments = autoLinkAnalysis('see test1/file.py for details', repo)
     const links = segments.filter(s => s.type === 'link')
     expect(links).toHaveLength(1)
-    expect(links[0].text).toBe('1/path.py')
+    expect(links[0].text).toBe('test1/file.py')
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  matchRepo                                                          */
+/* ------------------------------------------------------------------ */
+
+describe('matchRepo', () => {
+  it('throws when repos is empty', () => {
+    expect(() => matchRepo('some/file.py', [])).toThrow('matchRepo requires at least one repo')
   })
 })
