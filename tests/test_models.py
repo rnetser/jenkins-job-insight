@@ -60,6 +60,14 @@ class TestAnalyzeRequest:
         )
         assert request.tests_repo_url == "https://github.com/org/repo:develop"
 
+        # Also verify a non-URL string is accepted
+        request2 = AnalyzeRequest(
+            job_name="test",
+            build_number=123,
+            tests_repo_url="not-a-valid-url",
+        )
+        assert request2.tests_repo_url == "not-a-valid-url"
+
     def test_wait_for_completion_defaults(self) -> None:
         """Test wait_for_completion fields have correct defaults."""
         request = AnalyzeRequest(job_name="test", build_number=1)

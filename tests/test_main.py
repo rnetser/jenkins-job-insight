@@ -168,6 +168,7 @@ class TestAnalyzeEndpoint:
         )
         # 400 from missing AI config, not 422 from URL validation
         assert response.status_code == 400
+        assert "AI provider" in response.json()["detail"]
 
     def test_analyze_missing_required_field(self, test_client) -> None:
         """Test that missing required field returns 422."""
@@ -2696,6 +2697,26 @@ class TestReconstructFromParams:
         body, merged = _reconstruct_from_params(result_data)
         assert body.job_name == "j"
         assert merged.jenkins_url  # Falls back to env default
+
+    def test_reconstruct_rehydrates_tests_repo_ref(self, mock_settings) -> None:
+        """tests_repo_ref is recomposed with tests_repo_url during reconstruction."""
+        from jenkins_job_insight.main import _reconstruct_from_params
+
+        result_data = {
+            "job_name": "j",
+            "build_number": 1,
+            "request_params": {
+                "ai_provider": "claude",
+                "ai_model": "m",
+                "tests_repo_url": "https://github.com/org/repo",
+                "tests_repo_ref": "feature/bar",
+            },
+        }
+        body, merged = _reconstruct_from_params(result_data)
+        # Body should have the recomposed url:ref format
+        assert body.tests_repo_url == "https://github.com/org/repo:feature/bar"
+        # Settings should also have the recomposed format
+        assert merged.tests_repo_url == "https://github.com/org/repo:feature/bar"
 
 
 class TestResumeWaitingJobs:

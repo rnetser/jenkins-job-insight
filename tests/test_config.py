@@ -480,6 +480,12 @@ class TestParseRepoRef:
         assert url == "https://github.com/org/repo"
         assert ref == ""
 
+    def test_ref_with_slash(self) -> None:
+        """Ref containing slashes (branch names like feature/foo)."""
+        url, ref = parse_repo_ref("https://github.com/org/repo:feature/foo")
+        assert url == "https://github.com/org/repo"
+        assert ref == "feature/foo"
+
 
 class TestPeerSettingsFields:
     """Tests for peer_ai_configs and peer_analysis_max_rounds Settings fields."""

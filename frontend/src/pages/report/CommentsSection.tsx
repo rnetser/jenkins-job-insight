@@ -73,10 +73,10 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
     }
   }, [dispatch])
 
-  // Reset retry tracking when scope changes
+  // Reset retry tracking when scope or draft content changes
   useEffect(() => {
     setSucceededTestNames(new Set())
-  }, [jobId, testNames.join(','), scopedChildJobName, scopedChildBuildNumber]) // eslint-disable-line react-hooks/exhaustive-deps -- join produces a stable string key
+  }, [jobId, testNames.join(','), scopedChildJobName, scopedChildBuildNumber, text]) // eslint-disable-line react-hooks/exhaustive-deps -- join produces a stable string key
 
   const testComments = comments.filter((c) => isCommentInScope(c, testNames, scopedChildJobName, scopedChildBuildNumber))
 

@@ -8,13 +8,22 @@ interface LinkedTextProps {
   renderLink?: (seg: LinkSegment, index: number) => ReactNode
 }
 
+function isSafeHref(href: string): boolean {
+  try {
+    const url = new URL(href, 'https://example.invalid')
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 export function LinkedText({ text, repoUrls, renderLink }: LinkedTextProps) {
   const segments = useMemo<LinkSegment[]>(() => autoLinkAnalysis(text, repoUrls), [text, repoUrls])
 
   return (
     <>
       {segments.map((seg, i) =>
-        seg.type === 'link' ? (
+        seg.type === 'link' && isSafeHref(seg.href!) ? (
           renderLink ? renderLink(seg, i) : (
             <a key={i} href={seg.href} target="_blank" rel="noopener noreferrer" className="text-text-link hover:underline">
               {seg.text}

@@ -211,6 +211,13 @@ def _attach_result_links(payload: dict, base_url: str, job_id: str) -> dict:
     return payload
 
 
+def _recompose_repo_spec(url: str, ref: str) -> str:
+    """Recompose 'url:ref' from stored components. Returns url alone when ref is empty."""
+    if not url:
+        return ""
+    return f"{url}:{ref}" if ref else url
+
+
 def _reconstruct_from_params(
     result_data: dict,
 ) -> tuple[AnalyzeRequest, Settings]:
@@ -241,7 +248,10 @@ def _reconstruct_from_params(
         max_wait_minutes=params.get("max_wait_minutes", 0),
         enable_jira=params.get("enable_jira"),
         raw_prompt=params.get("raw_prompt") or None,
-        tests_repo_url=params.get("tests_repo_url") or None,
+        tests_repo_url=_recompose_repo_spec(
+            params.get("tests_repo_url", ""), params.get("tests_repo_ref", "")
+        )
+        or None,
         peer_ai_configs=(
             params["peer_ai_configs"] if "peer_ai_configs" in params else []
         ),
@@ -277,8 +287,11 @@ def _reconstruct_from_params(
             overrides[field] = params[field]
 
     # Tests repo URL
-    if params.get("tests_repo_url"):
-        overrides["tests_repo_url"] = params["tests_repo_url"]
+    recomposed = _recompose_repo_spec(
+        params.get("tests_repo_url", ""), params.get("tests_repo_ref", "")
+    )
+    if recomposed:
+        overrides["tests_repo_url"] = recomposed
 
     # SecretStr fields
     if params.get("jira_api_token"):

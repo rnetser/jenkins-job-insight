@@ -313,8 +313,9 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                     <p className="font-mono text-xs text-signal-green">
                       {repoUrls.length > 0 ? (() => {
                         const { repo, prefixMatched } = matchRepo(analysis.code_fix.file, repoUrls)
+                        const canLink = prefixMatched || repoUrls.length === 1
                         const relPath = prefixMatched ? analysis.code_fix.file.slice(repo.name.length + 1) : analysis.code_fix.file
-                        return (
+                        return canLink ? (
                           <a
                             href={buildFileUrl(repo.url, relPath, analysis.code_fix.line, repo.ref)}
                             target="_blank"
@@ -323,6 +324,8 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                           >
                             {analysis.code_fix.file}{analysis.code_fix.line && `:${analysis.code_fix.line}`}
                           </a>
+                        ) : (
+                          <>{analysis.code_fix.file}{analysis.code_fix.line && `:${analysis.code_fix.line}`}</>
                         )
                       })() : (
                         <>{analysis.code_fix.file}{analysis.code_fix.line && `:${analysis.code_fix.line}`}</>

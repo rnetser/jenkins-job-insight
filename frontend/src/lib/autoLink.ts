@@ -21,7 +21,7 @@ export const GENERIC_URL_RE = /https?:\/\/\S+/g
  * Use new RegExp(...) for stateful operations.
  */
 export const FILE_PATH_RE =
-  /(?<![:\/])(?:(?:[a-zA-Z0-9_-]+\/)+[a-zA-Z0-9_.-]+|[a-zA-Z0-9_-]+)\.(?:py|yaml|yml|json|cfg|ini|toml|sh|js|ts|go|java|xml|html|md|txt|conf|properties|groovy|rb|rs)(?::(\d+))?/g
+  /(?<![:\/.])(?:(?:[a-zA-Z0-9_-]+\/)+[a-zA-Z0-9_.-]+|[a-zA-Z0-9_-]+)\.(?:py|yaml|yml|json|cfg|ini|toml|sh|js|ts|go|java|xml|html|md|txt|conf|properties|groovy|rb|rs)(?::(\d+))?/g
 
 export type LinkMatch = { start: number; end: number; text: string; href: string }
 
@@ -105,7 +105,9 @@ function collectUrlMatches(text: string, matches: LinkMatch[]) {
 export function buildFileUrl(baseUrl: string, filePath: string, lineNumber?: string | number, ref: string = 'HEAD'): string {
   const normalized = baseUrl.replace(/\/$/, '')
   const anchor = lineNumber != null && lineNumber !== '' ? `#L${lineNumber}` : ''
-  return `${normalized}/blob/${ref || 'HEAD'}/${filePath}${anchor}`
+  const encodedRef = encodeURIComponent(ref || 'HEAD')
+  const encodedPath = filePath.split('/').map(encodeURIComponent).join('/')
+  return `${normalized}/blob/${encodedRef}/${encodedPath}${anchor}`
 }
 
 /** Build RepoUrl[] from analysis result request_params. */

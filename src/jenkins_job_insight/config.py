@@ -2,6 +2,7 @@
 
 import os
 from functools import lru_cache
+from urllib.parse import urlsplit, urlunsplit
 
 from ai_cli_runner import VALID_AI_PROVIDERS
 from pydantic import Field, SecretStr, model_validator
@@ -82,9 +83,10 @@ def parse_additional_repos(raw: str) -> list[dict]:
 def parse_repo_ref(raw: str) -> tuple[str, str]:
     """Extract git ref from a URL string.
 
-    Format: 'url:ref' where ref is in the last path segment.
+    Format: 'url:ref' where ref is appended after the repo path with a colon.
     Examples:
         'https://github.com/org/repo:develop' -> ('https://github.com/org/repo', 'develop')
+        'https://github.com/org/repo:feature/foo' -> ('https://github.com/org/repo', 'feature/foo')
         'https://github.com/org/repo' -> ('https://github.com/org/repo', '')
         'https://gitlab.internal:8443/org/repo:v1.0.0' -> ('https://gitlab.internal:8443/org/repo', 'v1.0.0')
         '' -> ('', '')
@@ -92,15 +94,15 @@ def parse_repo_ref(raw: str) -> tuple[str, str]:
     if not raw or not raw.strip():
         return ("", "")
     raw = raw.strip()
-    last_slash = raw.rfind("/")
-    if last_slash == -1:
-        return (raw, "")
-    last_segment = raw[last_slash + 1 :]
-    if ":" in last_segment:
-        colon_idx = last_segment.index(":")
-        ref = last_segment[colon_idx + 1 :]
-        url = raw[: last_slash + 1] + last_segment[:colon_idx]
-        return (url, ref)
+
+    parts = urlsplit(raw)
+    path = parts.path or ""
+    if ":" in path:
+        repo_path, ref = path.split(":", 1)
+        clean_url = urlunsplit(
+            (parts.scheme, parts.netloc, repo_path, parts.query, parts.fragment)
+        )
+        return (clean_url, ref)
     return (raw, "")
 
 

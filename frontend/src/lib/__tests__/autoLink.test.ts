@@ -282,11 +282,11 @@ describe('autoLinkAnalysis', () => {
 
   it('does not match version-string directory paths', () => {
     const segments = autoLinkAnalysis('Python 3.11/path.py is broken', repo)
-    // Should NOT match '3.11/path.py' since directory segment contains dots
+    // Should NOT match '3.11/path.py' or '11/path.py' since the dot lookbehind
+    // blocks matches starting right after a dot (the '.' in '3.11').
+    // '1/path.py' still matches (preceded by '1', not a dot).
     const links = segments.filter(s => s.type === 'link')
     expect(links).toHaveLength(1)
-    // '11/path.py' matches since '11' is a valid directory segment (no dots);
-    // the key point is that '3.11/path.py' is NOT matched as a single path.
-    expect(links[0].text).toBe('11/path.py')
+    expect(links[0].text).toBe('1/path.py')
   })
 })
