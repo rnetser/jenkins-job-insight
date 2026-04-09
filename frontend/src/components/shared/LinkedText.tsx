@@ -1,10 +1,10 @@
-import { useMemo, type ReactNode } from 'react'
+import { Fragment, useMemo, type ReactNode } from 'react'
 import { autoLinkAnalysis, isSafeHref, type RepoUrl, type LinkSegment } from '@/lib/autoLink'
 
 interface LinkedTextProps {
   text: string
   repoUrls: RepoUrl[]
-  /** Custom renderer for link segments. Must return a React element with a stable `key` (typically the `index` parameter). */
+  /** Custom renderer for link segments. */
   renderLink?: (seg: LinkSegment, index: number) => ReactNode
 }
 
@@ -15,7 +15,7 @@ export function LinkedText({ text, repoUrls, renderLink }: LinkedTextProps) {
     <>
       {segments.map((seg, i) =>
         seg.type === 'link' && seg.href && isSafeHref(seg.href) ? (
-          renderLink ? renderLink(seg, i) : (
+          renderLink ? <Fragment key={i}>{renderLink(seg, i)}</Fragment> : (
             <a key={i} href={seg.href} target="_blank" rel="noopener noreferrer" className="text-text-link hover:underline">
               {seg.text}
             </a>
