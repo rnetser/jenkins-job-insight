@@ -2026,3 +2026,37 @@ class TestAnalyzeWaitFlags:
         assert result.exit_code == 0
         kwargs = mock_client.analyze.call_args[1]
         assert "wait_for_completion" not in kwargs
+
+
+class TestReAnalyzeCommand:
+    def test_re_analyze(self, mock_client):
+        mock_client.re_analyze.return_value = {
+            "status": "queued",
+            "job_id": "new-1",
+            "result_url": "/results/new-1",
+        }
+        result = runner.invoke(app, ["re-analyze", "old-job-1"])
+        assert result.exit_code == 0
+        assert "new-1" in result.output
+        assert "queued" in result.output.lower()
+        mock_client.re_analyze.assert_called_once_with("old-job-1")
+
+    def test_re_analyze_json(self, mock_client):
+        mock_client.re_analyze.return_value = {
+            "status": "queued",
+            "job_id": "new-1",
+            "result_url": "/results/new-1",
+        }
+        result = runner.invoke(app, ["--json", "re-analyze", "old-job-1"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["status"] == "queued"
+        assert parsed["job_id"] == "new-1"
+
+    def test_re_analyze_error(self, mock_client):
+        mock_client.re_analyze.side_effect = JJIError(
+            status_code=404, detail="Job not found"
+        )
+        result = runner.invoke(app, ["re-analyze", "nonexistent"])
+        assert result.exit_code != 0
+        assert "404" in result.output or "not found" in result.output.lower()

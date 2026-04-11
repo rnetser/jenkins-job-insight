@@ -18,6 +18,7 @@ interface ReportState {
   error: string
   /** Number of comment editors with non-empty text (pauses comment polling when > 0). */
   commentDraftCount: number
+  reAnalyzeOpen: boolean
   /** Incremented on every optimistic local mutation (ADD_COMMENT, REMOVE_COMMENT, SET_REVIEW)
    *  so that in-flight poll responses can detect stale data and skip overwriting. */
   localMutationRev: number
@@ -38,6 +39,7 @@ type ReportAction =
   | { type: 'SET_ERROR'; payload: string }
   | { type: 'INCREMENT_DRAFT_COUNT' }
   | { type: 'DECREMENT_DRAFT_COUNT' }
+  | { type: 'SET_RE_ANALYZE_OPEN'; payload: boolean }
   | {
       type: 'OVERRIDE_CLASSIFICATION'
       payload: {
@@ -64,6 +66,7 @@ const initialState: ReportState = {
   loading: true,
   error: '',
   commentDraftCount: 0,
+  reAnalyzeOpen: false,
   localMutationRev: 0,
 }
 
@@ -97,6 +100,8 @@ function reportReducer(state: ReportState, action: ReportAction): ReportState {
       return { ...state, commentDraftCount: state.commentDraftCount + 1 }
     case 'DECREMENT_DRAFT_COUNT':
       return { ...state, commentDraftCount: Math.max(0, state.commentDraftCount - 1) }
+    case 'SET_RE_ANALYZE_OPEN':
+      return { ...state, reAnalyzeOpen: action.payload }
     case 'OVERRIDE_CLASSIFICATION': {
       if (!state.result) return state
       const { testName, testNames: explicitNames, classification, childJobName, childBuildNumber } = action.payload

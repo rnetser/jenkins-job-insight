@@ -10,6 +10,7 @@ import pytest
 
 from jenkins_job_insight import storage
 from jenkins_job_insight.config import Settings
+from jenkins_job_insight.encryption import encrypt_sensitive_fields
 from jenkins_job_insight.models import (
     AiConfigEntry,
     AnalysisDetail,
@@ -3773,3 +3774,69 @@ class TestRequestParamsPreservation:
         rp = result["request_params"]
         assert rp["ai_provider"] == "cursor"
         assert rp["ai_model"] == "test-model"
+
+
+class TestReAnalyzeEndpoint:
+    """Tests for POST /re-analyze/{job_id}."""
+
+    def test_re_analyze_not_found(self, test_client) -> None:
+        """Re-analyze returns 404 when job_id does not exist."""
+        response = test_client.post("/re-analyze/nonexistent", json={})
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_re_analyze_no_request_params(self, test_client) -> None:
+        """Re-analyze returns 400 when original has no request_params."""
+        from jenkins_job_insight import storage
+
+        # Save a result WITHOUT request_params
+        await storage.save_result(
+            "job-no-params",
+            "http://jenkins/job/test/1/",
+            "completed",
+            {"summary": "done", "failures": []},
+        )
+        response = test_client.post("/re-analyze/job-no-params", json={})
+        assert response.status_code == 400
+        assert "request_params" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_re_analyze_success(self, test_client) -> None:
+        """Re-analyze returns 202 with new job_id when original has request_params."""
+        from jenkins_job_insight import storage
+
+        # Save a result WITH request_params (mimicking a completed analysis)
+        result_data = {
+            "summary": "1 failure",
+            "job_name": "my-job",
+            "build_number": 42,
+            "failures": [],
+            "request_params": encrypt_sensitive_fields(
+                {
+                    "job_name": "my-job",
+                    "build_number": 42,
+                    "ai_provider": "claude",
+                    "ai_model": "opus",
+                    "jenkins_url": "https://jenkins.example.com",
+                    "jenkins_user": "testuser",
+                    "jenkins_password": "testpw",  # pragma: allowlist secret
+                }
+            ),
+        }
+        await storage.save_result(
+            "job-reanalyze-ok",
+            "http://jenkins/job/my-job/42/",
+            "completed",
+            result_data,
+        )
+        with patch("jenkins_job_insight.main.process_analysis_with_id") as mock_process:
+            response = test_client.post("/re-analyze/job-reanalyze-ok", json={})
+        assert response.status_code == 202
+        data = response.json()
+        assert data["status"] == "queued"
+        assert "job_id" in data
+        assert data["job_id"] != "job-reanalyze-ok"  # New job_id
+        assert "result_url" in data
+        mock_process.assert_called_once()
+        assert data["result_url"].endswith(f"/results/{data['job_id']}")

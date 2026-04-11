@@ -153,6 +153,22 @@ class JJIClient:
             accept_statuses=(202,),
         )
 
+    def re_analyze(self, job_id: str) -> dict:
+        """Re-analyze a previously analyzed job with the same settings. POST /re-analyze/{job_id}
+
+        Args:
+            job_id: Job ID of the original analysis to re-run.
+
+        Returns:
+            Queued status with new job_id for polling.
+        """
+        return self._request(
+            "POST",
+            f"/re-analyze/{job_id}",
+            json={},
+            accept_statuses=(202,),
+        )
+
     # -- History --------------------------------------------------------------
 
     def get_test_history(

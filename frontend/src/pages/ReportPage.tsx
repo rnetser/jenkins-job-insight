@@ -16,7 +16,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusChip } from '@/components/shared/StatusChip'
 import { ExpandCollapseButtons } from '@/components/shared/ExpandCollapseButtons'
-import { ExternalLink, CheckCircle2, Clock, Calendar, Cpu, Timer, FolderGit2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { ExternalLink, CheckCircle2, Clock, Calendar, Cpu, Timer, FolderGit2, RotateCw } from 'lucide-react'
+import { ReAnalyzeDialog } from './report/ReAnalyzeDialog'
 import { reviewKey } from './report/ReportContext'
 import type { ChildJobAnalysis } from '@/types'
 
@@ -385,16 +387,30 @@ function ReportContent() {
               {formatAiLabel(result.ai_provider, result.ai_model)}
             </Badge>
           )}
-          {result.jenkins_url && (
-            <a
-              href={String(result.jenkins_url)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="ml-auto flex items-center gap-1 text-xs text-text-link hover:underline"
-            >
-              Jenkins <ExternalLink className="h-3 w-3" />
-            </a>
-          )}
+          <div className="ml-auto flex items-center gap-3">
+            {result.request_params && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-xs"
+                onClick={() => dispatch({ type: 'SET_RE_ANALYZE_OPEN', payload: true })}
+                disabled={result.status === 'running' || result.status === 'pending' || result.status === 'waiting'}
+              >
+                <RotateCw className="h-3.5 w-3.5" />
+                Re-Analyze
+              </Button>
+            )}
+            {result.jenkins_url && (
+              <a
+                href={String(result.jenkins_url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-text-link hover:underline"
+              >
+                Jenkins <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
+          </div>
         </div>
       </div>
 
@@ -518,6 +534,14 @@ function ReportContent() {
         )}
       </footer>
     </div>
+      {result.request_params && (
+        <ReAnalyzeDialog
+          open={state.reAnalyzeOpen}
+          onOpenChange={(v) => dispatch({ type: 'SET_RE_ANALYZE_OPEN', payload: v })}
+          result={result}
+          jobId={jobId!}
+        />
+      )}
     </TooltipProvider>
   )
 }
