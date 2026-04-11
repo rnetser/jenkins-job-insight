@@ -36,6 +36,7 @@ export default defineConfig({
     proxy: {
       '/api': BACKEND_URL,
       '/analyze': BACKEND_URL,
+      '/re-analyze': BACKEND_URL,
       '/results': createSpaProxy(),
       '/history': createSpaProxy(),
       '/status': createSpaProxy(),
