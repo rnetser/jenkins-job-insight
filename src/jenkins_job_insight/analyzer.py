@@ -157,7 +157,7 @@ RETRYABLE_AI_CLI_PATTERNS: list[str] = [
 
 # Pattern for error detection in console output (word boundaries, case-insensitive)
 _CONSOLE_ERROR_PATTERN = re.compile(
-    r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
+    r"\b(errors?|fail(?:ed|ures?)?|exceptions?|tracebacks?|assert(?:ion)?s?|warnings?|critical|fatal)\b",
     re.IGNORECASE,
 )
 
