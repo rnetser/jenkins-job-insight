@@ -60,10 +60,13 @@ function Section({
   )
 }
 
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
       onClick={() => onChange(!checked)}
       className={`relative w-11 h-6 rounded-full transition-colors ${
         checked ? 'bg-signal-blue' : 'bg-surface-hover'
@@ -82,48 +85,58 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   return <label className="text-xs text-text-tertiary">{children}</label>
 }
 
-export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyzeDialogProps) {
-  const navigate = useNavigate()
-  const params = result.request_params
-
-  const [aiProvider, setAiProvider] = useState(params?.ai_provider || 'claude')
-  const [aiModel, setAiModel] = useState(params?.ai_model || '')
-  const [aiCliTimeout, setAiCliTimeout] = useState<number>(
-    (params?.ai_cli_timeout as number) || 10,
-  )
-  const [rawPrompt, setRawPrompt] = useState((params?.raw_prompt as string) || '')
-
-  const [enablePeers, setEnablePeers] = useState(!!(params?.peer_ai_configs?.length))
-  const [peerConfigs, setPeerConfigs] = useState<AiConfig[]>(params?.peer_ai_configs || [])
-  const [maxRounds, setMaxRounds] = useState(params?.peer_analysis_max_rounds || 3)
-
-  const [testsRepoUrl, setTestsRepoUrl] = useState(params?.tests_repo_url || '')
-  const [testsRepoRef, setTestsRepoRef] = useState(params?.tests_repo_ref || '')
-  const [additionalRepos, setAdditionalRepos] = useState<
-    Array<{ name: string; url: string; ref: string }>
-  >(
-    (params?.additional_repos || []).map((r) => ({
+function initFormState(p: AnalysisResult['request_params']) {
+  return {
+    aiProvider: p?.ai_provider || 'claude',
+    aiModel: p?.ai_model || '',
+    aiCliTimeout: (p?.ai_cli_timeout as number) || 10,
+    rawPrompt: (p?.raw_prompt as string) || '',
+    enablePeers: !!(p?.peer_ai_configs?.length),
+    peerConfigs: p?.peer_ai_configs || [],
+    maxRounds: p?.peer_analysis_max_rounds || 3,
+    testsRepoUrl: p?.tests_repo_url || '',
+    testsRepoRef: p?.tests_repo_ref || '',
+    additionalRepos: (p?.additional_repos || []).map((r) => ({
       name: r.name,
       url: r.url,
       ref: r.ref || '',
     })),
-  )
+    enableJira: (p?.enable_jira as boolean) !== false,
+    jiraUrl: (p?.jira_url as string) || '',
+    jiraProjectKey: (p?.jira_project_key as string) || '',
+    getArtifacts: (p?.get_job_artifacts as boolean) !== false,
+    maxArtifactsSize: (p?.jenkins_artifacts_max_size_mb as number) || 50,
+    contextLines: (p?.jenkins_artifacts_context_lines as number) || 100,
+  }
+}
 
-  const [enableJira, setEnableJira] = useState((params?.enable_jira as boolean) !== false)
-  const [jiraUrl, setJiraUrl] = useState((params?.jira_url as string) || '')
-  const [jiraProjectKey, setJiraProjectKey] = useState(
-    (params?.jira_project_key as string) || '',
-  )
+export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyzeDialogProps) {
+  const navigate = useNavigate()
+  const params = result.request_params
 
-  const [getArtifacts, setGetArtifacts] = useState(
-    (params?.get_job_artifacts as boolean) !== false,
-  )
-  const [maxArtifactsSize, setMaxArtifactsSize] = useState<number>(
-    (params?.jenkins_artifacts_max_size_mb as number) || 50,
-  )
-  const [contextLines, setContextLines] = useState<number>(
-    (params?.jenkins_artifacts_context_lines as number) || 100,
-  )
+  const init = initFormState(params)
+  const [aiProvider, setAiProvider] = useState(init.aiProvider)
+  const [aiModel, setAiModel] = useState(init.aiModel)
+  const [aiCliTimeout, setAiCliTimeout] = useState<number>(init.aiCliTimeout)
+  const [rawPrompt, setRawPrompt] = useState(init.rawPrompt)
+
+  const [enablePeers, setEnablePeers] = useState(init.enablePeers)
+  const [peerConfigs, setPeerConfigs] = useState<AiConfig[]>(init.peerConfigs)
+  const [maxRounds, setMaxRounds] = useState(init.maxRounds)
+
+  const [testsRepoUrl, setTestsRepoUrl] = useState(init.testsRepoUrl)
+  const [testsRepoRef, setTestsRepoRef] = useState(init.testsRepoRef)
+  const [additionalRepos, setAdditionalRepos] = useState<
+    Array<{ name: string; url: string; ref: string }>
+  >(init.additionalRepos)
+
+  const [enableJira, setEnableJira] = useState(init.enableJira)
+  const [jiraUrl, setJiraUrl] = useState(init.jiraUrl)
+  const [jiraProjectKey, setJiraProjectKey] = useState(init.jiraProjectKey)
+
+  const [getArtifacts, setGetArtifacts] = useState(init.getArtifacts)
+  const [maxArtifactsSize, setMaxArtifactsSize] = useState<number>(init.maxArtifactsSize)
+  const [contextLines, setContextLines] = useState<number>(init.contextLines)
 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -131,29 +144,23 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
   // Reset form state when dialog opens
   useEffect(() => {
     if (!open) return
-    const p = result.request_params
-    setAiProvider(p?.ai_provider || 'claude')
-    setAiModel(p?.ai_model || '')
-    setAiCliTimeout((p?.ai_cli_timeout as number) || 10)
-    setRawPrompt((p?.raw_prompt as string) || '')
-    setEnablePeers(!!(p?.peer_ai_configs?.length))
-    setPeerConfigs(p?.peer_ai_configs || [])
-    setMaxRounds(p?.peer_analysis_max_rounds || 3)
-    setTestsRepoUrl(p?.tests_repo_url || '')
-    setTestsRepoRef(p?.tests_repo_ref || '')
-    setAdditionalRepos(
-      (p?.additional_repos || []).map((r) => ({
-        name: r.name,
-        url: r.url,
-        ref: r.ref || '',
-      })),
-    )
-    setEnableJira((p?.enable_jira as boolean) !== false)
-    setJiraUrl((p?.jira_url as string) || '')
-    setJiraProjectKey((p?.jira_project_key as string) || '')
-    setGetArtifacts((p?.get_job_artifacts as boolean) !== false)
-    setMaxArtifactsSize((p?.jenkins_artifacts_max_size_mb as number) || 50)
-    setContextLines((p?.jenkins_artifacts_context_lines as number) || 100)
+    const s = initFormState(result.request_params)
+    setAiProvider(s.aiProvider)
+    setAiModel(s.aiModel)
+    setAiCliTimeout(s.aiCliTimeout)
+    setRawPrompt(s.rawPrompt)
+    setEnablePeers(s.enablePeers)
+    setPeerConfigs(s.peerConfigs)
+    setMaxRounds(s.maxRounds)
+    setTestsRepoUrl(s.testsRepoUrl)
+    setTestsRepoRef(s.testsRepoRef)
+    setAdditionalRepos(s.additionalRepos)
+    setEnableJira(s.enableJira)
+    setJiraUrl(s.jiraUrl)
+    setJiraProjectKey(s.jiraProjectKey)
+    setGetArtifacts(s.getArtifacts)
+    setMaxArtifactsSize(s.maxArtifactsSize)
+    setContextLines(s.contextLines)
     setSubmitting(false)
     setError('')
   }, [open, result.request_params])
@@ -173,8 +180,9 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
         jenkins_artifacts_max_size_mb: maxArtifactsSize,
         jenkins_artifacts_context_lines: contextLines,
         raw_prompt: rawPrompt || undefined,
-        tests_repo_url: testsRepoUrl || undefined,
-        tests_repo_ref: testsRepoRef || undefined,
+        tests_repo_url: testsRepoUrl
+          ? (testsRepoRef ? `${testsRepoUrl}:${testsRepoRef}` : testsRepoUrl)
+          : undefined,
         peer_ai_configs: enablePeers ? peerConfigs : [],
         peer_analysis_max_rounds: maxRounds,
         additional_repos: additionalRepos
@@ -284,7 +292,7 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
           >
             <div className="flex items-center justify-between">
               <span className="text-sm text-text-secondary">Enable peer review</span>
-              <Toggle checked={enablePeers} onChange={setEnablePeers} />
+              <Toggle checked={enablePeers} onChange={setEnablePeers} label="Enable peer review" />
             </div>
             {enablePeers && (
               <>
@@ -447,7 +455,7 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
           <Section title="Jira Integration" dotColor="bg-signal-orange">
             <div className="flex items-center justify-between">
               <span className="text-sm text-text-secondary">Enable Jira search</span>
-              <Toggle checked={enableJira} onChange={setEnableJira} />
+              <Toggle checked={enableJira} onChange={setEnableJira} label="Enable Jira search" />
             </div>
             {enableJira && (
               <>
@@ -482,7 +490,7 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
           <Section title="Jenkins Artifacts" dotColor="bg-[#58a6ff]">
             <div className="flex items-center justify-between">
               <span className="text-sm text-text-secondary">Fetch build artifacts</span>
-              <Toggle checked={getArtifacts} onChange={setGetArtifacts} />
+              <Toggle checked={getArtifacts} onChange={setGetArtifacts} label="Fetch build artifacts" />
             </div>
             {getArtifacts && (
               <div className="grid grid-cols-2 gap-3">

@@ -777,3 +777,24 @@ class TestJJIClientAnalyzeExtras:
         client = _make_client(handler)
         result = client.analyze("my-job", 1)
         assert result["status"] == "queued"
+
+
+class TestJJIClientReAnalyze:
+    def test_re_analyze(self):
+        response_data = {
+            "status": "queued",
+            "job_id": "new-reanalysis-1",
+            "message": "Re-analysis job queued.",
+        }
+
+        def handler(request):
+            assert request.method == "POST"
+            assert "/re-analyze/old-job-1" in str(request.url)
+            body = json.loads(request.content)
+            assert body == {}
+            return httpx.Response(202, json=response_data)
+
+        client = _make_client(handler)
+        result = client.re_analyze("old-job-1")
+        assert result["status"] == "queued"
+        assert result["job_id"] == "new-reanalysis-1"
