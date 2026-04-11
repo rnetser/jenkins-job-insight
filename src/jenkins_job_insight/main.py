@@ -278,7 +278,6 @@ def _reconstruct_from_params(
         "jira_max_results",
         "ai_cli_timeout",
         "jenkins_artifacts_max_size_mb",
-        "jenkins_artifacts_context_lines",
         "get_job_artifacts",
         "peer_analysis_max_rounds",
     ]
@@ -639,7 +638,6 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         "ai_cli_timeout",
         "enable_jira",
         "jenkins_artifacts_max_size_mb",
-        "jenkins_artifacts_context_lines",
         "get_job_artifacts",
     ]
     for field in direct_fields:
@@ -1069,7 +1067,6 @@ def _build_request_params(
             else "",
             "ai_cli_timeout": merged.ai_cli_timeout,
             "jenkins_artifacts_max_size_mb": merged.jenkins_artifacts_max_size_mb,
-            "jenkins_artifacts_context_lines": merged.jenkins_artifacts_context_lines,
             "get_job_artifacts": merged.get_job_artifacts,
             "raw_prompt": body.raw_prompt or "",
             "peer_analysis_max_rounds": merged.peer_analysis_max_rounds,

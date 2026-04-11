@@ -21,7 +21,6 @@ from simple_logger.logger import get_logger
 
 from jenkins_job_insight.config import Settings, parse_additional_repos, parse_repo_ref
 from jenkins_job_insight.jenkins_artifacts import (
-    ERROR_PATTERN,
     cleanup_extract_dir,
     process_build_artifacts,
 )
@@ -156,6 +155,13 @@ RETRYABLE_AI_CLI_PATTERNS: list[str] = [
     "ENOENT: no such file or directory",  # Cursor CLI config race condition
 ]
 
+# Pattern for error detection in console output (word boundaries, case-insensitive)
+_CONSOLE_ERROR_PATTERN = re.compile(
+    r"\b(?:errors?|fail(?:ed|ures?)?|tracebacks?|warn(?:ings?)?|critical|fatal|assert(?:ion)?(?:error)?s?)\b"
+    r"|(?:^|[\s\[])[A-Za-z_][\w.]*?(?:error|exception)(?=[:\s\]]|$)",
+    re.IGNORECASE,
+)
+
 
 async def _call_ai_cli_with_retry(
     prompt: str,
@@ -263,12 +269,12 @@ def _build_artifacts_section(artifacts_context: str) -> str:
     return f"""
 
 === BUILD ARTIFACTS ===
-The following is a PREVIEW of build artifact contents. The full files are available at build-artifacts/ in your working directory.
+The following is a PREVIEW of the build-artifacts/ directory structure and file listing. File contents are not inlined here; open the files under build-artifacts/ in your working directory to inspect them.
 
 {artifacts_context}
 
 IMPORTANT INSTRUCTIONS FOR ARTIFACT ANALYSIS:
-1. READ the actual files under build-artifacts/ — the preview above is incomplete
+1. READ the actual files under build-artifacts/ — the listing above is incomplete and does not include file contents
 2. Look for error messages, stack traces, service logs, and status information
 3. In your artifacts_evidence field, include VERBATIM lines with the file path, e.g.: [build-artifacts/logs/app.log]: actual error line here
 4. Do NOT classify based solely on the test error message — check the artifact logs for the real root cause"""
@@ -573,7 +579,7 @@ def extract_relevant_console_lines(console_output: str) -> str:
 
     for i, line in enumerate(lines):
         # Check if line matches error pattern (word boundaries, case-insensitive)
-        if ERROR_PATTERN.search(line):
+        if _CONSOLE_ERROR_PATTERN.search(line):
             # Add some context: 2 lines before
             start = max(0, i - 2)
             for j in range(start, i):
@@ -1501,7 +1507,6 @@ async def analyze_job(
                         build_url,
                         artifacts,
                         settings.jenkins_artifacts_max_size_mb,
-                        settings.jenkins_artifacts_context_lines,
                     )
                 except Exception as exc:
                     logger.warning(f"Failed to process artifacts: {exc}")

@@ -459,11 +459,6 @@ def analyze(
         "--jenkins-artifacts-max-size-mb",
         help="Maximum Jenkins artifacts size in MB.",
     ),
-    jenkins_artifacts_context_lines: int = typer.Option(
-        None,
-        "--jenkins-artifacts-context-lines",
-        help="Maximum Jenkins artifacts context lines for AI prompt.",
-    ),
     get_job_artifacts: bool | None = typer.Option(
         None,
         "--get-job-artifacts/--no-get-job-artifacts",
@@ -547,7 +542,6 @@ def analyze(
         "--jira-max-results": jira_max_results,
         "--ai-cli-timeout": ai_cli_timeout,
         "--jenkins-artifacts-max-size-mb": jenkins_artifacts_max_size_mb,
-        "--jenkins-artifacts-context-lines": jenkins_artifacts_context_lines,
     }
     for flag_name, flag_value in _positive_int_fields.items():
         if flag_value is not None and flag_value <= 0:
@@ -649,7 +643,6 @@ def analyze(
         "jira_max_results": jira_max_results,
         "ai_cli_timeout": ai_cli_timeout,
         "jenkins_artifacts_max_size_mb": jenkins_artifacts_max_size_mb,
-        "jenkins_artifacts_context_lines": jenkins_artifacts_context_lines,
         "poll_interval_minutes": poll_interval,
         "max_wait_minutes": max_wait,
     }
