@@ -1354,6 +1354,91 @@ async def analyze_failures(
         repo_manager.cleanup()
 
 
+@app.post("/re-analyze/{job_id}", status_code=202, response_model=None)
+async def re_analyze(
+    job_id: str,
+    request: Request,
+    body: BaseAnalysisRequest,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    """Re-analyze a previously analyzed job with the same (or overridden) settings.
+
+    Loads stored request_params from the original analysis, applies any
+    overrides from the request body, and queues a new analysis with a
+    fresh job_id.
+    """
+    base_url = _extract_base_url()
+
+    # Load the original result (with sensitive fields for credential reuse)
+    stored = await get_result(job_id, strip_sensitive=False)
+    if not stored or not stored.get("result"):
+        raise HTTPException(status_code=404, detail=f"Result {job_id} not found")
+
+    result_data = stored["result"]
+    if "request_params" not in result_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Original analysis has no stored request_params; cannot re-analyze",
+        )
+
+    # Reconstruct the original AnalyzeRequest + Settings
+    try:
+        original_body, original_settings = _reconstruct_from_params(result_data)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to reconstruct original request: {exc}",
+        )
+
+    # Apply overrides from request body onto the reconstructed request
+    # For each non-None field in the override body, set it on original_body
+    for field_name in body.model_fields_set:
+        setattr(original_body, field_name, getattr(body, field_name))
+
+    # Re-merge settings with overrides applied
+    merged = _merge_settings(original_body, original_settings)
+
+    # Validate AI config and peers
+    _resolve_ai_config(original_body)
+    resolved_peers = _validate_peer_configs(original_body, merged)
+
+    # Generate new job_id
+    new_job_id = str(uuid.uuid4())
+
+    jenkins_url = build_jenkins_url(
+        merged.jenkins_url, original_body.job_name, original_body.build_number
+    )
+
+    initial_result: dict = {
+        "job_name": original_body.job_name,
+        "build_number": original_body.build_number,
+        "request_params": _build_request_params(
+            original_body,
+            merged,
+            original_body.ai_provider or AI_PROVIDER,
+            original_body.ai_model or AI_MODEL,
+            peer_ai_configs_resolved=resolved_peers,
+        ),
+    }
+    can_resume_wait = merged.wait_for_completion and bool(merged.jenkins_url)
+    await save_result(
+        new_job_id,
+        jenkins_url,
+        "waiting" if can_resume_wait else "pending",
+        initial_result,
+    )
+    background_tasks.add_task(
+        process_analysis_with_id, new_job_id, original_body, merged
+    )
+
+    response: dict = {
+        "status": "queued",
+        "job_id": new_job_id,
+        "message": f"Re-analysis job queued. Poll /results/{new_job_id} for status.",
+    }
+    return _attach_result_links(response, base_url, new_job_id)
+
+
 @app.get("/results/{job_id}", response_model=None)
 async def get_job_result(request: Request, job_id: str, response: Response):
     """Retrieve stored result by job_id, or serve SPA for browser requests."""

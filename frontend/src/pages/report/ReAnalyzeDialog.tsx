@@ -1,0 +1,525 @@
+import { useState, useCallback, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
+import { api } from '@/lib/api'
+import type { AnalysisResult, AiConfig } from '@/types'
+import { ChevronRight, Plus, Trash2, RotateCw } from 'lucide-react'
+
+interface ReAnalyzeDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  result: AnalysisResult
+  jobId: string
+}
+
+function Section({
+  title,
+  dotColor,
+  defaultOpen = false,
+  children,
+}: {
+  title: string
+  dotColor: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2 py-2 text-left group"
+      >
+        <ChevronRight
+          className={`h-3 w-3 text-text-tertiary transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
+        />
+        <span className={`w-1.5 h-1.5 rounded-full ${dotColor} flex-shrink-0`} />
+        <span className="font-display text-[11px] font-semibold tracking-widest text-text-secondary uppercase">
+          {title}
+        </span>
+      </button>
+      {open && <div className="pl-5 space-y-4 pb-4">{children}</div>}
+    </div>
+  )
+}
+
+function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={`relative w-11 h-6 rounded-full transition-colors ${
+        checked ? 'bg-signal-blue' : 'bg-surface-hover'
+      }`}
+    >
+      <span
+        className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+          checked ? 'translate-x-5' : ''
+        }`}
+      />
+    </button>
+  )
+}
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return <label className="text-xs text-text-tertiary">{children}</label>
+}
+
+export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyzeDialogProps) {
+  const navigate = useNavigate()
+  const params = result.request_params
+
+  const [aiProvider, setAiProvider] = useState(params?.ai_provider || 'claude')
+  const [aiModel, setAiModel] = useState(params?.ai_model || '')
+  const [aiCliTimeout, setAiCliTimeout] = useState<number>(
+    (params?.ai_cli_timeout as number) || 10,
+  )
+  const [rawPrompt, setRawPrompt] = useState((params?.raw_prompt as string) || '')
+
+  const [enablePeers, setEnablePeers] = useState(!!(params?.peer_ai_configs?.length))
+  const [peerConfigs, setPeerConfigs] = useState<AiConfig[]>(params?.peer_ai_configs || [])
+  const [maxRounds, setMaxRounds] = useState(params?.peer_analysis_max_rounds || 3)
+
+  const [testsRepoUrl, setTestsRepoUrl] = useState(params?.tests_repo_url || '')
+  const [testsRepoRef, setTestsRepoRef] = useState(params?.tests_repo_ref || '')
+  const [additionalRepos, setAdditionalRepos] = useState<
+    Array<{ name: string; url: string; ref: string }>
+  >(
+    (params?.additional_repos || []).map((r) => ({
+      name: r.name,
+      url: r.url,
+      ref: r.ref || '',
+    })),
+  )
+
+  const [enableJira, setEnableJira] = useState((params?.enable_jira as boolean) !== false)
+  const [jiraUrl, setJiraUrl] = useState((params?.jira_url as string) || '')
+  const [jiraProjectKey, setJiraProjectKey] = useState(
+    (params?.jira_project_key as string) || '',
+  )
+
+  const [getArtifacts, setGetArtifacts] = useState(
+    (params?.get_job_artifacts as boolean) !== false,
+  )
+  const [maxArtifactsSize, setMaxArtifactsSize] = useState<number>(
+    (params?.jenkins_artifacts_max_size_mb as number) || 50,
+  )
+  const [contextLines, setContextLines] = useState<number>(
+    (params?.jenkins_artifacts_context_lines as number) || 100,
+  )
+
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+
+  // Reset form state when dialog opens
+  useEffect(() => {
+    if (!open) return
+    const p = result.request_params
+    setAiProvider(p?.ai_provider || 'claude')
+    setAiModel(p?.ai_model || '')
+    setAiCliTimeout((p?.ai_cli_timeout as number) || 10)
+    setRawPrompt((p?.raw_prompt as string) || '')
+    setEnablePeers(!!(p?.peer_ai_configs?.length))
+    setPeerConfigs(p?.peer_ai_configs || [])
+    setMaxRounds(p?.peer_analysis_max_rounds || 3)
+    setTestsRepoUrl(p?.tests_repo_url || '')
+    setTestsRepoRef(p?.tests_repo_ref || '')
+    setAdditionalRepos(
+      (p?.additional_repos || []).map((r) => ({
+        name: r.name,
+        url: r.url,
+        ref: r.ref || '',
+      })),
+    )
+    setEnableJira((p?.enable_jira as boolean) !== false)
+    setJiraUrl((p?.jira_url as string) || '')
+    setJiraProjectKey((p?.jira_project_key as string) || '')
+    setGetArtifacts((p?.get_job_artifacts as boolean) !== false)
+    setMaxArtifactsSize((p?.jenkins_artifacts_max_size_mb as number) || 50)
+    setContextLines((p?.jenkins_artifacts_context_lines as number) || 100)
+    setSubmitting(false)
+    setError('')
+  }, [open, result.request_params])
+
+  const handleSubmit = useCallback(async () => {
+    setSubmitting(true)
+    setError('')
+    try {
+      const overrides: Record<string, unknown> = {
+        ai_provider: aiProvider,
+        ai_model: aiModel,
+        ai_cli_timeout: aiCliTimeout,
+        enable_jira: enableJira,
+        jira_url: jiraUrl || undefined,
+        jira_project_key: jiraProjectKey || undefined,
+        get_job_artifacts: getArtifacts,
+        jenkins_artifacts_max_size_mb: maxArtifactsSize,
+        jenkins_artifacts_context_lines: contextLines,
+        raw_prompt: rawPrompt || undefined,
+        tests_repo_url: testsRepoUrl || undefined,
+        tests_repo_ref: testsRepoRef || undefined,
+        peer_ai_configs: enablePeers ? peerConfigs : [],
+        peer_analysis_max_rounds: maxRounds,
+        additional_repos: additionalRepos
+          .filter((r) => r.name && r.url)
+          .map((r) => ({
+            name: r.name,
+            url: r.url,
+            ref: r.ref || undefined,
+          })),
+      }
+      const body = Object.fromEntries(
+        Object.entries(overrides).filter(([, v]) => v !== undefined),
+      )
+      const data = await api.post<{ job_id: string }>(`/re-analyze/${jobId}`, body)
+      onOpenChange(false)
+      navigate(`/results/${data.job_id}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit re-analysis')
+    } finally {
+      setSubmitting(false)
+    }
+  }, [
+    aiProvider,
+    aiModel,
+    aiCliTimeout,
+    rawPrompt,
+    enablePeers,
+    peerConfigs,
+    maxRounds,
+    testsRepoUrl,
+    testsRepoRef,
+    additionalRepos,
+    enableJira,
+    jiraUrl,
+    jiraProjectKey,
+    getArtifacts,
+    maxArtifactsSize,
+    contextLines,
+    jobId,
+    onOpenChange,
+    navigate,
+  ])
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[600px] max-h-[85vh] flex flex-col bg-surface-card border-border-default p-0">
+        <DialogHeader className="px-6 pt-5 pb-4 border-b border-border-default flex-shrink-0">
+          <DialogTitle>🔄 Re-Analyze Job</DialogTitle>
+          <DialogDescription>
+            Adjust settings and re-run analysis. A new analysis will be created.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="overflow-y-auto flex-1 px-6 py-5 space-y-1">
+          {/* AI Configuration */}
+          <Section title="AI Configuration" dotColor="bg-signal-blue" defaultOpen>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <FieldLabel>AI Provider</FieldLabel>
+                <Select value={aiProvider} onValueChange={setAiProvider}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="claude">Claude</SelectItem>
+                    <SelectItem value="gemini">Gemini</SelectItem>
+                    <SelectItem value="cursor">Cursor</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>AI CLI Timeout</FieldLabel>
+                <Input
+                  type="number"
+                  min={1}
+                  value={aiCliTimeout}
+                  onChange={(e) => setAiCliTimeout(Number(e.target.value) || 1)}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <FieldLabel>AI Model</FieldLabel>
+              <Input
+                placeholder="Default model"
+                value={aiModel}
+                onChange={(e) => setAiModel(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <FieldLabel>Raw Prompt</FieldLabel>
+              <textarea
+                className="flex w-full rounded-md border border-border-default bg-surface-elevated px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-accent min-h-[80px] resize-y"
+                placeholder="Custom prompt to send to AI..."
+                value={rawPrompt}
+                onChange={(e) => setRawPrompt(e.target.value)}
+              />
+            </div>
+          </Section>
+
+          <hr className="border-border-muted" />
+
+          {/* Peer Analysis */}
+          <Section
+            title="Peer Analysis"
+            dotColor="bg-signal-purple"
+            defaultOpen={enablePeers}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-text-secondary">Enable peer review</span>
+              <Toggle checked={enablePeers} onChange={setEnablePeers} />
+            </div>
+            {enablePeers && (
+              <>
+                <div className="space-y-2">
+                  {peerConfigs.map((peer, i) => (
+                    <div
+                      key={i}
+                      className="bg-surface-elevated border border-border-default rounded-lg p-2.5 flex items-center gap-2"
+                    >
+                      <Select
+                        value={peer.ai_provider}
+                        onValueChange={(v) => {
+                          const next = [...peerConfigs]
+                          next[i] = { ...next[i], ai_provider: v }
+                          setPeerConfigs(next)
+                        }}
+                      >
+                        <SelectTrigger className="w-[120px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="claude">Claude</SelectItem>
+                          <SelectItem value="gemini">Gemini</SelectItem>
+                          <SelectItem value="cursor">Cursor</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        className="flex-1"
+                        placeholder="Model"
+                        value={peer.ai_model}
+                        onChange={(e) => {
+                          const next = [...peerConfigs]
+                          next[i] = { ...next[i], ai_model: e.target.value }
+                          setPeerConfigs(next)
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="p-1 rounded hover:bg-surface-hover text-text-tertiary hover:text-signal-red transition flex-shrink-0"
+                        onClick={() => setPeerConfigs(peerConfigs.filter((_, j) => j !== i))}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="text-xs text-text-link hover:text-signal-blue font-medium flex items-center gap-1"
+                  onClick={() =>
+                    setPeerConfigs([...peerConfigs, { ai_provider: 'claude', ai_model: '' }])
+                  }
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add Peer
+                </button>
+                <div className="space-y-1.5">
+                  <FieldLabel>Max Rounds</FieldLabel>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={maxRounds}
+                    onChange={(e) => setMaxRounds(Number(e.target.value) || 1)}
+                    className="w-24"
+                  />
+                </div>
+              </>
+            )}
+          </Section>
+
+          <hr className="border-border-muted" />
+
+          {/* Source Repositories */}
+          <Section title="Source Repositories" dotColor="bg-signal-green">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2 space-y-1.5">
+                <FieldLabel>Tests Repo URL</FieldLabel>
+                <Input
+                  placeholder="https://github.com/org/repo"
+                  value={testsRepoUrl}
+                  onChange={(e) => setTestsRepoUrl(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <FieldLabel>Ref / Branch</FieldLabel>
+                <Input
+                  placeholder="main"
+                  value={testsRepoRef}
+                  onChange={(e) => setTestsRepoRef(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <FieldLabel>Additional Repositories</FieldLabel>
+              {additionalRepos.map((repo, i) => (
+                <div
+                  key={i}
+                  className="bg-surface-elevated border border-border-default rounded-lg p-2.5 space-y-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="w-32"
+                      placeholder="Name"
+                      value={repo.name}
+                      onChange={(e) => {
+                        const next = [...additionalRepos]
+                        next[i] = { ...next[i], name: e.target.value }
+                        setAdditionalRepos(next)
+                      }}
+                    />
+                    <Input
+                      className="flex-1"
+                      placeholder="URL"
+                      value={repo.url}
+                      onChange={(e) => {
+                        const next = [...additionalRepos]
+                        next[i] = { ...next[i], url: e.target.value }
+                        setAdditionalRepos(next)
+                      }}
+                    />
+                    <Input
+                      className="w-24"
+                      placeholder="Ref"
+                      value={repo.ref}
+                      onChange={(e) => {
+                        const next = [...additionalRepos]
+                        next[i] = { ...next[i], ref: e.target.value }
+                        setAdditionalRepos(next)
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-surface-hover text-text-tertiary hover:text-signal-red transition flex-shrink-0"
+                      onClick={() =>
+                        setAdditionalRepos(additionalRepos.filter((_, j) => j !== i))
+                      }
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="text-xs text-text-link hover:text-signal-blue font-medium flex items-center gap-1"
+                onClick={() =>
+                  setAdditionalRepos([...additionalRepos, { name: '', url: '', ref: '' }])
+                }
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Repository
+              </button>
+            </div>
+          </Section>
+
+          <hr className="border-border-muted" />
+
+          {/* Jira Integration */}
+          <Section title="Jira Integration" dotColor="bg-signal-orange">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-text-secondary">Enable Jira search</span>
+              <Toggle checked={enableJira} onChange={setEnableJira} />
+            </div>
+            {enableJira && (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <FieldLabel>Jira URL</FieldLabel>
+                    <Input
+                      placeholder="https://jira.example.com"
+                      value={jiraUrl}
+                      onChange={(e) => setJiraUrl(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <FieldLabel>Project Key</FieldLabel>
+                    <Input
+                      placeholder="PROJ"
+                      value={jiraProjectKey}
+                      onChange={(e) => setJiraProjectKey(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <p className="text-[11px] text-text-tertiary">
+                  🔒 Credentials from original analysis will be reused securely.
+                </p>
+              </>
+            )}
+          </Section>
+
+          <hr className="border-border-muted" />
+
+          {/* Jenkins Artifacts */}
+          <Section title="Jenkins Artifacts" dotColor="bg-[#58a6ff]">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-text-secondary">Fetch build artifacts</span>
+              <Toggle checked={getArtifacts} onChange={setGetArtifacts} />
+            </div>
+            {getArtifacts && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <FieldLabel>Max Size (MB)</FieldLabel>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={maxArtifactsSize}
+                    onChange={(e) => setMaxArtifactsSize(Number(e.target.value) || 1)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <FieldLabel>Context Lines</FieldLabel>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={contextLines}
+                    onChange={(e) => setContextLines(Number(e.target.value) || 1)}
+                  />
+                </div>
+              </div>
+            )}
+          </Section>
+        </div>
+
+        <DialogFooter className="px-6 py-4 border-t border-border-default flex-shrink-0">
+          {error && <p className="text-signal-red text-xs mr-auto">{error}</p>}
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit} disabled={submitting} className="gap-1.5">
+            <RotateCw className={`h-3.5 w-3.5 ${submitting ? 'animate-spin' : ''}`} />
+            Re-Analyze
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}

@@ -717,6 +717,28 @@ def analyze(
         typer.echo(f"Poll: {data.get('result_url', '')}")
 
 
+@app.command("re-analyze")
+def re_analyze_cmd(
+    job_id: str = typer.Argument(help="Job ID of the analysis to re-run."),
+    json_output: bool = _JSON_OPTION,
+):
+    """Re-analyze a previously analyzed job with the same settings."""
+    _set_json(json_output)
+
+    try:
+        client = _get_client()
+        data = client.re_analyze(job_id)
+    except JJIError as err:
+        _handle_error(err)
+
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        typer.echo(f"Re-analysis queued: {data.get('job_id', '')}")
+        typer.echo(f"Status: {data.get('status', '')}")
+        typer.echo(f"Poll: {data.get('result_url', '')}")
+
+
 # -- Status -------------------------------------------------------------------
 
 
