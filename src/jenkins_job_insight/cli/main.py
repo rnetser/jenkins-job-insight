@@ -723,17 +723,12 @@ def re_analyze_cmd(
     json_output: bool = _JSON_OPTION,
 ):
     """Re-analyze a previously analyzed job with the same settings."""
-    _set_json(json_output)
-
-    try:
-        client = _get_client()
-        data = client.re_analyze(job_id)
-    except JJIError as err:
-        _handle_error(err)
-
-    if _state.get("json", False):
-        print_output(data, columns=[], as_json=True)
-    else:
+    data = _run_client_command(
+        json_output,
+        lambda c: c.re_analyze(job_id),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
         typer.echo(f"Re-analysis queued: {data.get('job_id', '')}")
         typer.echo(f"Status: {data.get('status', '')}")
         typer.echo(f"Poll: {data.get('result_url', '')}")

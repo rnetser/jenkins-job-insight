@@ -1079,37 +1079,24 @@ def _build_request_params(
     return encrypt_sensitive_fields(params)
 
 
-@app.post("/analyze", status_code=202, response_model=None)
-async def analyze(
-    request: Request,
+async def _enqueue_analysis_job(
     body: AnalyzeRequest,
+    merged: Settings,
+    resolved_peers: list | None,
     background_tasks: BackgroundTasks,
+    base_url: str,
     *,
-    settings: Settings = Depends(get_settings),
+    message_prefix: str = "Analysis",
 ) -> dict:
-    """Submit a Jenkins job for analysis.
+    """Create, save, and enqueue a new analysis job.
 
-    Returns immediately with a job_id. Poll /results/{job_id} for status.
+    Shared by ``/analyze`` and ``/re-analyze`` to avoid duplicating
+    job setup, persistence, and response shaping.
     """
-    logger.debug(f"Starting analysis for {body.job_name} #{body.build_number}")
-    base_url = _extract_base_url()
-
-    # Validate AI config early -- fail fast before queuing invalid jobs.
-    _resolve_ai_config(body)
-
-    # Generate job_id here so we can return it to the client for polling
     job_id = str(uuid.uuid4())
-    merged = _merge_settings(body, settings)
-
-    # Validate peer configs early -- fail fast before returning 202.
-    resolved_peers = _validate_peer_configs(body, merged)
     jenkins_url = build_jenkins_url(
         merged.jenkins_url, body.job_name, body.build_number
     )
-    # Save initial pending state before queueing background task.
-    # request_params is always persisted so the status page can display
-    # AI provider/model and peer configs, and waiting jobs can resume
-    # after a server restart.
     initial_result: dict = {
         "job_name": body.job_name,
         "build_number": body.build_number,
@@ -1129,15 +1116,43 @@ async def analyze(
         initial_result,
     )
     background_tasks.add_task(process_analysis_with_id, job_id, body, merged)
-    message = f"Analysis job queued. Poll /results/{job_id} for status."
-
     response: dict = {
         "status": "queued",
         "job_id": job_id,
-        "message": message,
+        "message": f"{message_prefix} job queued. Poll /results/{job_id} for status.",
     }
-
     return _attach_result_links(response, base_url, job_id)
+
+
+@app.post("/analyze", status_code=202, response_model=None)
+async def analyze(
+    request: Request,
+    body: AnalyzeRequest,
+    background_tasks: BackgroundTasks,
+    *,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Submit a Jenkins job for analysis.
+
+    Returns immediately with a job_id. Poll /results/{job_id} for status.
+    """
+    logger.debug(f"Starting analysis for {body.job_name} #{body.build_number}")
+    base_url = _extract_base_url()
+
+    # Validate AI config early -- fail fast before queuing invalid jobs.
+    _resolve_ai_config(body)
+
+    merged = _merge_settings(body, settings)
+
+    # Validate peer configs early -- fail fast before returning 202.
+    resolved_peers = _validate_peer_configs(body, merged)
+    return await _enqueue_analysis_job(
+        body,
+        merged,
+        resolved_peers,
+        background_tasks,
+        base_url,
+    )
 
 
 @app.post("/analyze-failures", response_model=None)
@@ -1384,11 +1399,11 @@ async def re_analyze(
     # Reconstruct the original AnalyzeRequest + Settings
     try:
         original_body, original_settings = _reconstruct_from_params(result_data)
-    except Exception as exc:
+    except (ValueError, KeyError) as exc:
         raise HTTPException(
             status_code=400,
             detail=f"Failed to reconstruct original request: {exc}",
-        )
+        ) from exc
 
     # Apply overrides from request body onto the reconstructed request
     # For each non-None field in the override body, set it on original_body
@@ -1402,41 +1417,14 @@ async def re_analyze(
     _resolve_ai_config(original_body)
     resolved_peers = _validate_peer_configs(original_body, merged)
 
-    # Generate new job_id
-    new_job_id = str(uuid.uuid4())
-
-    jenkins_url = build_jenkins_url(
-        merged.jenkins_url, original_body.job_name, original_body.build_number
+    return await _enqueue_analysis_job(
+        original_body,
+        merged,
+        resolved_peers,
+        background_tasks,
+        base_url,
+        message_prefix="Re-analysis",
     )
-
-    initial_result: dict = {
-        "job_name": original_body.job_name,
-        "build_number": original_body.build_number,
-        "request_params": _build_request_params(
-            original_body,
-            merged,
-            original_body.ai_provider or AI_PROVIDER,
-            original_body.ai_model or AI_MODEL,
-            peer_ai_configs_resolved=resolved_peers,
-        ),
-    }
-    can_resume_wait = merged.wait_for_completion and bool(merged.jenkins_url)
-    await save_result(
-        new_job_id,
-        jenkins_url,
-        "waiting" if can_resume_wait else "pending",
-        initial_result,
-    )
-    background_tasks.add_task(
-        process_analysis_with_id, new_job_id, original_body, merged
-    )
-
-    response: dict = {
-        "status": "queued",
-        "job_id": new_job_id,
-        "message": f"Re-analysis job queued. Poll /results/{new_job_id} for status.",
-    }
-    return _attach_result_links(response, base_url, new_job_id)
 
 
 @app.get("/results/{job_id}", response_model=None)

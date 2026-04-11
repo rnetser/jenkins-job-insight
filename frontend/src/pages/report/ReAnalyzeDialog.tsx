@@ -89,7 +89,7 @@ function initFormState(p: AnalysisResult['request_params']) {
   return {
     aiProvider: p?.ai_provider || 'claude',
     aiModel: p?.ai_model || '',
-    aiCliTimeout: (p?.ai_cli_timeout as number) || 10,
+    aiCliTimeout: p?.ai_cli_timeout != null ? (p.ai_cli_timeout as number) : undefined,
     rawPrompt: (p?.raw_prompt as string) || '',
     enablePeers: !!(p?.peer_ai_configs?.length),
     peerConfigs: p?.peer_ai_configs || [],
@@ -101,12 +101,12 @@ function initFormState(p: AnalysisResult['request_params']) {
       url: r.url,
       ref: r.ref || '',
     })),
-    enableJira: (p?.enable_jira as boolean) !== false,
+    enableJira: p?.enable_jira != null ? (p.enable_jira as boolean) : undefined,
     jiraUrl: (p?.jira_url as string) || '',
     jiraProjectKey: (p?.jira_project_key as string) || '',
-    getArtifacts: (p?.get_job_artifacts as boolean) !== false,
-    maxArtifactsSize: (p?.jenkins_artifacts_max_size_mb as number) || 50,
-    contextLines: (p?.jenkins_artifacts_context_lines as number) || 100,
+    getArtifacts: p?.get_job_artifacts != null ? (p.get_job_artifacts as boolean) : undefined,
+    maxArtifactsSize: p?.jenkins_artifacts_max_size_mb != null ? (p.jenkins_artifacts_max_size_mb as number) : undefined,
+    contextLines: p?.jenkins_artifacts_context_lines != null ? (p.jenkins_artifacts_context_lines as number) : undefined,
   }
 }
 
@@ -117,7 +117,7 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
   const init = initFormState(params)
   const [aiProvider, setAiProvider] = useState(init.aiProvider)
   const [aiModel, setAiModel] = useState(init.aiModel)
-  const [aiCliTimeout, setAiCliTimeout] = useState<number>(init.aiCliTimeout)
+  const [aiCliTimeout, setAiCliTimeout] = useState<number | undefined>(init.aiCliTimeout)
   const [rawPrompt, setRawPrompt] = useState(init.rawPrompt)
 
   const [enablePeers, setEnablePeers] = useState(init.enablePeers)
@@ -130,13 +130,13 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
     Array<{ name: string; url: string; ref: string }>
   >(init.additionalRepos)
 
-  const [enableJira, setEnableJira] = useState(init.enableJira)
+  const [enableJira, setEnableJira] = useState<boolean | undefined>(init.enableJira)
   const [jiraUrl, setJiraUrl] = useState(init.jiraUrl)
   const [jiraProjectKey, setJiraProjectKey] = useState(init.jiraProjectKey)
 
-  const [getArtifacts, setGetArtifacts] = useState(init.getArtifacts)
-  const [maxArtifactsSize, setMaxArtifactsSize] = useState<number>(init.maxArtifactsSize)
-  const [contextLines, setContextLines] = useState<number>(init.contextLines)
+  const [getArtifacts, setGetArtifacts] = useState<boolean | undefined>(init.getArtifacts)
+  const [maxArtifactsSize, setMaxArtifactsSize] = useState<number | undefined>(init.maxArtifactsSize)
+  const [contextLines, setContextLines] = useState<number | undefined>(init.contextLines)
 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -169,20 +169,18 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
     setSubmitting(true)
     setError('')
     try {
-      const overrides: Record<string, unknown> = {
+      const body: Record<string, unknown> = {
         ai_provider: aiProvider,
         ai_model: aiModel,
-        ai_cli_timeout: aiCliTimeout,
-        enable_jira: enableJira,
-        jira_url: jiraUrl || undefined,
-        jira_project_key: jiraProjectKey || undefined,
-        get_job_artifacts: getArtifacts,
-        jenkins_artifacts_max_size_mb: maxArtifactsSize,
-        jenkins_artifacts_context_lines: contextLines,
-        raw_prompt: rawPrompt || undefined,
-        tests_repo_url: testsRepoUrl
-          ? (testsRepoRef ? `${testsRepoUrl}:${testsRepoRef}` : testsRepoUrl)
-          : undefined,
+        ...(aiCliTimeout !== undefined && { ai_cli_timeout: aiCliTimeout }),
+        ...(enableJira !== undefined && { enable_jira: enableJira }),
+        ...(jiraUrl && { jira_url: jiraUrl }),
+        ...(jiraProjectKey && { jira_project_key: jiraProjectKey }),
+        ...(getArtifacts !== undefined && { get_job_artifacts: getArtifacts }),
+        ...(maxArtifactsSize !== undefined && { jenkins_artifacts_max_size_mb: maxArtifactsSize }),
+        ...(contextLines !== undefined && { jenkins_artifacts_context_lines: contextLines }),
+        ...(rawPrompt && { raw_prompt: rawPrompt }),
+        ...(testsRepoUrl && { tests_repo_url: testsRepoRef ? `${testsRepoUrl}:${testsRepoRef}` : testsRepoUrl }),
         peer_ai_configs: enablePeers ? peerConfigs : [],
         peer_analysis_max_rounds: maxRounds,
         additional_repos: additionalRepos
@@ -190,12 +188,9 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
           .map((r) => ({
             name: r.name,
             url: r.url,
-            ref: r.ref || undefined,
+            ...(r.ref && { ref: r.ref }),
           })),
       }
-      const body = Object.fromEntries(
-        Object.entries(overrides).filter(([, v]) => v !== undefined),
-      )
       const data = await api.post<{ job_id: string }>(`/re-analyze/${jobId}`, body)
       onOpenChange(false)
       navigate(`/results/${data.job_id}`)
@@ -258,8 +253,9 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
                 <Input
                   type="number"
                   min={1}
-                  value={aiCliTimeout}
-                  onChange={(e) => setAiCliTimeout(Number(e.target.value) || 1)}
+                  value={aiCliTimeout ?? ''}
+                  placeholder="10"
+                  onChange={(e) => setAiCliTimeout(e.target.value ? Number(e.target.value) || 1 : undefined)}
                 />
               </div>
             </div>
@@ -455,7 +451,7 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
           <Section title="Jira Integration" dotColor="bg-signal-orange">
             <div className="flex items-center justify-between">
               <span className="text-sm text-text-secondary">Enable Jira search</span>
-              <Toggle checked={enableJira} onChange={setEnableJira} label="Enable Jira search" />
+              <Toggle checked={enableJira ?? true} onChange={setEnableJira} label="Enable Jira search" />
             </div>
             {enableJira && (
               <>
@@ -490,7 +486,7 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
           <Section title="Jenkins Artifacts" dotColor="bg-[#58a6ff]">
             <div className="flex items-center justify-between">
               <span className="text-sm text-text-secondary">Fetch build artifacts</span>
-              <Toggle checked={getArtifacts} onChange={setGetArtifacts} label="Fetch build artifacts" />
+              <Toggle checked={getArtifacts ?? true} onChange={setGetArtifacts} label="Fetch build artifacts" />
             </div>
             {getArtifacts && (
               <div className="grid grid-cols-2 gap-3">
@@ -499,8 +495,9 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
                   <Input
                     type="number"
                     min={1}
-                    value={maxArtifactsSize}
-                    onChange={(e) => setMaxArtifactsSize(Number(e.target.value) || 1)}
+                    value={maxArtifactsSize ?? ''}
+                    placeholder="50"
+                    onChange={(e) => setMaxArtifactsSize(e.target.value ? Number(e.target.value) || 1 : undefined)}
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -508,8 +505,9 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
                   <Input
                     type="number"
                     min={1}
-                    value={contextLines}
-                    onChange={(e) => setContextLines(Number(e.target.value) || 1)}
+                    value={contextLines ?? ''}
+                    placeholder="100"
+                    onChange={(e) => setContextLines(e.target.value ? Number(e.target.value) || 1 : undefined)}
                   />
                 </div>
               </div>

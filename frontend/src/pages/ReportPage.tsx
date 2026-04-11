@@ -85,8 +85,6 @@ function ReportContent() {
   const dispatch = useReportDispatch()
   const refreshEnrichments = useRefreshEnrichments()
 
-  const [reAnalyzeOpen, setReAnalyzeOpen] = useState(false)
-
   // Capture hash fragment on mount and listen for changes (child-job deep linking)
   const [activeHash, setActiveHash] = useState(() => window.location.hash.replace(/^#/, ''))
 
@@ -395,7 +393,7 @@ function ReportContent() {
                 variant="outline"
                 size="sm"
                 className="gap-1.5 text-xs"
-                onClick={() => setReAnalyzeOpen(true)}
+                onClick={() => dispatch({ type: 'SET_RE_ANALYZE_OPEN', payload: true })}
                 disabled={result.status === 'running' || result.status === 'pending' || result.status === 'waiting'}
               >
                 <RotateCw className="h-3.5 w-3.5" />
@@ -538,8 +536,8 @@ function ReportContent() {
     </div>
       {result.request_params && (
         <ReAnalyzeDialog
-          open={reAnalyzeOpen}
-          onOpenChange={setReAnalyzeOpen}
+          open={state.reAnalyzeOpen}
+          onOpenChange={(v) => dispatch({ type: 'SET_RE_ANALYZE_OPEN', payload: v })}
           result={result}
           jobId={jobId!}
         />

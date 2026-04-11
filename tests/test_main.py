@@ -10,6 +10,7 @@ import pytest
 
 from jenkins_job_insight import storage
 from jenkins_job_insight.config import Settings
+from jenkins_job_insight.encryption import encrypt_sensitive_fields
 from jenkins_job_insight.models import (
     AiConfigEntry,
     AnalysisDetail,
@@ -3811,15 +3812,17 @@ class TestReAnalyzeEndpoint:
             "job_name": "my-job",
             "build_number": 42,
             "failures": [],
-            "request_params": {
-                "job_name": "my-job",
-                "build_number": 42,
-                "ai_provider": "claude",
-                "ai_model": "opus",
-                "jenkins_url": "https://jenkins.example.com",
-                "jenkins_user": "testuser",
-                "jenkins_password": "testpw",  # pragma: allowlist secret
-            },
+            "request_params": encrypt_sensitive_fields(
+                {
+                    "job_name": "my-job",
+                    "build_number": 42,
+                    "ai_provider": "claude",
+                    "ai_model": "opus",
+                    "jenkins_url": "https://jenkins.example.com",
+                    "jenkins_user": "testuser",
+                    "jenkins_password": "testpw",  # pragma: allowlist secret
+                }
+            ),
         }
         await storage.save_result(
             "job-reanalyze-ok",
@@ -3827,7 +3830,7 @@ class TestReAnalyzeEndpoint:
             "completed",
             result_data,
         )
-        with patch("jenkins_job_insight.main.process_analysis_with_id"):
+        with patch("jenkins_job_insight.main.process_analysis_with_id") as mock_process:
             response = test_client.post("/re-analyze/job-reanalyze-ok", json={})
         assert response.status_code == 202
         data = response.json()
@@ -3835,3 +3838,5 @@ class TestReAnalyzeEndpoint:
         assert "job_id" in data
         assert data["job_id"] != "job-reanalyze-ok"  # New job_id
         assert "result_url" in data
+        mock_process.assert_called_once()
+        assert data["result_url"].endswith(f"/results/{data['job_id']}")
