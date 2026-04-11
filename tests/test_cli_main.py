@@ -843,12 +843,6 @@ class TestAnalyzeAllOptions:
                 "jenkins_artifacts_max_size_mb",
                 50,
             ),
-            (
-                "--jenkins-artifacts-context-lines",
-                "200",
-                "jenkins_artifacts_context_lines",
-                200,
-            ),
         ],
     )
     def test_int_options(

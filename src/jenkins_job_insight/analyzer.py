@@ -21,7 +21,6 @@ from simple_logger.logger import get_logger
 
 from jenkins_job_insight.config import Settings, parse_additional_repos, parse_repo_ref
 from jenkins_job_insight.jenkins_artifacts import (
-    ERROR_PATTERN,
     cleanup_extract_dir,
     process_build_artifacts,
 )
@@ -155,6 +154,12 @@ PROVIDER_CLI_FLAGS: dict[str, list[str]] = {
 RETRYABLE_AI_CLI_PATTERNS: list[str] = [
     "ENOENT: no such file or directory",  # Cursor CLI config race condition
 ]
+
+# Pattern for error detection in console output (word boundaries, case-insensitive)
+_CONSOLE_ERROR_PATTERN = re.compile(
+    r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
+    re.IGNORECASE,
+)
 
 
 async def _call_ai_cli_with_retry(
@@ -573,7 +578,7 @@ def extract_relevant_console_lines(console_output: str) -> str:
 
     for i, line in enumerate(lines):
         # Check if line matches error pattern (word boundaries, case-insensitive)
-        if ERROR_PATTERN.search(line):
+        if _CONSOLE_ERROR_PATTERN.search(line):
             # Add some context: 2 lines before
             start = max(0, i - 2)
             for j in range(start, i):
@@ -1501,7 +1506,6 @@ async def analyze_job(
                         build_url,
                         artifacts,
                         settings.jenkins_artifacts_max_size_mb,
-                        settings.jenkins_artifacts_context_lines,
                     )
                 except Exception as exc:
                     logger.warning(f"Failed to process artifacts: {exc}")

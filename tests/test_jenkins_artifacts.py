@@ -177,8 +177,8 @@ class TestExtractZip:
 class TestBuildArtifactsContext:
     """Tests for build_artifacts_context."""
 
-    def test_extracts_error_lines_from_logs(self, tmp_path: Path) -> None:
-        """Error and failure lines from .log files appear in context."""
+    def test_does_not_include_error_lines_in_context(self, tmp_path: Path) -> None:
+        """Context contains directory structure but not pre-extracted error lines."""
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
         log_file = log_dir / "app.log"
@@ -191,12 +191,14 @@ class TestBuildArtifactsContext:
 
         context = build_artifacts_context(tmp_path)
 
-        assert "Connection refused" in context
-        assert "FAILURE Something broke" in context
-        assert "Starting up" not in context
+        assert "BUILD ARTIFACTS CONTEXT" in context
+        assert "logs/" in context
+        # Error lines should NOT be pre-extracted into the context
+        assert "Connection refused" not in context
+        assert "FAILURE Something broke" not in context
 
-    def test_extracts_warning_events(self, tmp_path: Path) -> None:
-        """Warning lines from event files appear in the events section."""
+    def test_does_not_include_warning_events_in_context(self, tmp_path: Path) -> None:
+        """Context contains directory structure but not pre-extracted warning events."""
         event_dir = tmp_path / "cluster-scoped-resources"
         event_dir.mkdir(parents=True)
         event_file = event_dir / "events.yaml"
@@ -210,15 +212,14 @@ class TestBuildArtifactsContext:
 
         context = build_artifacts_context(tmp_path)
 
-        assert "Warning" in context
-        # Only lines containing "Warning" are extracted; the message line is not
-        assert "type: Warning" in context
-        # Normal events should not appear
-        assert "type: Normal" not in context
-        assert "Scheduled successfully" not in context
+        assert "BUILD ARTIFACTS CONTEXT" in context
+        assert "cluster-scoped-resources/" in context
+        # Warning events should NOT be pre-extracted
+        assert "Warning Events" not in context
+        assert "type: Warning" not in context
 
-    def test_detects_status_issues(self, tmp_path: Path) -> None:
-        """YAML files with error/failure keywords appear in abnormal status indicators."""
+    def test_does_not_include_status_issues_in_context(self, tmp_path: Path) -> None:
+        """Context contains directory structure but not pre-extracted status issues."""
         resource_dir = tmp_path / "namespaces" / "default"
         resource_dir.mkdir(parents=True)
         pod_file = resource_dir / "pods.yaml"
@@ -235,33 +236,33 @@ class TestBuildArtifactsContext:
 
         context = build_artifacts_context(tmp_path)
 
-        assert "Failed" in context
-        assert "Error pulling image" in context
-        assert "Abnormal Status Indicators" in context
+        assert "BUILD ARTIFACTS CONTEXT" in context
+        assert "namespaces/default/" in context
+        # Status issues should NOT be pre-extracted
+        assert "Abnormal Status Indicators" not in context
 
     def test_empty_directory_returns_note(self, tmp_path: Path) -> None:
-        """Empty directory returns the 'no issues found' note."""
+        """Empty directory still produces valid context with header."""
         context = build_artifacts_context(tmp_path)
 
-        assert "No errors, warnings, or status issues found" in context
+        assert "BUILD ARTIFACTS CONTEXT" in context
+        assert "Contains 0 files" in context
+        # The old "no issues found" message should not appear
+        assert "No errors, warnings, or status issues found" not in context
 
-    def test_max_lines_truncation(self, tmp_path: Path) -> None:
-        """Context is truncated when it exceeds max_lines."""
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir()
-        log_file = log_dir / "big.log"
-        # Generate many error lines to exceed a small max_lines
-        lines = [f"ERROR failure number {i}\n" for i in range(200)]
-        log_file.write_text("".join(lines))
+    def test_root_only_files_listed_in_directory_structure(
+        self, tmp_path: Path
+    ) -> None:
+        """Root-level files with no subdirectories still produce a directory structure."""
+        (tmp_path / "build.log").write_text("some log content\n")
+        (tmp_path / "results.xml").write_text("<results/>\n")
 
-        max_lines = 10
-        context = build_artifacts_context(tmp_path, max_lines=max_lines)
+        context = build_artifacts_context(tmp_path)
 
-        assert "truncated" in context.lower()
-        # The total line count in the output should not greatly exceed max_lines
-        output_lines = context.splitlines()
-        # max_lines + truncation message + 2 footer lines + empty line
-        assert len(output_lines) <= max_lines + 4
+        assert "BUILD ARTIFACTS CONTEXT" in context
+        assert "Directory Structure" in context
+        assert "build.log" in context
+        assert "results.xml" in context
 
 
 class TestCleanupExtractDir:
@@ -466,8 +467,6 @@ class TestProcessBuildArtifacts:
         assert (artifacts_dir / "config.yaml").exists()
         # Context should contain artifacts output from the stored files
         assert "BUILD ARTIFACTS CONTEXT" in context
-        # The error line from the log should appear in context
-        assert "something failed" in context
 
         # Cleanup
         shutil.rmtree(artifacts_dir, ignore_errors=True)

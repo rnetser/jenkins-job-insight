@@ -106,7 +106,6 @@ function initFormState(p: AnalysisResult['request_params']) {
     jiraProjectKey: (p?.jira_project_key as string) || '',
     getArtifacts: p?.get_job_artifacts != null ? (p.get_job_artifacts as boolean) : undefined,
     maxArtifactsSize: p?.jenkins_artifacts_max_size_mb != null ? (p.jenkins_artifacts_max_size_mb as number) : undefined,
-    contextLines: p?.jenkins_artifacts_context_lines != null ? (p.jenkins_artifacts_context_lines as number) : undefined,
   }
 }
 
@@ -136,7 +135,6 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
 
   const [getArtifacts, setGetArtifacts] = useState<boolean | undefined>(init.getArtifacts)
   const [maxArtifactsSize, setMaxArtifactsSize] = useState<number | undefined>(init.maxArtifactsSize)
-  const [contextLines, setContextLines] = useState<number | undefined>(init.contextLines)
 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -160,7 +158,6 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
     setJiraProjectKey(s.jiraProjectKey)
     setGetArtifacts(s.getArtifacts)
     setMaxArtifactsSize(s.maxArtifactsSize)
-    setContextLines(s.contextLines)
     setSubmitting(false)
     setError('')
   }, [open, result.request_params])
@@ -178,7 +175,6 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
         ...(jiraProjectKey && { jira_project_key: jiraProjectKey }),
         ...(getArtifacts !== undefined && { get_job_artifacts: getArtifacts }),
         ...(maxArtifactsSize !== undefined && { jenkins_artifacts_max_size_mb: maxArtifactsSize }),
-        ...(contextLines !== undefined && { jenkins_artifacts_context_lines: contextLines }),
         ...(rawPrompt && { raw_prompt: rawPrompt }),
         ...(testsRepoUrl && { tests_repo_url: testsRepoRef ? `${testsRepoUrl}:${testsRepoRef}` : testsRepoUrl }),
         peer_ai_configs: enablePeers ? peerConfigs : [],
@@ -215,7 +211,6 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
     jiraProjectKey,
     getArtifacts,
     maxArtifactsSize,
-    contextLines,
     jobId,
     onOpenChange,
     navigate,
@@ -489,27 +484,15 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
               <Toggle checked={getArtifacts ?? true} onChange={setGetArtifacts} label="Fetch build artifacts" />
             </div>
             {getArtifacts && (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <FieldLabel>Max Size (MB)</FieldLabel>
-                  <Input
-                    type="number"
-                    min={1}
-                    value={maxArtifactsSize ?? ''}
-                    placeholder="50"
-                    onChange={(e) => setMaxArtifactsSize(e.target.value ? Number(e.target.value) || 1 : undefined)}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <FieldLabel>Context Lines</FieldLabel>
-                  <Input
-                    type="number"
-                    min={1}
-                    value={contextLines ?? ''}
-                    placeholder="100"
-                    onChange={(e) => setContextLines(e.target.value ? Number(e.target.value) || 1 : undefined)}
-                  />
-                </div>
+              <div className="space-y-1.5">
+                <FieldLabel>Max Size (MB)</FieldLabel>
+                <Input
+                  type="number"
+                  min={1}
+                  value={maxArtifactsSize ?? ''}
+                  placeholder="50"
+                  onChange={(e) => setMaxArtifactsSize(e.target.value ? Number(e.target.value) || 1 : undefined)}
+                />
               </div>
             )}
           </Section>

@@ -206,10 +206,6 @@ class AnalyzeRequest(BaseAnalysisRequest):
         default=None,
         description="Maximum Jenkins artifacts size in MB (overrides JENKINS_ARTIFACTS_MAX_SIZE_MB env var)",
     )
-    jenkins_artifacts_context_lines: Annotated[int, Field(gt=0)] | None = Field(
-        default=None,
-        description="Maximum Jenkins artifacts context lines for AI prompt (overrides JENKINS_ARTIFACTS_CONTEXT_LINES env var)",
-    )
     get_job_artifacts: bool | None = Field(
         default=None,
         description="Download all build artifacts for AI context (default: true, overrides GET_JOB_ARTIFACTS env var)",

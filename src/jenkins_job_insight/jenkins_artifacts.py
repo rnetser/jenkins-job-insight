@@ -2,7 +2,6 @@
 
 import io
 import os
-import re
 import shutil
 import tarfile
 import urllib.parse
@@ -16,12 +15,6 @@ from simple_logger.logger import get_logger
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
 EXTRACT_BASE = Path("/tmp/jenkins-insight")
-
-# Pre-compiled pattern for error detection with word boundaries
-ERROR_PATTERN = re.compile(
-    r"\b(error|fail(ed|ure)?|exception|traceback|assert(ion)?|warn(ing)?|critical|fatal)\b",
-    re.IGNORECASE,
-)
 
 # Maximum ratio of extracted size to compressed size. Typical compression ratios
 # for Jenkins artifacts (logs, YAML, JSON) range from 3-8x; 10x provides safe
@@ -317,18 +310,12 @@ def validate_and_extract_archive(
     return extract_dir
 
 
-def _discover_files(
-    extract_path: Path,
-) -> tuple[list[Path], list[Path], list[Path], list[tuple[str, int]]]:
-    """Discover and classify files in extracted archive.
+def _discover_files(extract_path: Path) -> list[tuple[str, int]]:
+    """Discover files in extracted archive.
 
     Returns:
-        Tuple of (log_files, event_files, yaml_json_files, all_files).
-        all_files contains (relative_path, size_in_bytes) tuples.
+        List of (relative_path, size_in_bytes) tuples.
     """
-    log_files: list[Path] = []
-    yaml_json_files: list[Path] = []
-    event_files: list[Path] = []
     all_files: list[tuple[str, int]] = []
 
     for file_path in extract_path.rglob("*"):
@@ -340,95 +327,21 @@ def _discover_files(
         except OSError:
             size = 0
         all_files.append((relative, size))
-        name_lower = file_path.name.lower()
-        if (
-            name_lower.endswith((".log", ".txt"))
-            or "/logs/" in relative
-            or "/log/" in relative
-        ):
-            log_files.append(file_path)
-        elif name_lower.endswith((".yaml", ".yml", ".json")):
-            if "event" in name_lower or "event" in relative.lower():
-                event_files.append(file_path)
-            else:
-                yaml_json_files.append(file_path)
 
-    return log_files, event_files, yaml_json_files, all_files
+    return all_files
 
 
-def _extract_error_lines(
-    log_files: list[Path], extract_path: Path, seen: set[str]
-) -> list[str]:
-    """Extract deduplicated error/warning lines from log files."""
-    lines: list[str] = []
-    for log_file in log_files:
-        try:
-            text = log_file.read_text(errors="replace")
-            name = str(log_file.relative_to(extract_path))
-            for line in text.splitlines():
-                if ERROR_PATTERN.search(line):
-                    key = line.strip()
-                    if key not in seen:
-                        seen.add(key)
-                        lines.append(f"[{name}]: {line.rstrip()}")
-        except OSError:
-            continue
-    return lines
-
-
-def _extract_event_lines(event_files: list[Path], extract_path: Path) -> list[str]:
-    """Extract warning event lines from event files."""
-    lines: list[str] = []
-    for event_file in event_files:
-        try:
-            text = event_file.read_text(errors="replace")
-            name = str(event_file.relative_to(extract_path))
-            for line in text.splitlines():
-                if "Warning" in line or "warning" in line:
-                    lines.append(f"[{name}]: {line.rstrip()}")
-        except OSError:
-            continue
-    return lines
-
-
-def _extract_status_issues(
-    yaml_json_files: list[Path], extract_path: Path, seen: set[str]
-) -> list[str]:
-    """Extract error/status lines from YAML/JSON files."""
-    lines: list[str] = []
-    for resource_file in yaml_json_files:
-        try:
-            text = resource_file.read_text(errors="replace")
-            name = str(resource_file.relative_to(extract_path))
-            for line in text.splitlines():
-                if ERROR_PATTERN.search(line):
-                    key = line.strip()
-                    if key not in seen:
-                        seen.add(key)
-                        lines.append(f"[{name}]: {line.strip()}")
-        except OSError:
-            continue
-    return lines
-
-
-def build_artifacts_context(extract_path: Path, max_lines: int = 1000) -> str:
+def build_artifacts_context(extract_path: Path) -> str:
     """Walk an extracted archive directory and build a structured artifacts summary."""
     logger.info(f"Building artifacts context from {extract_path}")
 
-    log_files, event_files, yaml_json_files, all_files = _discover_files(extract_path)
+    all_files = _discover_files(extract_path)
     total_size = sum(size for _, size in all_files)
     total_size_mb = total_size / (1024 * 1024)
 
     logger.info(
-        f"Archive file discovery: {len(all_files)} total files ({total_size_mb:.1f} MB), "
-        f"{len(log_files)} log files, {len(event_files)} event files, "
-        f"{len(yaml_json_files)} yaml/json files"
+        f"Archive file discovery: {len(all_files)} total files ({total_size_mb:.1f} MB)"
     )
-
-    seen_errors: set[str] = set()
-    error_lines = _extract_error_lines(log_files, extract_path, seen_errors)
-    event_lines = _extract_event_lines(event_files, extract_path)
-    status_issues = _extract_status_issues(yaml_json_files, extract_path, seen_errors)
 
     # Build the structured context
     sections: list[str] = [
@@ -438,26 +351,25 @@ def build_artifacts_context(extract_path: Path, max_lines: int = 1000) -> str:
         f"Contains {len(all_files)} files ({total_size_mb:.1f} MB total).",
         "",
         "IMPORTANT: You MUST explore the build-artifacts/ directory (or the absolute path above).",
-        "The summary below is only a preview. Read the actual files for full evidence.",
+        "The index below lists paths and sizes. Read files under the artifacts directory for full content.",
         "",
     ]
 
-    # Always show directory structure so AI knows what to explore
-    dirs = sorted(
-        {
-            str(Path(path).parent)
-            for path, _ in all_files
-            if str(Path(path).parent) != "."
-        }
-    )
-    if dirs:
+    # Aggregate per-directory stats in a single pass
+    dir_stats: dict[str, tuple[int, int]] = {}  # dir -> (count, total_size)
+    root_files: list[tuple[str, int]] = []
+    for path, size in all_files:
+        parent = str(Path(path).parent)
+        if parent == ".":
+            root_files.append((path, size))
+        else:
+            count, total = dir_stats.get(parent, (0, 0))
+            dir_stats[parent] = (count + 1, total + size)
+
+    if dir_stats or root_files:
         sections.append("--- Directory Structure ---")
-        for d in dirs:
-            # Count files in this directory
-            file_count = sum(1 for path, _ in all_files if str(Path(path).parent) == d)
-            dir_size = sum(
-                size for path, size in all_files if str(Path(path).parent) == d
-            )
+        for d in sorted(dir_stats):
+            file_count, dir_size = dir_stats[d]
             if dir_size >= 1024 * 1024:
                 sections.append(
                     f"  {d}/ ({file_count} files, {dir_size / (1024 * 1024):.1f} MB)"
@@ -468,10 +380,6 @@ def build_artifacts_context(extract_path: Path, max_lines: int = 1000) -> str:
                 )
             else:
                 sections.append(f"  {d}/ ({file_count} files, {dir_size} B)")
-        # Also list root-level files
-        root_files = [
-            (path, size) for path, size in all_files if str(Path(path).parent) == "."
-        ]
         if root_files:
             for path, size in root_files:
                 if size >= 1024:
@@ -480,42 +388,13 @@ def build_artifacts_context(extract_path: Path, max_lines: int = 1000) -> str:
                     sections.append(f"  {path} ({size} B)")
         sections.append("")
 
-    if error_lines:
-        sections.append("--- Error/Warning Lines from Logs ---")
-        sections.extend(error_lines)
-        sections.append("")
-
-    if event_lines:
-        sections.append("--- Warning Events ---")
-        sections.extend(event_lines)
-        sections.append("")
-
-    if status_issues:
-        sections.append("--- Abnormal Status Indicators ---")
-        sections.extend(status_issues)
-        sections.append("")
-
-    if not error_lines and not event_lines and not status_issues:
-        sections.append(
-            "No errors, warnings, or status issues found in build artifacts."
-        )
-        sections.append("")
-
-    if len(sections) > max_lines:
-        sections = sections[:max_lines]
-        sections.append("... [truncated to max_lines limit]")
-
     sections.append(f"--- Full artifacts available at: {extract_path} ---")
     sections.append(
         "Explore the build-artifacts/ directory (or current working directory) for complete evidence before classifying."
     )
 
     context = "\n".join(sections)
-    logger.info(
-        f"Artifacts context built: {len(error_lines)} error lines, "
-        f"{len(event_lines)} event lines, {len(status_issues)} status issues, "
-        f"total context: {len(context)} chars"
-    )
+    logger.info(f"Artifacts context built: {len(context)} chars")
     return context
 
 
@@ -524,7 +403,6 @@ def process_build_artifacts(
     build_url: str,
     artifact_list: list[dict],
     max_size_mb: int = 500,
-    max_context_lines: int = 1000,
 ) -> tuple[str, Path | None]:
     """Download, store, and analyze all build artifacts in a single pass.
 
@@ -536,7 +414,6 @@ def process_build_artifacts(
         build_url: Full Jenkins build URL (from API response).
         artifact_list: List of artifact dicts from Jenkins API.
         max_size_mb: Maximum allowed size per artifact in megabytes.
-        max_context_lines: Maximum lines in the context summary.
 
     Returns:
         Tuple of (context_string, artifacts_dir_or_None).
@@ -576,7 +453,7 @@ def process_build_artifacts(
         logger.info(
             f"Downloaded and stored {downloaded}/{len(artifact_list)} artifacts"
         )
-        context = build_artifacts_context(artifacts_dir, max_context_lines)
+        context = build_artifacts_context(artifacts_dir)
         return context, artifacts_dir
 
     except Exception:

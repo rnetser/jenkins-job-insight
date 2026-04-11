@@ -692,7 +692,6 @@ class TestJJIClientAnalyzeExtras:
             "jenkins_password": "s3cret",  # pragma: allowlist secret
             "jenkins_ssl_verify": False,
             "jenkins_artifacts_max_size_mb": 50,
-            "jenkins_artifacts_context_lines": 200,
             "get_job_artifacts": True,
             "tests_repo_url": "https://github.com/org/tests",
             "jira_url": "https://jira.example.com",

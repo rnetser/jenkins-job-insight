@@ -160,7 +160,6 @@ class Settings(BaseSettings):
 
     # Jenkins artifacts configuration
     jenkins_artifacts_max_size_mb: int = Field(default=500, gt=0)
-    jenkins_artifacts_context_lines: int = Field(default=200, gt=0)
 
     # Artifact download toggle
     get_job_artifacts: bool = True
