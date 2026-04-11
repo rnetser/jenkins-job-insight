@@ -157,7 +157,8 @@ RETRYABLE_AI_CLI_PATTERNS: list[str] = [
 
 # Pattern for error detection in console output (word boundaries, case-insensitive)
 _CONSOLE_ERROR_PATTERN = re.compile(
-    r"\b(errors?|fail(?:ed|ures?)?|exceptions?|tracebacks?|assert(?:ion)?s?|warnings?|critical|fatal)\b",
+    r"\b(?:errors?|fail(?:ed|ures?)?|tracebacks?|warn(?:ings?)?|critical|fatal|assert(?:ion)?(?:error)?s?)\b"
+    r"|(?:^|[\s\[])[A-Za-z_][\w.]*?(?:error|exception)(?=[:\s\]]|$)",
     re.IGNORECASE,
 )
 
@@ -268,12 +269,12 @@ def _build_artifacts_section(artifacts_context: str) -> str:
     return f"""
 
 === BUILD ARTIFACTS ===
-The following is a PREVIEW of build artifact contents. The full files are available at build-artifacts/ in your working directory.
+The following is a PREVIEW of the build-artifacts/ directory structure and file listing. File contents are not inlined here; open the files under build-artifacts/ in your working directory to inspect them.
 
 {artifacts_context}
 
 IMPORTANT INSTRUCTIONS FOR ARTIFACT ANALYSIS:
-1. READ the actual files under build-artifacts/ — the preview above is incomplete
+1. READ the actual files under build-artifacts/ — the listing above is incomplete and does not include file contents
 2. Look for error messages, stack traces, service logs, and status information
 3. In your artifacts_evidence field, include VERBATIM lines with the file path, e.g.: [build-artifacts/logs/app.log]: actual error line here
 4. Do NOT classify based solely on the test error message — check the artifact logs for the real root cause"""
