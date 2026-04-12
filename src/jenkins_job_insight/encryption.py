@@ -33,6 +33,7 @@ SENSITIVE_KEYS: frozenset[str] = frozenset(
         "jira_api_token",
         "jira_pat",
         "jira_email",
+        "jira_token",
         "github_token",
     }
 )

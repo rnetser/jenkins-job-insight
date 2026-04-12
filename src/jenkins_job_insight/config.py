@@ -148,6 +148,12 @@ class Settings(BaseSettings):
         description="Enable GitHub issue creation. When None, enabled if TESTS_REPO_URL and GITHUB_TOKEN are configured.",
     )
 
+    # Explicit Jira issue creation toggle (optional)
+    enable_jira_issues: bool | None = Field(
+        default=None,
+        description="Enable Jira bug creation. When None, follows jira_enabled.",
+    )
+
     # AI CLI timeout in minutes
     ai_cli_timeout: int = Field(default=10, gt=0)
 

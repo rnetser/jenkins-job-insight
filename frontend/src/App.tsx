@@ -6,6 +6,7 @@ import { ProtectedRoute } from '@/components/shared/ProtectedRoute'
 import { RegisterPage } from '@/pages/RegisterPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { StatusPage } from '@/pages/StatusPage'
+import { SettingsPage } from '@/pages/SettingsPage'
 import { HistoryPage } from '@/pages/HistoryPage'
 import { ReportPage } from '@/pages/ReportPage'
 import { TestHistoryPage } from '@/pages/TestHistoryPage'
@@ -22,6 +23,7 @@ export default function App() {
           <Route path="/history/test/:testName" element={<ProtectedRoute><TestHistoryPage /></ProtectedRoute>} />
           <Route path="/results/:jobId" element={<ProtectedRoute><ReportPage /></ProtectedRoute>} />
           <Route path="/status/:jobId" element={<ProtectedRoute><StatusPage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
         </Route>
       </Routes>
     </BrowserRouter>

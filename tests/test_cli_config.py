@@ -40,6 +40,7 @@ jira_url = "https://jira.dev.local"
 jira_email = "dev@example.com"
 jira_api_token = "jira-tok-dev"
 jira_pat = "jira-pat-dev"
+jira_token = "jira-token-dev"
 jira_project_key = "DEV"
 jira_ssl_verify = false
 jira_max_results = 30
@@ -245,6 +246,7 @@ class TestGetServerConfig:
         assert cfg.jira_email == "dev@example.com"
         assert cfg.jira_api_token == "jira-tok-dev"  # noqa: S105
         assert cfg.jira_pat == "jira-pat-dev"  # noqa: S105
+        assert cfg.jira_token == "jira-token-dev"  # noqa: S105
         assert cfg.jira_project_key == "DEV"
         assert cfg.jira_ssl_verify is False
         assert cfg.jira_max_results == 30
@@ -267,6 +269,7 @@ class TestGetServerConfig:
         assert cfg.jira_max_results == 0
         assert cfg.enable_jira is None
         assert cfg.github_token == ""
+        assert cfg.jira_token == ""
         assert cfg.wait_for_completion is None
         assert cfg.poll_interval_minutes == 0
         assert cfg.max_wait_minutes == 0

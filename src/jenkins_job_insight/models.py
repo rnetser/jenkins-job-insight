@@ -519,12 +519,25 @@ class ReviewStatusResponse(BaseModel):
     comment_count: int
 
 
+class _TrackerCredentialsMixin(BaseModel):
+    """Shared tracker credential fields for issue preview/create requests."""
+
+    github_token: str = Field(
+        default="", description="User's GitHub PAT for issue creation"
+    )
+    jira_token: str = Field(
+        default="", description="User's Jira token for bug creation"
+    )
+    jira_email: str = Field(default="", description="User's Jira email for Cloud auth")
+
+
 # NOTE: Preview/create request models intentionally do NOT inherit
-# BaseAnalysisRequest. These are server-level operations that use deployment
-# config (GITHUB_TOKEN, TESTS_REPO_URL, Jira credentials), not per-request
-# analysis overrides. The caller identifies *which* failure to act on, but
-# the credentials and target repos are fixed at the server level.
-class PreviewIssueRequest(_ChildJobFieldsValidator):
+# BaseAnalysisRequest. Target repositories (TESTS_REPO_URL, JIRA_URL) are
+# configured at the server level, but users may provide their own tracker
+# tokens (github_token, jira_token, jira_email) to create issues under
+# their own identity. When user tokens are absent, the server falls back
+# to its deployment credentials. Analysis overrides remain out of scope.
+class PreviewIssueRequest(_ChildJobFieldsValidator, _TrackerCredentialsMixin):
     """Request body for previewing a GitHub issue or Jira bug."""
 
     test_name: str
@@ -535,7 +548,7 @@ class PreviewIssueRequest(_ChildJobFieldsValidator):
     ai_model: str = Field(default="", description="AI model for content generation")
 
 
-class CreateIssueRequest(_ChildJobFieldsValidator):
+class CreateIssueRequest(_ChildJobFieldsValidator, _TrackerCredentialsMixin):
     """Request body for creating a GitHub issue or Jira bug."""
 
     test_name: str

@@ -3,12 +3,14 @@
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import AsyncMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import jenkins
 import pytest
 
 from jenkins_job_insight import storage
+from pydantic import SecretStr
+
 from jenkins_job_insight.config import Settings
 from jenkins_job_insight.encryption import encrypt_sensitive_fields
 from jenkins_job_insight.models import (
@@ -46,18 +48,52 @@ def _with_github_issue_config():
 def _enable_feature(prop_name: str):
     """Context manager to enable a Settings boolean property for tests.
 
+    Also patches the underlying raw fields that endpoint guards check directly
+    (e.g. ``settings.tests_repo_url`` for GitHub, ``settings.jira_url`` for Jira).
+
     Usage::
 
         with _enable_feature("github_issues_enabled"):
             response = test_client.post(...)
     """
-    with patch.object(
-        Settings,
-        prop_name,
-        new_callable=PropertyMock,
-        return_value=True,
-    ):
-        yield
+    from contextlib import ExitStack
+
+    from jenkins_job_insight.config import get_settings
+
+    # Map computed properties to the env vars that endpoint guards check
+    raw_env_patches: dict[str, dict[str, str]] = {
+        "github_issues_enabled": {
+            "TESTS_REPO_URL": "https://github.com/test-org/test-repo",
+            "GITHUB_TOKEN": "ghp_test_token",
+            "ENABLE_GITHUB_ISSUES": "true",
+        },
+        "jira_enabled": {
+            "JIRA_URL": "https://jira.example.com",
+            "JIRA_PROJECT_KEY": "TEST",
+            "JIRA_API_TOKEN": "test_jira_token",
+            "ENABLE_JIRA_ISSUES": "true",
+        },
+    }
+
+    with ExitStack() as stack:
+        # Patch the computed property
+        stack.enter_context(
+            patch.object(
+                Settings,
+                prop_name,
+                new_callable=PropertyMock,
+                return_value=True,
+            )
+        )
+        # Also patch env vars so newly-created Settings instances have raw fields set
+        env_overrides = raw_env_patches.get(prop_name, {})
+        if env_overrides:
+            stack.enter_context(patch.dict(os.environ, env_overrides))
+        get_settings.cache_clear()
+        try:
+            yield
+        finally:
+            get_settings.cache_clear()
 
 
 def _build_wait_settings(**overrides) -> Settings:
@@ -1389,10 +1425,28 @@ class TestPreviewGithubIssue:
     @pytest.mark.asyncio
     async def test_preview_disabled_returns_403(self, test_client):
         """Preview returns 403 when GitHub issues are disabled."""
-        response = test_client.post(
-            "/results/any-job/preview-github-issue",
-            json={"test_name": "test_foo", "ai_provider": "claude", "ai_model": "opus"},
-        )
+        from jenkins_job_insight.config import get_settings
+
+        with patch.dict(
+            os.environ,
+            {
+                "ENABLE_GITHUB_ISSUES": "false",
+                "TESTS_REPO_URL": "https://github.com/test-org/test-repo",
+                "GITHUB_TOKEN": "ghp_test_token",
+            },
+        ):
+            get_settings.cache_clear()
+            try:
+                response = test_client.post(
+                    "/results/any-job/preview-github-issue",
+                    json={
+                        "test_name": "test_foo",
+                        "ai_provider": "claude",
+                        "ai_model": "opus",
+                    },
+                )
+            finally:
+                get_settings.cache_clear()
         assert response.status_code == 403
         assert "disabled" in response.json()["detail"].lower()
 
@@ -1490,10 +1544,29 @@ class TestPreviewJiraBug:
     @pytest.mark.asyncio
     async def test_preview_disabled_returns_403(self, test_client):
         """Preview returns 403 when Jira is disabled."""
-        response = test_client.post(
-            "/results/any-job/preview-jira-bug",
-            json={"test_name": "test_foo", "ai_provider": "claude", "ai_model": "opus"},
-        )
+        from jenkins_job_insight.config import get_settings
+
+        with patch.dict(
+            os.environ,
+            {
+                "ENABLE_JIRA_ISSUES": "false",
+                "JIRA_URL": "https://jira.example.com",
+                "JIRA_PROJECT_KEY": "TEST",
+                "JIRA_API_TOKEN": "test_jira_token",
+            },
+        ):
+            get_settings.cache_clear()
+            try:
+                response = test_client.post(
+                    "/results/any-job/preview-jira-bug",
+                    json={
+                        "test_name": "test_foo",
+                        "ai_provider": "claude",
+                        "ai_model": "opus",
+                    },
+                )
+            finally:
+                get_settings.cache_clear()
         assert response.status_code == 403
         assert "disabled" in response.json()["detail"].lower()
 
@@ -1548,6 +1621,8 @@ class TestCreateGithubIssue:
     @pytest.mark.asyncio
     async def test_create_disabled_returns_403(self, test_client):
         """Creating a GitHub issue when disabled returns 403."""
+        from jenkins_job_insight.config import get_settings
+
         result_data = {
             "status": "completed",
             "summary": "",
@@ -1562,14 +1637,26 @@ class TestCreateGithubIssue:
         await storage.save_result(
             "job-create-gh-noconfig", "http://jenkins", "completed", result_data
         )
-        response = test_client.post(
-            "/results/job-create-gh-noconfig/create-github-issue",
-            json={
-                "test_name": "test_foo",
-                "title": "Bug",
-                "body": "Details",
+        with patch.dict(
+            os.environ,
+            {
+                "ENABLE_GITHUB_ISSUES": "false",
+                "TESTS_REPO_URL": "https://github.com/test-org/test-repo",
+                "GITHUB_TOKEN": "ghp_test_token",
             },
-        )
+        ):
+            get_settings.cache_clear()
+            try:
+                response = test_client.post(
+                    "/results/job-create-gh-noconfig/create-github-issue",
+                    json={
+                        "test_name": "test_foo",
+                        "title": "Bug",
+                        "body": "Details",
+                    },
+                )
+            finally:
+                get_settings.cache_clear()
         assert response.status_code == 403
         assert "disabled" in response.json()["detail"].lower()
 
@@ -1626,6 +1713,8 @@ class TestCreateJiraBug:
     @pytest.mark.asyncio
     async def test_create_jira_disabled_returns_403(self, test_client):
         """Creating a Jira bug when Jira is disabled returns 403."""
+        from jenkins_job_insight.config import get_settings
+
         result_data = {
             "status": "completed",
             "summary": "",
@@ -1640,14 +1729,27 @@ class TestCreateJiraBug:
         await storage.save_result(
             "job-create-jira-noconfig", "http://jenkins", "completed", result_data
         )
-        response = test_client.post(
-            "/results/job-create-jira-noconfig/create-jira-bug",
-            json={
-                "test_name": "test_foo",
-                "title": "Bug",
-                "body": "Details",
+        with patch.dict(
+            os.environ,
+            {
+                "ENABLE_JIRA_ISSUES": "false",
+                "JIRA_URL": "https://jira.example.com",
+                "JIRA_PROJECT_KEY": "TEST",
+                "JIRA_API_TOKEN": "test_jira_token",
             },
-        )
+        ):
+            get_settings.cache_clear()
+            try:
+                response = test_client.post(
+                    "/results/job-create-jira-noconfig/create-jira-bug",
+                    json={
+                        "test_name": "test_foo",
+                        "title": "Bug",
+                        "body": "Details",
+                    },
+                )
+            finally:
+                get_settings.cache_clear()
         assert response.status_code == 403
         assert "disabled" in response.json()["detail"].lower()
 
@@ -1855,7 +1957,7 @@ class TestCreateGithubIssueApiErrors:
 
     @pytest.mark.asyncio
     async def test_github_api_http_error_returns_502(self, test_client):
-        """HTTPStatusError from GitHub API should surface as 502."""
+        """HTTPStatusError from GitHub API (non-auth) should surface as 502."""
         import httpx
 
         result_data = {
@@ -1874,9 +1976,9 @@ class TestCreateGithubIssueApiErrors:
         )
         with patch("jenkins_job_insight.main.create_github_issue") as mock_create:
             mock_create.side_effect = httpx.HTTPStatusError(
-                "Forbidden",
+                "Internal Server Error",
                 request=httpx.Request("POST", "https://api.github.com"),
-                response=httpx.Response(403),
+                response=httpx.Response(500),
             )
             with _with_github_issue_config():
                 response = test_client.post(
@@ -1932,7 +2034,7 @@ class TestCreateJiraBugApiErrors:
 
     @pytest.mark.asyncio
     async def test_jira_api_http_error_returns_502(self, test_client):
-        """HTTPStatusError from Jira API should surface as 502."""
+        """HTTPStatusError from Jira API (non-auth) should surface as 502."""
         import httpx
 
         result_data = {
@@ -1951,9 +2053,9 @@ class TestCreateJiraBugApiErrors:
         )
         with patch("jenkins_job_insight.main.create_jira_bug") as mock_create:
             mock_create.side_effect = httpx.HTTPStatusError(
-                "Forbidden",
+                "Internal Server Error",
                 request=httpx.Request("POST", "https://jira.example.com"),
-                response=httpx.Response(403),
+                response=httpx.Response(500),
             )
             with _enable_feature("jira_enabled"):
                 response = test_client.post(
@@ -3840,3 +3942,141 @@ class TestReAnalyzeEndpoint:
         assert "result_url" in data
         mock_process.assert_called_once()
         assert data["result_url"].endswith(f"/results/{data['job_id']}")
+
+
+class TestBuildEffectiveJiraSettings:
+    """Tests for _build_effective_jira_settings helper."""
+
+    def test_no_user_token_returns_original(self):
+        """When no user token, original settings returned unchanged."""
+        from jenkins_job_insight.main import _build_effective_jira_settings
+
+        settings = Settings()
+        result = _build_effective_jira_settings(settings, "", "")
+        assert result is settings
+
+    def test_user_token_clears_server_pat(self):
+        """User token clears server PAT so it takes precedence."""
+        from jenkins_job_insight.main import _build_effective_jira_settings
+
+        settings = Settings(
+            jira_url="https://jira.example.com",
+            jira_pat=SecretStr("server-pat"),
+            jira_api_token=SecretStr("server-api-token"),
+            jira_project_key="TEST",
+        )
+        result = _build_effective_jira_settings(settings, "user-token", "")
+        assert result.jira_pat is None
+        assert result.jira_api_token.get_secret_value() == "user-token"
+
+    def test_user_token_without_email_clears_server_email(self):
+        """User token without email clears server email to avoid mismatched Cloud auth."""
+        from jenkins_job_insight.main import _build_effective_jira_settings
+
+        settings = Settings(
+            jira_url="https://jira.example.com",
+            jira_email="server@example.com",
+            jira_api_token=SecretStr("server-api-token"),
+            jira_project_key="TEST",
+        )
+        result = _build_effective_jira_settings(settings, "user-token", "")
+        assert result.jira_email is None
+        assert result.jira_api_token.get_secret_value() == "user-token"
+
+    def test_user_token_with_email_sets_both(self):
+        """User token with email sets both for Cloud auth."""
+        from jenkins_job_insight.main import _build_effective_jira_settings
+
+        settings = Settings(
+            jira_url="https://jira.example.com",
+            jira_project_key="TEST",
+        )
+        result = _build_effective_jira_settings(
+            settings, "user-token", "user@example.com"
+        )
+        assert result.jira_api_token.get_secret_value() == "user-token"
+        assert result.jira_email == "user@example.com"
+        assert result.jira_pat is None
+
+    def test_original_settings_not_mutated(self):
+        """model_copy must not mutate the original Settings instance."""
+        from jenkins_job_insight.main import _build_effective_jira_settings
+
+        settings = Settings(
+            jira_url="https://jira.example.com",
+            jira_pat=SecretStr("server-pat"),
+            jira_email="server@example.com",
+            jira_project_key="TEST",
+        )
+        _build_effective_jira_settings(settings, "user-token", "user@example.com")
+        # Original must be untouched
+        assert settings.jira_pat.get_secret_value() == "server-pat"
+        assert settings.jira_email == "server@example.com"
+
+
+class TestValidateToken:
+    """Tests for POST /api/validate-token."""
+
+    @pytest.mark.asyncio
+    async def test_github_valid_token(self, test_client):
+        with patch("jenkins_job_insight.main.httpx.AsyncClient") as mock_client_class:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {"login": "testuser"}
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client_class.return_value = mock_client
+            response = test_client.post(
+                "/api/validate-token",
+                json={"token_type": "github", "token": "ghp_valid"},
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["valid"] is True
+        assert data["username"] == "testuser"
+
+    @pytest.mark.asyncio
+    async def test_github_invalid_token(self, test_client):
+        import httpx
+
+        with patch("jenkins_job_insight.main.httpx.AsyncClient") as mock_client_class:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 401
+            mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "Unauthorized", request=MagicMock(), response=mock_resp
+            )
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client_class.return_value = mock_client
+            response = test_client.post(
+                "/api/validate-token",
+                json={"token_type": "github", "token": "ghp_invalid"},
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["valid"] is False
+        assert "Invalid token" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_token_type(self, test_client):
+        response = test_client.post(
+            "/api/validate-token",
+            json={"token_type": "bitbucket", "token": "some-token"},
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_jira_no_url_configured(self, test_client):
+        response = test_client.post(
+            "/api/validate-token",
+            json={"token_type": "jira", "token": "jira-token"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["valid"] is False
+        assert "not configured" in data["message"]

@@ -38,6 +38,7 @@ class ServerConfig:
     jira_email: str = ""
     jira_api_token: str = ""
     jira_pat: str = ""
+    jira_token: str = ""
     jira_project_key: str = ""
     jira_ssl_verify: bool | None = None
     jira_max_results: int = 0  # 0 means use server default
@@ -216,6 +217,7 @@ def _server_config_from_dict(data: dict) -> ServerConfig:
         jira_email=data.get("jira_email", ""),
         jira_api_token=data.get("jira_api_token", ""),
         jira_pat=data.get("jira_pat", ""),
+        jira_token=_validated_str(data, "jira_token"),
         jira_project_key=data.get("jira_project_key", ""),
         jira_ssl_verify=data.get("jira_ssl_verify"),
         jira_max_results=data.get("jira_max_results", 0),

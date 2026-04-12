@@ -18,6 +18,20 @@ import { ClassificationSelect } from './ClassificationSelect'
 import { BugCreationDialog } from './BugCreationDialog'
 import { ChevronDown, ChevronRight, Bug, MessageSquare, CheckCircle2, Copy, Check, Clock } from 'lucide-react'
 
+function IssueButton({ disabled, tooltip, label, onClick }: {
+  disabled: boolean
+  tooltip: string | undefined
+  label: string
+  onClick: () => void
+}) {
+  const button = (
+    <Button variant="outline" size="sm" onClick={onClick} disabled={disabled}>
+      <Bug className="h-3.5 w-3.5 mr-1" /> {label}
+    </Button>
+  )
+  return tooltip ? <span title={tooltip} className="inline-flex">{button}</span> : button
+}
+
 function CopyableSectionHeader({ title, content, sectionId, copiedSection, onCopy, extra }: {
   title: string
   content: string
@@ -56,7 +70,7 @@ interface FailureCardProps {
 export function FailureCard({ group, jobId, childJobName, childBuildNumber, index }: FailureCardProps) {
   const scopedChildJobName = childJobName ?? ''
   const scopedChildBuildNumber = childBuildNumber ?? 0
-  const { githubAvailable, jiraAvailable, comments, reviews, aiConfigs, result, classifications } = useReportState()
+  const { githubIssuesEnabled, jiraIssuesEnabled, comments, reviews, aiConfigs, result, classifications } = useReportState()
   const dispatch = useReportDispatch()
   const expandKey = `jji-expand-${jobId}-${scopedChildJobName}-${scopedChildBuildNumber}-${group.id}`
   const [expanded, setExpanded] = useSessionState(expandKey, false)
@@ -116,11 +130,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
   const repKey = scopedReviewKey(rep.test_name)
   const classification = classifications[repKey] ?? analysis.classification
   const borderColor = classification === 'PRODUCT BUG' ? 'border-l-signal-orange' : 'border-l-signal-blue'
-  const issueCreationAvailable =
-    group.count === 1 &&
-    ((classification === 'PRODUCT BUG' && jiraAvailable) ||
-      (classification !== 'PRODUCT BUG' && githubAvailable))
-  const showAiSelector = (providers.length > 0 || models.length > 0) && issueCreationAvailable
+  const showAiSelector = providers.length > 0 || models.length > 0
 
   // Comment count for ALL tests in the group
   const groupTestNames = group.tests.map((t) => t.test_name)
@@ -412,7 +422,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                   </div>
                 </>
               )}
-              {issueCreationAvailable && (
+              {(showAiSelector || githubIssuesEnabled || jiraIssuesEnabled) && (
                 <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer">
                   <input
                     type="checkbox"
@@ -423,16 +433,18 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                   Include links
                 </label>
               )}
-              {group.count === 1 && classification !== 'PRODUCT BUG' && githubAvailable && (
-                <Button variant="outline" size="sm" onClick={() => setBugTarget('github')}>
-                  <Bug className="h-3.5 w-3.5 mr-1" /> GitHub Issue
-                </Button>
-              )}
-              {group.count === 1 && classification === 'PRODUCT BUG' && jiraAvailable && (
-                <Button variant="outline" size="sm" onClick={() => setBugTarget('jira')}>
-                  <Bug className="h-3.5 w-3.5 mr-1" /> Jira Bug
-                </Button>
-              )}
+              <IssueButton
+                disabled={!githubIssuesEnabled}
+                tooltip={!githubIssuesEnabled ? 'GitHub issues are disabled on this server' : undefined}
+                label="GitHub Issue"
+                onClick={() => setBugTarget('github')}
+              />
+              <IssueButton
+                disabled={!jiraIssuesEnabled}
+                tooltip={!jiraIssuesEnabled ? 'Jira issues are disabled on this server' : undefined}
+                label="Jira Bug"
+                onClick={() => setBugTarget('jira')}
+              />
             </div>
 
             {/* Comments */}
@@ -441,7 +453,8 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
         )}
       </Card>
 
-      {group.count === 1 && bugTarget && (
+      {/* For grouped failures, the dialog creates an issue for the representative test (first in group) */}
+      {bugTarget && (
         <BugCreationDialog
           open={bugTarget !== null}
           onOpenChange={(o) => { if (!o) setBugTarget(null) }}

@@ -1093,11 +1093,13 @@ def capabilities(
     Reports whether the server is configured to create GitHub issues
     and Jira bugs automatically. Requires server-level credentials.
     """
-    _run_client_command(
+    data = _run_client_command(
         json_output,
         lambda c: c.capabilities(),
-        columns=["github_issues", "jira_bugs"],
+        emit_output=False,
     )
+    if not _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
 
 
 @app.command("ai-configs")
@@ -1129,6 +1131,18 @@ def ai_configs(
 # -- Bug Creation -------------------------------------------------------------
 
 
+def _resolve_tracker_tokens(
+    github_token: str, jira_token: str, jira_email: str
+) -> tuple[str, str, str]:
+    """Resolve tracker tokens with config fallback."""
+    cfg = _state.get("server_config")
+    return (
+        github_token.strip() or ((cfg.github_token or "").strip() if cfg else ""),
+        jira_token.strip() or ((cfg.jira_token or "").strip() if cfg else ""),
+        jira_email.strip() or ((cfg.jira_email or "").strip() if cfg else ""),
+    )
+
+
 def _validate_issue_type(issue_type: str) -> str:
     """Validate and normalize issue type, exit on invalid input."""
     normalized = issue_type.lower()
@@ -1157,11 +1171,27 @@ def preview_issue(
     ai_model: str = typer.Option(
         "", "--ai-model", help="AI model for content generation."
     ),
+    github_token: str = typer.Option(
+        "",
+        "--github-token",
+        help="GitHub PAT for issue creation (overrides server config).",
+    ),
+    jira_token: str = typer.Option(
+        "",
+        "--jira-token",
+        help="Jira token for bug creation (overrides server config).",
+    ),
+    jira_email: str = typer.Option(
+        "", "--jira-email", help="Jira email for Cloud auth (used with --jira-token)."
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Preview generated issue content (GitHub or Jira)."""
     _set_json(json_output)
     normalized_type = _validate_issue_type(issue_type)
+    _github_token, _jira_token, _jira_email = _resolve_tracker_tokens(
+        github_token, jira_token, jira_email
+    )
     try:
         client = _get_client()
         if normalized_type == "github":
@@ -1173,6 +1203,7 @@ def preview_issue(
                 include_links=include_links,
                 ai_provider=ai_provider,
                 ai_model=ai_model,
+                github_token=_github_token,
             )
         else:
             data = client.preview_jira_bug(
@@ -1183,6 +1214,8 @@ def preview_issue(
                 include_links=include_links,
                 ai_provider=ai_provider,
                 ai_model=ai_model,
+                jira_token=_jira_token,
+                jira_email=_jira_email,
             )
     except JJIError as err:
         _handle_error(err)
@@ -1209,11 +1242,27 @@ def create_issue(
     body: str = typer.Option(..., "--body", help="Issue body."),
     child_job_name: str = typer.Option("", "--child-job"),
     child_build_number: int = typer.Option(0, "--child-build"),
+    github_token: str = typer.Option(
+        "",
+        "--github-token",
+        help="GitHub PAT for issue creation (overrides server config).",
+    ),
+    jira_token: str = typer.Option(
+        "",
+        "--jira-token",
+        help="Jira token for bug creation (overrides server config).",
+    ),
+    jira_email: str = typer.Option(
+        "", "--jira-email", help="Jira email for Cloud auth (used with --jira-token)."
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Create a GitHub issue or Jira bug from a failure analysis."""
     _set_json(json_output)
     normalized_type = _validate_issue_type(issue_type)
+    _github_token, _jira_token, _jira_email = _resolve_tracker_tokens(
+        github_token, jira_token, jira_email
+    )
     try:
         client = _get_client()
         if normalized_type == "github":
@@ -1224,6 +1273,7 @@ def create_issue(
                 body=body,
                 child_job_name=child_job_name,
                 child_build_number=child_build_number,
+                github_token=_github_token,
             )
         else:
             data = client.create_jira_bug(
@@ -1233,6 +1283,8 @@ def create_issue(
                 body=body,
                 child_job_name=child_job_name,
                 child_build_number=child_build_number,
+                jira_token=_jira_token,
+                jira_email=_jira_email,
             )
     except JJIError as err:
         _handle_error(err)
@@ -1245,6 +1297,32 @@ def create_issue(
         typer.echo(f"URL: {data.get('url', '')}")
         if data.get("comment_id"):
             typer.echo(f"Comment added (id: {data['comment_id']})")
+
+
+@app.command("validate-token")
+def validate_token_cmd(
+    token_type: str = typer.Argument(help="Token type: 'github' or 'jira'"),
+    token: str = typer.Option(
+        ..., help="Token value to validate", prompt=True, hide_input=True
+    ),
+    email: str = typer.Option("", help="Email for Jira Cloud auth"),
+    json_output: bool = _JSON_OPTION,
+) -> None:
+    """Validate a GitHub or Jira token."""
+    token_type = _validate_issue_type(token_type)
+    data = _run_client_command(
+        json_output,
+        lambda c: c.validate_token(token_type=token_type, token=token, email=email),
+        emit_output=False,
+    )
+    if data.get("valid"):
+        if not _state.get("json", False):
+            typer.echo(f"\u2713 Valid \u2014 {data.get('message', '')}")
+        return
+
+    if not _state.get("json", False):
+        typer.echo(f"\u2717 Invalid \u2014 {data.get('message', '')}")
+    raise typer.Exit(code=1)
 
 
 @app.command("override-classification")
