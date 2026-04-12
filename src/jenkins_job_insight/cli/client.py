@@ -347,6 +347,43 @@ class JJIClient:
             payload["child_build_number"] = child_build_number
         return payload
 
+    def _build_tracker_body(
+        self,
+        test_name: str,
+        child_job_name: str = "",
+        child_build_number: int = 0,
+        *,
+        include_links: bool = False,
+        ai_provider: str = "",
+        ai_model: str = "",
+        title: str = "",
+        body_text: str = "",
+        github_token: str = "",
+        jira_token: str = "",
+        jira_email: str = "",
+        include_github: bool = True,
+        include_jira: bool = True,
+    ) -> dict:
+        """Build the common payload for tracker preview/create endpoints."""
+        payload: dict = {"test_name": test_name}
+        if title:
+            payload["title"] = title
+        if body_text:
+            payload["body"] = body_text
+        if include_links:
+            payload["include_links"] = include_links
+        if ai_provider:
+            payload["ai_provider"] = ai_provider
+        if ai_model:
+            payload["ai_model"] = ai_model
+        if include_github and github_token:
+            payload["github_token"] = github_token
+        if include_jira and jira_token:
+            payload["jira_token"] = jira_token
+        if include_jira and jira_email:
+            payload["jira_email"] = jira_email
+        return self._with_child_scope(payload, child_job_name, child_build_number)
+
     def preview_github_issue(
         self,
         job_id: str,
@@ -356,14 +393,23 @@ class JJIClient:
         include_links: bool = False,
         ai_provider: str = "",
         ai_model: str = "",
+        github_token: str = "",
+        jira_token: str = "",
+        jira_email: str = "",
     ) -> dict:
         """Preview a GitHub issue. POST /results/{job_id}/preview-github-issue"""
-        body: dict = {"test_name": test_name, "include_links": include_links}
-        if ai_provider:
-            body["ai_provider"] = ai_provider
-        if ai_model:
-            body["ai_model"] = ai_model
-        body = self._with_child_scope(body, child_job_name, child_build_number)
+        body = self._build_tracker_body(
+            test_name,
+            child_job_name,
+            child_build_number,
+            include_links=include_links,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            github_token=github_token,
+            jira_token=jira_token,
+            jira_email=jira_email,
+            include_jira=False,
+        )
         return self._request(
             "POST", f"/results/{job_id}/preview-github-issue", json=body
         )
@@ -377,14 +423,23 @@ class JJIClient:
         include_links: bool = False,
         ai_provider: str = "",
         ai_model: str = "",
+        github_token: str = "",
+        jira_token: str = "",
+        jira_email: str = "",
     ) -> dict:
         """Preview a Jira bug. POST /results/{job_id}/preview-jira-bug"""
-        body: dict = {"test_name": test_name, "include_links": include_links}
-        if ai_provider:
-            body["ai_provider"] = ai_provider
-        if ai_model:
-            body["ai_model"] = ai_model
-        body = self._with_child_scope(body, child_job_name, child_build_number)
+        body = self._build_tracker_body(
+            test_name,
+            child_job_name,
+            child_build_number,
+            include_links=include_links,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            github_token=github_token,
+            jira_token=jira_token,
+            jira_email=jira_email,
+            include_github=False,
+        )
         return self._request("POST", f"/results/{job_id}/preview-jira-bug", json=body)
 
     def create_github_issue(
@@ -395,16 +450,21 @@ class JJIClient:
         body: str,
         child_job_name: str = "",
         child_build_number: int = 0,
+        github_token: str = "",
+        jira_token: str = "",
+        jira_email: str = "",
     ) -> dict:
         """Create a GitHub issue. POST /results/{job_id}/create-github-issue"""
-        payload = self._with_child_scope(
-            {
-                "test_name": test_name,
-                "title": title,
-                "body": body,
-            },
+        payload = self._build_tracker_body(
+            test_name,
             child_job_name,
             child_build_number,
+            title=title,
+            body_text=body,
+            github_token=github_token,
+            jira_token=jira_token,
+            jira_email=jira_email,
+            include_jira=False,
         )
         return self._request(
             "POST",
@@ -421,16 +481,21 @@ class JJIClient:
         body: str,
         child_job_name: str = "",
         child_build_number: int = 0,
+        github_token: str = "",
+        jira_token: str = "",
+        jira_email: str = "",
     ) -> dict:
         """Create a Jira bug. POST /results/{job_id}/create-jira-bug"""
-        payload = self._with_child_scope(
-            {
-                "test_name": test_name,
-                "title": title,
-                "body": body,
-            },
+        payload = self._build_tracker_body(
+            test_name,
             child_job_name,
             child_build_number,
+            title=title,
+            body_text=body,
+            github_token=github_token,
+            jira_token=jira_token,
+            jira_email=jira_email,
+            include_github=False,
         )
         return self._request(
             "POST",
@@ -438,6 +503,20 @@ class JJIClient:
             json=payload,
             accept_statuses=(201,),
         )
+
+    # -- Token Validation -----------------------------------------------------
+
+    def validate_token(
+        self,
+        token_type: str,
+        token: str,
+        email: str = "",
+    ) -> dict:
+        """Validate a tracker token. POST /api/validate-token"""
+        body: dict = {"token_type": token_type, "token": token}
+        if email:
+            body["email"] = email
+        return self._request("POST", "/api/validate-token", json=body)
 
     # -- Capabilities ---------------------------------------------------------
 

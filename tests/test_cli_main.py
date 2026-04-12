@@ -939,13 +939,14 @@ class TestAnalyzeAllOptions:
 class TestCapabilitiesCommand:
     def test_capabilities(self, mock_client):
         mock_client.capabilities.return_value = {
-            "github_issues": True,
-            "jira_bugs": False,
+            "github_issues_enabled": True,
+            "jira_issues_enabled": False,
         }
-        result = runner.invoke(app, ["capabilities"])
+        result = runner.invoke(app, ["capabilities", "--json"])
         assert result.exit_code == 0
-        assert "github" in result.output.lower()
-        assert "jira" in result.output.lower()
+        data = json.loads(result.output)
+        assert data["github_issues_enabled"] is True
+        assert data["jira_issues_enabled"] is False
         mock_client.capabilities.assert_called_once()
 
 
@@ -1086,6 +1087,64 @@ class TestPreviewIssueCommand:
         assert result.exit_code == 0
         assert "Similar issues (1)" in result.output
 
+    def test_preview_with_user_tokens(self, mock_client):
+        mock_client.preview_github_issue.return_value = {
+            "title": "Fix: login handler",
+            "body": "## Details...",
+            "similar_issues": [],
+        }
+        result = runner.invoke(
+            app,
+            [
+                "preview-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "github",
+                "--github-token",
+                "ghp_tok",  # noqa: S106
+                "--jira-token",
+                "jira-tok",  # noqa: S106
+                "--jira-email",
+                "user@example.com",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.preview_github_issue.call_args[1]
+        assert kwargs["github_token"] == "ghp_tok"  # noqa: S105
+        assert "jira_token" not in kwargs
+        assert "jira_email" not in kwargs
+
+    def test_preview_jira_with_user_tokens(self, mock_client):
+        mock_client.preview_jira_bug.return_value = {
+            "title": "DNS timeout",
+            "body": "h2. Summary...",
+            "similar_issues": [],
+        }
+        result = runner.invoke(
+            app,
+            [
+                "preview-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "jira",
+                "--github-token",
+                "ghp_tok",  # noqa: S106
+                "--jira-token",
+                "jira-tok",  # noqa: S106
+                "--jira-email",
+                "user@example.com",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.preview_jira_bug.call_args[1]
+        assert "github_token" not in kwargs
+        assert kwargs["jira_token"] == "jira-tok"  # noqa: S105
+        assert kwargs["jira_email"] == "user@example.com"
+
 
 class TestCreateIssueCommand:
     def test_create_github(self, mock_client):
@@ -1155,6 +1214,74 @@ class TestCreateIssueCommand:
             ],
         )
         assert result.exit_code == 1
+
+    def test_create_with_user_tokens(self, mock_client):
+        mock_client.create_github_issue.return_value = {
+            "url": "https://github.com/org/repo/issues/99",
+            "key": "",
+            "title": "Bug fix",
+            "comment_id": 42,
+        }
+        result = runner.invoke(
+            app,
+            [
+                "create-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "github",
+                "--title",
+                "Bug fix",
+                "--body",
+                "Details...",
+                "--github-token",
+                "ghp_tok",  # noqa: S106
+                "--jira-token",
+                "jira-tok",  # noqa: S106
+                "--jira-email",
+                "user@example.com",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.create_github_issue.call_args[1]
+        assert kwargs["github_token"] == "ghp_tok"  # noqa: S105
+        assert "jira_token" not in kwargs
+        assert "jira_email" not in kwargs
+
+    def test_create_jira_with_user_tokens(self, mock_client):
+        mock_client.create_jira_bug.return_value = {
+            "url": "https://jira.example.com/browse/PROJ-456",
+            "key": "PROJ-456",
+            "title": "DNS timeout",
+            "comment_id": 43,
+        }
+        result = runner.invoke(
+            app,
+            [
+                "create-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "jira",
+                "--title",
+                "DNS timeout",
+                "--body",
+                "Description...",
+                "--github-token",
+                "ghp_tok",  # noqa: S106
+                "--jira-token",
+                "jira-tok",  # noqa: S106
+                "--jira-email",
+                "user@example.com",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.create_jira_bug.call_args[1]
+        assert "github_token" not in kwargs
+        assert kwargs["jira_token"] == "jira-tok"  # noqa: S105
+        assert kwargs["jira_email"] == "user@example.com"
 
 
 class TestOverrideClassificationCommand:
@@ -2020,6 +2147,70 @@ class TestAnalyzeWaitFlags:
         assert result.exit_code == 0
         kwargs = mock_client.analyze.call_args[1]
         assert "wait_for_completion" not in kwargs
+
+
+class TestValidateTokenCommand:
+    def test_validate_token_valid(self, mock_client):
+        mock_client.validate_token.return_value = {
+            "valid": True,
+            "username": "testuser",
+            "message": "Authenticated as testuser",
+        }
+        result = runner.invoke(app, ["validate-token", "github", "--token", "ghp_test"])  # noqa: S106
+        assert result.exit_code == 0
+        assert "Valid" in result.output
+        mock_client.validate_token.assert_called_once_with(
+            token_type="github",  # noqa: S106
+            token="ghp_test",  # noqa: S105, S106
+            email="",
+        )
+
+    def test_validate_token_invalid(self, mock_client):
+        mock_client.validate_token.return_value = {
+            "valid": False,
+            "username": "",
+            "message": "Invalid token (HTTP 401)",
+        }
+        result = runner.invoke(app, ["validate-token", "github", "--token", "bad"])  # noqa: S106
+        assert result.exit_code == 1
+        assert "Invalid" in result.output
+
+    def test_validate_token_json(self, mock_client):
+        mock_client.validate_token.return_value = {
+            "valid": True,
+            "username": "testuser",
+            "message": "Authenticated as testuser",
+        }
+        result = runner.invoke(
+            app,
+            ["--json", "validate-token", "github", "--token", "ghp_test"],  # noqa: S106
+        )
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["valid"] is True
+
+    def test_validate_token_with_email(self, mock_client):
+        mock_client.validate_token.return_value = {
+            "valid": True,
+            "username": "User",
+            "message": "Authenticated as User",
+        }
+        result = runner.invoke(
+            app,
+            [
+                "validate-token",
+                "jira",
+                "--token",
+                "jira-tok",  # noqa: S106
+                "--email",
+                "user@example.com",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.validate_token.call_args[1]
+        assert kwargs["token_type"] == "jira"  # noqa: S105
+        assert kwargs["token"] == "jira-tok"  # noqa: S105
+        assert kwargs["email"] == "user@example.com"
 
 
 class TestReAnalyzeCommand:

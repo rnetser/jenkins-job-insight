@@ -246,7 +246,14 @@ export interface ResultResponse {
   analysis_started_at?: string | null
   base_url: string | null
   result_url: string | null
-  capabilities?: { github_issues: boolean; jira_bugs: boolean }
+  capabilities?: {
+    github_issues_enabled: boolean
+    jira_issues_enabled: boolean
+    server_github_token?: boolean
+    server_jira_token?: boolean
+    server_jira_email?: boolean
+    server_jira_project_key?: boolean
+  }
 }
 
 // -- Comment enrichment ---------------------------------------------

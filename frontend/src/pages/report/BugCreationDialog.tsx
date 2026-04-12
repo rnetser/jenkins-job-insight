@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { CheckCircle2, ExternalLink, AlertTriangle } from 'lucide-react'
 import type { PreviewIssueResponse, CreateIssueResponse, SimilarIssue, CommentsAndReviews } from '@/types'
+import { getGithubToken, getJiraToken, getJiraEmail } from '@/lib/cookies'
 import { useReportDispatch, useRefreshEnrichments } from './ReportContext'
 
 type BugTarget = 'github' | 'jira'
@@ -57,6 +58,15 @@ export function BugCreationDialog({
   const previewPath = target === 'github' ? 'preview-github-issue' : 'preview-jira-bug'
   const createPath = target === 'github' ? 'create-github-issue' : 'create-jira-bug'
   const label = target === 'github' ? 'GitHub Issue' : 'Jira Bug'
+  const hasToken = target === 'github' ? !!getGithubToken() : !!getJiraToken()
+
+  function getTrackerCredentials() {
+    return {
+      github_token: target === 'github' ? getGithubToken() : '',
+      jira_token: target === 'jira' ? getJiraToken() : '',
+      jira_email: target === 'jira' ? getJiraEmail() : '',
+    }
+  }
 
   // Load preview when dialog opens
   useEffect(() => {
@@ -70,6 +80,7 @@ export function BugCreationDialog({
         ai_model: aiModel ?? '',
         child_job_name: childJobName ?? '',
         child_build_number: childBuildNumber ?? 0,
+        ...getTrackerCredentials(),
       })
       .then((res) => {
         setTitle(res.title)
@@ -92,6 +103,7 @@ export function BugCreationDialog({
         body,
         child_job_name: childJobName ?? '',
         child_build_number: childBuildNumber ?? 0,
+        ...getTrackerCredentials(),
       })
       setCreatedUrl(res.url)
       setPhase('success')
@@ -203,18 +215,26 @@ export function BugCreationDialog({
         {phase === 'error' && (
           <div className="flex flex-col items-center gap-4 py-8">
             <p className="text-sm text-signal-red">{errorMsg}</p>
+            {errorMsg.toLowerCase().includes('token') && errorMsg.toLowerCase().includes('invalid') && (
+              <p className="text-xs text-text-tertiary">You can update your tokens in <a href="/settings" className="text-text-link hover:underline">settings</a>.</p>
+            )}
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
           {phase === 'preview' && (
             <>
-              <Button variant="ghost" onClick={handleClose}>Cancel</Button>
-              <Button onClick={handleCreate} disabled={!title.trim()}>Create {label}</Button>
+              {!hasToken && (
+                <p className="text-xs text-text-tertiary">Add a {target === 'github' ? 'GitHub' : 'Jira'} token in <a href="/settings" className="text-text-link hover:underline">settings</a> to create directly.</p>
+              )}
+              <div className="flex gap-2 sm:ml-auto">
+                <Button variant="ghost" onClick={handleClose}>Cancel</Button>
+                <Button onClick={handleCreate} disabled={!title.trim() || !hasToken} title={!hasToken ? `Add a ${target === 'github' ? 'GitHub' : 'Jira'} token to create issues` : undefined}>Create {label}</Button>
+              </div>
             </>
           )}
           {(phase === 'success' || phase === 'error') && (
-            <Button variant="ghost" onClick={handleClose}>Close</Button>
+            <Button variant="ghost" onClick={handleClose} className="sm:ml-auto">Close</Button>
           )}
         </DialogFooter>
       </DialogContent>

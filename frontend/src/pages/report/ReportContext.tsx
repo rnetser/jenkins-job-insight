@@ -11,8 +11,8 @@ interface ReportState {
   reviews: Record<string, ReviewState>
   enrichments: Record<string, CommentEnrichment[]>
   classifications: Record<string, string>
-  githubAvailable: boolean
-  jiraAvailable: boolean
+  githubIssuesEnabled: boolean
+  jiraIssuesEnabled: boolean
   aiConfigs: AiConfig[]
   loading: boolean
   error: string
@@ -30,8 +30,8 @@ type ReportAction =
   | { type: 'ADD_COMMENT'; payload: Comment }
   | { type: 'REMOVE_COMMENT'; payload: number }
   | { type: 'SET_REVIEW'; payload: { key: string; state: ReviewState } }
-  | { type: 'SET_GITHUB_AVAILABLE'; payload: boolean }
-  | { type: 'SET_JIRA_AVAILABLE'; payload: boolean }
+  | { type: 'SET_GITHUB_ISSUES_ENABLED'; payload: boolean }
+  | { type: 'SET_JIRA_ISSUES_ENABLED'; payload: boolean }
   | { type: 'SET_AI_CONFIGS'; payload: AiConfig[] }
   | { type: 'SET_ENRICHMENTS'; payload: Record<string, CommentEnrichment[]> }
   | { type: 'SET_CLASSIFICATIONS'; payload: Record<string, string> }
@@ -60,8 +60,8 @@ const initialState: ReportState = {
   reviews: {},
   enrichments: {},
   classifications: {},
-  githubAvailable: false,
-  jiraAvailable: false,
+  githubIssuesEnabled: false,
+  jiraIssuesEnabled: false,
   aiConfigs: [],
   loading: true,
   error: '',
@@ -82,10 +82,10 @@ function reportReducer(state: ReportState, action: ReportAction): ReportState {
       return { ...state, comments: state.comments.filter((c) => c.id !== action.payload), localMutationRev: state.localMutationRev + 1 }
     case 'SET_REVIEW':
       return { ...state, reviews: { ...state.reviews, [action.payload.key]: action.payload.state }, localMutationRev: state.localMutationRev + 1 }
-    case 'SET_GITHUB_AVAILABLE':
-      return { ...state, githubAvailable: action.payload }
-    case 'SET_JIRA_AVAILABLE':
-      return { ...state, jiraAvailable: action.payload }
+    case 'SET_GITHUB_ISSUES_ENABLED':
+      return { ...state, githubIssuesEnabled: action.payload }
+    case 'SET_JIRA_ISSUES_ENABLED':
+      return { ...state, jiraIssuesEnabled: action.payload }
     case 'SET_AI_CONFIGS':
       return { ...state, aiConfigs: action.payload }
     case 'SET_ENRICHMENTS':

@@ -172,8 +172,8 @@ function ReportContent() {
 
         // Use capabilities from the result response (job-scoped, avoids separate call)
         if (resultRes.capabilities) {
-          dispatch({ type: 'SET_GITHUB_AVAILABLE', payload: resultRes.capabilities.github_issues })
-          dispatch({ type: 'SET_JIRA_AVAILABLE', payload: resultRes.capabilities.jira_bugs })
+          dispatch({ type: 'SET_GITHUB_ISSUES_ENABLED', payload: resultRes.capabilities?.github_issues_enabled ?? false })
+          dispatch({ type: 'SET_JIRA_ISSUES_ENABLED', payload: resultRes.capabilities?.jira_issues_enabled ?? false })
         }
 
         // Initial comment fetch via the shared single-flight helper
@@ -193,10 +193,15 @@ function ReportContent() {
         }
         if (classificationsResult.status === 'fulfilled') {
           const classMap: Record<string, string> = {}
-          for (const c of classificationsResult.value.classifications ?? []) {
+          const sorted = [...(classificationsResult.value.classifications ?? [])]
+            .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+          for (const c of sorted) {
             // Use composite key to handle same test_name across different child jobs
             const key = reviewKey(c.test_name, c.job_name, c.child_build_number)
-            classMap[key] = c.classification
+            // API returns newest first — only keep the latest classification per key
+            if (!(key in classMap)) {
+              classMap[key] = c.classification
+            }
           }
           dispatch({ type: 'SET_CLASSIFICATIONS', payload: classMap })
         }
@@ -390,7 +395,7 @@ function ReportContent() {
           <div className="ml-auto flex items-center gap-3">
             {result.request_params && (
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 className="gap-1.5 text-xs"
                 onClick={() => dispatch({ type: 'SET_RE_ANALYZE_OPEN', payload: true })}

@@ -8,7 +8,7 @@ import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Coroutine
+from typing import Any, Coroutine, Literal
 from xml.etree.ElementTree import ParseError
 
 import httpx
@@ -16,7 +16,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Req
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import SecretStr
+from pydantic import BaseModel, Field, SecretStr
 from simple_logger.logger import get_logger
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
@@ -1441,10 +1441,7 @@ async def get_job_result(request: Request, job_id: str, response: Response):
         raise HTTPException(status_code=404, detail="Job not found")
     _attach_result_links(result, _extract_base_url(), job_id)
     settings = get_settings()
-    result["capabilities"] = {
-        "github_issues": settings.github_issues_enabled,
-        "jira_bugs": settings.jira_enabled,
-    }
+    result["capabilities"] = _build_capabilities(settings)
     if result.get("status") in IN_PROGRESS_STATUSES:
         response.status_code = 202
     return result
@@ -1818,6 +1815,14 @@ async def enrich_comments(
     return {"enrichments": enrichments}
 
 
+def _resolve_tests_repo_url(settings: Settings, result_data: dict) -> str:
+    """Resolve tests repo URL from settings or job request params."""
+    url = str(settings.tests_repo_url or "")
+    if not url:
+        url = str(result_data.get("request_params", {}).get("tests_repo_url", ""))
+    return url
+
+
 async def _load_effective_failure(
     job_id: str,
     test_name: str,
@@ -1869,7 +1874,7 @@ async def preview_github_issue(
     logger.debug(
         f"POST /results/{job_id}/preview-github-issue: test_name={body.test_name}"
     )
-    if not settings.github_issues_enabled:
+    if settings.enable_github_issues is False:
         raise HTTPException(
             status_code=403,
             detail="GitHub issue creation is disabled on this server",
@@ -1900,8 +1905,8 @@ async def preview_github_issue(
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
-    tests_repo_url = str(settings.tests_repo_url or "")
-    github_token = (
+    tests_repo_url = _resolve_tests_repo_url(settings, result_data)
+    github_token = (body.github_token or "").strip() or (
         settings.github_token.get_secret_value() if settings.github_token else ""
     )
     similar: list[dict] = []
@@ -1935,10 +1940,15 @@ async def preview_jira_bug(
 ) -> dict:
     """Generate preview content for a Jira bug from a failure analysis."""
     logger.debug(f"POST /results/{job_id}/preview-jira-bug: test_name={body.test_name}")
-    if not settings.jira_enabled:
+    if not _jira_issue_creation_enabled(settings):
         raise HTTPException(
             status_code=403,
-            detail="Jira integration is disabled on this server",
+            detail="Jira issue creation is disabled on this server",
+        )
+    if not settings.jira_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Jira URL is not configured on the server",
         )
     failure, result_data = await _load_effective_failure(
         job_id, body.test_name, body.child_job_name, body.child_build_number
@@ -1967,11 +1977,18 @@ async def preview_jira_bug(
 
     # Duplicate detection (best-effort: failures must not break preview)
     similar: list[dict] = []
-    if settings.jira_enabled:
+    effective_jira_settings = _build_effective_jira_settings(
+        settings, body.jira_token, body.jira_email
+    )
+    if (
+        _has_jira_credentials(effective_jira_settings)
+        and effective_jira_settings.jira_url
+        and effective_jira_settings.jira_project_key
+    ):
         try:
             similar = await search_jira_duplicates(
                 title=content["title"],
-                settings=settings,
+                settings=effective_jira_settings,
             )
         except Exception:
             logger.warning(
@@ -1985,6 +2002,71 @@ async def preview_jira_bug(
         "body": content["body"],
         "similar_issues": similar,
     }
+
+
+def _has_jira_credentials(settings: Settings) -> bool:
+    """Return True if the given settings contain usable Jira credentials."""
+    return bool(
+        (settings.jira_api_token and settings.jira_api_token.get_secret_value())
+        or (settings.jira_pat and settings.jira_pat.get_secret_value())
+    )
+
+
+def _jira_issue_creation_enabled(settings: Settings) -> bool:
+    """Check whether Jira issue creation is enabled.
+
+    ``ENABLE_JIRA_ISSUES`` takes precedence when explicitly set (True/False).
+    Falls back to ``ENABLE_JIRA`` when ``ENABLE_JIRA_ISSUES`` is None.
+    """
+    if settings.enable_jira_issues is not None:
+        return bool(settings.enable_jira_issues)
+    return settings.enable_jira is not False
+
+
+def _build_capabilities(settings: Settings) -> dict[str, bool]:
+    """Build the capabilities dict for API responses."""
+    return {
+        "github_issues_enabled": settings.enable_github_issues is not False,
+        "jira_issues_enabled": _jira_issue_creation_enabled(settings),
+        "server_github_token": bool(
+            settings.github_token and settings.github_token.get_secret_value()
+        ),
+        "server_jira_token": bool(
+            (settings.jira_api_token and settings.jira_api_token.get_secret_value())
+            or (settings.jira_pat and settings.jira_pat.get_secret_value())
+        ),
+        "server_jira_email": bool(settings.jira_email),
+        "server_jira_project_key": bool(settings.jira_project_key),
+    }
+
+
+def _build_effective_jira_settings(
+    settings: Settings, user_jira_token: str, user_jira_email: str
+) -> Settings:
+    """Build effective settings with user Jira credentials overriding server defaults.
+
+    Uses ``model_copy()`` to follow the same pattern as ``_merge_settings()``.
+    The user token is set as ``jira_api_token`` and ``jira_pat`` is cleared so
+    the user token takes precedence in all auth resolution paths
+    (``_resolve_jira_auth`` prefers PAT over API token, so leaving server PAT
+    intact would bypass the user override).
+
+    When the user provides a token but no email, ``jira_email`` is also cleared
+    to prevent pairing the server's email with the user's token (which would
+    incorrectly trigger Cloud Basic auth). Cloud users must explicitly provide
+    their email; without it, the non-Cloud auth path is used, which may
+    fail against Cloud-only Jira hosts.
+    """
+    if not user_jira_token or not user_jira_token.strip():
+        return settings
+    overrides: dict = {
+        "jira_api_token": SecretStr(user_jira_token.strip()),
+        "jira_pat": None,
+        "jira_email": user_jira_email.strip()
+        if user_jira_email and user_jira_email.strip()
+        else None,
+    }
+    return settings.model_copy(update=overrides)
 
 
 def _require_tracker_url(result: dict, tracker_name: str) -> str:
@@ -2061,36 +2143,35 @@ async def create_github_issue_endpoint(
     logger.debug(
         f"POST /results/{job_id}/create-github-issue: test_name={body.test_name}"
     )
-    if not settings.github_issues_enabled:
+    if settings.enable_github_issues is False:
         raise HTTPException(
             status_code=403,
             detail="GitHub issue creation is disabled on this server",
         )
-    tests_repo_url = str(settings.tests_repo_url or "")
-    github_token = (
+    github_token = (body.github_token or "").strip() or (
         settings.github_token.get_secret_value() if settings.github_token else ""
     )
-
-    if not tests_repo_url or not github_token:
+    if not github_token:
         raise HTTPException(
             status_code=400,
-            detail="TESTS_REPO_URL and GITHUB_TOKEN must be configured to create GitHub issues",
+            detail="GitHub token is required. Provide a token in your profile settings or configure GITHUB_TOKEN on the server.",
         )
 
-    # Verify classification matches tracker
-    failure, _result_data = await _load_effective_failure(
+    _failure, _result_data = await _load_effective_failure(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
-    if failure.analysis.classification == "PRODUCT BUG":
-        raise HTTPException(
-            status_code=422,
-            detail="Cannot create GitHub issue for a PRODUCT BUG classification. Use Jira instead.",
-        )
 
     username = request.cookies.get("jji_username", "")
     issue_body = body.body
     if username:
         issue_body += f"\n\n---\n_Reported by: {username} via jenkins-job-insight_"
+
+    tests_repo_url = _resolve_tests_repo_url(settings, _result_data)
+    if not tests_repo_url:
+        raise HTTPException(
+            status_code=400,
+            detail="No test repository URL available. The job was analyzed without tests_repo_url.",
+        )
 
     try:
         result = await create_github_issue(
@@ -2105,6 +2186,11 @@ async def create_github_issue_endpoint(
             detail=f"Invalid TESTS_REPO_URL: {exc}",
         ) from exc
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (401, 403):
+            raise HTTPException(
+                status_code=401,
+                detail="GitHub token is invalid or expired. Update your token in settings.",
+            ) from exc
         raise HTTPException(
             status_code=502,
             detail=f"GitHub API error: {exc.response.status_code}",
@@ -2145,21 +2231,20 @@ async def create_jira_bug_endpoint(
     """Create a Jira bug from a failure analysis."""
     logger.debug(f"POST /results/{job_id}/create-jira-bug: test_name={body.test_name}")
 
-    if not settings.jira_enabled:
+    if not _jira_issue_creation_enabled(settings):
         raise HTTPException(
             status_code=403,
-            detail="Jira integration is disabled on this server",
+            detail="Jira issue creation is disabled on this server",
+        )
+    if not settings.jira_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Jira URL is not configured on the server",
         )
 
-    # Verify classification matches tracker
-    failure, _result_data = await _load_effective_failure(
+    _failure, _result_data = await _load_effective_failure(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
-    if failure.analysis.classification == "CODE ISSUE":
-        raise HTTPException(
-            status_code=422,
-            detail="Cannot create Jira bug for a CODE ISSUE classification. Use GitHub instead.",
-        )
 
     username = request.cookies.get("jji_username", "")
     bug_body = body.body
@@ -2167,12 +2252,30 @@ async def create_jira_bug_endpoint(
         bug_body += f"\n\n----\nReported by: {username} via jenkins-job-insight"
 
     try:
+        effective_jira_settings = _build_effective_jira_settings(
+            settings, body.jira_token, body.jira_email
+        )
+        if not effective_jira_settings.jira_project_key:
+            raise HTTPException(
+                status_code=400,
+                detail="Jira project key is not configured on the server.",
+            )
+        if not _has_jira_credentials(effective_jira_settings):
+            raise HTTPException(
+                status_code=400,
+                detail="Jira token is required. Provide a token in your profile settings or configure Jira credentials on the server.",
+            )
         result = await create_jira_bug(
             title=body.title,
             body=bug_body,
-            settings=settings,
+            settings=effective_jira_settings,
         )
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (401, 403):
+            raise HTTPException(
+                status_code=401,
+                detail="Jira token is invalid or expired. Update your token in settings.",
+            ) from exc
         raise HTTPException(
             status_code=502,
             detail=f"Jira API error: {exc.response.status_code}",
@@ -2383,17 +2486,106 @@ async def api_dashboard() -> list[dict]:
 
 @app.get("/api/capabilities")
 async def get_capabilities(settings: Settings = Depends(get_settings)) -> dict:
-    """Report which post-analysis automation features are available.
+    """Report server-level feature toggles and credential availability.
 
-    These capabilities indicate whether the server is configured to
-    automatically create GitHub issues or Jira bugs from analysis results.
-    They require server-level credentials (GITHUB_TOKEN, JIRA_API_TOKEN, etc.)
-    and cannot be provided per-request.
+    Feature toggles (ENABLE_GITHUB_ISSUES, ENABLE_JIRA_ISSUES) control
+    whether issue creation is available at all.  Credential flags tell
+    the frontend whether the server has its own tokens configured so the
+    UI can decide if user-supplied tokens are required or optional.
     """
-    return {
-        "github_issues": settings.github_issues_enabled,
-        "jira_bugs": settings.jira_enabled,
-    }
+    return _build_capabilities(settings)
+
+
+class ValidateTokenRequest(BaseModel):
+    """Request body for validating a tracker token."""
+
+    token_type: Literal["github", "jira"] = Field(description="Token type")
+    token: str = Field(description="Token value to validate")
+    email: str = Field(default="", description="Email for Jira Cloud auth")
+
+
+@app.post("/api/validate-token")
+async def validate_token(
+    body: ValidateTokenRequest,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Validate a GitHub or Jira token by making a lightweight API call.
+
+    GitHub: GET /user (returns authenticated user info)
+    Jira: GET /rest/api/2/myself (returns authenticated user info)
+    """
+    token = body.token.strip()
+    if not token:
+        return {"valid": False, "username": "", "message": "Token is required"}
+
+    def _invalid(msg: str) -> dict:
+        return {"valid": False, "username": "", "message": msg}
+
+    def _status_message(status_code: int) -> str:
+        if status_code in (401, 403):
+            return f"Invalid token (HTTP {status_code})"
+        return f"Tracker API returned HTTP {status_code}"
+
+    if body.token_type == "github":
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    "https://api.github.com/user",
+                    headers={
+                        "Accept": "application/vnd.github.v3+json",
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+                resp.raise_for_status()
+                try:
+                    data = resp.json()
+                except (ValueError, json.JSONDecodeError):
+                    return _invalid("Tracker API returned an unexpected response")
+                return {
+                    "valid": True,
+                    "username": data.get("login", ""),
+                    "message": f"Authenticated as {data.get('login', 'unknown')}",
+                }
+        except httpx.HTTPStatusError as exc:
+            return _invalid(_status_message(exc.response.status_code))
+        except httpx.RequestError:
+            return _invalid("Could not reach GitHub API")
+
+    elif body.token_type == "jira":
+        jira_url = (settings.jira_url or "").rstrip("/")
+        if not jira_url:
+            return _invalid("Jira URL not configured on server")
+        # Build auth based on whether email is provided (Cloud vs DC)
+        email = body.email.strip()
+        auth: tuple[str, str] | None = None
+        headers: dict[str, str] = {"Accept": "application/json"}
+        if email:
+            auth = (email, token)
+        else:
+            headers["Authorization"] = f"Bearer {token}"
+        try:
+            async with httpx.AsyncClient(
+                verify=settings.jira_ssl_verify, timeout=10, auth=auth
+            ) as client:
+                resp = await client.get(
+                    f"{jira_url}/rest/api/2/myself",
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                try:
+                    data = resp.json()
+                except (ValueError, json.JSONDecodeError):
+                    return _invalid("Tracker API returned an unexpected response")
+                display = data.get("displayName", data.get("name", ""))
+                return {
+                    "valid": True,
+                    "username": display,
+                    "message": f"Authenticated as {display}",
+                }
+        except httpx.HTTPStatusError as exc:
+            return _invalid(_status_message(exc.response.status_code))
+        except httpx.RequestError:
+            return _invalid("Could not reach Jira API")
 
 
 @app.get("/history/failures")

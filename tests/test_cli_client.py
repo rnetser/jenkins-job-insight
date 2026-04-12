@@ -425,12 +425,14 @@ class TestJJIClientCapabilities:
         def handler(request):
             assert request.method == "GET"
             assert request.url.path == "/api/capabilities"
-            return httpx.Response(200, json={"github_issues": True, "jira_bugs": False})
+            return httpx.Response(
+                200, json={"github_issues_enabled": True, "jira_issues_enabled": False}
+            )
 
         client = _make_client(handler)
         result = client.capabilities()
-        assert result["github_issues"] is True
-        assert result["jira_bugs"] is False
+        assert result["github_issues_enabled"] is True
+        assert result["jira_issues_enabled"] is False
 
 
 class TestJJIClientAiConfigs:
@@ -512,6 +514,231 @@ class TestJJIClientPreviewWithAiConfig:
         client.preview_github_issue(
             job_id="job-1",
             test_name="tests.TestA.test_one",
+        )
+
+
+class TestJJIClientIssueTokens:
+    def test_preview_github_issue_with_tokens(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/results/job-1/preview-github-issue" in str(request.url)
+            body = json.loads(request.content)
+            assert body["github_token"] == "ghp_test123"  # noqa: S105
+            assert "jira_token" not in body
+            assert "jira_email" not in body
+            return httpx.Response(
+                200,
+                json={"title": "Fix", "body": "Body", "similar_issues": []},
+            )
+
+        client = _make_client(handler)
+        result = client.preview_github_issue(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            github_token="ghp_test123",  # noqa: S106
+        )
+        assert result["title"] == "Fix"
+
+    def test_create_github_issue_with_tokens(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/results/job-1/create-github-issue" in str(request.url)
+            body = json.loads(request.content)
+            assert body["github_token"] == "ghp_test123"  # noqa: S105
+            assert "jira_token" not in body
+            assert "jira_email" not in body
+            return httpx.Response(
+                201,
+                json={
+                    "url": "https://github.com/org/repo/issues/99",
+                    "key": "",
+                    "title": "Bug",
+                    "comment_id": 1,
+                },
+            )
+
+        client = _make_client(handler)
+        result = client.create_github_issue(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            title="Bug",
+            body="Details",
+            github_token="ghp_test123",  # noqa: S106
+        )
+        assert result["url"] == "https://github.com/org/repo/issues/99"
+
+    def test_preview_jira_bug_with_tokens(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/results/job-1/preview-jira-bug" in str(request.url)
+            body = json.loads(request.content)
+            assert "github_token" not in body
+            assert body["jira_token"] == "jira-tok-test"  # noqa: S105
+            assert body["jira_email"] == "test@example.com"
+            return httpx.Response(
+                200,
+                json={"title": "Bug", "body": "Desc", "similar_issues": []},
+            )
+
+        client = _make_client(handler)
+        result = client.preview_jira_bug(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            jira_token="jira-tok-test",  # noqa: S106
+            jira_email="test@example.com",
+        )
+        assert result["title"] == "Bug"
+
+    def test_create_jira_bug_with_tokens(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/results/job-1/create-jira-bug" in str(request.url)
+            body = json.loads(request.content)
+            assert "github_token" not in body
+            assert body["jira_token"] == "jira-tok-test"  # noqa: S105
+            assert body["jira_email"] == "test@example.com"
+            return httpx.Response(
+                201,
+                json={
+                    "url": "https://jira.example.com/browse/PROJ-1",
+                    "key": "PROJ-1",
+                    "title": "Bug",
+                    "comment_id": 1,
+                },
+            )
+
+        client = _make_client(handler)
+        result = client.create_jira_bug(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            title="Bug",
+            body="Details",
+            jira_token="jira-tok-test",  # noqa: S106
+            jira_email="test@example.com",
+        )
+        assert result["key"] == "PROJ-1"
+
+    def test_preview_github_issue_without_tokens_omits_fields(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/results/job-1/preview-github-issue" in str(request.url)
+            body = json.loads(request.content)
+            assert "github_token" not in body
+            assert "jira_token" not in body
+            assert "jira_email" not in body
+            return httpx.Response(
+                200,
+                json={"title": "Fix", "body": "Body", "similar_issues": []},
+            )
+
+        client = _make_client(handler)
+        client.preview_github_issue(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+        )
+
+
+class TestJJIClientCrossCredentialLeakage:
+    """Verify that GitHub methods never include Jira credentials and vice versa."""
+
+    def test_preview_github_issue_excludes_jira_credentials(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert "jira_token" not in body, (
+                "jira_token leaked into GitHub preview payload"
+            )
+            assert "jira_email" not in body, (
+                "jira_email leaked into GitHub preview payload"
+            )
+            assert body["github_token"] == "ghp_test"  # noqa: S105
+            return httpx.Response(
+                200,
+                json={"title": "Fix", "body": "Body", "similar_issues": []},
+            )
+
+        client = _make_client(handler)
+        client.preview_github_issue(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            github_token="ghp_test",  # noqa: S106
+            jira_token="jira-should-not-appear",  # noqa: S106
+            jira_email="leak@example.com",
+        )
+
+    def test_create_github_issue_excludes_jira_credentials(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert "jira_token" not in body, (
+                "jira_token leaked into GitHub create payload"
+            )
+            assert "jira_email" not in body, (
+                "jira_email leaked into GitHub create payload"
+            )
+            return httpx.Response(
+                201,
+                json={
+                    "url": "https://github.com/org/repo/issues/1",
+                    "key": "",
+                    "title": "Bug",
+                    "comment_id": 1,
+                },
+            )
+
+        client = _make_client(handler)
+        client.create_github_issue(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            title="Bug",
+            body="Details",
+            github_token="ghp_test",  # noqa: S106
+            jira_token="jira-should-not-appear",  # noqa: S106
+            jira_email="leak@example.com",
+        )
+
+    def test_preview_jira_bug_excludes_github_credentials(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert "github_token" not in body, (
+                "github_token leaked into Jira preview payload"
+            )
+            assert body["jira_token"] == "jira-tok"  # noqa: S105
+            return httpx.Response(
+                200,
+                json={"title": "Bug", "body": "Desc", "similar_issues": []},
+            )
+
+        client = _make_client(handler)
+        client.preview_jira_bug(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            github_token="ghp-should-not-appear",  # noqa: S106
+            jira_token="jira-tok",  # noqa: S106
+        )
+
+    def test_create_jira_bug_excludes_github_credentials(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert "github_token" not in body, (
+                "github_token leaked into Jira create payload"
+            )
+            return httpx.Response(
+                201,
+                json={
+                    "url": "https://jira.example.com/browse/PROJ-1",
+                    "key": "PROJ-1",
+                    "title": "Bug",
+                    "comment_id": 1,
+                },
+            )
+
+        client = _make_client(handler)
+        client.create_jira_bug(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            title="Bug",
+            body="Details",
+            github_token="ghp-should-not-appear",  # noqa: S106
+            jira_token="jira-tok",  # noqa: S106
         )
 
 
@@ -696,12 +923,12 @@ class TestJJIClientAnalyzeExtras:
             "tests_repo_url": "https://github.com/org/tests",
             "jira_url": "https://jira.example.com",
             "jira_email": "user@example.com",
-            "jira_api_token": "tok-123",
-            "jira_pat": "pat-abc",
+            "jira_api_token": "tok-123",  # noqa: S105
+            "jira_pat": "pat-abc",  # noqa: S105
             "jira_project_key": "PROJ",
             "jira_ssl_verify": True,
             "jira_max_results": 25,
-            "github_token": "ghp_abc123",
+            "github_token": "ghp_abc123",  # noqa: S105
             "ai_cli_timeout": 10,
             "enable_jira": True,
             "raw_prompt": "extra instructions",
@@ -776,6 +1003,68 @@ class TestJJIClientAnalyzeExtras:
         client = _make_client(handler)
         result = client.analyze("my-job", 1)
         assert result["status"] == "queued"
+
+
+class TestJJIClientValidateToken:
+    def test_validate_github_token(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/api/validate-token" in str(request.url)
+            body = json.loads(request.content)
+            assert body["token_type"] == "github"  # noqa: S105
+            assert body["token"] == "ghp_test"  # noqa: S105
+            return httpx.Response(
+                200,
+                json={
+                    "valid": True,
+                    "username": "testuser",
+                    "message": "Authenticated as testuser",
+                },
+            )
+
+        client = _make_client(handler)
+        result = client.validate_token(token_type="github", token="ghp_test")  # noqa: S106
+        assert result["valid"] is True
+
+    def test_validate_jira_token_with_email(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/api/validate-token" in str(request.url)
+            body = json.loads(request.content)
+            assert body["token_type"] == "jira"  # noqa: S105
+            assert body["token"] == "jira-tok"  # noqa: S105
+            assert body["email"] == "user@example.com"
+            return httpx.Response(
+                200,
+                json={
+                    "valid": True,
+                    "username": "User",
+                    "message": "Authenticated as User",
+                },
+            )
+
+        client = _make_client(handler)
+        result = client.validate_token(
+            token_type="jira",  # noqa: S106
+            token="jira-tok",  # noqa: S106
+            email="user@example.com",
+        )
+        assert result["valid"] is True
+
+    def test_validate_token_without_email_omits_field(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/api/validate-token" in str(request.url)
+            body = json.loads(request.content)
+            assert "email" not in body
+            assert body["token_type"] == "jira"  # noqa: S105
+            assert body["token"] == "jira-tok"  # noqa: S105
+            return httpx.Response(
+                200, json={"valid": True, "username": "u", "message": "ok"}
+            )
+
+        client = _make_client(handler)
+        client.validate_token(token_type="jira", token="jira-tok")  # noqa: S106
 
 
 class TestJJIClientReAnalyze:
