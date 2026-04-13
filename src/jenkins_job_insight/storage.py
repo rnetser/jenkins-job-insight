@@ -2032,6 +2032,73 @@ async def override_classification(
     return group_tests
 
 
+async def get_history_classification(
+    job_id: str,
+    test_name: str,
+    child_job_name: str = "",
+    child_build_number: int = 0,
+) -> str:
+    """Return the history-domain classification for a test.
+
+    History classifications are ``FLAKY``, ``REGRESSION``,
+    ``INFRASTRUCTURE``, ``KNOWN_BUG``, and ``INTERMITTENT``.
+    Primary classifications (``CODE ISSUE`` / ``PRODUCT BUG``) are
+    intentionally excluded — use :func:`get_effective_classification`
+    for those.
+
+    Checks ``test_classifications`` first (visible entries only),
+    then falls back to ``failure_history``.
+
+    Args:
+        job_id: Analysis job identifier.
+        test_name: Fully qualified test name.
+        child_job_name: Optional child job name for scoping.
+        child_build_number: Optional child build number for scoping.
+
+    Returns:
+        The history classification string (e.g. ``"INFRASTRUCTURE"``),
+        or ``""`` if no history classification exists.
+    """
+    _child_job_name = child_job_name or ""
+    _child_build_number = child_build_number or 0
+
+    _history_classifications_sql = (
+        "(" + ", ".join(f"'{c}'" for c in HISTORY_CLASSIFICATIONS) + ")"
+    )
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # 1. Prefer visible entry from test_classifications
+        override_row = await (
+            await db.execute(
+                "SELECT classification FROM test_classifications"
+                " WHERE test_name = ? AND job_id = ? AND job_name = ?"
+                " AND child_build_number = ? AND visible = 1"
+                f" AND classification IN {_history_classifications_sql}"
+                " ORDER BY id DESC LIMIT 1",
+                [test_name, job_id, _child_job_name, _child_build_number],
+            )
+        ).fetchone()
+        if override_row and override_row[0]:
+            return override_row[0]
+
+        # 2. Fall back to failure_history
+        fh_query = (
+            "SELECT classification FROM failure_history"
+            " WHERE job_id = ? AND test_name = ?"
+            f" AND classification IN {_history_classifications_sql}"
+        )
+        fh_params: list = [job_id, test_name]
+        if child_job_name:
+            fh_query += " AND child_job_name = ? AND child_build_number = ?"
+            fh_params.extend([child_job_name, child_build_number])
+        else:
+            fh_query += " AND child_job_name = '' AND child_build_number = 0"
+        fh_query += " LIMIT 1"
+
+        fh_row = await (await db.execute(fh_query, fh_params)).fetchone()
+        return fh_row[0] if fh_row and fh_row[0] else ""
+
+
 async def get_effective_classification(
     job_id: str,
     test_name: str,

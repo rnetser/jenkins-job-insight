@@ -1,0 +1,329 @@
+"""Tests for Report Portal API endpoint and auto-push hook."""
+
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def _rp_disabled_env():
+    """Environment with RP disabled."""
+    env = {
+        "JENKINS_URL": "https://jenkins.example.com",
+        "JENKINS_USER": "testuser",
+        "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+        "AI_PROVIDER": "claude",
+        "AI_MODEL": "test-model",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        from jenkins_job_insight.config import get_settings
+
+        get_settings.cache_clear()
+        yield
+        get_settings.cache_clear()
+
+
+@pytest.fixture
+def _rp_enabled_env():
+    """Environment with RP enabled."""
+    env = {
+        "JENKINS_URL": "https://jenkins.example.com",
+        "JENKINS_USER": "testuser",
+        "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+        "AI_PROVIDER": "claude",
+        "AI_MODEL": "test-model",
+        "REPORTPORTAL_URL": "http://rp.example.com",
+        "REPORTPORTAL_API_TOKEN": "rp-token",  # pragma: allowlist secret
+        "REPORTPORTAL_PROJECT": "my-project",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        from jenkins_job_insight.config import get_settings
+
+        get_settings.cache_clear()
+        yield
+        get_settings.cache_clear()
+
+
+class TestPushReportPortalEndpoint:
+    """Test POST /results/{job_id}/push-reportportal."""
+
+    def test_returns_400_when_rp_disabled(self, _rp_disabled_env):
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/some-job-id/push-reportportal")
+        assert response.status_code == 400
+        detail = response.json()["detail"].lower()
+        assert "disabled" in detail or "not configured" in detail
+
+    @patch("jenkins_job_insight.main.get_result")
+    def test_returns_404_when_job_not_found(self, mock_get_result, _rp_enabled_env):
+        mock_get_result.return_value = None
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/nonexistent-id/push-reportportal")
+        assert response.status_code == 404
+
+    @patch(
+        "jenkins_job_insight.main.ReportPortalClient",
+    )
+    @patch("jenkins_job_insight.main.get_result")
+    def test_returns_422_on_invalid_stored_failures(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        mock_get_result.return_value = {
+            "result": {
+                "failures": [{"bad_field": "not_a_valid_failure"}],
+                "jenkins_url": "http://jenkins.example.com/job/test/1/",
+                "job_name": "test-job",
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.return_value = [{"id": 1, "name": "test_a"}]
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/corrupt-job/push-reportportal")
+        assert response.status_code == 422
+        assert "validation error" in response.json()["detail"].lower()
+
+    @patch(
+        "jenkins_job_insight.main.get_history_classification", new_callable=AsyncMock
+    )
+    @patch("jenkins_job_insight.main.get_result")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    def test_returns_result_on_success(
+        self, mock_rp_class, mock_get_result, mock_get_cls, _rp_enabled_env
+    ):
+        mock_get_cls.return_value = ""
+        # Mock stored result
+        mock_get_result.return_value = {
+            "status": "completed",
+            "result": {
+                "job_name": "my-job",
+                "build_number": 42,
+                "jenkins_url": "https://jenkins.example.com/job/my-job/42/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {
+                            "classification": "PRODUCT BUG",
+                            "details": "Bug found",
+                        },
+                    }
+                ],
+            },
+        }
+        # Mock RP client (supports context manager protocol)
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 100
+        mock_rp.get_failed_items.return_value = [
+            {"id": 1, "name": "test_a", "status": "FAILED"}
+        ]
+        mock_rp.match_failures.return_value = [
+            ({"id": 1, "name": "test_a"}, MagicMock(test_name="test_a"))
+        ]
+        mock_rp.push_classifications.return_value = {
+            "pushed": 1,
+            "unmatched": [],
+            "errors": [],
+            "launch_id": 100,
+        }
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/some-job-id/push-reportportal")
+        assert response.status_code == 200, f"Response: {response.text}"
+        data = response.json()
+        assert data["pushed"] == 1
+        mock_rp.__exit__.assert_called_once()
+
+    @patch(
+        "jenkins_job_insight.main.get_history_classification", new_callable=AsyncMock
+    )
+    @patch("jenkins_job_insight.main.get_result")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    def test_infrastructure_classification_passed_to_rp(
+        self, mock_rp_class, mock_get_result, mock_get_cls, _rp_enabled_env
+    ):
+        """INFRASTRUCTURE history classification maps to RP System Issue."""
+        mock_get_cls.return_value = "INFRASTRUCTURE"
+        mock_get_result.return_value = {
+            "status": "completed",
+            "result": {
+                "job_name": "my-job",
+                "build_number": 42,
+                "jenkins_url": "https://jenkins.example.com/job/my-job/42/",
+                "failures": [
+                    {
+                        "test_name": "test_infra",
+                        "error": "timeout",
+                        "analysis": {
+                            "classification": "PRODUCT BUG",
+                            "details": "Network timeout",
+                        },
+                    }
+                ],
+            },
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 200
+        mock_rp.get_failed_items.return_value = [
+            {"id": 10, "name": "test_infra", "status": "FAILED"}
+        ]
+        # match_failures returns a pair where the FailureAnalysis has test_name
+        mock_failure = MagicMock()
+        mock_failure.test_name = "test_infra"
+        mock_rp.match_failures.return_value = [
+            ({"id": 10, "name": "test_infra"}, mock_failure)
+        ]
+        mock_rp.push_classifications.return_value = {
+            "pushed": 1,
+            "unmatched": [],
+            "errors": [],
+            "launch_id": 200,
+        }
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/some-job-id/push-reportportal")
+        assert response.status_code == 200, f"Response: {response.text}"
+        # Verify push_classifications was called with INFRASTRUCTURE in history_classifications
+        push_call = mock_rp.push_classifications.call_args
+        history_arg = (
+            push_call[0][2]
+            if len(push_call[0]) > 2
+            else push_call[1].get("history_classifications", {})
+        )
+        assert history_arg.get("test_infra") == "INFRASTRUCTURE"
+
+    @patch(
+        "jenkins_job_insight.main.get_history_classification", new_callable=AsyncMock
+    )
+    @patch("jenkins_job_insight.main.get_result")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    def test_no_overlap_returns_error(
+        self, mock_rp_class, mock_get_result, mock_get_cls, _rp_enabled_env
+    ):
+        """When RP items and JJI failures have no name overlap, return an error."""
+        mock_get_cls.return_value = ""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "build_number": 1,
+                "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
+                "failures": [
+                    {
+                        "test_name": "test_alpha",
+                        "error": "err",
+                        "analysis": {
+                            "classification": "PRODUCT BUG",
+                            "details": "d",
+                        },
+                    }
+                ],
+            },
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 99
+        mock_rp.get_failed_items.return_value = [
+            {"id": 1, "name": "test_beta", "status": "FAILED"}
+        ]
+        mock_rp.match_failures.return_value = []  # no overlap
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/some-job-id/push-reportportal")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["pushed"] == 0
+        assert len(data["errors"]) == 1
+        assert "No overlap" in data["errors"][0]
+        assert "test_beta" in data["errors"][0]
+        assert "test_alpha" in data["errors"][0]
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_verify_ssl_passed_to_rp_client(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """REPORTPORTAL_VERIFY_SSL is forwarded to the ReportPortalClient."""
+        with patch.dict(os.environ, {"REPORTPORTAL_VERIFY_SSL": "false"}):
+            from jenkins_job_insight.config import get_settings
+
+            get_settings.cache_clear()
+            mock_get_result.return_value = {
+                "result": {
+                    "job_name": "test-job",
+                    "jenkins_url": "https://jenkins.example.com/job/test/1/",
+                    "failures": [],
+                }
+            }
+            mock_rp = MagicMock()
+            mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+            mock_rp.__exit__ = MagicMock(return_value=False)
+            mock_rp.find_launch.return_value = 1
+            mock_rp.get_failed_items.return_value = []
+            mock_rp.push_classifications.return_value = {
+                "pushed": 0,
+                "unmatched": [],
+                "errors": [],
+                "launch_id": 1,
+            }
+            mock_rp_class.return_value = mock_rp
+
+            from jenkins_job_insight.main import app
+
+            client = TestClient(app, raise_server_exceptions=False)
+            client.post("/results/some-job/push-reportportal")
+
+            # Verify verify_ssl=False was passed
+            mock_rp_class.assert_called_once()
+            call_kwargs = mock_rp_class.call_args[1]
+            assert call_kwargs["verify_ssl"] is False
+            get_settings.cache_clear()
+
+
+class TestCapabilitiesEndpoint:
+    """Test that capabilities includes reportportal."""
+
+    def test_capabilities_includes_rp_disabled(self, _rp_disabled_env):
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/api/capabilities")
+        assert response.status_code == 200
+        data = response.json()
+        assert "reportportal" in data
+        assert data["reportportal"] is False
+
+    def test_capabilities_includes_rp_enabled(self, _rp_enabled_env):
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/api/capabilities")
+        assert response.status_code == 200
+        data = response.json()
+        assert "reportportal" in data
+        assert data["reportportal"] is True

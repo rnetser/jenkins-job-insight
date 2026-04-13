@@ -1475,6 +1475,33 @@ def validate_token_cmd(
     raise typer.Exit(code=1)
 
 
+@app.command("push-rp")
+def push_rp_cmd(
+    job_id: str = typer.Argument(help="Job ID to push classifications for."),
+    json_output: bool = _JSON_OPTION,
+):
+    """Push JJI classifications into Report Portal test items."""
+    data = _run_client_command(
+        json_output,
+        lambda c: c.push_reportportal(job_id),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
+        pushed = data.get("pushed", 0)
+        errors = data.get("errors", [])
+        unmatched = data.get("unmatched", [])
+        launch_id = data.get("launch_id")
+        typer.echo(f"Pushed {pushed} classification(s) to Report Portal")
+        if launch_id:
+            typer.echo(f"Launch ID: {launch_id}")
+        if unmatched:
+            typer.echo(f"Unmatched: {', '.join(unmatched)}")
+        if errors:
+            typer.echo(f"Errors: {len(errors)}")
+            for err in errors:
+                typer.echo(f"  - {err}")
+
+
 @app.command("override-classification")
 def override_classification_cmd(
     job_id: str = typer.Argument(help="Job ID."),

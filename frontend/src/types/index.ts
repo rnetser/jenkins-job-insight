@@ -253,7 +253,17 @@ export interface ResultResponse {
     server_jira_token?: boolean
     server_jira_email?: boolean
     server_jira_project_key?: string
+    reportportal?: boolean
   }
+}
+
+// -- Report Portal --------------------------------------------------
+
+export interface ReportPortalPushResult {
+  pushed: number
+  unmatched: string[]
+  errors: string[]
+  launch_id: number | null
 }
 
 // -- Comment enrichment ---------------------------------------------

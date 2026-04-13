@@ -7,8 +7,10 @@ from collections.abc import Awaitable, Callable
 from typing import Generator
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
+from jenkins_job_insight.cli.client import JJIClient
 from jenkins_job_insight.config import Settings
 from jenkins_job_insight.models import (
     AnalysisDetail,
@@ -17,6 +19,49 @@ from jenkins_job_insight.models import (
     FailureAnalysis,
     ProductBugReport,
 )
+
+CLI_TEST_BASE_URL = "http://localhost:8700"
+
+
+def build_test_env(**overrides: str) -> dict[str, str]:
+    """Return baseline Jenkins env with per-test overrides applied.
+
+    Shared by test_config.py, test_reportportal_config.py, and any test
+    module that needs a minimal environment for ``Settings``.
+    """
+    base = {
+        "JENKINS_URL": "https://jenkins.example.com",
+        "JENKINS_USER": "testuser",
+        "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
+    }
+    base.update(overrides)
+    return base
+
+
+def make_test_client(
+    handler: Callable[[httpx.Request], httpx.Response],
+    username: str = "",
+) -> JJIClient:
+    """Create a JJIClient with a mock transport for testing.
+
+    The mock httpx.Client is created with base_url set so that
+    relative paths (e.g. "/health") resolve correctly.
+
+    Shared by test_cli_client.py and test_reportportal_cli.py.
+    """
+    cookies = {}
+    if username:
+        cookies["jji_username"] = username
+
+    mock_http = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url=CLI_TEST_BASE_URL,
+        cookies=cookies,
+    )
+    client = JJIClient(CLI_TEST_BASE_URL, username=username)
+    client._client.close()
+    client._client = mock_http
+    return client
 
 
 @pytest.fixture
