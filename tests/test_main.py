@@ -4137,11 +4137,11 @@ class TestValidateToken:
 
 
 class TestJiraProjectsEndpoint:
-    """Tests for GET /api/jira-projects."""
+    """Tests for POST /api/jira-projects."""
 
     def test_no_jira_url_returns_empty(self, test_client):
         """No JIRA_URL configured returns empty list."""
-        response = test_client.get("/api/jira-projects")
+        response = test_client.post("/api/jira-projects", json={})
         assert response.status_code == 200
         assert response.json() == []
 
@@ -4160,8 +4160,69 @@ class TestJiraProjectsEndpoint:
                 mock_client.__aenter__ = AsyncMock(return_value=mock_client)
                 mock_client.__aexit__ = AsyncMock(return_value=False)
                 MockJiraClient.return_value = mock_client
-                response = test_client.get("/api/jira-projects")
+                response = test_client.post(
+                    "/api/jira-projects",
+                    json={"jira_token": "tok", "jira_email": "u@e.com"},  # noqa: S106
+                )
             assert response.status_code == 200
-            assert response.json() == projects
+            data = response.json()
+            assert any(p["key"] == "PROJ" for p in data)
+        finally:
+            app.dependency_overrides.pop(get_settings, None)
+
+
+class TestJiraSecurityLevelsEndpoint:
+    """Tests for POST /api/jira-security-levels."""
+
+    def test_no_jira_url_returns_empty(self, test_client):
+        """No JIRA_URL configured returns empty list."""
+        response = test_client.post(
+            "/api/jira-security-levels", json={"project_key": "PROJ"}
+        )
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_no_token_returns_empty(self, test_client):
+        """No jira_token returns empty list."""
+        from jenkins_job_insight.main import app, get_settings
+
+        jira_settings = _build_wait_settings(jira_url="https://jira.example.com")
+        app.dependency_overrides[get_settings] = lambda: jira_settings
+        try:
+            response = test_client.post(
+                "/api/jira-security-levels", json={"project_key": "PROJ"}
+            )
+            assert response.status_code == 200
+            assert response.json() == []
+        finally:
+            app.dependency_overrides.pop(get_settings, None)
+
+    @pytest.mark.asyncio
+    async def test_returns_security_levels(self, test_client):
+        """Returns security levels from JiraClient.list_security_levels."""
+        from jenkins_job_insight.main import app, get_settings
+
+        levels = [{"id": "10", "name": "Internal", "description": "Internal only"}]
+        jira_settings = _build_wait_settings(jira_url="https://jira.example.com")
+        app.dependency_overrides[get_settings] = lambda: jira_settings
+        try:
+            with patch("jenkins_job_insight.jira.JiraClient") as MockJiraClient:
+                mock_client = AsyncMock()
+                mock_client.list_security_levels = AsyncMock(return_value=levels)
+                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_client.__aexit__ = AsyncMock(return_value=False)
+                MockJiraClient.return_value = mock_client
+                response = test_client.post(
+                    "/api/jira-security-levels",
+                    json={
+                        "project_key": "PROJ",
+                        "jira_token": "tok",
+                        "jira_email": "u@e.com",
+                    },  # noqa: S106
+                )
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data) == 1
+            assert data[0]["name"] == "Internal"
         finally:
             app.dependency_overrides.pop(get_settings, None)

@@ -47,12 +47,13 @@ class JiraClient:
     Auto-detects Cloud (email + API token, REST API v3) vs
     Server/DC (PAT or API token, REST API v2) based on provided credentials.
 
-    Cloud detection requires ``jira_email`` together with
-    ``jira_api_token``. ``jira_email`` + ``jira_pat`` stays in
-    Server/DC mode.
+    Cloud detection: ``jira_email`` present → Cloud mode.
+    The token is ``jira_api_token`` (preferred) or ``jira_pat``
+    (fallback).
 
-    Server/DC detection: uses Bearer auth with ``jira_pat``
-    (preferred) or ``jira_api_token`` as fallback.
+    Server/DC detection (no ``jira_email``): uses Bearer auth
+    with ``jira_pat`` (preferred) or ``jira_api_token`` as
+    fallback.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -65,7 +66,7 @@ class JiraClient:
         # Configure Cloud vs Server/DC auth
         self._auth: tuple[str, str] | None
         if is_cloud and settings.jira_email:
-            # Cloud: _resolve_jira_auth() selected email + jira_api_token.
+            # Cloud: _resolve_jira_auth() selected email + token (api_token or pat).
             self._auth = (settings.jira_email, token_value)
             self._search_path = "/rest/api/3/search/jql"
             self._api_path = "/rest/api/3"
@@ -101,15 +102,109 @@ class JiraClient:
     async def __aexit__(self, *exc) -> None:
         await self.close()
 
-    async def list_projects(self) -> list[dict]:
-        """List all accessible Jira projects."""
-        try:
-            response = await self._client.get(f"{self._api_path}/project")
+    async def list_projects(self, query: str = "") -> list[dict]:
+        """List all accessible Jira projects.
+
+        Tries ``/project/search`` first (returns only projects the caller
+        can see) and falls back to ``/project`` (requires broader
+        permissions).  Paginates ``/project/search`` to fetch all results.
+        """
+        # /project/search returns paginated results scoped to the caller;
+        # /project requires global Browse Projects and may 403 on Cloud.
+        paths_to_try = [
+            f"{self._api_path}/project/search",
+            f"{self._api_path}/project",
+        ]
+
+        for path in paths_to_try:
+            try:
+                if "/project/search" in path:
+                    return await self._list_projects_paginated(path, query=query)
+                response = await self._client.get(path)
+                response.raise_for_status()
+                data = response.json()
+                projects = data if isinstance(data, list) else data.get("values", [])
+                result = [
+                    {"key": p["key"], "name": p.get("name", p["key"])}
+                    for p in projects
+                    if isinstance(p, dict) and "key" in p
+                ]
+                if query:
+                    _q = query.lower()
+                    result = [
+                        p
+                        for p in result
+                        if _q in p["key"].lower() or _q in p["name"].lower()
+                    ]
+                if result:
+                    return result
+            except (httpx.HTTPError, ValueError) as exc:
+                logger.warning(
+                    "Failed to fetch Jira projects from %s: %s",
+                    path,
+                    exc,
+                )
+        return []
+
+    async def _list_projects_paginated(self, path: str, query: str = "") -> list[dict]:
+        """Fetch projects via paginated /project/search endpoint."""
+        all_projects: list[dict] = []
+        start_at = 0
+        page_size = 50
+
+        while True:
+            params: dict = {"startAt": start_at, "maxResults": page_size}
+            if query:
+                params["query"] = query
+            response = await self._client.get(path, params=params)
             response.raise_for_status()
             data = response.json()
-            return [{"key": p["key"], "name": p.get("name", p["key"])} for p in data]
-        except Exception:
-            logger.warning("Failed to fetch Jira projects", exc_info=True)
+            values = data if isinstance(data, list) else data.get("values", [])
+            for p in values:
+                if isinstance(p, dict) and "key" in p:
+                    all_projects.append(
+                        {"key": p["key"], "name": p.get("name", p["key"])}
+                    )
+            # Use Jira pagination metadata when available
+            if isinstance(data, dict) and "isLast" in data:
+                if data["isLast"]:
+                    break
+                start_at = data.get("startAt", start_at) + data.get(
+                    "maxResults", page_size
+                )
+            elif len(values) < page_size:
+                break
+            else:
+                start_at += page_size
+
+        return all_projects
+
+    async def list_security_levels(self, project_key: str) -> list[dict]:
+        """List available security levels for a Jira project."""
+        if not project_key:
+            return []
+        try:
+            response = await self._client.get(
+                f"{self._api_path}/project/{project_key}/securitylevel"
+            )
+            response.raise_for_status()
+            data = response.json()
+            levels = data.get("levels", [])
+            return [
+                {
+                    "id": lv["id"],
+                    "name": lv["name"],
+                    "description": lv.get("description", ""),
+                }
+                for lv in levels
+                if isinstance(lv, dict) and "id" in lv and "name" in lv
+            ]
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning(
+                "Failed to fetch security levels for project %s: %s",
+                project_key,
+                exc,
+            )
             return []
 
     async def search(self, keywords: list[str]) -> list[dict]:
@@ -410,6 +505,7 @@ async def enrich_with_jira_matches(
         len(reports),
     )
 
+    total_matches = 0
     async with JiraClient(settings) as client:
         try:
             # Search Jira for each unique keyword set in parallel
@@ -461,11 +557,7 @@ async def enrich_with_jira_matches(
                 for report in keyword_to_reports[kw_tuple]:
                     report.jira_matches = matches
 
-            total_matches = sum(
-                len(r.jira_matches)
-                for reports_list in keyword_to_reports.values()
-                for r in reports_list
-            )
+                total_matches += len(matches)
             logger.info(
                 "Jira search complete: %d relevant match(es) found", total_matches
             )

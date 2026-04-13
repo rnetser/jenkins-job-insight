@@ -535,9 +535,34 @@ class JJIClient:
 
     # -- Jira Projects --------------------------------------------------------
 
-    def jira_projects(self) -> list[dict]:
-        """List Jira projects. GET /api/jira-projects"""
-        return self._request("GET", "/api/jira-projects")
+    @staticmethod
+    def _with_jira_auth_fields(
+        body: dict, jira_token: str = "", jira_email: str = ""
+    ) -> dict:
+        """Add jira_token/jira_email to *body* when set."""
+        if jira_token and jira_token.strip():
+            body["jira_token"] = jira_token.strip()
+        if jira_email and jira_email.strip():
+            body["jira_email"] = jira_email.strip()
+        return body
+
+    def jira_projects(
+        self, jira_token: str = "", jira_email: str = "", query: str = ""
+    ) -> list[dict]:
+        """List Jira projects. POST /api/jira-projects"""
+        body: dict = {}
+        if query:
+            body["query"] = query
+        body = self._with_jira_auth_fields(body, jira_token, jira_email)
+        return self._request("POST", "/api/jira-projects", json=body)
+
+    def jira_security_levels(
+        self, project_key: str, jira_token: str = "", jira_email: str = ""
+    ) -> list[dict]:
+        """List security levels for a Jira project. POST /api/jira-security-levels"""
+        body: dict = {"project_key": project_key}
+        body = self._with_jira_auth_fields(body, jira_token, jira_email)
+        return self._request("POST", "/api/jira-security-levels", json=body)
 
     # -- AI Configs -----------------------------------------------------------
 

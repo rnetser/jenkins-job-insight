@@ -593,8 +593,7 @@ def _resolve_enable_jira(body: BaseAnalysisRequest, settings: Settings) -> bool:
 
     Priority order:
     1. Request body field (highest)
-    2. ENABLE_JIRA env var (via settings)
-    3. Auto-detect from Jira credentials (lowest)
+    2. settings.jira_enabled property (env var + auto-detect fallback)
 
     Args:
         body: The analysis request (AnalyzeRequest or AnalyzeFailuresRequest).
@@ -2044,15 +2043,14 @@ def _has_jira_credentials(settings: Settings) -> bool:
 def _jira_issue_creation_enabled(settings: Settings) -> bool:
     """Check whether Jira issue creation is enabled.
 
-    ``ENABLE_JIRA_ISSUES`` takes precedence when explicitly set (True/False).
-    Falls back to ``ENABLE_JIRA`` when ``ENABLE_JIRA_ISSUES`` is None.
+    Controlled only by ``ENABLE_JIRA_ISSUES``.  Defaults to enabled
+    when not explicitly set.  Independent of ``ENABLE_JIRA`` (which
+    controls Jira enrichment during analysis).
     """
-    if settings.enable_jira_issues is not None:
-        return bool(settings.enable_jira_issues)
-    return settings.enable_jira is not False
+    return settings.enable_jira_issues is not False
 
 
-def _build_capabilities(settings: Settings) -> dict[str, bool]:
+def _build_capabilities(settings: Settings) -> dict[str, bool | str]:
     """Build the capabilities dict for API responses."""
     return {
         "github_issues_enabled": settings.enable_github_issues is not False,
@@ -2065,7 +2063,7 @@ def _build_capabilities(settings: Settings) -> dict[str, bool]:
             or (settings.jira_pat and settings.jira_pat.get_secret_value())
         ),
         "server_jira_email": bool(settings.jira_email),
-        "server_jira_project_key": bool(settings.jira_project_key),
+        "server_jira_project_key": settings.jira_project_key or "",
     }
 
 
@@ -2544,18 +2542,100 @@ async def get_capabilities(settings: Settings = Depends(get_settings)) -> dict:
     return _build_capabilities(settings)
 
 
-@app.get("/api/jira-projects")
+class JiraProjectsRequest(BaseModel):
+    """Request body for listing Jira projects with user credentials."""
+
+    jira_token: str = Field(default="", description="User's Jira token")
+    jira_email: str = Field(default="", description="User's Jira email for Cloud auth")
+    query: str = Field(default="", description="Search query to filter projects")
+
+
+def _jira_client_from_body(
+    settings: Settings, jira_token: str, jira_email: str
+) -> tuple[Settings, str] | None:
+    """Normalize user Jira credentials and return effective settings.
+
+    Returns ``(effective_settings, stripped_token)`` when the user supplied a
+    non-empty token, or *None* when no usable token is present.
+    """
+    token = jira_token.strip() if jira_token else ""
+    if not token:
+        return None
+    effective = _build_effective_jira_settings(settings, token, jira_email)
+    return effective, token
+
+
+@app.post("/api/jira-projects")
 async def list_jira_projects(
+    body: JiraProjectsRequest,
     settings: Settings = Depends(get_settings),
 ) -> list[dict]:
-    """List available Jira projects for the project selector."""
+    """List Jira projects accessible to the user.
+
+    Uses the user's Jira token to list projects they can see.
+    Always includes the server's configured project key.
+    """
     if not settings.jira_url:
         return []
 
+    result = _jira_client_from_body(settings, body.jira_token, body.jira_email)
+    if result is None:
+        # No user token — return just the server's configured project
+        if settings.jira_project_key:
+            return [
+                {"key": settings.jira_project_key, "name": settings.jira_project_key}
+            ]
+        return []
+
+    effective_settings, _ = result
+
     from jenkins_job_insight.jira import JiraClient
 
-    async with JiraClient(settings) as client:
-        return await client.list_projects()
+    projects: list[dict] = []
+    try:
+        async with JiraClient(effective_settings) as client:
+            projects = await client.list_projects(query=body.query)
+    except Exception:
+        logger.warning("Failed to list Jira projects", exc_info=True)
+
+    # Ensure the server's configured project is always included
+    if settings.jira_project_key:
+        configured_key = settings.jira_project_key
+        if not any(p["key"] == configured_key for p in projects):
+            projects.insert(0, {"key": configured_key, "name": configured_key})
+
+    return projects
+
+
+class JiraSecurityLevelsRequest(BaseModel):
+    jira_token: str = Field(default="", description="User's Jira token")
+    jira_email: str = Field(default="", description="User's Jira email")
+    project_key: str = Field(description="Jira project key")
+
+
+@app.post("/api/jira-security-levels")
+async def list_jira_security_levels(
+    body: JiraSecurityLevelsRequest,
+    settings: Settings = Depends(get_settings),
+) -> list[dict]:
+    """List available security levels for a Jira project."""
+    if not settings.jira_url or not body.project_key:
+        return []
+
+    result = _jira_client_from_body(settings, body.jira_token, body.jira_email)
+    if result is None:
+        return []
+
+    effective_settings, _ = result
+
+    from jenkins_job_insight.jira import JiraClient
+
+    try:
+        async with JiraClient(effective_settings) as client:
+            return await client.list_security_levels(body.project_key)
+    except Exception:
+        logger.warning("Failed to list Jira security levels", exc_info=True)
+        return []
 
 
 class ValidateTokenRequest(BaseModel):

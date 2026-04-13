@@ -101,6 +101,26 @@ def _run_client_command(
     return data
 
 
+def _resolve_jira_cli_auth(
+    jira_token: str,
+    jira_email: str,
+) -> tuple[str, str]:
+    """Resolve Jira token and email from CLI flags with config fallback.
+
+    Args:
+        jira_token: Value from --jira-token flag (may be empty).
+        jira_email: Value from --jira-email flag (may be empty).
+
+    Returns:
+        (jira_token, jira_email) with config defaults applied.
+    """
+    cfg = _state.get("server_config")
+    return (
+        jira_token.strip() or ((cfg.jira_token or "").strip() if cfg else ""),
+        jira_email.strip() or ((cfg.jira_email or "").strip() if cfg else ""),
+    )
+
+
 def _resolve_server(
     server: str | None,
     username: str,
@@ -1104,12 +1124,22 @@ def capabilities(
 
 @app.command("jira-projects")
 def jira_projects_cmd(
+    query: str = typer.Option("", help="Search query to filter projects."),
+    jira_token: str = typer.Option(
+        "", "--jira-token", help="Jira token (uses config fallback)."
+    ),
+    jira_email: str = typer.Option(
+        "", "--jira-email", help="Jira email (uses config fallback)."
+    ),
     json_output: bool = _JSON_OPTION,
 ) -> None:
     """List available Jira projects."""
+    _jira_token, _jira_email = _resolve_jira_cli_auth(jira_token, jira_email)
     data = _run_client_command(
         json_output,
-        lambda c: c.jira_projects(),
+        lambda c: c.jira_projects(
+            jira_token=_jira_token, jira_email=_jira_email, query=query
+        ),
         emit_output=False,
     )
     if not _state.get("json", False):
@@ -1120,6 +1150,34 @@ def jira_projects_cmd(
                 data,
                 columns=["key", "name"],
                 labels={"key": "KEY", "name": "NAME"},
+                as_json=False,
+            )
+
+
+@app.command("jira-security-levels")
+def jira_security_levels_cmd(
+    project_key: str = typer.Argument(help="Jira project key."),
+    jira_token: str = typer.Option("", "--jira-token", help="Jira token."),
+    jira_email: str = typer.Option("", "--jira-email", help="Jira email."),
+    json_output: bool = _JSON_OPTION,
+) -> None:
+    """List security levels for a Jira project."""
+    _jira_token, _jira_email = _resolve_jira_cli_auth(jira_token, jira_email)
+    data = _run_client_command(
+        json_output,
+        lambda c: c.jira_security_levels(
+            project_key=project_key, jira_token=_jira_token, jira_email=_jira_email
+        ),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
+        if not data:
+            typer.echo("No security levels found.")
+        else:
+            print_output(
+                data,
+                columns=["name", "description"],
+                labels={"name": "NAME", "description": "DESCRIPTION"},
                 as_json=False,
             )
 

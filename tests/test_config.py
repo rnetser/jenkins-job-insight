@@ -215,13 +215,13 @@ class TestJiraSettings:
 class TestResolveJiraAuth:
     """Tests for _resolve_jira_auth helper."""
 
-    def test_email_plus_pat_is_server_not_cloud(self) -> None:
-        """JIRA_EMAIL + JIRA_PAT must resolve to Server/DC mode, not Cloud.
+    def test_email_plus_pat_is_cloud(self) -> None:
+        """JIRA_EMAIL + JIRA_PAT resolves to Cloud mode.
 
-        Regression: a PAT sent via Cloud Basic-auth path would fail.
+        Email present = Cloud.  PAT is used as the token via Basic auth.
         """
         env = _build_env(
-            JIRA_URL="https://jira-server.example.com",
+            JIRA_URL="https://myorg.atlassian.net",
             JIRA_EMAIL="user@example.com",
             JIRA_PAT="pat-token-456",
             JIRA_PROJECT_KEY="TEST",
@@ -229,7 +229,7 @@ class TestResolveJiraAuth:
         with patch.dict(os.environ, env, clear=True):
             settings = Settings(_env_file=None)
             is_cloud, token = _resolve_jira_auth(settings)
-            assert not is_cloud, "email + PAT must NOT activate Cloud mode"
+            assert is_cloud, "email present must activate Cloud mode"
             assert token == env["JIRA_PAT"]
 
 

@@ -65,8 +65,8 @@ def jira_server_settings() -> Generator[Settings, None, None]:
 def jira_cloud_pat_settings() -> Generator[Settings, None, None]:
     """Create Settings with JIRA_PAT + JIRA_EMAIL (no JIRA_API_TOKEN).
 
-    Even when email is present, PAT-only auth should resolve to Server/DC
-    mode to avoid sending a Bearer token down the Cloud Basic-auth path.
+    Email present → Cloud mode.  The PAT is used as the token value
+    for Cloud Basic auth (email, pat).
     """
     yield from _jira_settings_from_env(
         {
@@ -214,18 +214,16 @@ class TestJiraClient:
             assert client._headers.get("Authorization") == "Bearer server-pat-token"
 
     async def test_cloud_pat_auth_detection(self, jira_cloud_pat_settings) -> None:
-        """JIRA_PAT + JIRA_EMAIL resolves to Server/DC auth (Bearer + v2).
-
-        PAT should never promote to Cloud mode; only jira_api_token does.
-        """
+        """JIRA_PAT + JIRA_EMAIL resolves to Cloud auth (email present = Cloud)."""
         async with JiraClient(jira_cloud_pat_settings) as client:
-            assert client._api_path == "/rest/api/2"
-            assert client._search_path == "/rest/api/2/search"
-            assert client._auth is None
-            assert (
-                client._headers.get("Authorization")
-                == "Bearer ATATT3xFfGF0AbM93-cloud-api-token"
+            assert client._api_path == "/rest/api/3"
+            assert client._search_path == "/rest/api/3/search/jql"
+            # Cloud uses Basic auth (email, token) — PAT used as the token
+            assert client._auth == (
+                "user@example.com",
+                "ATATT3xFfGF0AbM93-cloud-api-token",
             )
+            assert "Authorization" not in (client._headers or {})
 
     async def test_list_projects_returns_projects(self, jira_settings) -> None:
         """list_projects returns project key and name."""
@@ -247,14 +245,112 @@ class TestJiraClient:
         assert projects[1] == {"key": "OTHER", "name": "Other Project"}
         await client.close()
 
+    async def test_list_projects_paginated_response(self, jira_settings) -> None:
+        """list_projects handles paginated response format."""
+        mock_response = httpx.Response(
+            200,
+            json={
+                "values": [
+                    {"key": "PROJ", "name": "My Project"},
+                    {"key": "OTHER", "name": "Other Project"},
+                ],
+                "maxResults": 50,
+            },
+            request=httpx.Request("GET", "https://jira.example.com"),
+        )
+        client = JiraClient(jira_settings)
+        with patch.object(
+            client._client, "get", new_callable=AsyncMock, return_value=mock_response
+        ):
+            projects = await client.list_projects()
+        assert len(projects) == 2
+        assert projects[0] == {"key": "PROJ", "name": "My Project"}
+        await client.close()
+
+    async def test_list_projects_falls_back_to_project_endpoint(
+        self, jira_settings
+    ) -> None:
+        """list_projects falls back to /project when /project/search fails."""
+        client = JiraClient(jira_settings)
+
+        project_response = httpx.Response(
+            200,
+            json=[{"key": "FALL", "name": "Fallback"}],
+            request=httpx.Request("GET", "https://jira.example.com"),
+        )
+
+        async def _side_effect(path: str, **kwargs) -> httpx.Response:
+            if "/project/search" in path:
+                raise httpx.HTTPError("search failed")
+            return project_response
+
+        with patch.object(
+            client._client, "get", new_callable=AsyncMock, side_effect=_side_effect
+        ):
+            projects = await client.list_projects()
+        assert len(projects) == 1
+        assert projects[0] == {"key": "FALL", "name": "Fallback"}
+        await client.close()
+
     async def test_list_projects_returns_empty_on_error(self, jira_settings) -> None:
         """list_projects returns empty list on error."""
         client = JiraClient(jira_settings)
         with patch.object(
-            client._client, "get", new_callable=AsyncMock, side_effect=Exception("fail")
+            client._client,
+            "get",
+            new_callable=AsyncMock,
+            side_effect=httpx.HTTPError("fail"),
         ):
             projects = await client.list_projects()
         assert projects == []
+        await client.close()
+
+    async def test_list_security_levels_returns_levels(self, jira_settings) -> None:
+        """list_security_levels returns id, name, description."""
+        mock_response = httpx.Response(
+            200,
+            json={
+                "levels": [
+                    {"id": "10", "name": "Internal", "description": "Internal only"},
+                    {"id": "20", "name": "Public"},
+                ]
+            },
+            request=httpx.Request("GET", "https://jira.example.com"),
+        )
+        client = JiraClient(jira_settings)
+        with patch.object(
+            client._client, "get", new_callable=AsyncMock, return_value=mock_response
+        ):
+            levels = await client.list_security_levels("PROJ")
+        assert len(levels) == 2
+        assert levels[0] == {
+            "id": "10",
+            "name": "Internal",
+            "description": "Internal only",
+        }
+        assert levels[1] == {"id": "20", "name": "Public", "description": ""}
+        await client.close()
+
+    async def test_list_security_levels_empty_project_key(self, jira_settings) -> None:
+        """list_security_levels returns empty list for empty project key."""
+        client = JiraClient(jira_settings)
+        levels = await client.list_security_levels("")
+        assert levels == []
+        await client.close()
+
+    async def test_list_security_levels_returns_empty_on_error(
+        self, jira_settings
+    ) -> None:
+        """list_security_levels returns empty list on error."""
+        client = JiraClient(jira_settings)
+        with patch.object(
+            client._client,
+            "get",
+            new_callable=AsyncMock,
+            side_effect=httpx.HTTPError("fail"),
+        ):
+            levels = await client.list_security_levels("PROJ")
+        assert levels == []
         await client.close()
 
     async def test_search_returns_candidates(self, jira_settings) -> None:

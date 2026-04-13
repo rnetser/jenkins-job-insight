@@ -151,7 +151,7 @@ class Settings(BaseSettings):
     # Explicit Jira issue creation toggle (optional)
     enable_jira_issues: bool | None = Field(
         default=None,
-        description="Enable Jira bug creation. When None, follows jira_enabled.",
+        description="Enable Jira bug creation. When None, defaults to enabled. Independent of enable_jira.",
     )
 
     # AI CLI timeout in minutes
@@ -264,9 +264,9 @@ def _resolve_jira_auth(settings: Settings) -> tuple[bool, str]:
     Determines Cloud vs Server/DC deployment first, then selects the
     appropriate credential.
 
-    Cloud mode is detected only when ``jira_email`` is set together with
-    ``jira_api_token``.  A PAT with email is treated as Server/DC to
-    avoid sending a Bearer token down the Cloud Basic-auth path.
+    Cloud mode (``is_cloud=True``) is detected when ``jira_email`` is
+    set.  The token is selected by preferring ``jira_api_token`` and
+    falling back to ``jira_pat``.
 
     Server/DC mode (no ``jira_email``) prefers ``jira_pat`` and falls
     back to ``jira_api_token`` only when PAT is absent.
@@ -281,13 +281,15 @@ def _resolve_jira_auth(settings: Settings) -> tuple[bool, str]:
     has_pat = bool(settings.jira_pat and settings.jira_pat.get_secret_value())
     has_email = bool(settings.jira_email)
 
-    is_cloud = has_email and has_api_token
+    # email present = Cloud; use api_token first, fall back to pat
+    if has_email:
+        if has_api_token:
+            return True, settings.jira_api_token.get_secret_value()  # type: ignore[union-attr]
+        if has_pat:
+            return True, settings.jira_pat.get_secret_value()  # type: ignore[union-attr]
+        return True, ""
 
-    if is_cloud:
-        # Cloud: jira_api_token only (has_api_token already confirms truthiness)
-        return True, settings.jira_api_token.get_secret_value()  # type: ignore[union-attr]
-
-    # Server/DC: prefer PAT, fall back to API token
+    # No email = Server/DC; prefer PAT, fall back to API token
     if has_pat and settings.jira_pat:
         return False, settings.jira_pat.get_secret_value()
     if has_api_token and settings.jira_api_token:
