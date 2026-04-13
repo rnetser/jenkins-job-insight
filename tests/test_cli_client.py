@@ -637,6 +637,34 @@ class TestJJIClientIssueTokens:
             test_name="tests.TestA.test_one",
         )
 
+    def test_create_jira_bug_includes_jira_security_level(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/results/job-1/create-jira-bug" in str(request.url)
+            body = json.loads(request.content)
+            assert body["jira_security_level"] == "Restricted"
+            return httpx.Response(
+                201,
+                json={
+                    "url": "https://jira.example.com/browse/PROJ-2",
+                    "key": "PROJ-2",
+                    "title": "Bug",
+                    "comment_id": 1,
+                },
+            )
+
+        client = _make_client(handler)
+        result = client.create_jira_bug(
+            job_id="job-1",
+            test_name="tests.TestA.test_one",
+            title="Bug",
+            body="Details",
+            jira_token="jira-tok-test",  # noqa: S106
+            jira_email="test@example.com",
+            jira_security_level="Restricted",
+        )
+        assert result["key"] == "PROJ-2"
+
 
 class TestJJIClientCrossCredentialLeakage:
     """Verify that GitHub methods never include Jira credentials and vice versa."""
@@ -661,8 +689,6 @@ class TestJJIClientCrossCredentialLeakage:
             job_id="job-1",
             test_name="tests.TestA.test_one",
             github_token="ghp_test",  # noqa: S106
-            jira_token="jira-should-not-appear",  # noqa: S106
-            jira_email="leak@example.com",
         )
 
     def test_create_github_issue_excludes_jira_credentials(self):
@@ -691,8 +717,6 @@ class TestJJIClientCrossCredentialLeakage:
             title="Bug",
             body="Details",
             github_token="ghp_test",  # noqa: S106
-            jira_token="jira-should-not-appear",  # noqa: S106
-            jira_email="leak@example.com",
         )
 
     def test_preview_jira_bug_excludes_github_credentials(self):
@@ -711,7 +735,6 @@ class TestJJIClientCrossCredentialLeakage:
         client.preview_jira_bug(
             job_id="job-1",
             test_name="tests.TestA.test_one",
-            github_token="ghp-should-not-appear",  # noqa: S106
             jira_token="jira-tok",  # noqa: S106
         )
 
@@ -737,7 +760,6 @@ class TestJJIClientCrossCredentialLeakage:
             test_name="tests.TestA.test_one",
             title="Bug",
             body="Details",
-            github_token="ghp-should-not-appear",  # noqa: S106
             jira_token="jira-tok",  # noqa: S106
         )
 
@@ -1065,6 +1087,19 @@ class TestJJIClientValidateToken:
 
         client = _make_client(handler)
         client.validate_token(token_type="jira", token="jira-tok")  # noqa: S106
+
+
+class TestJJIClientJiraProjects:
+    def test_jira_projects(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert "/api/jira-projects" in str(request.url)
+            return httpx.Response(200, json=[{"key": "PROJ", "name": "My Project"}])
+
+        client = _make_client(handler)
+        result = client.jira_projects()
+        assert len(result) == 1
+        assert result[0]["key"] == "PROJ"
 
 
 class TestJJIClientReAnalyze:

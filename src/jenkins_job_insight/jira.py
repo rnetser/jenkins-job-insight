@@ -101,6 +101,17 @@ class JiraClient:
     async def __aexit__(self, *exc) -> None:
         await self.close()
 
+    async def list_projects(self) -> list[dict]:
+        """List all accessible Jira projects."""
+        try:
+            response = await self._client.get(f"{self._api_path}/project")
+            response.raise_for_status()
+            data = response.json()
+            return [{"key": p["key"], "name": p.get("name", p["key"])} for p in data]
+        except Exception:
+            logger.warning("Failed to fetch Jira projects", exc_info=True)
+            return []
+
     async def search(self, keywords: list[str]) -> list[dict]:
         """Search Jira for Bug issues matching the given keywords.
 

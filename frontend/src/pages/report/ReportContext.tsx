@@ -110,9 +110,15 @@ function reportReducer(state: ReportState, action: ReportAction): ReportState {
       const normalizedChildBuildNumber = childJobName ? (childBuildNumber ?? 0) : childBuildNumber
       const names = explicitNames ?? [testName]
       const nameSet = new Set(names)
+      // Determine which classification-specific fields to clear based on the new classification
+      const clearFields: Partial<Record<'code_fix' | 'product_bug_report', undefined>> =
+        classification === 'CODE ISSUE' ? { product_bug_report: undefined }
+        : classification === 'PRODUCT BUG' ? { code_fix: undefined }
+        : classification === 'INFRASTRUCTURE' ? { code_fix: undefined, product_bug_report: undefined }
+        : {}
       const patchFailures = (fs: typeof state.result.failures) =>
         (fs ?? []).map((f) =>
-          nameSet.has(f.test_name) ? { ...f, analysis: { ...f.analysis, classification } } : f,
+          nameSet.has(f.test_name) ? { ...f, analysis: { ...f.analysis, classification, ...clearFields } } : f,
         )
       const isWildcard = normalizedChildBuildNumber === 0
       /** Check whether a child node matches the target job name with wildcard/exact build semantics. */

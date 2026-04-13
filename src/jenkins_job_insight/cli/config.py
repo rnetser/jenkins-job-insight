@@ -40,11 +40,13 @@ class ServerConfig:
     jira_pat: str = ""
     jira_token: str = ""
     jira_project_key: str = ""
+    jira_security_level: str = ""
     jira_ssl_verify: bool | None = None
     jira_max_results: int = 0  # 0 means use server default
     enable_jira: bool | None = None
     # GitHub
     github_token: str = ""
+    github_repo_url: str = ""
     # Peer analysis
     peers: str = ""  # "provider:model,provider:model" format
     peer_analysis_max_rounds: int = 0  # 0 = not set, use server default
@@ -219,11 +221,13 @@ def _server_config_from_dict(data: dict) -> ServerConfig:
         jira_pat=data.get("jira_pat", ""),
         jira_token=_validated_str(data, "jira_token"),
         jira_project_key=data.get("jira_project_key", ""),
+        jira_security_level=_validated_str(data, "jira_security_level"),
         jira_ssl_verify=data.get("jira_ssl_verify"),
         jira_max_results=data.get("jira_max_results", 0),
         enable_jira=data.get("enable_jira"),
         # GitHub
         github_token=data.get("github_token", ""),
+        github_repo_url=_validated_str(data, "github_repo_url"),
         # Jenkins job monitoring
         wait_for_completion=data.get("wait_for_completion"),
         poll_interval_minutes=data.get("poll_interval_minutes", 0),

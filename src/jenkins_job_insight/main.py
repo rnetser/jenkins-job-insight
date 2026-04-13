@@ -41,6 +41,7 @@ from jenkins_job_insight.encryption import (
 )
 from jenkins_job_insight.jira import enrich_with_jira_matches
 from jenkins_job_insight.bug_creation import (
+    _parse_github_repo_url,
     create_github_issue,
     create_jira_bug,
     generate_github_issue_content,
@@ -1602,6 +1603,9 @@ async def _resolve_effective_failure(
         updates["product_bug_report"] = False
     elif effective_cls == "PRODUCT BUG":
         updates["code_fix"] = False
+    elif effective_cls == "INFRASTRUCTURE":
+        updates["code_fix"] = False
+        updates["product_bug_report"] = False
     return failure.model_copy(
         update={"analysis": failure.analysis.model_copy(update=updates)}
     )
@@ -1823,6 +1827,29 @@ def _resolve_tests_repo_url(settings: Settings, result_data: dict) -> str:
     return url
 
 
+def _resolve_github_repo_url(
+    body_repo_url: str, settings: Settings, result_data: dict
+) -> str:
+    """Validate and resolve GitHub repo URL from request body or fallback.
+
+    If *body_repo_url* is provided it is validated via ``_parse_github_repo_url``
+    (which raises ``ValueError`` on bad input).  Otherwise falls back to
+    ``_resolve_tests_repo_url``.
+
+    Raises:
+        HTTPException: 400 when *body_repo_url* is invalid.
+    """
+    if body_repo_url:
+        try:
+            _parse_github_repo_url(body_repo_url)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid github_repo_url: {exc}"
+            ) from exc
+        return body_repo_url
+    return _resolve_tests_repo_url(settings, result_data)
+
+
 async def _load_effective_failure(
     job_id: str,
     test_name: str,
@@ -1905,7 +1932,9 @@ async def preview_github_issue(
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
-    tests_repo_url = _resolve_tests_repo_url(settings, result_data)
+    tests_repo_url = _resolve_github_repo_url(
+        body.github_repo_url, settings, result_data
+    )
     github_token = (body.github_token or "").strip() or (
         settings.github_token.get_secret_value() if settings.github_token else ""
     )
@@ -1978,7 +2007,7 @@ async def preview_jira_bug(
     # Duplicate detection (best-effort: failures must not break preview)
     similar: list[dict] = []
     effective_jira_settings = _build_effective_jira_settings(
-        settings, body.jira_token, body.jira_email
+        settings, body.jira_token, body.jira_email, body.jira_project_key
     )
     if (
         _has_jira_credentials(effective_jira_settings)
@@ -2041,7 +2070,10 @@ def _build_capabilities(settings: Settings) -> dict[str, bool]:
 
 
 def _build_effective_jira_settings(
-    settings: Settings, user_jira_token: str, user_jira_email: str
+    settings: Settings,
+    user_jira_token: str,
+    user_jira_email: str,
+    user_jira_project_key: str = "",
 ) -> Settings:
     """Build effective settings with user Jira credentials overriding server defaults.
 
@@ -2056,16 +2088,23 @@ def _build_effective_jira_settings(
     incorrectly trigger Cloud Basic auth). Cloud users must explicitly provide
     their email; without it, the non-Cloud auth path is used, which may
     fail against Cloud-only Jira hosts.
+
+    An optional *user_jira_project_key* overrides the server-level project key
+    so that duplicate searches and bug creation target the user's chosen project.
     """
-    if not user_jira_token or not user_jira_token.strip():
+    overrides: dict = {}
+    if user_jira_token and user_jira_token.strip():
+        overrides["jira_api_token"] = SecretStr(user_jira_token.strip())
+        overrides["jira_pat"] = None
+        overrides["jira_email"] = (
+            user_jira_email.strip()
+            if user_jira_email and user_jira_email.strip()
+            else None
+        )
+    if user_jira_project_key and user_jira_project_key.strip():
+        overrides["jira_project_key"] = user_jira_project_key.strip()
+    if not overrides:
         return settings
-    overrides: dict = {
-        "jira_api_token": SecretStr(user_jira_token.strip()),
-        "jira_pat": None,
-        "jira_email": user_jira_email.strip()
-        if user_jira_email and user_jira_email.strip()
-        else None,
-    }
     return settings.model_copy(update=overrides)
 
 
@@ -2166,7 +2205,9 @@ async def create_github_issue_endpoint(
     if username:
         issue_body += f"\n\n---\n_Reported by: {username} via jenkins-job-insight_"
 
-    tests_repo_url = _resolve_tests_repo_url(settings, _result_data)
+    tests_repo_url = _resolve_github_repo_url(
+        body.github_repo_url, settings, _result_data
+    )
     if not tests_repo_url:
         raise HTTPException(
             status_code=400,
@@ -2253,12 +2294,12 @@ async def create_jira_bug_endpoint(
 
     try:
         effective_jira_settings = _build_effective_jira_settings(
-            settings, body.jira_token, body.jira_email
+            settings, body.jira_token, body.jira_email, body.jira_project_key
         )
         if not effective_jira_settings.jira_project_key:
             raise HTTPException(
                 status_code=400,
-                detail="Jira project key is not configured on the server.",
+                detail="Jira project key is required. Provide it in the request or configure JIRA_PROJECT_KEY on the server.",
             )
         if not _has_jira_credentials(effective_jira_settings):
             raise HTTPException(
@@ -2269,6 +2310,8 @@ async def create_jira_bug_endpoint(
             title=body.title,
             body=bug_body,
             settings=effective_jira_settings,
+            project_key=body.jira_project_key,
+            security_level=body.jira_security_level,
         )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in (401, 403):
@@ -2308,8 +2351,10 @@ def _patch_failure_classification(
 ) -> None:
     """Patch classification for matching failures in a list.
 
-    Also clears stale subtype fields: when switching to CODE ISSUE the
-    old product_bug_report is removed, and vice-versa.
+    Also clears stale subtype fields:
+    - CODE ISSUE: clears product_bug_report
+    - PRODUCT BUG: clears code_fix
+    - INFRASTRUCTURE: clears both product_bug_report and code_fix
     """
     for f in failures:
         if f.get("test_name") == test_name:
@@ -2319,6 +2364,9 @@ def _patch_failure_classification(
                 if classification == "CODE ISSUE":
                     analysis.pop("product_bug_report", None)
                 elif classification == "PRODUCT BUG":
+                    analysis.pop("code_fix", None)
+                elif classification == "INFRASTRUCTURE":
+                    analysis.pop("product_bug_report", None)
                     analysis.pop("code_fix", None)
 
 
@@ -2385,7 +2433,7 @@ async def override_classification_endpoint(
     body: OverrideClassificationRequest,
     request: Request,
 ) -> dict:
-    """Override the classification of a failure (CODE ISSUE / PRODUCT BUG)."""
+    """Override the classification of a failure (CODE ISSUE, PRODUCT BUG, or INFRASTRUCTURE)."""
     logger.debug(
         f"PUT /results/{job_id}/override-classification: test_name={body.test_name}, "
         f"classification={body.classification}"
@@ -2494,6 +2542,20 @@ async def get_capabilities(settings: Settings = Depends(get_settings)) -> dict:
     UI can decide if user-supplied tokens are required or optional.
     """
     return _build_capabilities(settings)
+
+
+@app.get("/api/jira-projects")
+async def list_jira_projects(
+    settings: Settings = Depends(get_settings),
+) -> list[dict]:
+    """List available Jira projects for the project selector."""
+    if not settings.jira_url:
+        return []
+
+    from jenkins_job_insight.jira import JiraClient
+
+    async with JiraClient(settings) as client:
+        return await client.list_projects()
 
 
 class ValidateTokenRequest(BaseModel):

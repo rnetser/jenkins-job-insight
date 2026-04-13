@@ -359,8 +359,11 @@ class JJIClient:
         title: str = "",
         body_text: str = "",
         github_token: str = "",
+        github_repo_url: str = "",
         jira_token: str = "",
         jira_email: str = "",
+        jira_project_key: str = "",
+        jira_security_level: str = "",
         include_github: bool = True,
         include_jira: bool = True,
     ) -> dict:
@@ -378,10 +381,16 @@ class JJIClient:
             payload["ai_model"] = ai_model
         if include_github and github_token:
             payload["github_token"] = github_token
+        if include_github and github_repo_url:
+            payload["github_repo_url"] = github_repo_url
         if include_jira and jira_token:
             payload["jira_token"] = jira_token
         if include_jira and jira_email:
             payload["jira_email"] = jira_email
+        if include_jira and jira_project_key:
+            payload["jira_project_key"] = jira_project_key
+        if include_jira and jira_security_level:
+            payload["jira_security_level"] = jira_security_level
         return self._with_child_scope(payload, child_job_name, child_build_number)
 
     def preview_github_issue(
@@ -394,8 +403,7 @@ class JJIClient:
         ai_provider: str = "",
         ai_model: str = "",
         github_token: str = "",
-        jira_token: str = "",
-        jira_email: str = "",
+        github_repo_url: str = "",
     ) -> dict:
         """Preview a GitHub issue. POST /results/{job_id}/preview-github-issue"""
         body = self._build_tracker_body(
@@ -406,8 +414,7 @@ class JJIClient:
             ai_provider=ai_provider,
             ai_model=ai_model,
             github_token=github_token,
-            jira_token=jira_token,
-            jira_email=jira_email,
+            github_repo_url=github_repo_url,
             include_jira=False,
         )
         return self._request(
@@ -423,9 +430,10 @@ class JJIClient:
         include_links: bool = False,
         ai_provider: str = "",
         ai_model: str = "",
-        github_token: str = "",
         jira_token: str = "",
         jira_email: str = "",
+        jira_project_key: str = "",
+        jira_security_level: str = "",
     ) -> dict:
         """Preview a Jira bug. POST /results/{job_id}/preview-jira-bug"""
         body = self._build_tracker_body(
@@ -435,9 +443,10 @@ class JJIClient:
             include_links=include_links,
             ai_provider=ai_provider,
             ai_model=ai_model,
-            github_token=github_token,
             jira_token=jira_token,
             jira_email=jira_email,
+            jira_project_key=jira_project_key,
+            jira_security_level=jira_security_level,
             include_github=False,
         )
         return self._request("POST", f"/results/{job_id}/preview-jira-bug", json=body)
@@ -451,8 +460,7 @@ class JJIClient:
         child_job_name: str = "",
         child_build_number: int = 0,
         github_token: str = "",
-        jira_token: str = "",
-        jira_email: str = "",
+        github_repo_url: str = "",
     ) -> dict:
         """Create a GitHub issue. POST /results/{job_id}/create-github-issue"""
         payload = self._build_tracker_body(
@@ -462,8 +470,7 @@ class JJIClient:
             title=title,
             body_text=body,
             github_token=github_token,
-            jira_token=jira_token,
-            jira_email=jira_email,
+            github_repo_url=github_repo_url,
             include_jira=False,
         )
         return self._request(
@@ -481,9 +488,10 @@ class JJIClient:
         body: str,
         child_job_name: str = "",
         child_build_number: int = 0,
-        github_token: str = "",
         jira_token: str = "",
         jira_email: str = "",
+        jira_project_key: str = "",
+        jira_security_level: str = "",
     ) -> dict:
         """Create a Jira bug. POST /results/{job_id}/create-jira-bug"""
         payload = self._build_tracker_body(
@@ -492,9 +500,10 @@ class JJIClient:
             child_build_number,
             title=title,
             body_text=body,
-            github_token=github_token,
             jira_token=jira_token,
             jira_email=jira_email,
+            jira_project_key=jira_project_key,
+            jira_security_level=jira_security_level,
             include_github=False,
         )
         return self._request(
@@ -523,6 +532,12 @@ class JJIClient:
     def capabilities(self) -> dict:
         """Get server-level automation capabilities (GitHub issues, Jira bugs). GET /api/capabilities"""
         return self._request("GET", "/api/capabilities")
+
+    # -- Jira Projects --------------------------------------------------------
+
+    def jira_projects(self) -> list[dict]:
+        """List Jira projects. GET /api/jira-projects"""
+        return self._request("GET", "/api/jira-projects")
 
     # -- AI Configs -----------------------------------------------------------
 

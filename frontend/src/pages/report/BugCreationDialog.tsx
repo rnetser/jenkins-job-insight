@@ -32,6 +32,8 @@ interface BugCreationDialogProps {
   aiProvider?: string
   aiModel?: string
   includeLinks?: boolean
+  availableRepos?: Array<{ name: string; url: string }>
+  defaultProjectKey?: string
 }
 
 export function BugCreationDialog({
@@ -45,6 +47,8 @@ export function BugCreationDialog({
   includeLinks = false,
   aiProvider,
   aiModel,
+  availableRepos,
+  defaultProjectKey,
 }: BugCreationDialogProps) {
   const dispatch = useReportDispatch()
   const refreshEnrichments = useRefreshEnrichments()
@@ -54,6 +58,10 @@ export function BugCreationDialog({
   const [similar, setSimilar] = useState<SimilarIssue[]>([])
   const [createdUrl, setCreatedUrl] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
+  const [selectedRepo, setSelectedRepo] = useState(availableRepos?.[0]?.url ?? '')
+  const [jiraProjectKey, setJiraProjectKey] = useState(defaultProjectKey || '')
+  const [jiraProjects, setJiraProjects] = useState<Array<{key: string; name: string}>>([])
+  const [jiraSecurityLevel, setJiraSecurityLevel] = useState('')
 
   const previewPath = target === 'github' ? 'preview-github-issue' : 'preview-jira-bug'
   const createPath = target === 'github' ? 'create-github-issue' : 'create-jira-bug'
@@ -65,8 +73,27 @@ export function BugCreationDialog({
       github_token: target === 'github' ? getGithubToken() : '',
       jira_token: target === 'jira' ? getJiraToken() : '',
       jira_email: target === 'jira' ? getJiraEmail() : '',
+      ...(target === 'github' && selectedRepo ? { github_repo_url: selectedRepo } : {}),
+      ...(target === 'jira' && jiraProjectKey ? { jira_project_key: jiraProjectKey } : {}),
+      ...(target === 'jira' && jiraSecurityLevel ? { jira_security_level: jiraSecurityLevel } : {}),
     }
   }
+
+  // Fetch Jira projects when dialog opens for Jira target
+  useEffect(() => {
+    if (!open || target !== 'jira') return
+    api.get<Array<{key: string; name: string}>>('/api/jira-projects')
+      .then((projects) => {
+        setJiraProjects(projects)
+        if (projects.length > 0) {
+          const match = defaultProjectKey
+            ? projects.find((p) => p.key === defaultProjectKey)
+            : undefined
+          setJiraProjectKey(match?.key ?? projects[0].key)
+        }
+      })
+      .catch((err) => console.warn('Failed to fetch Jira projects:', err))
+  }, [open, target])
 
   // Load preview when dialog opens
   useEffect(() => {
@@ -130,6 +157,10 @@ export function BugCreationDialog({
       setSimilar([])
       setCreatedUrl('')
       setErrorMsg('')
+      setSelectedRepo(availableRepos?.[0]?.url ?? '')
+      setJiraProjectKey(defaultProjectKey || '')
+      setJiraProjects([])
+      setJiraSecurityLevel('')
     }, 200)
   }
 
@@ -152,6 +183,39 @@ export function BugCreationDialog({
         {/* Preview */}
         {phase === 'preview' && (
           <div className="space-y-4">
+            {target === 'github' && availableRepos && availableRepos.length > 1 && (
+              <div className="space-y-2">
+                <label htmlFor="bug-repo" className="text-xs font-display uppercase tracking-widest text-text-tertiary">Repository</label>
+                <select id="bug-repo" value={selectedRepo} onChange={(e) => setSelectedRepo(e.target.value)} className="w-full h-9 rounded-md border border-border-default bg-surface-elevated px-2 text-sm text-text-primary">
+                  {availableRepos.map((r) => (
+                    <option key={r.url} value={r.url}>{r.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {target === 'jira' && jiraProjects.length > 0 && (
+              <div className="space-y-2">
+                <label htmlFor="bug-jira-project" className="text-xs font-display uppercase tracking-widest text-text-tertiary">Jira Project</label>
+                <select id="bug-jira-project" value={jiraProjectKey} onChange={(e) => setJiraProjectKey(e.target.value)} className="w-full h-9 rounded-md border border-border-default bg-surface-elevated px-2 text-sm text-text-primary">
+                  {jiraProjects.map((p) => (
+                    <option key={p.key} value={p.key}>{p.key} — {p.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {target === 'jira' && (
+              <div className="space-y-2">
+                <label htmlFor="bug-security-level" className="text-xs font-display uppercase tracking-widest text-text-tertiary">Security Level</label>
+                <input
+                  id="bug-security-level"
+                  type="text"
+                  value={jiraSecurityLevel}
+                  onChange={(e) => setJiraSecurityLevel(e.target.value)}
+                  placeholder="e.g. Red Hat Employee"
+                  className="w-full h-9 rounded-md border border-border-default bg-surface-elevated px-2 text-sm text-text-primary placeholder:text-text-tertiary"
+                />
+              </div>
+            )}
             {similar.length > 0 && (
               <div className="rounded-md border border-signal-orange/30 bg-glow-orange p-3">
                 <div className="flex items-center gap-2 text-sm font-medium text-signal-orange">
