@@ -2238,6 +2238,32 @@ class TestJiraProjectsCommand:
         assert result.exit_code == 0
 
 
+class TestJiraSecurityLevelsCommand:
+    def test_jira_security_levels(self, mock_client):
+        mock_client.jira_security_levels.return_value = [
+            {"id": "10", "name": "Internal", "description": "Internal only"},
+        ]
+        result = runner.invoke(app, ["jira-security-levels", "PROJ"])
+        assert result.exit_code == 0
+        assert "Internal" in result.output
+
+    def test_jira_security_levels_json(self, mock_client):
+        mock_client.jira_security_levels.return_value = [
+            {"id": "10", "name": "Internal", "description": "Internal only"},
+        ]
+        result = runner.invoke(app, ["--json", "jira-security-levels", "PROJ"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert len(parsed) == 1
+        assert parsed[0]["name"] == "Internal"
+
+    def test_jira_security_levels_empty(self, mock_client):
+        mock_client.jira_security_levels.return_value = []
+        result = runner.invoke(app, ["jira-security-levels", "PROJ"])
+        assert result.exit_code == 0
+        assert "No security levels found" in result.output
+
+
 class TestReAnalyzeCommand:
     def test_re_analyze(self, mock_client):
         mock_client.re_analyze.return_value = {

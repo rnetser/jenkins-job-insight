@@ -70,7 +70,7 @@ interface FailureCardProps {
 export function FailureCard({ group, jobId, childJobName, childBuildNumber, index }: FailureCardProps) {
   const scopedChildJobName = childJobName ?? ''
   const scopedChildBuildNumber = childBuildNumber ?? 0
-  const { githubIssuesEnabled, jiraIssuesEnabled, comments, reviews, aiConfigs, result, classifications } = useReportState()
+  const { githubIssuesEnabled, jiraIssuesEnabled, serverJiraProjectKey, comments, reviews, aiConfigs, result, classifications } = useReportState()
   const dispatch = useReportDispatch()
   const expandKey = `jji-expand-${jobId}-${scopedChildJobName}-${scopedChildBuildNumber}-${group.id}`
   const [expanded, setExpanded] = useSessionState(expandKey, false)
@@ -466,6 +466,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
           childBuildNumber={scopedChildBuildNumber}
           aiProvider={selectedProvider}
           aiModel={selectedModel}
+          defaultProjectKey={serverJiraProjectKey}
           availableRepos={
             repoUrls.length > 0
               ? repoUrls.map(({ name, url }) => ({ name, url }))

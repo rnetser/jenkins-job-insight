@@ -252,7 +252,7 @@ export interface ResultResponse {
     server_github_token?: boolean
     server_jira_token?: boolean
     server_jira_email?: boolean
-    server_jira_project_key?: boolean
+    server_jira_project_key?: string
   }
 }
 

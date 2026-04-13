@@ -60,8 +60,12 @@ export function BugCreationDialog({
   const [errorMsg, setErrorMsg] = useState('')
   const [selectedRepo, setSelectedRepo] = useState(availableRepos?.[0]?.url ?? '')
   const [jiraProjectKey, setJiraProjectKey] = useState(defaultProjectKey || '')
+  const [confirmedProjectKey, setConfirmedProjectKey] = useState(defaultProjectKey || '')
   const [jiraProjects, setJiraProjects] = useState<Array<{key: string; name: string}>>([])
   const [jiraSecurityLevel, setJiraSecurityLevel] = useState('')
+  const [showProjectDropdown, setShowProjectDropdown] = useState(false)
+  const [showSecurityDropdown, setShowSecurityDropdown] = useState(false)
+  const [securityLevels, setSecurityLevels] = useState<Array<{id: string; name: string; description: string}>>([])
 
   const previewPath = target === 'github' ? 'preview-github-issue' : 'preview-jira-bug'
   const createPath = target === 'github' ? 'create-github-issue' : 'create-jira-bug'
@@ -79,21 +83,43 @@ export function BugCreationDialog({
     }
   }
 
-  // Fetch Jira projects when dialog opens for Jira target
+  // Debounced Jira project search
   useEffect(() => {
+    let ignore = false
     if (!open || target !== 'jira') return
-    api.get<Array<{key: string; name: string}>>('/api/jira-projects')
-      .then((projects) => {
-        setJiraProjects(projects)
-        if (projects.length > 0) {
-          const match = defaultProjectKey
-            ? projects.find((p) => p.key === defaultProjectKey)
-            : undefined
-          setJiraProjectKey(match?.key ?? projects[0].key)
-        }
+    if (jiraProjectKey.length < 2) {
+      setJiraProjects([])
+      setShowProjectDropdown(false)
+      return
+    }
+    const timer = setTimeout(() => {
+      api.post<Array<{key: string; name: string}>>('/api/jira-projects', {
+        jira_token: getJiraToken(),
+        jira_email: getJiraEmail(),
+        query: jiraProjectKey,
       })
-      .catch((err) => console.warn('Failed to fetch Jira projects:', err))
-  }, [open, target])
+        .then((data) => { if (!ignore) setJiraProjects(data) })
+        .catch((err) => console.warn('Failed to fetch Jira projects:', err))
+    }, 300)
+    return () => { ignore = true; clearTimeout(timer) }
+  }, [open, target, jiraProjectKey])
+
+  // Fetch security levels only after user confirms a project selection
+  useEffect(() => {
+    let ignore = false
+    if (!open || target !== 'jira' || !confirmedProjectKey) {
+      setSecurityLevels([])
+      return
+    }
+    api.post<Array<{id: string; name: string; description: string}>>('/api/jira-security-levels', {
+      jira_token: getJiraToken(),
+      jira_email: getJiraEmail(),
+      project_key: confirmedProjectKey,
+    })
+      .then((data) => { if (!ignore) setSecurityLevels(data) })
+      .catch((err) => console.warn('Failed to fetch security levels:', err))
+    return () => { ignore = true }
+  }, [open, target, confirmedProjectKey])
 
   // Load preview when dialog opens
   useEffect(() => {
@@ -148,7 +174,8 @@ export function BugCreationDialog({
     }
   }
 
-  function handleClose() {
+  function handleClose(nextOpen: boolean) {
+    if (nextOpen) return
     onOpenChange(false)
     setTimeout(() => {
       setPhase('idle')
@@ -159,8 +186,12 @@ export function BugCreationDialog({
       setErrorMsg('')
       setSelectedRepo(availableRepos?.[0]?.url ?? '')
       setJiraProjectKey(defaultProjectKey || '')
+      setConfirmedProjectKey(defaultProjectKey || '')
       setJiraProjects([])
       setJiraSecurityLevel('')
+      setSecurityLevels([])
+      setShowProjectDropdown(false)
+      setShowSecurityDropdown(false)
     }, 200)
   }
 
@@ -193,27 +224,101 @@ export function BugCreationDialog({
                 </select>
               </div>
             )}
-            {target === 'jira' && jiraProjects.length > 0 && (
+            {target === 'jira' && (
               <div className="space-y-2">
                 <label htmlFor="bug-jira-project" className="text-xs font-display uppercase tracking-widest text-text-tertiary">Jira Project</label>
-                <select id="bug-jira-project" value={jiraProjectKey} onChange={(e) => setJiraProjectKey(e.target.value)} className="w-full h-9 rounded-md border border-border-default bg-surface-elevated px-2 text-sm text-text-primary">
-                  {jiraProjects.map((p) => (
-                    <option key={p.key} value={p.key}>{p.key} — {p.name}</option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <input
+                    id="bug-jira-project"
+                    type="text"
+                    value={jiraProjectKey}
+                    onChange={(e) => {
+                      const val = e.target.value
+                      setJiraProjectKey(val)
+                      setShowProjectDropdown(true)
+                      if (val !== confirmedProjectKey) {
+                        setConfirmedProjectKey('')
+                        setJiraSecurityLevel('')
+                        setSecurityLevels([])
+                      }
+                    }}
+                    onFocus={() => setShowProjectDropdown(true)}
+                    onBlur={() => setTimeout(() => setShowProjectDropdown(false), 200)}
+                    placeholder="Type to search projects..."
+                    autoComplete="off"
+                    className="w-full h-9 rounded-md border border-border-default bg-surface-elevated px-2 text-sm text-text-primary placeholder:text-text-tertiary"
+                  />
+                  {showProjectDropdown && jiraProjects.length > 0 && (
+                    <div className="absolute z-50 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-border-default bg-surface-card shadow-lg">
+                      {jiraProjects.map((p) => (
+                          <button
+                            key={p.key}
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              setJiraProjectKey(p.key)
+                              setConfirmedProjectKey(p.key)
+                              setShowProjectDropdown(false)
+                            }}
+                            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-hover"
+                          >
+                            <span className="font-mono text-text-primary">{p.key}</span>
+                            <span className="text-text-tertiary">{p.name}</span>
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             {target === 'jira' && (
               <div className="space-y-2">
                 <label htmlFor="bug-security-level" className="text-xs font-display uppercase tracking-widest text-text-tertiary">Security Level</label>
-                <input
-                  id="bug-security-level"
-                  type="text"
-                  value={jiraSecurityLevel}
-                  onChange={(e) => setJiraSecurityLevel(e.target.value)}
-                  placeholder="e.g. Red Hat Employee"
-                  className="w-full h-9 rounded-md border border-border-default bg-surface-elevated px-2 text-sm text-text-primary placeholder:text-text-tertiary"
-                />
+                <div className="relative">
+                  <input
+                    id="bug-security-level"
+                    type="text"
+                    value={jiraSecurityLevel}
+                    onChange={(e) => {
+                      setJiraSecurityLevel(e.target.value)
+                      setShowSecurityDropdown(true)
+                    }}
+                    onFocus={() => setShowSecurityDropdown(true)}
+                    onBlur={() => setTimeout(() => setShowSecurityDropdown(false), 200)}
+                    placeholder="None (public)"
+                    autoComplete="off"
+                    className="w-full h-9 rounded-md border border-border-default bg-surface-elevated px-2 text-sm text-text-primary placeholder:text-text-tertiary"
+                  />
+                  {showSecurityDropdown && securityLevels.length > 0 && (
+                    <div className="absolute z-50 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-border-default bg-surface-card shadow-lg">
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => { setJiraSecurityLevel(''); setShowSecurityDropdown(false) }}
+                        className="flex w-full items-center px-2 py-1.5 text-left text-sm hover:bg-surface-hover text-text-tertiary"
+                      >
+                        None (public)
+                      </button>
+                      {securityLevels
+                        .filter((lv) => {
+                          const q = jiraSecurityLevel.toLowerCase()
+                          return !q || lv.name.toLowerCase().includes(q) || lv.description.toLowerCase().includes(q)
+                        })
+                        .map((lv) => (
+                          <button
+                            key={lv.id}
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => { setJiraSecurityLevel(lv.name); setShowSecurityDropdown(false) }}
+                            className="flex w-full flex-col px-2 py-1.5 text-left text-sm hover:bg-surface-hover"
+                          >
+                            <span className="text-text-primary">{lv.name}</span>
+                            {lv.description && <span className="text-xs text-text-tertiary">{lv.description}</span>}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             {similar.length > 0 && (
@@ -292,13 +397,13 @@ export function BugCreationDialog({
                 <p className="text-xs text-text-tertiary">Add a {target === 'github' ? 'GitHub' : 'Jira'} token in <a href="/settings" className="text-text-link hover:underline">settings</a> to create directly.</p>
               )}
               <div className="flex gap-2 sm:ml-auto">
-                <Button variant="ghost" onClick={handleClose}>Cancel</Button>
+                <Button variant="ghost" onClick={() => handleClose(false)}>Cancel</Button>
                 <Button onClick={handleCreate} disabled={!title.trim() || !hasToken} title={!hasToken ? `Add a ${target === 'github' ? 'GitHub' : 'Jira'} token to create issues` : undefined}>Create {label}</Button>
               </div>
             </>
           )}
           {(phase === 'success' || phase === 'error') && (
-            <Button variant="ghost" onClick={handleClose} className="sm:ml-auto">Close</Button>
+            <Button variant="ghost" onClick={() => handleClose(false)} className="sm:ml-auto">Close</Button>
           )}
         </DialogFooter>
       </DialogContent>

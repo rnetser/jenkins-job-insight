@@ -1092,7 +1092,7 @@ class TestJJIClientValidateToken:
 class TestJJIClientJiraProjects:
     def test_jira_projects(self):
         def handler(request):
-            assert request.method == "GET"
+            assert request.method == "POST"
             assert "/api/jira-projects" in str(request.url)
             return httpx.Response(200, json=[{"key": "PROJ", "name": "My Project"}])
 
@@ -1100,6 +1100,39 @@ class TestJJIClientJiraProjects:
         result = client.jira_projects()
         assert len(result) == 1
         assert result[0]["key"] == "PROJ"
+
+
+class TestJJIClientJiraSecurityLevels:
+    def test_jira_security_levels(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/api/jira-security-levels" in str(request.url)
+            body = json.loads(request.content)
+            assert body["project_key"] == "PROJ"
+            return httpx.Response(
+                200,
+                json=[{"id": "10", "name": "Internal", "description": "Internal only"}],
+            )
+
+        client = _make_client(handler)
+        result = client.jira_security_levels("PROJ")
+        assert len(result) == 1
+        assert result[0]["name"] == "Internal"
+
+    def test_jira_security_levels_with_token(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert body["jira_token"] == "tok"  # noqa: S105
+            assert body["jira_email"] == "u@e.com"
+            return httpx.Response(200, json=[])
+
+        client = _make_client(handler)
+        result = client.jira_security_levels(
+            "PROJ",
+            jira_token="tok",  # noqa: S106
+            jira_email="u@e.com",
+        )
+        assert result == []
 
 
 class TestJJIClientReAnalyze:
