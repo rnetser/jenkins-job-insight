@@ -1851,6 +1851,60 @@ class TestOverrideClassification:
         )
         assert response.status_code == 422
 
+    @pytest.mark.asyncio
+    async def test_override_to_infrastructure(self, test_client):
+        """Override classification to INFRASTRUCTURE clears code_fix and product_bug_report."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_deploy_check",
+                    "error": "timeout",
+                    "analysis": {
+                        "classification": "CODE ISSUE",
+                        "code_fix": {
+                            "file": "deploy.py",
+                            "line": "42",
+                            "change": "fix timeout",
+                        },
+                        "product_bug_report": {
+                            "title": "stale report",
+                            "severity": "high",
+                            "component": "deploy",
+                            "description": "leftover",
+                            "evidence": "none",
+                        },
+                    },
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-override-infra", "http://jenkins", "completed", result_data
+        )
+        with patch(
+            "jenkins_job_insight.storage.override_classification",
+            return_value=["test_deploy_check"],
+        ) as mock_override:
+            response = test_client.put(
+                "/results/job-override-infra/override-classification",
+                json={
+                    "test_name": "test_deploy_check",
+                    "classification": "INFRASTRUCTURE",
+                },
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert data["classification"] == "INFRASTRUCTURE"
+        mock_override.assert_called_once()
+
+        # Verify code_fix and product_bug_report are cleared from persisted result
+        stored = await storage.get_result("job-override-infra")
+        failure_analysis = stored["result"]["failures"][0]["analysis"]
+        assert "code_fix" not in failure_analysis
+        assert "product_bug_report" not in failure_analysis
+
 
 class TestBugCreationIntegration:
     """Integration tests for the full bug creation flow."""
@@ -4080,3 +4134,34 @@ class TestValidateToken:
         data = response.json()
         assert data["valid"] is False
         assert "not configured" in data["message"]
+
+
+class TestJiraProjectsEndpoint:
+    """Tests for GET /api/jira-projects."""
+
+    def test_no_jira_url_returns_empty(self, test_client):
+        """No JIRA_URL configured returns empty list."""
+        response = test_client.get("/api/jira-projects")
+        assert response.status_code == 200
+        assert response.json() == []
+
+    @pytest.mark.asyncio
+    async def test_returns_projects(self, test_client):
+        """Returns project list from JiraClient.list_projects."""
+        from jenkins_job_insight.main import app, get_settings
+
+        projects = [{"key": "PROJ", "name": "My Project"}]
+        jira_settings = _build_wait_settings(jira_url="https://jira.example.com")
+        app.dependency_overrides[get_settings] = lambda: jira_settings
+        try:
+            with patch("jenkins_job_insight.jira.JiraClient") as MockJiraClient:
+                mock_client = AsyncMock()
+                mock_client.list_projects = AsyncMock(return_value=projects)
+                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_client.__aexit__ = AsyncMock(return_value=False)
+                MockJiraClient.return_value = mock_client
+                response = test_client.get("/api/jira-projects")
+            assert response.status_code == 200
+            assert response.json() == projects
+        finally:
+            app.dependency_overrides.pop(get_settings, None)

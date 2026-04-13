@@ -466,6 +466,11 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
           childBuildNumber={scopedChildBuildNumber}
           aiProvider={selectedProvider}
           aiModel={selectedModel}
+          availableRepos={
+            repoUrls.length > 0
+              ? repoUrls.map(({ name, url }) => ({ name, url }))
+              : undefined
+          }
         />
       )}
     </>

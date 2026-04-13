@@ -2213,6 +2213,31 @@ class TestValidateTokenCommand:
         assert kwargs["email"] == "user@example.com"
 
 
+class TestJiraProjectsCommand:
+    def test_jira_projects(self, mock_client):
+        mock_client.jira_projects.return_value = [
+            {"key": "PROJ", "name": "My Project"},
+        ]
+        result = runner.invoke(app, ["jira-projects"])
+        assert result.exit_code == 0
+        assert "PROJ" in result.output
+
+    def test_jira_projects_json(self, mock_client):
+        mock_client.jira_projects.return_value = [
+            {"key": "PROJ", "name": "My Project"},
+        ]
+        result = runner.invoke(app, ["--json", "jira-projects"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert len(parsed) == 1
+        assert parsed[0]["key"] == "PROJ"
+
+    def test_jira_projects_empty(self, mock_client):
+        mock_client.jira_projects.return_value = []
+        result = runner.invoke(app, ["jira-projects"])
+        assert result.exit_code == 0
+
+
 class TestReAnalyzeCommand:
     def test_re_analyze(self, mock_client):
         mock_client.re_analyze.return_value = {

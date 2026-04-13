@@ -613,6 +613,8 @@ async def create_jira_bug(
     body: str,
     settings: Settings,
     priority: str = "",
+    project_key: str = "",
+    security_level: str = "",
 ) -> dict:
     """Create a Jira Bug issue via the REST API.
 
@@ -622,7 +624,7 @@ async def create_jira_bug(
     Raises httpx.HTTPStatusError on failure.
     """
     base_url = (settings.jira_url or "").rstrip("/")
-    project_key = settings.jira_project_key or ""
+    effective_project_key = project_key or settings.jira_project_key or ""
 
     # Resolve auth (same logic as JiraClient)
     token_value = ""
@@ -647,7 +649,7 @@ async def create_jira_bug(
 
     payload: dict = {
         "fields": {
-            "project": {"key": project_key},
+            "project": {"key": effective_project_key},
             "summary": title,
             "description": body,
             "issuetype": {"name": "Bug"},
@@ -655,6 +657,8 @@ async def create_jira_bug(
     }
     if priority:
         payload["fields"]["priority"] = {"name": priority}
+    if security_level:
+        payload["fields"]["security"] = {"name": security_level}
 
     async with httpx.AsyncClient(
         verify=settings.jira_ssl_verify, timeout=15, auth=auth

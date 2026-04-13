@@ -10,6 +10,6 @@ export const CLASSIFICATIONS = [
 
 export type Classification = (typeof CLASSIFICATIONS)[number]
 
-export const OVERRIDE_CLASSIFICATIONS = ['CODE ISSUE', 'PRODUCT BUG'] as const
+export const OVERRIDE_CLASSIFICATIONS = ['CODE ISSUE', 'PRODUCT BUG', 'INFRASTRUCTURE'] as const
 
 export type OverrideClassification = (typeof OVERRIDE_CLASSIFICATIONS)[number]

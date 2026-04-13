@@ -227,6 +227,36 @@ class TestJiraClient:
                 == "Bearer ATATT3xFfGF0AbM93-cloud-api-token"
             )
 
+    async def test_list_projects_returns_projects(self, jira_settings) -> None:
+        """list_projects returns project key and name."""
+        mock_response = httpx.Response(
+            200,
+            json=[
+                {"key": "PROJ", "name": "My Project"},
+                {"key": "OTHER", "name": "Other Project"},
+            ],
+            request=httpx.Request("GET", "https://jira.example.com"),
+        )
+        client = JiraClient(jira_settings)
+        with patch.object(
+            client._client, "get", new_callable=AsyncMock, return_value=mock_response
+        ):
+            projects = await client.list_projects()
+        assert len(projects) == 2
+        assert projects[0] == {"key": "PROJ", "name": "My Project"}
+        assert projects[1] == {"key": "OTHER", "name": "Other Project"}
+        await client.close()
+
+    async def test_list_projects_returns_empty_on_error(self, jira_settings) -> None:
+        """list_projects returns empty list on error."""
+        client = JiraClient(jira_settings)
+        with patch.object(
+            client._client, "get", new_callable=AsyncMock, side_effect=Exception("fail")
+        ):
+            projects = await client.list_projects()
+        assert projects == []
+        await client.close()
+
     async def test_search_returns_candidates(self, jira_settings) -> None:
         """Search returns candidate dicts from API response."""
         mock_response = httpx.Response(

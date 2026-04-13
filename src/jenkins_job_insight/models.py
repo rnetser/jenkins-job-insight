@@ -269,7 +269,9 @@ class CodeFix(BaseModel):
 class AnalysisDetail(BaseModel):
     """Structured AI analysis broken into sections."""
 
-    classification: str = Field(default="", description="CODE ISSUE or PRODUCT BUG")
+    classification: str = Field(
+        default="", description="CODE ISSUE, PRODUCT BUG, or INFRASTRUCTURE (override)"
+    )
     affected_tests: list[str] = Field(
         default_factory=list, description="List of affected test names"
     )
@@ -529,6 +531,20 @@ class _TrackerCredentialsMixin(BaseModel):
         default="", description="User's Jira token for bug creation"
     )
     jira_email: str = Field(default="", description="User's Jira email for Cloud auth")
+    jira_project_key: str = Field(
+        default="", description="Override Jira project key for bug creation"
+    )
+    jira_security_level: str = Field(
+        default="", description="Jira security level name for restricted issues"
+    )
+    github_repo_url: str = Field(
+        default="", description="Override GitHub repo URL for issue creation"
+    )
+
+    @field_validator("jira_project_key", "jira_security_level", "github_repo_url")
+    @classmethod
+    def _strip_tracker_overrides(cls, v: str) -> str:
+        return v.strip() if isinstance(v, str) else v
 
 
 # NOTE: Preview/create request models intentionally do NOT inherit
@@ -563,7 +579,7 @@ class CreateIssueRequest(_ChildJobFieldsValidator, _TrackerCredentialsMixin):
         return v
 
 
-OverrideClassificationLiteral = Literal["CODE ISSUE", "PRODUCT BUG"]
+OverrideClassificationLiteral = Literal["CODE ISSUE", "PRODUCT BUG", "INFRASTRUCTURE"]
 HistoryClassificationLiteral = Literal[
     "FLAKY", "REGRESSION", "INFRASTRUCTURE", "KNOWN_BUG", "INTERMITTENT"
 ]

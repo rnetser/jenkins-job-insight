@@ -1102,6 +1102,28 @@ def capabilities(
         print_output(data, columns=[], as_json=True)
 
 
+@app.command("jira-projects")
+def jira_projects_cmd(
+    json_output: bool = _JSON_OPTION,
+) -> None:
+    """List available Jira projects."""
+    data = _run_client_command(
+        json_output,
+        lambda c: c.jira_projects(),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
+        if not data:
+            typer.echo("No Jira projects found.")
+        else:
+            print_output(
+                data,
+                columns=["key", "name"],
+                labels={"key": "KEY", "name": "NAME"},
+                as_json=False,
+            )
+
+
 @app.command("ai-configs")
 def ai_configs(
     json_output: bool = _JSON_OPTION,
@@ -1132,14 +1154,24 @@ def ai_configs(
 
 
 def _resolve_tracker_tokens(
-    github_token: str, jira_token: str, jira_email: str
-) -> tuple[str, str, str]:
-    """Resolve tracker tokens with config fallback."""
+    github_token: str,
+    jira_token: str,
+    jira_email: str,
+    jira_project_key: str = "",
+    github_repo_url: str = "",
+    jira_security_level: str = "",
+) -> tuple[str, str, str, str, str, str]:
+    """Resolve tracker tokens and related fields with config fallback."""
     cfg = _state.get("server_config")
     return (
         github_token.strip() or ((cfg.github_token or "").strip() if cfg else ""),
         jira_token.strip() or ((cfg.jira_token or "").strip() if cfg else ""),
         jira_email.strip() or ((cfg.jira_email or "").strip() if cfg else ""),
+        jira_project_key.strip()
+        or ((cfg.jira_project_key or "").strip() if cfg else ""),
+        github_repo_url.strip() or ((cfg.github_repo_url or "").strip() if cfg else ""),
+        jira_security_level.strip()
+        or ((cfg.jira_security_level or "").strip() if cfg else ""),
     )
 
 
@@ -1176,6 +1208,11 @@ def preview_issue(
         "--github-token",
         help="GitHub PAT for issue creation (overrides server config).",
     ),
+    github_repo_url: str = typer.Option(
+        "",
+        "--github-repo-url",
+        help="GitHub repository URL (overrides server config).",
+    ),
     jira_token: str = typer.Option(
         "",
         "--jira-token",
@@ -1184,13 +1221,35 @@ def preview_issue(
     jira_email: str = typer.Option(
         "", "--jira-email", help="Jira email for Cloud auth (used with --jira-token)."
     ),
+    jira_project_key: str = typer.Option(
+        "",
+        "--jira-project-key",
+        help="Jira project key for bug creation (overrides server config).",
+    ),
+    jira_security_level: str = typer.Option(
+        "",
+        "--jira-security-level",
+        help="Jira security level name for restricted issues.",
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Preview generated issue content (GitHub or Jira)."""
     _set_json(json_output)
     normalized_type = _validate_issue_type(issue_type)
-    _github_token, _jira_token, _jira_email = _resolve_tracker_tokens(
-        github_token, jira_token, jira_email
+    (
+        _github_token,
+        _jira_token,
+        _jira_email,
+        _jira_project_key,
+        _github_repo_url,
+        _jira_security_level,
+    ) = _resolve_tracker_tokens(
+        github_token,
+        jira_token,
+        jira_email,
+        jira_project_key,
+        github_repo_url,
+        jira_security_level,
     )
     try:
         client = _get_client()
@@ -1204,6 +1263,7 @@ def preview_issue(
                 ai_provider=ai_provider,
                 ai_model=ai_model,
                 github_token=_github_token,
+                github_repo_url=_github_repo_url,
             )
         else:
             data = client.preview_jira_bug(
@@ -1216,6 +1276,8 @@ def preview_issue(
                 ai_model=ai_model,
                 jira_token=_jira_token,
                 jira_email=_jira_email,
+                jira_project_key=_jira_project_key,
+                jira_security_level=_jira_security_level,
             )
     except JJIError as err:
         _handle_error(err)
@@ -1247,6 +1309,11 @@ def create_issue(
         "--github-token",
         help="GitHub PAT for issue creation (overrides server config).",
     ),
+    github_repo_url: str = typer.Option(
+        "",
+        "--github-repo-url",
+        help="GitHub repository URL (overrides server config).",
+    ),
     jira_token: str = typer.Option(
         "",
         "--jira-token",
@@ -1255,13 +1322,35 @@ def create_issue(
     jira_email: str = typer.Option(
         "", "--jira-email", help="Jira email for Cloud auth (used with --jira-token)."
     ),
+    jira_project_key: str = typer.Option(
+        "",
+        "--jira-project-key",
+        help="Jira project key for bug creation (overrides server config).",
+    ),
+    jira_security_level: str = typer.Option(
+        "",
+        "--jira-security-level",
+        help="Jira security level name for restricted issues.",
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Create a GitHub issue or Jira bug from a failure analysis."""
     _set_json(json_output)
     normalized_type = _validate_issue_type(issue_type)
-    _github_token, _jira_token, _jira_email = _resolve_tracker_tokens(
-        github_token, jira_token, jira_email
+    (
+        _github_token,
+        _jira_token,
+        _jira_email,
+        _jira_project_key,
+        _github_repo_url,
+        _jira_security_level,
+    ) = _resolve_tracker_tokens(
+        github_token,
+        jira_token,
+        jira_email,
+        jira_project_key,
+        github_repo_url,
+        jira_security_level,
     )
     try:
         client = _get_client()
@@ -1274,6 +1363,7 @@ def create_issue(
                 child_job_name=child_job_name,
                 child_build_number=child_build_number,
                 github_token=_github_token,
+                github_repo_url=_github_repo_url,
             )
         else:
             data = client.create_jira_bug(
@@ -1285,6 +1375,8 @@ def create_issue(
                 child_build_number=child_build_number,
                 jira_token=_jira_token,
                 jira_email=_jira_email,
+                jira_project_key=_jira_project_key,
+                jira_security_level=_jira_security_level,
             )
     except JJIError as err:
         _handle_error(err)
@@ -1330,7 +1422,10 @@ def override_classification_cmd(
     job_id: str = typer.Argument(help="Job ID."),
     test_name: str = typer.Option(..., "--test", "-t", help="Test name."),
     classification: str = typer.Option(
-        ..., "--classification", "-c", help="CODE ISSUE or PRODUCT BUG."
+        ...,
+        "--classification",
+        "-c",
+        help="CODE ISSUE, PRODUCT BUG, or INFRASTRUCTURE.",
     ),
     child_job_name: str = typer.Option("", "--child-job"),
     child_build_number: int = typer.Option(0, "--child-build"),
