@@ -30,6 +30,9 @@ HISTORY_CLASSIFICATIONS: tuple[str, ...] = get_args(HistoryClassificationLiteral
 _PRIMARY_CLASSIFICATIONS_SQL = (
     "(" + ", ".join(f"'{c}'" for c in PRIMARY_CLASSIFICATIONS) + ")"
 )
+_HISTORY_CLASSIFICATIONS_SQL = (
+    "(" + ", ".join(f"'{c}'" for c in HISTORY_CLASSIFICATIONS) + ")"
+)
 
 
 def parse_result_json(raw: str | None, *, job_id: str = "") -> dict | None:
@@ -2062,10 +2065,6 @@ async def get_history_classification(
     _child_job_name = child_job_name or ""
     _child_build_number = child_build_number or 0
 
-    _history_classifications_sql = (
-        "(" + ", ".join(f"'{c}'" for c in HISTORY_CLASSIFICATIONS) + ")"
-    )
-
     async with aiosqlite.connect(DB_PATH) as db:
         # 1. Prefer visible entry from test_classifications
         override_row = await (
@@ -2073,7 +2072,7 @@ async def get_history_classification(
                 "SELECT classification FROM test_classifications"
                 " WHERE test_name = ? AND job_id = ? AND job_name = ?"
                 " AND child_build_number = ? AND visible = 1"
-                f" AND classification IN {_history_classifications_sql}"
+                f" AND classification IN {_HISTORY_CLASSIFICATIONS_SQL}"
                 " ORDER BY id DESC LIMIT 1",
                 [test_name, job_id, _child_job_name, _child_build_number],
             )
@@ -2085,7 +2084,7 @@ async def get_history_classification(
         fh_query = (
             "SELECT classification FROM failure_history"
             " WHERE job_id = ? AND test_name = ?"
-            f" AND classification IN {_history_classifications_sql}"
+            f" AND classification IN {_HISTORY_CLASSIFICATIONS_SQL}"
         )
         fh_params: list = [job_id, test_name]
         if child_job_name:
@@ -2093,7 +2092,7 @@ async def get_history_classification(
             fh_params.extend([child_job_name, child_build_number])
         else:
             fh_query += " AND child_job_name = '' AND child_build_number = 0"
-        fh_query += " LIMIT 1"
+        fh_query += " ORDER BY analyzed_at DESC, id DESC LIMIT 1"
 
         fh_row = await (await db.execute(fh_query, fh_params)).fetchone()
         return fh_row[0] if fh_row and fh_row[0] else ""
@@ -2154,7 +2153,7 @@ async def get_effective_classification(
             fh_params.extend([child_job_name, child_build_number])
         else:
             fh_query += " AND child_job_name = '' AND child_build_number = 0"
-        fh_query += " LIMIT 1"
+        fh_query += " ORDER BY analyzed_at DESC, id DESC LIMIT 1"
 
         fh_row = await (await db.execute(fh_query, fh_params)).fetchone()
         return fh_row[0] if fh_row and fh_row[0] else ""

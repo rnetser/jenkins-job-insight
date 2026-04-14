@@ -37,6 +37,7 @@ def _rp_enabled_env():
         "REPORTPORTAL_URL": "http://rp.example.com",
         "REPORTPORTAL_API_TOKEN": "rp-token",  # pragma: allowlist secret
         "REPORTPORTAL_PROJECT": "my-project",
+        "PUBLIC_BASE_URL": "https://jji.example.com",
     }
     with patch.dict(os.environ, env, clear=True):
         from jenkins_job_insight.config import get_settings
@@ -303,6 +304,252 @@ class TestPushReportPortalEndpoint:
             call_kwargs = mock_rp_class.call_args[1]
             assert call_kwargs["verify_ssl"] is False
             get_settings.cache_clear()
+
+    @patch(
+        "jenkins_job_insight.main.get_history_classification", new_callable=AsyncMock
+    )
+    @patch("jenkins_job_insight.main.get_result")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    def test_child_job_push_uses_child_data(
+        self, mock_rp_class, mock_get_result, mock_get_cls, _rp_enabled_env
+    ):
+        """Child job params scope push to child's failures and job name."""
+        mock_get_cls.return_value = ""
+        mock_get_result.return_value = {
+            "status": "completed",
+            "result": {
+                "job_name": "parent-pipeline",
+                "build_number": 1,
+                "jenkins_url": "https://jenkins.example.com/job/parent/1/",
+                "failures": [],
+                "child_job_analyses": [
+                    {
+                        "job_name": "child-job",
+                        "build_number": 42,
+                        "jenkins_url": "https://jenkins.example.com/job/child-job/42/",
+                        "failures": [
+                            {
+                                "test_name": "test_child_a",
+                                "error": "err",
+                                "analysis": {
+                                    "classification": "PRODUCT BUG",
+                                    "details": "child bug",
+                                },
+                            }
+                        ],
+                        "failed_children": [],
+                    }
+                ],
+            },
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 300
+        mock_rp.get_failed_items.return_value = [
+            {"id": 5, "name": "test_child_a", "status": "FAILED"}
+        ]
+        mock_failure = MagicMock()
+        mock_failure.test_name = "test_child_a"
+        mock_rp.match_failures.return_value = [
+            ({"id": 5, "name": "test_child_a"}, mock_failure)
+        ]
+        mock_rp.push_classifications.return_value = {
+            "pushed": 1,
+            "unmatched": [],
+            "errors": [],
+            "launch_id": 300,
+        }
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post(
+            "/results/some-job-id/push-reportportal",
+            params={"child_job_name": "child-job", "child_build_number": 42},
+        )
+        assert response.status_code == 200, f"Response: {response.text}"
+        data = response.json()
+        assert data["pushed"] == 1
+        # find_launch should be called with child job name, not parent
+        mock_rp.find_launch.assert_called_once_with(
+            "child-job", "https://jenkins.example.com/job/child-job/42/"
+        )
+
+    @patch("jenkins_job_insight.main.get_result")
+    def test_child_job_not_found_returns_400(self, mock_get_result, _rp_enabled_env):
+        """Returns 400 when the specified child job doesn't exist."""
+        mock_get_result.return_value = {
+            "status": "completed",
+            "result": {
+                "job_name": "parent-pipeline",
+                "build_number": 1,
+                "jenkins_url": "https://jenkins.example.com/job/parent/1/",
+                "failures": [],
+                "child_job_analyses": [],
+            },
+        }
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post(
+            "/results/some-job-id/push-reportportal",
+            params={"child_job_name": "nonexistent", "child_build_number": 99},
+        )
+        assert response.status_code == 400
+        assert "not found" in response.json()["detail"].lower()
+
+    @patch(
+        "jenkins_job_insight.main.get_history_classification", new_callable=AsyncMock
+    )
+    @patch("jenkins_job_insight.main.get_result")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    def test_child_job_report_url_contains_anchor(
+        self, mock_rp_class, mock_get_result, mock_get_cls, _rp_enabled_env
+    ):
+        """Report URL includes child anchor fragment."""
+        mock_get_cls.return_value = ""
+        mock_get_result.return_value = {
+            "status": "completed",
+            "result": {
+                "job_name": "parent-pipeline",
+                "build_number": 1,
+                "jenkins_url": "https://jenkins.example.com/job/parent/1/",
+                "failures": [],
+                "child_job_analyses": [
+                    {
+                        "job_name": "child-job",
+                        "build_number": 10,
+                        "jenkins_url": "https://jenkins.example.com/job/child-job/10/",
+                        "failures": [
+                            {
+                                "test_name": "test_x",
+                                "error": "err",
+                                "analysis": {
+                                    "classification": "CODE ISSUE",
+                                    "details": "d",
+                                },
+                            }
+                        ],
+                        "failed_children": [],
+                    }
+                ],
+            },
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 400
+        mock_rp.get_failed_items.return_value = [
+            {"id": 7, "name": "test_x", "status": "FAILED"}
+        ]
+        mock_failure = MagicMock()
+        mock_failure.test_name = "test_x"
+        mock_rp.match_failures.return_value = [
+            ({"id": 7, "name": "test_x"}, mock_failure)
+        ]
+        mock_rp.push_classifications.return_value = {
+            "pushed": 1,
+            "unmatched": [],
+            "errors": [],
+            "launch_id": 400,
+        }
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post(
+            "/results/some-job-id/push-reportportal",
+            params={"child_job_name": "child-job", "child_build_number": 10},
+        )
+        assert response.status_code == 200
+        # Verify the report_url passed to push_classifications contains the anchor
+        push_call = mock_rp.push_classifications.call_args
+        report_url = push_call[0][1]  # second positional arg
+        assert "#child-child-job-10" in report_url
+
+    @patch(
+        "jenkins_job_insight.main.get_history_classification", new_callable=AsyncMock
+    )
+    @patch("jenkins_job_insight.main.get_result")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    def test_nested_child_job_push(
+        self, mock_rp_class, mock_get_result, mock_get_cls, _rp_enabled_env
+    ):
+        """Recursively finds nested child job in failed_children."""
+        mock_get_cls.return_value = ""
+        mock_get_result.return_value = {
+            "status": "completed",
+            "result": {
+                "job_name": "parent-pipeline",
+                "build_number": 1,
+                "jenkins_url": "https://jenkins.example.com/job/parent/1/",
+                "failures": [],
+                "child_job_analyses": [
+                    {
+                        "job_name": "child-1",
+                        "build_number": 10,
+                        "jenkins_url": "https://jenkins.example.com/job/child-1/10/",
+                        "failures": [],
+                        "failed_children": [
+                            {
+                                "job_name": "nested-child",
+                                "build_number": 5,
+                                "jenkins_url": "https://jenkins.example.com/job/nested-child/5/",
+                                "failures": [
+                                    {
+                                        "test_name": "test_nested",
+                                        "error": "err",
+                                        "analysis": {
+                                            "classification": "INFRASTRUCTURE",
+                                            "details": "d",
+                                        },
+                                    }
+                                ],
+                                "failed_children": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 500
+        mock_rp.get_failed_items.return_value = [
+            {"id": 9, "name": "test_nested", "status": "FAILED"}
+        ]
+        mock_failure = MagicMock()
+        mock_failure.test_name = "test_nested"
+        mock_rp.match_failures.return_value = [
+            ({"id": 9, "name": "test_nested"}, mock_failure)
+        ]
+        mock_rp.push_classifications.return_value = {
+            "pushed": 1,
+            "unmatched": [],
+            "errors": [],
+            "launch_id": 500,
+        }
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post(
+            "/results/some-job-id/push-reportportal",
+            params={"child_job_name": "nested-child", "child_build_number": 5},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["pushed"] == 1
+        # find_launch called with nested child's job name
+        mock_rp.find_launch.assert_called_once_with(
+            "nested-child", "https://jenkins.example.com/job/nested-child/5/"
+        )
 
 
 class TestCapabilitiesEndpoint:

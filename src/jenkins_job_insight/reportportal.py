@@ -53,19 +53,20 @@ class ReportPortalClient:
     def __init__(
         self, url: str, token: str, project: str, *, verify_ssl: bool = True
     ) -> None:
+        # Build our own requests.Session for custom API calls instead of
+        # relying on RPClient.session, which may not honour verify_ssl
+        # for all requests (observed with self-signed certificates).
+        # Initialised before RPClient so close() can always clean up.
+        self._session = _requests.Session()
+        self._session.headers["Authorization"] = f"Bearer {token}"
+        self._session.verify = verify_ssl
+        self._suppress_ssl_warnings = not verify_ssl
         self._rp_client = RPClient(
             endpoint=url.rstrip("/"),
             project=project,
             api_key=token,
             verify_ssl=verify_ssl,
         )
-        # Build our own requests.Session for custom API calls instead of
-        # relying on RPClient.session, which may not honour verify_ssl
-        # for all requests (observed with self-signed certificates).
-        self._session = _requests.Session()
-        self._session.headers["Authorization"] = f"Bearer {token}"
-        self._session.verify = verify_ssl
-        self._suppress_ssl_warnings = not verify_ssl
 
     def __enter__(self) -> ReportPortalClient:
         return self
@@ -77,6 +78,7 @@ class ReportPortalClient:
         self,
         classification: str,
         history_classification: str | None = None,
+        locators: dict[str, str] | None = None,
     ) -> str | None:
         """Map a JJI classification to an RP defect type locator.
 
@@ -87,16 +89,22 @@ class ReportPortalClient:
             classification: JJI AI classification (e.g. ``PRODUCT BUG``).
             history_classification: Optional history classification from
                 test_classifications table.
+            locators: Project-specific defect type locators. Falls back
+                to ``_DEFAULT_LOCATORS`` when ``None`` or missing key.
 
         Returns:
             RP locator string (e.g. ``pb001``), or ``None`` if no mapping.
         """
+        effective = classification
         if history_classification == "INFRASTRUCTURE":
-            return _DEFAULT_LOCATORS.get("SYSTEM_ISSUE")
+            effective = "INFRASTRUCTURE"
 
-        rp_category = _CLASSIFICATION_MAP.get(classification)
+        rp_category = _CLASSIFICATION_MAP.get(effective)
         if not rp_category:
             return None
+
+        if locators and rp_category in locators:
+            return locators[rp_category]
         return _DEFAULT_LOCATORS.get(rp_category)
 
     def _paginate_get(self, url: str, params: dict[str, str | int]) -> list[dict]:
@@ -186,8 +194,14 @@ class ReportPortalClient:
             if jenkins_url in desc:
                 return launch["id"]
 
-        # Fallback: return the most recent (first in desc sort order)
-        return all_launches[0]["id"]
+        # Ambiguous: multiple launches, none matched by URL — refuse to guess
+        logger.warning(
+            "Found %d launches named '%s' but none matched jenkins_url '%s'",
+            len(all_launches),
+            job_name,
+            jenkins_url,
+        )
+        return None
 
     def get_failed_items(self, launch_id: int) -> list[dict]:
         """Get all failed test items from a launch.
@@ -255,6 +269,14 @@ class ReportPortalClient:
                     matched.append((rp_item, failure))
                     break
 
+                # Dotted-suffix match against codeRef
+                if rp_code_ref and (
+                    jji_name.endswith(f".{rp_code_ref}")
+                    or rp_code_ref.endswith(f".{jji_name}")
+                ):
+                    matched.append((rp_item, failure))
+                    break
+
         return matched
 
     def push_classifications(
@@ -267,7 +289,7 @@ class ReportPortalClient:
 
         For each matched pair, builds an issue update with:
         - Defect type locator mapped from JJI classification
-        - Comment with AI analysis details + JJI report link
+        - Comment with link to JJI report page
         - External system issues for Jira matches (if present)
 
         Args:
@@ -316,19 +338,11 @@ class ReportPortalClient:
             # Determine classification
             ai_classification = failure.analysis.classification
             hist_cls = history.get(failure.test_name)
-            locator = self._map_classification(ai_classification, hist_cls)
+            locator = self._map_classification(ai_classification, hist_cls, locators)
 
             if not locator:
                 unmatched.append(item_name)
                 continue
-
-            # Resolve actual locator from project settings if available
-            rp_category = _CLASSIFICATION_MAP.get(
-                "INFRASTRUCTURE" if hist_cls == "INFRASTRUCTURE" else ai_classification,
-                "",
-            )
-            if rp_category and rp_category in locators:
-                locator = locators[rp_category]
 
             # Build comment
             comment = (
@@ -414,10 +428,17 @@ class ReportPortalClient:
             "launch_id": launch_id,
         }
 
+    _DEFAULT_TIMEOUT: int = 30
+
     def _request(
         self, method: Literal["get", "put"], url: str, **kwargs: object
     ) -> _requests.Response:
-        """HTTP request with scoped InsecureRequestWarning suppression."""
+        """HTTP request with scoped InsecureRequestWarning suppression.
+
+        Applies a default timeout of 30 seconds if none is provided.
+        """
+        if "timeout" not in kwargs:
+            kwargs["timeout"] = self._DEFAULT_TIMEOUT
         with warnings.catch_warnings():
             if self._suppress_ssl_warnings:
                 warnings.filterwarnings(

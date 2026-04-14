@@ -991,6 +991,16 @@ class TestGetHistoryClassification:
                 child_build_number=5,
                 visible=1,
             )
+            # Insert a second row with different child scope
+            await storage.set_test_classification(
+                test_name="tests.TestA.test_child",
+                classification="REGRESSION",
+                job_id="job-child",
+                job_name="child-job-2",
+                child_build_number=6,
+                visible=1,
+            )
+            # Should return INFRASTRUCTURE for child-job-1
             cls = await storage.get_history_classification(
                 "job-child",
                 "tests.TestA.test_child",
@@ -998,3 +1008,11 @@ class TestGetHistoryClassification:
                 child_build_number=5,
             )
             assert cls == "INFRASTRUCTURE"
+            # Should return REGRESSION for child-job-2
+            cls2 = await storage.get_history_classification(
+                "job-child",
+                "tests.TestA.test_child",
+                child_job_name="child-job-2",
+                child_build_number=6,
+            )
+            assert cls2 == "REGRESSION"

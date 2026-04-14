@@ -14,9 +14,11 @@ import type { ReportPortalPushResult } from '@/types'
 
 interface ReportPortalButtonProps {
   jobId: string
+  childJobName?: string
+  childBuildNumber?: number
 }
 
-export function ReportPortalButton({ jobId }: ReportPortalButtonProps) {
+export function ReportPortalButton({ jobId, childJobName, childBuildNumber }: ReportPortalButtonProps) {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pushing, setPushing] = useState(false)
   const [resultDialogOpen, setResultDialogOpen] = useState(false)
@@ -29,7 +31,11 @@ export function ReportPortalButton({ jobId }: ReportPortalButtonProps) {
     setPushError('')
     setPushResult(null)
     try {
-      const result = await api.post<ReportPortalPushResult>(`/results/${jobId}/push-reportportal`)
+      const params = new URLSearchParams()
+      if (childJobName) params.set('child_job_name', childJobName)
+      if (childBuildNumber != null) params.set('child_build_number', String(childBuildNumber))
+      const qs = params.toString()
+      const result = await api.post<ReportPortalPushResult>(`/results/${jobId}/push-reportportal${qs ? `?${qs}` : ''}`)
       setPushResult(result)
       setResultDialogOpen(true)
     } catch (err) {
@@ -38,7 +44,7 @@ export function ReportPortalButton({ jobId }: ReportPortalButtonProps) {
     } finally {
       setPushing(false)
     }
-  }, [jobId])
+  }, [jobId, childJobName, childBuildNumber])
 
   const handleClose = useCallback(() => {
     setResultDialogOpen(false)

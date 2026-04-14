@@ -2351,6 +2351,12 @@ async def create_jira_bug_endpoint(
 @app.post("/results/{job_id}/push-reportportal", response_model=ReportPortalPushResult)
 async def push_to_reportportal(
     job_id: str,
+    child_job_name: str | None = Query(
+        default=None, description="Child job name for pipeline child push"
+    ),
+    child_build_number: int | None = Query(
+        default=None, description="Child build number for pipeline child push"
+    ),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """Push JJI classifications into Report Portal test items.
@@ -2371,13 +2377,26 @@ async def push_to_reportportal(
     result_data = stored["result"]
 
     try:
-        push_result = await _execute_rp_push(job_id, result_data, settings)
+        push_result = await _execute_rp_push(
+            job_id,
+            result_data,
+            settings,
+            child_job_name=child_job_name,
+            child_build_number=child_build_number,
+        )
         return push_result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-async def _execute_rp_push(job_id: str, result_data: dict, settings: Settings) -> dict:
+async def _execute_rp_push(
+    job_id: str,
+    result_data: dict,
+    settings: Settings,
+    *,
+    child_job_name: str | None = None,
+    child_build_number: int | None = None,
+) -> dict:
     """Shared logic for pushing classifications to Report Portal.
 
     Creates a ReportPortalClient, finds the matching launch, matches
@@ -2387,12 +2406,42 @@ async def _execute_rp_push(job_id: str, result_data: dict, settings: Settings) -
         job_id: The analysis job identifier.
         result_data: Stored result dict containing failures and Jenkins metadata.
         settings: Application settings with Report Portal configuration.
+        child_job_name: Optional child job name for scoping push to a child.
+        child_build_number: Optional child build number (required with child_job_name).
 
     Returns:
         Dict with keys: ``pushed``, ``unmatched``, ``errors``, ``launch_id``.
     """
     base_url = _extract_base_url()
-    report_url = f"{base_url}/results/{job_id}" if base_url else f"/results/{job_id}"
+    if not base_url:
+        raise ValueError(
+            "PUBLIC_BASE_URL must be set to push to Report Portal"
+            " (relative URLs resolve against the RP domain)"
+        )
+    report_url = f"{base_url}/results/{job_id}"
+
+    # Scope to child job when requested
+    if child_job_name is not None:
+        if child_build_number is None:
+            raise ValueError(
+                "child_build_number is required when child_job_name is provided"
+            )
+        child = _find_child_job(
+            result_data.get("child_job_analyses", []),
+            child_job_name,
+            child_build_number,
+        )
+        if not child:
+            raise ValueError(
+                f"Child job '{child_job_name}' #{child_build_number} not found"
+            )
+        # Use child job's data for RP push
+        result_data = child
+        # Build anchor fragment for the child section (URL-encoded job name)
+        anchor = (
+            f"child-{urllib.parse.quote(child_job_name, safe='')}-{child_build_number}"
+        )
+        report_url = f"{report_url}#{anchor}"
 
     # Called only when reportportal_enabled is True, which guarantees these
     # fields are set (see Settings.reportportal_enabled property).  Explicit
@@ -2433,7 +2482,7 @@ async def _execute_rp_push(job_id: str, result_data: dict, settings: Settings) -
             return {
                 "pushed": 0,
                 "unmatched": [],
-                "errors": [],
+                "errors": ["No failed test items found in RP launch."],
                 "launch_id": launch_id,
             }
 
@@ -2478,8 +2527,13 @@ async def _execute_rp_push(job_id: str, result_data: dict, settings: Settings) -
         unique_test_names = list(
             dict.fromkeys(failure.test_name for _, failure in matched)
         )
+        scope_name = child_job_name or ""
+        scope_build = child_build_number or 0
         classifications = await asyncio.gather(
-            *(get_history_classification(job_id, name) for name in unique_test_names)
+            *(
+                get_history_classification(job_id, name, scope_name, scope_build)
+                for name in unique_test_names
+            )
         )
         history_classifications: dict[str, str] = {
             name: cls for name, cls in zip(unique_test_names, classifications) if cls
@@ -2490,6 +2544,37 @@ async def _execute_rp_push(job_id: str, result_data: dict, settings: Settings) -
         )
         push_result["launch_id"] = launch_id
         return push_result
+
+
+def _find_child_job(
+    children: list[dict],
+    child_job_name: str,
+    child_build_number: int,
+) -> dict | None:
+    """Recursively find a child job by name and build number.
+
+    Args:
+        children: List of child job dicts to search.
+        child_job_name: Job name to match.
+        child_build_number: Build number to match.
+
+    Returns:
+        The matching child job dict, or ``None`` if not found.
+    """
+    for child in children:
+        if (
+            child.get("job_name") == child_job_name
+            and child.get("build_number") == child_build_number
+        ):
+            return child
+        found = _find_child_job(
+            child.get("failed_children", []),
+            child_job_name,
+            child_build_number,
+        )
+        if found:
+            return found
+    return None
 
 
 def _patch_failure_classification(

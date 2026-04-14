@@ -66,7 +66,8 @@ class TestReportPortalSettings:
             settings = Settings(_env_file=None)
             assert not settings.reportportal_enabled
 
-    def test_rp_warns_when_explicitly_enabled_but_url_missing(self, caplog):
+    @patch("jenkins_job_insight.config.logger")
+    def test_rp_warns_when_explicitly_enabled_but_url_missing(self, mock_logger):
         """When enable_reportportal=True but url is missing, warn."""
         env = _build_env(
             ENABLE_REPORTPORTAL="true",
@@ -76,8 +77,12 @@ class TestReportPortalSettings:
         with patch.dict(os.environ, env, clear=True):
             settings = Settings(_env_file=None)
             assert not settings.reportportal_enabled
+        mock_logger.warning.assert_called()
+        warn_msg = mock_logger.warning.call_args[0][0]
+        assert "REPORTPORTAL_URL" in warn_msg
 
-    def test_rp_warns_when_explicitly_enabled_but_token_missing(self, caplog):
+    @patch("jenkins_job_insight.config.logger")
+    def test_rp_warns_when_explicitly_enabled_but_token_missing(self, mock_logger):
         env = _build_env(
             ENABLE_REPORTPORTAL="true",
             REPORTPORTAL_URL="http://rp.example.com",
@@ -86,8 +91,12 @@ class TestReportPortalSettings:
         with patch.dict(os.environ, env, clear=True):
             settings = Settings(_env_file=None)
             assert not settings.reportportal_enabled
+        mock_logger.warning.assert_called()
+        warn_msg = mock_logger.warning.call_args[0][0]
+        assert "REPORTPORTAL_API_TOKEN" in warn_msg
 
-    def test_rp_warns_when_explicitly_enabled_but_project_missing(self, caplog):
+    @patch("jenkins_job_insight.config.logger")
+    def test_rp_warns_when_explicitly_enabled_but_project_missing(self, mock_logger):
         env = _build_env(
             ENABLE_REPORTPORTAL="true",
             REPORTPORTAL_URL="http://rp.example.com",
@@ -96,3 +105,6 @@ class TestReportPortalSettings:
         with patch.dict(os.environ, env, clear=True):
             settings = Settings(_env_file=None)
             assert not settings.reportportal_enabled
+        mock_logger.warning.assert_called()
+        warn_msg = mock_logger.warning.call_args[0][0]
+        assert "REPORTPORTAL_PROJECT" in warn_msg

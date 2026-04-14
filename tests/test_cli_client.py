@@ -1156,6 +1156,27 @@ class TestJJIClientPushReportPortal:
         assert result["pushed"] == 3
         assert result["launch_id"] == 42
 
+    def test_push_reportportal_child_job(self):
+        response_data = {
+            "pushed": 1,
+            "unmatched": [],
+            "errors": [],
+            "launch_id": 55,
+        }
+
+        def handler(request):
+            assert request.method == "POST"
+            assert "/results/job-123/push-reportportal" in str(request.url)
+            assert request.url.params.get("child_job_name") == "my-child"
+            assert request.url.params.get("child_build_number") == "42"
+            return httpx.Response(200, json=response_data)
+
+        client = _make_client(handler)
+        result = client.push_reportportal(
+            "job-123", child_job_name="my-child", child_build_number=42
+        )
+        assert result["pushed"] == 1
+
     def test_push_reportportal_error(self):
         def handler(request):
             return httpx.Response(400, json={"detail": "Report Portal is disabled"})

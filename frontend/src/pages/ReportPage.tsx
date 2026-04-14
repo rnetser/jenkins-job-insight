@@ -396,7 +396,7 @@ function ReportContent() {
             </Badge>
           )}
           <div className="ml-auto flex items-center gap-3">
-            {state.reportportalAvailable && (
+            {state.reportportalAvailable && (result.child_job_analyses ?? []).length === 0 && (
               <ReportPortalButton jobId={result.job_id} />
             )}
             {result.request_params && (
