@@ -2296,3 +2296,81 @@ class TestReAnalyzeCommand:
         result = runner.invoke(app, ["re-analyze", "nonexistent"])
         assert result.exit_code != 0
         assert "404" in result.output or "not found" in result.output.lower()
+
+
+class TestPushRpCommand:
+    def test_push_rp(self, mock_client):
+        mock_client.push_reportportal.return_value = {
+            "pushed": 3,
+            "unmatched": [],
+            "errors": [],
+            "launch_id": 42,
+        }
+        result = runner.invoke(app, ["push-rp", "job-123"])
+        assert result.exit_code == 0
+        assert "3" in result.output
+        mock_client.push_reportportal.assert_called_once_with(
+            "job-123",
+            child_job_name=None,
+            child_build_number=None,
+        )
+
+    def test_push_rp_json(self, mock_client):
+        mock_client.push_reportportal.return_value = {
+            "pushed": 3,
+            "unmatched": [],
+            "errors": [],
+            "launch_id": 42,
+        }
+        result = runner.invoke(app, ["--json", "push-rp", "job-123"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["pushed"] == 3
+        assert parsed["launch_id"] == 42
+
+    def test_push_rp_error(self, mock_client):
+        mock_client.push_reportportal.side_effect = JJIError(
+            status_code=400, detail="Report Portal is disabled"
+        )
+        result = runner.invoke(app, ["push-rp", "job-123"])
+        assert result.exit_code != 0
+        assert "400" in result.output or "disabled" in result.output.lower()
+
+    def test_push_rp_with_errors(self, mock_client):
+        mock_client.push_reportportal.return_value = {
+            "pushed": 1,
+            "unmatched": ["test_unmatched"],
+            "errors": ["Failed to update RP item 99"],
+            "launch_id": 42,
+        }
+        result = runner.invoke(app, ["push-rp", "job-123"])
+        assert result.exit_code == 0
+        assert "1" in result.output
+        assert "test_unmatched" in result.output
+        assert "Errors: 1" in result.output
+
+    def test_push_rp_child_job_flags(self, mock_client):
+        mock_client.push_reportportal.return_value = {
+            "pushed": 2,
+            "unmatched": [],
+            "errors": [],
+            "launch_id": 55,
+        }
+        result = runner.invoke(
+            app,
+            [
+                "push-rp",
+                "job-123",
+                "--child-job-name",
+                "my-child",
+                "--child-build-number",
+                "42",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "2" in result.output
+        mock_client.push_reportportal.assert_called_once_with(
+            "job-123",
+            child_job_name="my-child",
+            child_build_number=42,
+        )

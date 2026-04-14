@@ -527,6 +527,25 @@ class JJIClient:
             body["email"] = email
         return self._request("POST", "/api/validate-token", json=body)
 
+    # -- Report Portal --------------------------------------------------------
+
+    def push_reportportal(
+        self,
+        job_id: str,
+        *,
+        child_job_name: str | None = None,
+        child_build_number: int | None = None,
+    ) -> dict:
+        """Push classifications to Report Portal. POST /results/{job_id}/push-reportportal"""
+        params: dict[str, str | int] = {}
+        if child_job_name is not None:
+            params["child_job_name"] = child_job_name
+        if child_build_number is not None:
+            params["child_build_number"] = child_build_number
+        return self._request(
+            "POST", f"/results/{job_id}/push-reportportal", params=params
+        )
+
     # -- Capabilities ---------------------------------------------------------
 
     def capabilities(self) -> dict:

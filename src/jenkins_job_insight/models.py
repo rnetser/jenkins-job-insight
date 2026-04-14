@@ -648,3 +648,18 @@ class ClassifyTestRequest(BaseModel):
     @classmethod
     def normalize_classification(cls, v: str) -> str:
         return v.upper() if isinstance(v, str) else v
+
+
+class ReportPortalPushResult(BaseModel):
+    """Result from pushing classifications to Report Portal."""
+
+    pushed: int = Field(description="Number of items successfully updated")
+    unmatched: list[str] = Field(
+        default_factory=list,
+        description="RP item names that could not be matched to JJI failures or mapped to a defect type",
+    )
+    errors: list[str] = Field(
+        default_factory=list,
+        description="Error messages from failed RP API calls",
+    )
+    launch_id: int | None = Field(default=None, description="Report Portal launch ID")

@@ -184,6 +184,19 @@ class Settings(BaseSettings):
     # GitHub (optional) -- for comment enrichment (PR status)
     github_token: SecretStr | None = None
 
+    # Report Portal integration (optional)
+    reportportal_url: str | None = None
+    reportportal_api_token: SecretStr | None = None
+    reportportal_project: str | None = None
+    reportportal_verify_ssl: bool = Field(
+        default=True,
+        description="Verify SSL certificates for Report Portal connections. Set to False for self-signed certs.",
+    )
+    enable_reportportal: bool | None = Field(
+        default=None,
+        description="Enable Report Portal integration. When None, enabled if REPORTPORTAL_URL, REPORTPORTAL_API_TOKEN, and REPORTPORTAL_PROJECT are configured.",
+    )
+
     @model_validator(mode="after")
     def _normalize_optional_strings(self) -> "Settings":
         """Strip whitespace from optional string fields; blank becomes None."""
@@ -193,6 +206,8 @@ class Settings(BaseSettings):
             "jira_email",
             "jira_project_key",
             "public_base_url",
+            "reportportal_url",
+            "reportportal_project",
         ):
             value = getattr(self, field_name)
             if isinstance(value, str):
@@ -204,7 +219,12 @@ class Settings(BaseSettings):
             if isinstance(value, str):
                 object.__setattr__(self, field_name, value.strip())
         # Strip whitespace from secret fields; blank becomes None
-        for field_name in ("github_token", "jira_api_token", "jira_pat"):
+        for field_name in (
+            "github_token",
+            "jira_api_token",
+            "jira_pat",
+            "reportportal_api_token",
+        ):
             secret = getattr(self, field_name)
             if secret is not None:
                 stripped = secret.get_secret_value().strip()
@@ -256,6 +276,34 @@ class Settings(BaseSettings):
                     "enable_github_issues is True but GITHUB_TOKEN is not configured"
                 )
         return bool(tests_repo_url and github_token)
+
+    @property
+    def reportportal_enabled(self) -> bool:
+        """Check if Report Portal integration is enabled and configured."""
+        if self.enable_reportportal is False:
+            return False
+        if not self.reportportal_url:
+            if self.enable_reportportal is True:
+                logger.warning(
+                    "enable_reportportal is True but REPORTPORTAL_URL is not configured"
+                )
+            return False
+        if (
+            not self.reportportal_api_token
+            or not self.reportportal_api_token.get_secret_value()
+        ):
+            if self.enable_reportportal is True:
+                logger.warning(
+                    "enable_reportportal is True but REPORTPORTAL_API_TOKEN is not configured"
+                )
+            return False
+        if not self.reportportal_project:
+            if self.enable_reportportal is True:
+                logger.warning(
+                    "enable_reportportal is True but REPORTPORTAL_PROJECT is not configured"
+                )
+            return False
+        return True
 
 
 def _resolve_jira_auth(settings: Settings) -> tuple[bool, str]:

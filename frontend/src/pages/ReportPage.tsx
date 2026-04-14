@@ -19,6 +19,7 @@ import { ExpandCollapseButtons } from '@/components/shared/ExpandCollapseButtons
 import { Button } from '@/components/ui/button'
 import { ExternalLink, CheckCircle2, Clock, Calendar, Cpu, Timer, FolderGit2, RotateCw } from 'lucide-react'
 import { ReAnalyzeDialog } from './report/ReAnalyzeDialog'
+import { ReportPortalButton } from './report/ReportPortalButton'
 import { reviewKey } from './report/ReportContext'
 import type { ChildJobAnalysis } from '@/types'
 
@@ -174,6 +175,7 @@ function ReportContent() {
         if (resultRes.capabilities) {
           dispatch({ type: 'SET_GITHUB_ISSUES_ENABLED', payload: resultRes.capabilities?.github_issues_enabled ?? false })
           dispatch({ type: 'SET_JIRA_ISSUES_ENABLED', payload: resultRes.capabilities?.jira_issues_enabled ?? false })
+          dispatch({ type: 'SET_REPORTPORTAL_AVAILABLE', payload: resultRes.capabilities?.reportportal ?? false })
           dispatch({ type: 'SET_SERVER_JIRA_PROJECT_KEY', payload: resultRes.capabilities?.server_jira_project_key ?? '' })
         }
 
@@ -394,6 +396,9 @@ function ReportContent() {
             </Badge>
           )}
           <div className="ml-auto flex items-center gap-3">
+            {state.reportportalAvailable && (result.child_job_analyses ?? []).length === 0 && (
+              <ReportPortalButton jobId={result.job_id} />
+            )}
             {result.request_params && (
               <Button
                 variant="ghost"

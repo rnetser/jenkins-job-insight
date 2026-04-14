@@ -13,17 +13,7 @@ from jenkins_job_insight.config import (
     parse_peer_configs,
     parse_repo_ref,
 )
-
-
-def _build_env(**overrides: str) -> dict[str, str]:
-    """Return baseline Jenkins env with per-test overrides applied."""
-    base = {
-        "JENKINS_URL": "https://jenkins.example.com",
-        "JENKINS_USER": "testuser",
-        "JENKINS_PASSWORD": "testpassword",  # pragma: allowlist secret
-    }
-    base.update(overrides)
-    return base
+from tests.conftest import build_test_env as _build_env
 
 
 class TestSettings:

@@ -8,6 +8,8 @@ import { FailureCard } from './FailureCard'
 import { Badge } from '@/components/ui/badge'
 import { ExpandCollapseButtons } from '@/components/shared/ExpandCollapseButtons'
 import { ChevronDown, ChevronRight, ExternalLink, GitFork } from 'lucide-react'
+import { ReportPortalButton } from './ReportPortalButton'
+import { useReportState } from './ReportContext'
 
 interface ChildJobSectionProps {
   child: ChildJobAnalysis
@@ -20,6 +22,7 @@ interface ChildJobSectionProps {
 }
 
 export function ChildJobSection({ child, jobId, depth = 0, activeHash, parentHashId }: ChildJobSectionProps) {
+  const state = useReportState()
   const hashId = childJobHashId(child.job_name, child.build_number, parentHashId)
   const expandKey = `jji-expand-${jobId}-${hashId}`
   const sectionRef = useRef<HTMLDivElement>(null)
@@ -97,6 +100,13 @@ export function ChildJobSection({ child, jobId, depth = 0, activeHash, parentHas
         <Badge variant="outline" className="shrink-0">
           {failures.length} {failures.length === 1 ? 'failure' : 'failures'}
         </Badge>
+        {state.reportportalAvailable && (
+          <ReportPortalButton
+            jobId={jobId}
+            childJobName={child.job_name}
+            childBuildNumber={child.build_number}
+          />
+        )}
         {child.jenkins_url && (
           <a
             href={child.jenkins_url}

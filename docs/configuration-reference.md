@@ -176,6 +176,22 @@ These settings control Jira-assisted bug matching, GitHub issue creation, and re
 
 > **Note:** GitHub issue preview/create and Jira bug preview/create are deployment-level features. Per-request analysis overrides do not turn those endpoints on. If you want those features in the UI or API, configure the server environment.
 
+## Report Portal Integration
+
+Push failure classifications from JJI into Report Portal test items. The server matches JJI results to RP launches by job name and Jenkins URL, then updates each failed item's defect type and comment.
+
+| Environment variable | Request override | Default | Applies to | What it does |
+| --- | --- | --- | --- | --- |
+| `REPORTPORTAL_URL` | — | unset | Server only | Report Portal server URL (e.g. `https://reportportal.example.com`). |
+| `REPORTPORTAL_PROJECT` | — | unset | Server only | Report Portal project name. |
+| `REPORTPORTAL_API_TOKEN` | — | unset | Server only | API token for authenticating with Report Portal. Must belong to the launch owner or a Project Manager. |
+| `REPORTPORTAL_VERIFY_SSL` | — | `true` | Server only | Verify TLS certificates for Report Portal connections. Set to `false` for self-signed certificates. |
+| `ENABLE_REPORTPORTAL` | — | auto-detect | Server only | Explicit on/off switch. If omitted, enabled when `REPORTPORTAL_URL`, `REPORTPORTAL_API_TOKEN`, and `REPORTPORTAL_PROJECT` are all configured. |
+
+> **Tip:** The Push to Report Portal button appears in the UI when RP is configured. The token must belong to the account that creates the launches (typically a CI service account) or a user with the Project Manager role, because Report Portal enforces launch ownership on item updates.
+
+> **Note:** For Report Portal instances with self-signed certificates (e.g. internal OpenShift deployments), set `REPORTPORTAL_VERIFY_SSL=false`.
+
 ## Callbacks, Waiting, And Result URLs
 
 There are no callback URL settings in the current codebase. What you can configure instead is how long the service waits for Jenkins and how it builds public-facing links.
@@ -335,6 +351,7 @@ If you only need a minimal production-ish setup, these are the highest-impact se
 - `JENKINS_URL`, `JENKINS_USER`, and `JENKINS_PASSWORD` for Jenkins-backed analysis.
 - `TESTS_REPO_URL` if you want the AI to inspect repository code or you plan to create GitHub issues.
 - `JIRA_URL`, `JIRA_PROJECT_KEY`, and either `JIRA_API_TOKEN` or `JIRA_PAT` if you want Jira-assisted triage.
+- `REPORTPORTAL_URL`, `REPORTPORTAL_API_TOKEN`, and `REPORTPORTAL_PROJECT` if you want to push classifications to Report Portal. Add `REPORTPORTAL_VERIFY_SSL=false` for self-signed certificates.
 - `PUBLIC_BASE_URL` if users or external systems need absolute result links.
 - `JJI_ENCRYPTION_KEY` if you want stable, explicit secret encryption across deployments.
 - `DB_PATH` if the default `/data/results.db` does not fit your runtime environment.

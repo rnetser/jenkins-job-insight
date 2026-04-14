@@ -16,7 +16,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Req
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, ValidationError
 from simple_logger.logger import get_logger
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
@@ -40,6 +40,7 @@ from jenkins_job_insight.encryption import (
     encrypt_sensitive_fields,
 )
 from jenkins_job_insight.jira import enrich_with_jira_matches
+from jenkins_job_insight.reportportal import ReportPortalClient
 from jenkins_job_insight.bug_creation import (
     _parse_github_repo_url,
     create_github_issue,
@@ -61,6 +62,7 @@ from jenkins_job_insight.models import (
     FailureAnalysisResult,
     OverrideClassificationRequest,
     PreviewIssueRequest,
+    ReportPortalPushResult,
     SetReviewedRequest,
 )
 from jenkins_job_insight.xml_enrichment import (
@@ -72,6 +74,7 @@ from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
     get_ai_configs,
     get_effective_classification,
+    get_history_classification,
     get_result,
     init_db,
     list_results,
@@ -2064,6 +2067,7 @@ def _build_capabilities(settings: Settings) -> dict[str, bool | str]:
         ),
         "server_jira_email": bool(settings.jira_email),
         "server_jira_project_key": settings.jira_project_key or "",
+        "reportportal": settings.reportportal_enabled,
     }
 
 
@@ -2342,6 +2346,235 @@ async def create_jira_bug_endpoint(
         "title": body.title,
         "comment_id": comment_id,
     }
+
+
+@app.post("/results/{job_id}/push-reportportal", response_model=ReportPortalPushResult)
+async def push_to_reportportal(
+    job_id: str,
+    child_job_name: str | None = Query(
+        default=None, description="Child job name for pipeline child push"
+    ),
+    child_build_number: int | None = Query(
+        default=None, description="Child build number for pipeline child push"
+    ),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Push JJI classifications into Report Portal test items.
+
+    Finds the matching RP launch, matches failed items to JJI failures,
+    and updates each item's defect type and comment.
+    """
+    if not settings.reportportal_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Report Portal integration is disabled or not configured",
+        )
+
+    stored = await get_result(job_id)
+    if not stored or not stored.get("result"):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    result_data = stored["result"]
+
+    try:
+        push_result = await _execute_rp_push(
+            job_id,
+            result_data,
+            settings,
+            child_job_name=child_job_name,
+            child_build_number=child_build_number,
+        )
+        return push_result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def _execute_rp_push(
+    job_id: str,
+    result_data: dict,
+    settings: Settings,
+    *,
+    child_job_name: str | None = None,
+    child_build_number: int | None = None,
+) -> dict:
+    """Shared logic for pushing classifications to Report Portal.
+
+    Creates a ReportPortalClient, finds the matching launch, matches
+    failed items to JJI failures, and pushes classifications.
+
+    Args:
+        job_id: The analysis job identifier.
+        result_data: Stored result dict containing failures and Jenkins metadata.
+        settings: Application settings with Report Portal configuration.
+        child_job_name: Optional child job name for scoping push to a child.
+        child_build_number: Optional child build number (required with child_job_name).
+
+    Returns:
+        Dict with keys: ``pushed``, ``unmatched``, ``errors``, ``launch_id``.
+    """
+    base_url = _extract_base_url()
+    if not base_url:
+        raise ValueError(
+            "PUBLIC_BASE_URL must be set to push to Report Portal"
+            " (relative URLs resolve against the RP domain)"
+        )
+    report_url = f"{base_url}/results/{job_id}"
+
+    # Scope to child job when requested
+    if child_job_name is not None:
+        if child_build_number is None:
+            raise ValueError(
+                "child_build_number is required when child_job_name is provided"
+            )
+        child = _find_child_job(
+            result_data.get("child_job_analyses", []),
+            child_job_name,
+            child_build_number,
+        )
+        if not child:
+            raise ValueError(
+                f"Child job '{child_job_name}' #{child_build_number} not found"
+            )
+        # Use child job's data for RP push
+        result_data = child
+        # Build anchor fragment for the child section (URL-encoded job name)
+        anchor = (
+            f"child-{urllib.parse.quote(child_job_name, safe='')}-{child_build_number}"
+        )
+        report_url = f"{report_url}#{anchor}"
+
+    # Called only when reportportal_enabled is True, which guarantees these
+    # fields are set (see Settings.reportportal_enabled property).  Explicit
+    # checks narrow the Optional types for mypy and survive python -O.
+    if settings.reportportal_url is None:
+        raise RuntimeError("reportportal_url is required when Report Portal is enabled")
+    if settings.reportportal_api_token is None:
+        raise RuntimeError(
+            "reportportal_api_token is required when Report Portal is enabled"
+        )
+    if settings.reportportal_project is None:
+        raise RuntimeError(
+            "reportportal_project is required when Report Portal is enabled"
+        )
+
+    with ReportPortalClient(
+        url=settings.reportportal_url,
+        token=settings.reportportal_api_token.get_secret_value(),
+        project=settings.reportportal_project,
+        verify_ssl=settings.reportportal_verify_ssl,
+    ) as rp_client:
+        jenkins_url = result_data.get("jenkins_url", "")
+        job_name = result_data.get("job_name", "")
+
+        launch_id = await asyncio.to_thread(
+            rp_client.find_launch, job_name, jenkins_url
+        )
+        if launch_id is None:
+            return {
+                "pushed": 0,
+                "unmatched": [],
+                "errors": [f"No RP launch found for job '{job_name}'"],
+                "launch_id": None,
+            }
+
+        failed_items = await asyncio.to_thread(rp_client.get_failed_items, launch_id)
+        if not failed_items:
+            return {
+                "pushed": 0,
+                "unmatched": [],
+                "errors": ["No failed test items found in RP launch."],
+                "launch_id": launch_id,
+            }
+
+        # Build FailureAnalysis objects from stored result
+        failures_data = result_data.get("failures", [])
+        try:
+            jji_failures = [FailureAnalysis.model_validate(f) for f in failures_data]
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Stored result contains invalid failure data: {exc.error_count()} validation error(s)",
+            ) from exc
+
+        if not jji_failures:
+            return {
+                "pushed": 0,
+                "unmatched": [],
+                "errors": ["No JJI failures found in stored result."],
+                "launch_id": launch_id,
+            }
+
+        matched = await asyncio.to_thread(
+            rp_client.match_failures, failed_items, jji_failures
+        )
+
+        if not matched and failed_items and jji_failures:
+            rp_names = [item.get("name", "") for item in failed_items]
+            jji_names = [f.test_name for f in jji_failures]
+            return {
+                "pushed": 0,
+                "unmatched": [],
+                "errors": [
+                    f"No overlap between {len(failed_items)} RP item(s)"
+                    f" and {len(jji_failures)} JJI failure(s)."
+                    f" RP items: {', '.join(rp_names)}."
+                    f" JJI tests: {', '.join(jji_names)}."
+                ],
+                "launch_id": launch_id,
+            }
+
+        # Get history classifications for matched tests (concurrent queries)
+        unique_test_names = list(
+            dict.fromkeys(failure.test_name for _, failure in matched)
+        )
+        scope_name = child_job_name or ""
+        scope_build = child_build_number or 0
+        classifications = await asyncio.gather(
+            *(
+                get_history_classification(job_id, name, scope_name, scope_build)
+                for name in unique_test_names
+            )
+        )
+        history_classifications: dict[str, str] = {
+            name: cls for name, cls in zip(unique_test_names, classifications) if cls
+        }
+
+        push_result = await asyncio.to_thread(
+            rp_client.push_classifications, matched, report_url, history_classifications
+        )
+        push_result["launch_id"] = launch_id
+        return push_result
+
+
+def _find_child_job(
+    children: list[dict],
+    child_job_name: str,
+    child_build_number: int,
+) -> dict | None:
+    """Recursively find a child job by name and build number.
+
+    Args:
+        children: List of child job dicts to search.
+        child_job_name: Job name to match.
+        child_build_number: Build number to match.
+
+    Returns:
+        The matching child job dict, or ``None`` if not found.
+    """
+    for child in children:
+        if (
+            child.get("job_name") == child_job_name
+            and child.get("build_number") == child_build_number
+        ):
+            return child
+        found = _find_child_job(
+            child.get("failed_children", []),
+            child_job_name,
+            child_build_number,
+        )
+        if found:
+            return found
+    return None
 
 
 def _patch_failure_classification(

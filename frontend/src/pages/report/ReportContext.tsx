@@ -13,6 +13,7 @@ interface ReportState {
   classifications: Record<string, string>
   githubIssuesEnabled: boolean
   jiraIssuesEnabled: boolean
+  reportportalAvailable: boolean
   serverJiraProjectKey: string
   aiConfigs: AiConfig[]
   loading: boolean
@@ -33,6 +34,7 @@ type ReportAction =
   | { type: 'SET_REVIEW'; payload: { key: string; state: ReviewState } }
   | { type: 'SET_GITHUB_ISSUES_ENABLED'; payload: boolean }
   | { type: 'SET_JIRA_ISSUES_ENABLED'; payload: boolean }
+  | { type: 'SET_REPORTPORTAL_AVAILABLE'; payload: boolean }
   | { type: 'SET_SERVER_JIRA_PROJECT_KEY'; payload: string }
   | { type: 'SET_AI_CONFIGS'; payload: AiConfig[] }
   | { type: 'SET_ENRICHMENTS'; payload: Record<string, CommentEnrichment[]> }
@@ -64,6 +66,7 @@ const initialState: ReportState = {
   classifications: {},
   githubIssuesEnabled: false,
   jiraIssuesEnabled: false,
+  reportportalAvailable: false,
   serverJiraProjectKey: '',
   aiConfigs: [],
   loading: true,
@@ -89,6 +92,8 @@ function reportReducer(state: ReportState, action: ReportAction): ReportState {
       return { ...state, githubIssuesEnabled: action.payload }
     case 'SET_JIRA_ISSUES_ENABLED':
       return { ...state, jiraIssuesEnabled: action.payload }
+    case 'SET_REPORTPORTAL_AVAILABLE':
+      return { ...state, reportportalAvailable: action.payload }
     case 'SET_SERVER_JIRA_PROJECT_KEY':
       return { ...state, serverJiraProjectKey: action.payload }
     case 'SET_AI_CONFIGS':

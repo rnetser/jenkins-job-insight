@@ -7,29 +7,10 @@ import httpx
 import pytest
 
 from jenkins_job_insight.cli.client import JJIClient, JJIError
-
-BASE_URL = "http://localhost:8700"
-
-
-def _make_client(handler, username: str = "") -> JJIClient:
-    """Create a JJIClient with a mock transport for testing.
-
-    The mock httpx.Client is created with base_url set so that
-    relative paths (e.g. "/health") resolve correctly.
-    """
-    cookies = {}
-    if username:
-        cookies["jji_username"] = username
-
-    mock_http = httpx.Client(
-        transport=httpx.MockTransport(handler),
-        base_url=BASE_URL,
-        cookies=cookies,
-    )
-    client = JJIClient(BASE_URL, username=username)
-    client._client.close()
-    client._client = mock_http
-    return client
+from tests.conftest import (
+    CLI_TEST_BASE_URL as BASE_URL,
+    make_test_client as _make_client,
+)
 
 
 class TestJJIError:
@@ -1154,3 +1135,53 @@ class TestJJIClientReAnalyze:
         result = client.re_analyze("old-job-1")
         assert result["status"] == "queued"
         assert result["job_id"] == "new-reanalysis-1"
+
+
+class TestJJIClientPushReportPortal:
+    def test_push_reportportal(self):
+        response_data = {
+            "pushed": 3,
+            "unmatched": [],
+            "errors": [],
+            "launch_id": 42,
+        }
+
+        def handler(request):
+            assert request.method == "POST"
+            assert "/results/job-123/push-reportportal" in str(request.url)
+            return httpx.Response(200, json=response_data)
+
+        client = _make_client(handler)
+        result = client.push_reportportal("job-123")
+        assert result["pushed"] == 3
+        assert result["launch_id"] == 42
+
+    def test_push_reportportal_child_job(self):
+        response_data = {
+            "pushed": 1,
+            "unmatched": [],
+            "errors": [],
+            "launch_id": 55,
+        }
+
+        def handler(request):
+            assert request.method == "POST"
+            assert "/results/job-123/push-reportportal" in str(request.url)
+            assert request.url.params.get("child_job_name") == "my-child"
+            assert request.url.params.get("child_build_number") == "42"
+            return httpx.Response(200, json=response_data)
+
+        client = _make_client(handler)
+        result = client.push_reportportal(
+            "job-123", child_job_name="my-child", child_build_number=42
+        )
+        assert result["pushed"] == 1
+
+    def test_push_reportportal_error(self):
+        def handler(request):
+            return httpx.Response(400, json={"detail": "Report Portal is disabled"})
+
+        client = _make_client(handler)
+        with pytest.raises(JJIError) as exc_info:
+            client.push_reportportal("job-123")
+        assert exc_info.value.status_code == 400

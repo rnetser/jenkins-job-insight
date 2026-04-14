@@ -840,3 +840,179 @@ class TestProgressPhaseHelpers:
             assert len(log) == len(phases)
             for i, phase in enumerate(phases):
                 assert log[i]["phase"] == phase
+
+
+class TestGetHistoryClassification:
+    """Tests for the get_history_classification function."""
+
+    async def test_returns_empty_string_when_no_data(self, setup_test_db: Path) -> None:
+        """Returns empty string when no classification data exists."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            cls = await storage.get_history_classification("job-missing", "test_x")
+            assert cls == ""
+
+    async def test_returns_infrastructure_from_test_classifications(
+        self, setup_test_db: Path
+    ) -> None:
+        """Returns INFRASTRUCTURE from visible test_classifications entries."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.set_test_classification(
+                test_name="tests.TestA.test_infra",
+                classification="INFRASTRUCTURE",
+                job_id="job-infra-1",
+                visible=1,
+            )
+            cls = await storage.get_history_classification(
+                "job-infra-1", "tests.TestA.test_infra"
+            )
+            assert cls == "INFRASTRUCTURE"
+
+    async def test_returns_flaky_from_test_classifications(
+        self, setup_test_db: Path
+    ) -> None:
+        """Returns FLAKY from visible test_classifications entries."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.set_test_classification(
+                test_name="tests.TestA.test_flaky",
+                classification="FLAKY",
+                job_id="job-flaky-1",
+                visible=1,
+            )
+            cls = await storage.get_history_classification(
+                "job-flaky-1", "tests.TestA.test_flaky"
+            )
+            assert cls == "FLAKY"
+
+    async def test_ignores_primary_classifications(self, setup_test_db: Path) -> None:
+        """Does NOT return CODE ISSUE or PRODUCT BUG (those are primary, not history)."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            # Insert a failure_history row with CODE ISSUE
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    """INSERT INTO failure_history
+                       (job_id, job_name, build_number, test_name, classification,
+                        error_message, analyzed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    (
+                        "job-pri",
+                        "my-job",
+                        1,
+                        "tests.TestA.test_pri",
+                        "CODE ISSUE",
+                        "err",
+                    ),
+                )
+                await db.commit()
+            cls = await storage.get_history_classification(
+                "job-pri", "tests.TestA.test_pri"
+            )
+            assert cls == ""
+
+    async def test_falls_back_to_failure_history(self, setup_test_db: Path) -> None:
+        """Falls back to failure_history classification when no test_classifications entry."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    """INSERT INTO failure_history
+                       (job_id, job_name, build_number, test_name, classification,
+                        error_message, analyzed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    (
+                        "job-fh",
+                        "my-job",
+                        1,
+                        "tests.TestA.test_fh",
+                        "INFRASTRUCTURE",
+                        "err",
+                    ),
+                )
+                await db.commit()
+            cls = await storage.get_history_classification(
+                "job-fh", "tests.TestA.test_fh"
+            )
+            assert cls == "INFRASTRUCTURE"
+
+    async def test_prefers_test_classifications_over_failure_history(
+        self, setup_test_db: Path
+    ) -> None:
+        """test_classifications takes precedence over failure_history."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            # failure_history says INFRASTRUCTURE
+            async with aiosqlite.connect(setup_test_db) as db:
+                await db.execute(
+                    """INSERT INTO failure_history
+                       (job_id, job_name, build_number, test_name, classification,
+                        error_message, analyzed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    (
+                        "job-pref",
+                        "my-job",
+                        1,
+                        "tests.TestA.test_pref",
+                        "INFRASTRUCTURE",
+                        "err",
+                    ),
+                )
+                await db.commit()
+            # test_classifications says FLAKY
+            await storage.set_test_classification(
+                test_name="tests.TestA.test_pref",
+                classification="FLAKY",
+                job_id="job-pref",
+                visible=1,
+            )
+            cls = await storage.get_history_classification(
+                "job-pref", "tests.TestA.test_pref"
+            )
+            assert cls == "FLAKY"
+
+    async def test_ignores_invisible_classifications(self, setup_test_db: Path) -> None:
+        """Does not return classifications with visible=0."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.set_test_classification(
+                test_name="tests.TestA.test_hidden",
+                classification="INFRASTRUCTURE",
+                job_id="job-hidden",
+                visible=0,
+            )
+            cls = await storage.get_history_classification(
+                "job-hidden", "tests.TestA.test_hidden"
+            )
+            assert cls == ""
+
+    async def test_with_child_job_context(self, setup_test_db: Path) -> None:
+        """Scopes lookup by child_job_name and child_build_number."""
+        with patch.object(storage, "DB_PATH", setup_test_db):
+            await storage.set_test_classification(
+                test_name="tests.TestA.test_child",
+                classification="INFRASTRUCTURE",
+                job_id="job-child",
+                job_name="child-job-1",
+                child_build_number=5,
+                visible=1,
+            )
+            # Insert a second row with different child scope
+            await storage.set_test_classification(
+                test_name="tests.TestA.test_child",
+                classification="REGRESSION",
+                job_id="job-child",
+                job_name="child-job-2",
+                child_build_number=6,
+                visible=1,
+            )
+            # Should return INFRASTRUCTURE for child-job-1
+            cls = await storage.get_history_classification(
+                "job-child",
+                "tests.TestA.test_child",
+                child_job_name="child-job-1",
+                child_build_number=5,
+            )
+            assert cls == "INFRASTRUCTURE"
+            # Should return REGRESSION for child-job-2
+            cls2 = await storage.get_history_classification(
+                "job-child",
+                "tests.TestA.test_child",
+                child_job_name="child-job-2",
+                child_build_number=6,
+            )
+            assert cls2 == "REGRESSION"

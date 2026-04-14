@@ -250,6 +250,13 @@ Each peer entry uses `provider:model` format. The primary analysis still uses `A
 # Explicitly enable/disable GitHub issue creation (overrides auto-detection)
 # When not set, auto-detected from TESTS_REPO_URL and GITHUB_TOKEN
 # ENABLE_GITHUB_ISSUES=true
+
+# Report Portal integration
+# REPORTPORTAL_URL=https://reportportal.example.com
+# REPORTPORTAL_API_TOKEN=your-rp-api-token
+# REPORTPORTAL_PROJECT=your-project
+# ENABLE_REPORTPORTAL=true
+# REPORTPORTAL_VERIFY_SSL=false  # for self-signed certificates
 ```
 
 For day-to-day container deployments, these are the most important choices:
@@ -262,6 +269,7 @@ For day-to-day container deployments, these are the most important choices:
 - If you want multi-AI consensus, set `PEER_AI_CONFIGS` to a comma-separated list of additional `provider:model` pairs. Use `PEER_ANALYSIS_MAX_ROUNDS` to limit how many peer debate rounds the service will run. Every provider you list there must also have working credentials in the container.
 - If you want GitHub issue creation from the report UI, set `TESTS_REPO_URL` and `GITHUB_TOKEN`. Use `ENABLE_GITHUB_ISSUES` only when you want to force the feature on or off instead of relying on auto-detection.
 - If you want Jira bug search or Jira bug creation, set `JIRA_URL` and `JIRA_PROJECT_KEY`, then use either `JIRA_EMAIL` + `JIRA_API_TOKEN` for Jira Cloud or `JIRA_PAT` for Jira Server/Data Center.
+- If you want to push classifications to Report Portal, set `REPORTPORTAL_URL`, `REPORTPORTAL_API_TOKEN`, and `REPORTPORTAL_PROJECT`. The token must belong to the launch owner (typically a CI service account) or a Project Manager. Use `REPORTPORTAL_VERIFY_SSL=false` for instances with self-signed certificates.
 
 Provider-specific notes:
 
