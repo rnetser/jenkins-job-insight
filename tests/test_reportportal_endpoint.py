@@ -552,6 +552,264 @@ class TestPushReportPortalEndpoint:
         )
 
 
+class TestRPPushHTTPErrors:
+    """Verify HTTP errors from RP API return proper error responses, not 500."""
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_find_launch_401_returns_200_with_error(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """A 401 from RP find_launch returns a push result with errors, not 500."""
+        import requests as _requests
+
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = '{"message": "Full authentication is required"}'
+        mock_response.json.return_value = {"message": "Full authentication is required"}
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.side_effect = _requests.exceptions.HTTPError(
+            response=mock_response
+        )
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["pushed"] == 0
+        assert len(body["errors"]) == 1
+        assert "401" in body["errors"][0]
+        assert "Full authentication is required" in body["errors"][0]
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_find_launch_connection_error_returns_200_with_error(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """A ConnectionError from find_launch returns a push result with errors."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.side_effect = ConnectionError("connection refused")
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job2/push-reportportal")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["pushed"] == 0
+        assert len(body["errors"]) == 1
+        assert "ConnectionError" in body["errors"][0]
+        assert "connection refused" in body["errors"][0]
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_get_failed_items_error_returns_200_with_error(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """An HTTPError from get_failed_items returns errors, not 500."""
+        import requests as _requests
+
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_response.text = '{"message": "Access denied"}'
+        mock_response.json.return_value = {"message": "Access denied"}
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.side_effect = _requests.exceptions.HTTPError(
+            response=mock_response
+        )
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["pushed"] == 0
+        assert body["launch_id"] == 42
+        assert len(body["errors"]) == 1
+        assert "403" in body["errors"][0]
+        assert "Access denied" in body["errors"][0]
+        assert "fetching failed items" in body["errors"][0]
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_match_failures_error_returns_200_with_error(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """An exception from match_failures returns errors, not 500."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.return_value = [{"id": 1, "name": "test_a"}]
+        mock_rp.match_failures.side_effect = TypeError("unexpected None")
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job2/push-reportportal")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["pushed"] == 0
+        assert body["launch_id"] == 42
+        assert len(body["errors"]) == 1
+        assert "TypeError" in body["errors"][0]
+        assert "matching RP items" in body["errors"][0]
+
+
+class TestRPPushDebugLogging:
+    """Verify normal-state RP paths log at DEBUG, not ERROR."""
+
+    @patch("jenkins_job_insight.main.logger")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_no_failed_items_logs_debug(
+        self, mock_get_result, mock_rp_class, mock_logger, _rp_enabled_env
+    ):
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
+                "failures": [],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.return_value = []
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        assert response.status_code == 200
+        assert response.json()["pushed"] == 0
+
+        # Normal state: logged at DEBUG, not ERROR
+        debug_calls = [
+            c
+            for c in mock_logger.debug.call_args_list
+            if "no failed items" in str(c).lower()
+        ]
+        assert debug_calls, "Expected DEBUG log for 'no failed items'"
+        error_calls = [
+            c
+            for c in mock_logger.error.call_args_list
+            if "no failed items" in str(c).lower()
+        ]
+        assert not error_calls, "Should NOT log 'no failed items' at ERROR"
+
+    @patch("jenkins_job_insight.main.logger")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_no_jji_failures_logs_debug(
+        self, mock_get_result, mock_rp_class, mock_logger, _rp_enabled_env
+    ):
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
+                "failures": [],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.return_value = [
+            {"id": 1, "name": "test_a", "status": "FAILED"}
+        ]
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job2/push-reportportal")
+        assert response.status_code == 200
+        assert response.json()["pushed"] == 0
+
+        # Normal state: logged at DEBUG, not ERROR
+        debug_calls = [
+            c
+            for c in mock_logger.debug.call_args_list
+            if "no jji failures" in str(c).lower()
+        ]
+        assert debug_calls, "Expected DEBUG log for 'no JJI failures'"
+        error_calls = [
+            c
+            for c in mock_logger.error.call_args_list
+            if "no jji failures" in str(c).lower()
+        ]
+        assert not error_calls, "Should NOT log 'no JJI failures' at ERROR"
+
+
 class TestCapabilitiesEndpoint:
     """Test that capabilities includes reportportal."""
 

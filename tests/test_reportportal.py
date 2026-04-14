@@ -1,7 +1,8 @@
 """Tests for Report Portal integration module."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 import requests as _requests
 
 from jenkins_job_insight.reportportal import ReportPortalClient
@@ -57,6 +58,27 @@ class TestClassificationMapping:
         )
         locator = client._map_classification("")
         assert locator is None
+
+    def test_custom_locators_override_defaults(self):
+        client = ReportPortalClient(
+            url="http://rp.example.com",
+            token="tok",
+            project="proj",
+        )
+        custom = {"PRODUCT_BUG": "pb_custom_123"}
+        locator = client._map_classification("PRODUCT BUG", locators=custom)
+        assert locator == "pb_custom_123"
+
+    def test_custom_locators_falls_back_to_defaults_for_missing_key(self):
+        client = ReportPortalClient(
+            url="http://rp.example.com",
+            token="tok",
+            project="proj",
+        )
+        # Custom locators without PRODUCT_BUG — falls back to default
+        custom = {"SYSTEM_ISSUE": "si_custom"}
+        locator = client._map_classification("PRODUCT BUG", locators=custom)
+        assert locator == "pb001"  # default locator
 
 
 # -- Constructor tests -------------------------------------------------------
@@ -218,6 +240,33 @@ class TestFindLaunch:
             "my-job", "http://jenkins.example.com/job/my-job/5/"
         )
         assert result == 20
+
+    def test_raises_ambiguous_launch_error(self):
+        from jenkins_job_insight.reportportal import AmbiguousLaunchError
+
+        client = ReportPortalClient(
+            url="http://rp.example.com", token="tok", project="proj"
+        )
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "content": [
+                {"id": 10, "name": "my-job", "description": "run A"},
+                {"id": 20, "name": "my-job", "description": "run B"},
+            ],
+            "page": {"totalPages": 1},
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_session.get.return_value = mock_response
+        mock_rp = MagicMock()
+        mock_rp.base_url_v1 = "http://rp.example.com/api/v1/proj"
+        client._rp_client = mock_rp
+        client._session = mock_session
+
+        with pytest.raises(AmbiguousLaunchError) as exc_info:
+            client.find_launch("my-job", "http://jenkins/job/my-job/99/")
+        assert exc_info.value.count == 2
+        assert exc_info.value.job_name == "my-job"
 
     def test_paginates_across_multiple_pages(self):
         client = ReportPortalClient(
@@ -396,6 +445,12 @@ def _extract_put_json(mock_session):
 class TestPushClassifications:
     """Test pushing classifications to RP."""
 
+    _DEFAULT_LOCATORS = {
+        "PRODUCT_BUG": "pb001",
+        "AUTOMATION_BUG": "ab001",
+        "SYSTEM_ISSUE": "si001",
+    }
+
     def _make_failure(self, classification="PRODUCT BUG", details="Analysis text"):
         failure = MagicMock()
         failure.analysis = MagicMock()
@@ -404,6 +459,27 @@ class TestPushClassifications:
         failure.analysis.product_bug_report = None
         failure.analysis.code_fix = None
         return failure
+
+    def _setup_push_client(self, *, locators=None, put_side_effect=None):
+        """Create a ReportPortalClient with mocked session for push tests."""
+        client = ReportPortalClient(
+            url="http://rp.example.com", token="tok", project="proj"
+        )
+        client.get_defect_type_locators = MagicMock(
+            return_value=self._DEFAULT_LOCATORS if locators is None else locators
+        )
+        mock_session = MagicMock()
+        if put_side_effect is not None:
+            mock_session.put.side_effect = put_side_effect
+        else:
+            mock_put_response = MagicMock()
+            mock_put_response.raise_for_status = MagicMock()
+            mock_session.put.return_value = mock_put_response
+        mock_rp = MagicMock()
+        mock_rp.base_url_v1 = "http://rp.example.com/api/v1/proj"
+        client._rp_client = mock_rp
+        client._session = mock_session
+        return client, mock_session
 
     def test_push_product_bug(self):
         client = ReportPortalClient(
@@ -627,27 +703,22 @@ class TestPushClassifications:
         assert result["errors"] == []
         assert result["unmatched"] == []
 
-    def test_http_error_extracts_rp_message(self):
+    @patch("jenkins_job_insight.reportportal.logger")
+    def test_http_error_extracts_rp_message(self, mock_logger):
         """HTTPError responses extract the RP JSON message field into errors."""
-        client = ReportPortalClient(
-            url="http://rp.example.com", token="tok", project="proj"
-        )
-        client.get_defect_type_locators = MagicMock(
-            return_value={"PRODUCT_BUG": "pb001"},
-        )
-        mock_session = MagicMock()
         mock_error_response = MagicMock()
         mock_error_response.status_code = 403
+        mock_error_response.text = '{"message": "Not a launch owner"}'
         mock_error_response.json.return_value = {"message": "Not a launch owner"}
-        mock_response = MagicMock()
-        mock_response.raise_for_status.side_effect = _requests.exceptions.HTTPError(
+        mock_put_response = MagicMock()
+        mock_put_response.raise_for_status.side_effect = _requests.exceptions.HTTPError(
             response=mock_error_response
         )
-        mock_session.put.return_value = mock_response
-        mock_rp = MagicMock()
-        mock_rp.base_url_v1 = "http://rp.example.com/api/v1/proj"
-        client._rp_client = mock_rp
-        client._session = mock_session
+
+        client, _mock_session = self._setup_push_client(
+            locators={"PRODUCT_BUG": "pb001"}
+        )
+        _mock_session.put.return_value = mock_put_response
 
         failure = self._make_failure("PRODUCT BUG", "Bug")
         matched = [({"id": 200, "name": "test_x"}, failure)]
@@ -659,20 +730,26 @@ class TestPushClassifications:
         assert "403" in result["errors"][0]
         assert "Not a launch owner" in result["errors"][0]
 
-    def test_generic_exception_uses_type_name(self):
+        # Verify error logged with status, detail, and response body
+        error_calls = [
+            c
+            for c in mock_logger.error.call_args_list
+            if "batch update failed" in str(c).lower()
+        ]
+        assert error_calls, "Expected error log for HTTP error"
+        log_msg = str(error_calls[0])
+        assert "403" in log_msg
+        assert "Not a launch owner" in log_msg
+        # Response body included in ERROR log (not separate DEBUG)
+        assert '{"message": "Not a launch owner"}' in log_msg
+
+    @patch("jenkins_job_insight.reportportal.logger")
+    def test_generic_exception_uses_type_name(self, mock_logger):
         """Non-HTTP exceptions use type(exc).__name__ in the error."""
-        client = ReportPortalClient(
-            url="http://rp.example.com", token="tok", project="proj"
+        client, _ = self._setup_push_client(
+            locators={"PRODUCT_BUG": "pb001"},
+            put_side_effect=ConnectionError("connection refused"),
         )
-        client.get_defect_type_locators = MagicMock(
-            return_value={"PRODUCT_BUG": "pb001"},
-        )
-        mock_session = MagicMock()
-        mock_session.put.side_effect = ConnectionError("connection refused")
-        mock_rp = MagicMock()
-        mock_rp.base_url_v1 = "http://rp.example.com/api/v1/proj"
-        client._rp_client = mock_rp
-        client._session = mock_session
 
         failure = self._make_failure("PRODUCT BUG", "Bug")
         matched = [({"id": 201, "name": "test_y"}, failure)]
@@ -682,6 +759,16 @@ class TestPushClassifications:
         assert result["pushed"] == 0
         assert len(result["errors"]) == 1
         assert "ConnectionError" in result["errors"][0]
+
+        # Verify error logged with error details
+        error_calls = [
+            c
+            for c in mock_logger.error.call_args_list
+            if "batch update failed" in str(c).lower()
+        ]
+        assert error_calls, "Expected error log for generic exception"
+        log_msg = str(error_calls[0])
+        assert "connection refused" in log_msg
 
 
 # -- close tests --------------------------------------------------------------

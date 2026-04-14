@@ -40,7 +40,7 @@ from jenkins_job_insight.encryption import (
     encrypt_sensitive_fields,
 )
 from jenkins_job_insight.jira import enrich_with_jira_matches
-from jenkins_job_insight.reportportal import ReportPortalClient
+from jenkins_job_insight.reportportal import AmbiguousLaunchError, ReportPortalClient
 from jenkins_job_insight.bug_creation import (
     _parse_github_repo_url,
     create_github_issue,
@@ -2389,6 +2389,36 @@ async def push_to_reportportal(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _rp_push_error_result(message: str, *, launch_id: int | None = None) -> dict:
+    """Build a standard RP push failure response."""
+    return {
+        "pushed": 0,
+        "unmatched": [],
+        "errors": [message],
+        "launch_id": launch_id,
+    }
+
+
+def _rp_error_message(exc: Exception, operation: str) -> str:
+    """Build a user-facing error message from an RP exception."""
+    detail = ""
+    status = ""
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        status = str(resp.status_code)
+        try:
+            detail = resp.json().get("message", resp.text)
+        except Exception:
+            detail = resp.text
+    else:
+        # No HTTP response (ConnectionError, TimeoutError, etc.)
+        detail = str(exc) if str(exc) else ""
+    msg = f"{status or type(exc).__name__} error {operation}"
+    if detail:
+        msg += f": {detail}"
+    return msg
+
+
 async def _execute_rp_push(
     job_id: str,
     result_data: dict,
@@ -2457,34 +2487,95 @@ async def _execute_rp_push(
             "reportportal_project is required when Report Portal is enabled"
         )
 
-    with ReportPortalClient(
-        url=settings.reportportal_url,
-        token=settings.reportportal_api_token.get_secret_value(),
-        project=settings.reportportal_project,
-        verify_ssl=settings.reportportal_verify_ssl,
-    ) as rp_client:
+    try:
+        rp_client_ctx = ReportPortalClient(
+            url=settings.reportportal_url,
+            token=settings.reportportal_api_token.get_secret_value(),
+            project=settings.reportportal_project,
+            verify_ssl=settings.reportportal_verify_ssl,
+        )
+    except Exception as exc:
+        error_msg = _rp_error_message(
+            exc,
+            f"connecting to Report Portal at {settings.reportportal_url}",
+        )
+        logger.error("RP push failed: %s", error_msg)
+        return _rp_push_error_result(error_msg)
+
+    with rp_client_ctx as rp_client:
         jenkins_url = result_data.get("jenkins_url", "")
         job_name = result_data.get("job_name", "")
 
-        launch_id = await asyncio.to_thread(
-            rp_client.find_launch, job_name, jenkins_url
+        logger.debug(
+            "RP push: searching for launch name='%s', jenkins_url='%s'",
+            job_name,
+            jenkins_url,
         )
-        if launch_id is None:
-            return {
-                "pushed": 0,
-                "unmatched": [],
-                "errors": [f"No RP launch found for job '{job_name}'"],
-                "launch_id": None,
-            }
+        try:
+            launch_id = await asyncio.to_thread(
+                rp_client.find_launch, job_name, jenkins_url
+            )
+        except AmbiguousLaunchError as exc:
+            logger.warning(
+                "RP push: %s",
+                exc,
+            )
+            return _rp_push_error_result(
+                f"Ambiguous RP launch: found {exc.count} launches"
+                f" named '{job_name}' in project"
+                f" '{settings.reportportal_project}'"
+                f" but none matched the Jenkins build URL."
+                f" Add the Jenkins URL to the RP launch description"
+                f" to disambiguate."
+            )
+        except Exception as exc:
+            error_msg = _rp_error_message(
+                exc, f"searching RP launches for job '{job_name}'"
+            )
+            logger.error(
+                "RP push failed: %s, jenkins_url='%s'",
+                error_msg,
+                jenkins_url,
+            )
+            return _rp_push_error_result(error_msg)
 
-        failed_items = await asyncio.to_thread(rp_client.get_failed_items, launch_id)
+        if launch_id is None:
+            logger.error(
+                "RP push failed: no launch found for job='%s' in project='%s',"
+                " jenkins_url='%s'",
+                job_name,
+                settings.reportportal_project,
+                jenkins_url,
+            )
+            return _rp_push_error_result(
+                f"No RP launch found for job '{job_name}'"
+                f" in project '{settings.reportportal_project}'"
+            )
+
+        try:
+            failed_items = await asyncio.to_thread(
+                rp_client.get_failed_items, launch_id
+            )
+        except Exception as exc:
+            error_msg = _rp_error_message(
+                exc, f"fetching failed items from RP launch {launch_id}"
+            )
+            logger.error(
+                "RP push failed: %s, job='%s'",
+                error_msg,
+                job_name,
+            )
+            return _rp_push_error_result(error_msg, launch_id=launch_id)
         if not failed_items:
-            return {
-                "pushed": 0,
-                "unmatched": [],
-                "errors": ["No failed test items found in RP launch."],
-                "launch_id": launch_id,
-            }
+            logger.debug(
+                "RP push: no failed items in launch_id=%d for job='%s'",
+                launch_id,
+                job_name,
+            )
+            return _rp_push_error_result(
+                "No failed test items found in RP launch.",
+                launch_id=launch_id,
+            )
 
         # Build FailureAnalysis objects from stored result
         failures_data = result_data.get("failures", [])
@@ -2497,31 +2588,47 @@ async def _execute_rp_push(
             ) from exc
 
         if not jji_failures:
-            return {
-                "pushed": 0,
-                "unmatched": [],
-                "errors": ["No JJI failures found in stored result."],
-                "launch_id": launch_id,
-            }
+            logger.debug(
+                "RP push: no JJI failures in stored result for job='%s', launch_id=%d",
+                job_name,
+                launch_id,
+            )
+            return _rp_push_error_result(
+                "No JJI failures found in stored result.",
+                launch_id=launch_id,
+            )
 
-        matched = await asyncio.to_thread(
-            rp_client.match_failures, failed_items, jji_failures
-        )
+        try:
+            matched = await asyncio.to_thread(
+                rp_client.match_failures, failed_items, jji_failures
+            )
+        except Exception as exc:
+            error_msg = _rp_error_message(
+                exc, f"matching RP items to JJI failures for job '{job_name}'"
+            )
+            logger.error(
+                "RP push failed: %s, launch_id=%d",
+                error_msg,
+                launch_id,
+            )
+            return _rp_push_error_result(error_msg, launch_id=launch_id)
 
         if not matched and failed_items and jji_failures:
             rp_names = [item.get("name", "") for item in failed_items]
             jji_names = [f.test_name for f in jji_failures]
-            return {
-                "pushed": 0,
-                "unmatched": [],
-                "errors": [
-                    f"No overlap between {len(failed_items)} RP item(s)"
-                    f" and {len(jji_failures)} JJI failure(s)."
-                    f" RP items: {', '.join(rp_names)}."
-                    f" JJI tests: {', '.join(jji_names)}."
-                ],
-                "launch_id": launch_id,
-            }
+            overlap_error = (
+                f"No overlap between {len(failed_items)} RP item(s)"
+                f" and {len(jji_failures)} JJI failure(s)."
+                f" RP items: {', '.join(rp_names)}."
+                f" JJI tests: {', '.join(jji_names)}."
+            )
+            logger.error(
+                "RP push failed for job='%s', launch_id=%d: %s",
+                job_name,
+                launch_id,
+                overlap_error,
+            )
+            return _rp_push_error_result(overlap_error, launch_id=launch_id)
 
         # Get history classifications for matched tests (concurrent queries)
         unique_test_names = list(
@@ -2529,19 +2636,44 @@ async def _execute_rp_push(
         )
         scope_name = child_job_name or ""
         scope_build = child_build_number or 0
-        classifications = await asyncio.gather(
-            *(
+        classification_results = await run_parallel_with_limit(
+            [
                 get_history_classification(job_id, name, scope_name, scope_build)
                 for name in unique_test_names
-            )
+            ]
         )
-        history_classifications: dict[str, str] = {
-            name: cls for name, cls in zip(unique_test_names, classifications) if cls
-        }
+        history_classifications: dict[str, str] = {}
+        for name, result in zip(unique_test_names, classification_results, strict=True):
+            if isinstance(result, BaseException):
+                logger.debug(
+                    "RP push: failed to fetch history classification"
+                    " for test='%s', job='%s'",
+                    name,
+                    job_name,
+                )
+                continue
+            if result:
+                history_classifications[name] = result
 
-        push_result = await asyncio.to_thread(
-            rp_client.push_classifications, matched, report_url, history_classifications
-        )
+        try:
+            push_result = await asyncio.to_thread(
+                rp_client.push_classifications,
+                matched,
+                report_url,
+                history_classifications,
+            )
+        except Exception as exc:
+            error_msg = _rp_error_message(
+                exc,
+                f"pushing classifications to RP for job '{job_name}'",
+            )
+            logger.error(
+                "RP push failed: %s, launch_id=%d",
+                error_msg,
+                launch_id,
+            )
+            return _rp_push_error_result(error_msg, launch_id=launch_id)
+
         push_result["launch_id"] = launch_id
         return push_result
 

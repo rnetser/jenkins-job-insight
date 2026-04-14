@@ -6,6 +6,8 @@ classification results, analysis text, and Jira matches into RP launches.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import warnings
 from typing import TYPE_CHECKING, Literal
@@ -19,6 +21,20 @@ if TYPE_CHECKING:
     from jenkins_job_insight.models import FailureAnalysis
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+
+
+class AmbiguousLaunchError(Exception):
+    """Multiple RP launches matched but none could be disambiguated."""
+
+    def __init__(self, count: int, job_name: str, jenkins_url: str) -> None:
+        self.count = count
+        self.job_name = job_name
+        self.jenkins_url = jenkins_url
+        super().__init__(
+            f"Found {count} launches named '{job_name}'"
+            f" but none matched jenkins_url '{jenkins_url}'"
+        )
+
 
 # JJI classification -> RP defect type category
 _CLASSIFICATION_MAP: dict[str, str] = {
@@ -61,12 +77,20 @@ class ReportPortalClient:
         self._session.headers["Authorization"] = f"Bearer {token}"
         self._session.verify = verify_ssl
         self._suppress_ssl_warnings = not verify_ssl
-        self._rp_client = RPClient(
-            endpoint=url.rstrip("/"),
-            project=project,
-            api_key=token,
-            verify_ssl=verify_ssl,
-        )
+        # Suppress RPClient's own traceback output from get_api_info().
+        # The library prints to sys.stderr on connection failure before
+        # raising; we catch the exception ourselves and log a clean error.
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self._rp_client = RPClient(
+                    endpoint=url.rstrip("/"),
+                    project=project,
+                    api_key=token,
+                    verify_ssl=verify_ssl,
+                )
+        except Exception:
+            self._session.close()
+            raise
 
     def __enter__(self) -> ReportPortalClient:
         return self
@@ -170,6 +194,10 @@ class ReportPortalClient:
 
         Returns:
             Numeric launch ID, or ``None`` if no match found.
+
+        Raises:
+            AmbiguousLaunchError: Multiple launches share the same name
+                and none could be disambiguated by *jenkins_url*.
         """
         base = self._rp_client.base_url_v1
         url = f"{base}/launch"
@@ -195,13 +223,7 @@ class ReportPortalClient:
                 return launch["id"]
 
         # Ambiguous: multiple launches, none matched by URL — refuse to guess
-        logger.warning(
-            "Found %d launches named '%s' but none matched jenkins_url '%s'",
-            len(all_launches),
-            job_name,
-            jenkins_url,
-        )
-        return None
+        raise AmbiguousLaunchError(len(all_launches), job_name, jenkins_url)
 
     def get_failed_items(self, launch_id: int) -> list[dict]:
         """Get all failed test items from a launch.
@@ -238,10 +260,12 @@ class ReportPortalClient:
 
         Matching strategy (in order):
         1. Exact match on ``name`` or ``codeRef``
-        2. Dotted-suffix match in either direction: JJI FQN ends with
-           ``.{rp_name}`` *or* RP name ends with ``.{jji_name}``.  This
-           handles both cases where JJI stores the fully-qualified name
-           and RP stores the short name, and vice-versa.
+        2. Dotted-suffix match on ``name`` in either direction: JJI FQN
+           ends with ``.{rp_name}`` *or* RP name ends with
+           ``.{jji_name}``.
+        3. Dotted-suffix match on ``codeRef`` in either direction: JJI
+           FQN ends with ``.{rp_codeRef}`` *or* RP codeRef ends with
+           ``.{jji_name}``.
 
         Args:
             rp_items: List of RP item dicts.
@@ -398,27 +422,53 @@ class ReportPortalClient:
             except _requests.exceptions.HTTPError as exc:
                 status = exc.response.status_code if exc.response is not None else None
                 detail = ""
+                response_body = ""
                 if exc.response is not None:
+                    response_body = exc.response.text
                     try:
                         rp_body = exc.response.json()
-                        detail = rp_body.get("message", "")
+                        raw_detail = (
+                            rp_body.get("message", response_body)
+                            if isinstance(rp_body, dict)
+                            else response_body
+                        )
+                        detail = (
+                            raw_detail
+                            if isinstance(raw_detail, str)
+                            else response_body
+                            if raw_detail is None
+                            else str(raw_detail)
+                        )
                     except Exception:
-                        detail = ""
-                logger.debug("RP batch update failed: %s", exc)
+                        detail = response_body
+                log_detail = detail.replace("\r", "\\r").replace("\n", "\\n")
+                log_body = response_body.replace("\r", "\\r").replace("\n", "\\n")
+                logger.error(
+                    "RP batch update failed: status=%s, url=%s,"
+                    " items=%d, detail=%s, response_body=%s",
+                    status,
+                    url,
+                    len(bulk_issues),
+                    log_detail or "(no detail)",
+                    log_body,
+                )
                 suffix = f": {detail}" if detail else ""
                 error_msg = (
                     f"{status or 'HTTP'} error updating"
                     f" {len(bulk_issues)} item(s){suffix}"
                 )
-                logger.warning(error_msg)
                 errors.append(error_msg)
             except Exception as exc:
-                logger.debug("RP batch update failed: %s", exc)
+                logger.error(
+                    "RP batch update failed: url=%s, items=%d, error=%s",
+                    url,
+                    len(bulk_issues),
+                    exc,
+                )
                 error_msg = (
                     f"Failed to update {len(bulk_issues)} RP item(s):"
                     f" {type(exc).__name__}"
                 )
-                logger.warning(error_msg)
                 errors.append(error_msg)
 
         return {
