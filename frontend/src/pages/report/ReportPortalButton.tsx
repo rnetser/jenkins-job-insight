@@ -11,14 +11,20 @@ import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { Upload, Loader2, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react'
 import type { ReportPortalPushResult } from '@/types'
+import { useReportState } from './ReportContext'
 
 interface ReportPortalButtonProps {
   jobId: string
+  jobName: string
+  buildNumber: number
   childJobName?: string
   childBuildNumber?: number
 }
 
-export function ReportPortalButton({ jobId, childJobName, childBuildNumber }: ReportPortalButtonProps) {
+export function ReportPortalButton({ jobId, jobName, buildNumber, childJobName, childBuildNumber }: ReportPortalButtonProps) {
+  const { reportportalProject } = useReportState()
+  const displayJobName = childJobName ?? jobName
+  const displayBuildNumber = childBuildNumber ?? buildNumber
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pushing, setPushing] = useState(false)
   const [resultDialogOpen, setResultDialogOpen] = useState(false)
@@ -83,6 +89,18 @@ export function ReportPortalButton({ jobId, childJobName, childBuildNumber }: Re
             <DialogDescription>
               Push failure classifications to Report Portal?
             </DialogDescription>
+            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-text-secondary">
+              {reportportalProject && (
+                <>
+                  <dt className="font-medium">Project</dt>
+                  <dd className="font-mono truncate" title={reportportalProject}>{reportportalProject}</dd>
+                </>
+              )}
+              <dt className="font-medium">Job</dt>
+              <dd className="font-mono truncate" title={displayJobName}>{displayJobName}</dd>
+              <dt className="font-medium">Build</dt>
+              <dd className="font-mono">#{displayBuildNumber}</dd>
+            </dl>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>
@@ -107,11 +125,24 @@ export function ReportPortalButton({ jobId, childJobName, childBuildNumber }: Re
                 <><CheckCircle2 className="h-5 w-5 text-signal-green" /> Pushed {pushResult?.pushed ?? 0} classification{pushResult?.pushed !== 1 ? 's' : ''} to Report Portal.</>
               )}
             </DialogTitle>
-            {pushResult?.launch_id != null && (
-              <p className="text-xs text-text-tertiary mt-1">
-                Launch ID: <span className="font-mono">{pushResult.launch_id}</span>
-              </p>
-            )}
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-text-tertiary">
+              {reportportalProject && (
+                <>
+                  <dt className="font-medium">Project</dt>
+                  <dd className="font-mono truncate" title={reportportalProject}>{reportportalProject}</dd>
+                </>
+              )}
+              <dt className="font-medium">Job</dt>
+              <dd className="font-mono truncate" title={displayJobName}>{displayJobName}</dd>
+              <dt className="font-medium">Build</dt>
+              <dd className="font-mono">#{displayBuildNumber}</dd>
+              {pushResult?.launch_id != null && (
+                <>
+                  <dt className="font-medium">Launch ID</dt>
+                  <dd className="font-mono">{pushResult.launch_id}</dd>
+                </>
+              )}
+            </dl>
           </DialogHeader>
 
           <div className="space-y-3 py-2 min-w-0">

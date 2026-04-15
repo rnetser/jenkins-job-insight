@@ -918,6 +918,7 @@ class TestCapabilitiesEndpoint:
         data = response.json()
         assert "reportportal" in data
         assert data["reportportal"] is False
+        assert data["reportportal_project"] == ""
 
     def test_capabilities_includes_rp_enabled(self, _rp_enabled_env):
         from jenkins_job_insight.main import app
@@ -928,3 +929,4 @@ class TestCapabilitiesEndpoint:
         data = response.json()
         assert "reportportal" in data
         assert data["reportportal"] is True
+        assert data["reportportal_project"] == "my-project"
