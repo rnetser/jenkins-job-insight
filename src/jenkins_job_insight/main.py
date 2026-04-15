@@ -2408,7 +2408,12 @@ def _rp_error_message(exc: Exception, operation: str) -> str:
     if resp is not None:
         status = str(resp.status_code)
         try:
-            detail = resp.json().get("message", resp.text)
+            rp_body = resp.json()
+            detail = (
+                rp_body.get("message", resp.text)
+                if isinstance(rp_body, dict)
+                else resp.text
+            )
         except Exception:
             detail = resp.text
     else:

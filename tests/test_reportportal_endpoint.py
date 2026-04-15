@@ -1184,3 +1184,81 @@ class TestCapabilitiesEndpoint:
         assert "reportportal" in data
         assert data["reportportal"] is True
         assert data["reportportal_project"] == "my-project"
+
+
+class TestRPErrorMessage:
+    """Unit tests for _rp_error_message helper."""
+
+    def _make_exc_with_response(self, *, json_return, text="fallback text"):
+        """Build an exception whose .response mimics an httpx/requests Response."""
+        resp = MagicMock()
+        resp.status_code = 500
+        resp.text = text
+        resp.json.return_value = json_return
+        exc = Exception("boom")
+        exc.response = resp
+        return exc
+
+    def test_dict_body_extracts_message_field(self, _rp_enabled_env):
+        """When RP returns a JSON dict with 'message', extract it."""
+        from jenkins_job_insight.main import _rp_error_message
+
+        exc = self._make_exc_with_response(json_return={"message": "Token expired"})
+        result = _rp_error_message(exc, "finding launch")
+        assert "Token expired" in result
+
+    def test_dict_body_without_message_falls_back_to_text(self, _rp_enabled_env):
+        """When RP returns a JSON dict without 'message', fall back to resp.text."""
+        from jenkins_job_insight.main import _rp_error_message
+
+        exc = self._make_exc_with_response(
+            json_return={"error": "something else"},
+            text="raw response text",
+        )
+        result = _rp_error_message(exc, "finding launch")
+        assert "raw response text" in result
+
+    def test_list_body_falls_back_to_text(self, _rp_enabled_env):
+        """When RP returns a JSON array, fall back to resp.text (not AttributeError)."""
+        from jenkins_job_insight.main import _rp_error_message
+
+        exc = self._make_exc_with_response(
+            json_return=["error1", "error2"],
+            text="the raw text",
+        )
+        result = _rp_error_message(exc, "finding launch")
+        # Must contain the fallback text, not crash with AttributeError
+        assert "the raw text" in result
+
+    def test_string_body_falls_back_to_text(self, _rp_enabled_env):
+        """When RP returns a plain JSON string, fall back to resp.text."""
+        from jenkins_job_insight.main import _rp_error_message
+
+        exc = self._make_exc_with_response(
+            json_return="just a string",
+            text="the raw text",
+        )
+        result = _rp_error_message(exc, "finding launch")
+        assert "the raw text" in result
+
+    def test_json_parse_failure_falls_back_to_text(self, _rp_enabled_env):
+        """When resp.json() raises, fall back to resp.text."""
+        from jenkins_job_insight.main import _rp_error_message
+
+        resp = MagicMock()
+        resp.status_code = 502
+        resp.text = "Bad Gateway"
+        resp.json.side_effect = ValueError("No JSON")
+        exc = Exception("boom")
+        exc.response = resp
+        result = _rp_error_message(exc, "finding launch")
+        assert "Bad Gateway" in result
+
+    def test_no_response_uses_exc_str(self, _rp_enabled_env):
+        """When exc has no .response, use str(exc) as detail."""
+        from jenkins_job_insight.main import _rp_error_message
+
+        exc = ConnectionError("connection refused")
+        result = _rp_error_message(exc, "connecting")
+        assert "ConnectionError" in result
+        assert "connection refused" in result

@@ -13,6 +13,45 @@ import { Upload, Loader2, CheckCircle2, AlertTriangle, XCircle } from 'lucide-re
 import type { ReportPortalPushResult } from '@/types'
 import { useReportState } from './ReportContext'
 
+interface RPPushMetadataProps {
+  project?: string
+  jobName?: string
+  buildNumber?: number
+  launchId?: number
+  className?: string
+}
+
+function RPPushMetadata({ project, jobName, buildNumber, launchId, className }: RPPushMetadataProps) {
+  return (
+    <dl className={className}>
+      {project && (
+        <>
+          <dt className="font-medium">Project</dt>
+          <dd className="font-mono truncate" title={project}>{project}</dd>
+        </>
+      )}
+      {jobName && (
+        <>
+          <dt className="font-medium">Job</dt>
+          <dd className="font-mono truncate" title={jobName}>{jobName}</dd>
+        </>
+      )}
+      {buildNumber != null && (
+        <>
+          <dt className="font-medium">Build</dt>
+          <dd className="font-mono">#{buildNumber}</dd>
+        </>
+      )}
+      {launchId != null && (
+        <>
+          <dt className="font-medium">Launch ID</dt>
+          <dd className="font-mono">{launchId}</dd>
+        </>
+      )}
+    </dl>
+  )
+}
+
 interface ReportPortalButtonProps {
   jobId: string
   jobName: string
@@ -89,18 +128,12 @@ export function ReportPortalButton({ jobId, jobName, buildNumber, childJobName, 
             <DialogDescription>
               Push failure classifications to Report Portal?
             </DialogDescription>
-            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-text-secondary">
-              {reportportalProject && (
-                <>
-                  <dt className="font-medium">Project</dt>
-                  <dd className="font-mono truncate" title={reportportalProject}>{reportportalProject}</dd>
-                </>
-              )}
-              <dt className="font-medium">Job</dt>
-              <dd className="font-mono truncate" title={displayJobName}>{displayJobName}</dd>
-              <dt className="font-medium">Build</dt>
-              <dd className="font-mono">#{displayBuildNumber}</dd>
-            </dl>
+            <RPPushMetadata
+              project={reportportalProject}
+              jobName={displayJobName}
+              buildNumber={displayBuildNumber}
+              className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-text-secondary"
+            />
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>
@@ -125,24 +158,13 @@ export function ReportPortalButton({ jobId, jobName, buildNumber, childJobName, 
                 <><CheckCircle2 className="h-5 w-5 text-signal-green" /> Pushed {pushResult?.pushed ?? 0} classification{pushResult?.pushed !== 1 ? 's' : ''} to Report Portal.</>
               )}
             </DialogTitle>
-            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-text-tertiary">
-              {reportportalProject && (
-                <>
-                  <dt className="font-medium">Project</dt>
-                  <dd className="font-mono truncate" title={reportportalProject}>{reportportalProject}</dd>
-                </>
-              )}
-              <dt className="font-medium">Job</dt>
-              <dd className="font-mono truncate" title={displayJobName}>{displayJobName}</dd>
-              <dt className="font-medium">Build</dt>
-              <dd className="font-mono">#{displayBuildNumber}</dd>
-              {pushResult?.launch_id != null && (
-                <>
-                  <dt className="font-medium">Launch ID</dt>
-                  <dd className="font-mono">{pushResult.launch_id}</dd>
-                </>
-              )}
-            </dl>
+            <RPPushMetadata
+              project={reportportalProject}
+              jobName={displayJobName}
+              buildNumber={displayBuildNumber}
+              launchId={pushResult?.launch_id ?? undefined}
+              className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-text-tertiary"
+            />
           </DialogHeader>
 
           <div className="space-y-3 py-2 min-w-0">
