@@ -278,7 +278,16 @@ class TestPushReportPortalEndpoint:
                 "result": {
                     "job_name": "test-job",
                     "jenkins_url": "https://jenkins.example.com/job/test/1/",
-                    "failures": [],
+                    "failures": [
+                        {
+                            "test_name": "test_a",
+                            "error": "err",
+                            "analysis": {
+                                "classification": "PRODUCT BUG",
+                                "details": "d",
+                            },
+                        }
+                    ],
                 }
             }
             mock_rp = MagicMock()
@@ -971,6 +980,107 @@ class TestRPPushHTTPErrors:
         assert error_calls, "Expected ERROR log for constructor failure"
 
 
+class TestRPPushEarlyGuard:
+    """Verify early exit when there are no failures to push."""
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_empty_failures_skips_rp_calls(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """When failures list is empty, return early without connecting to RP."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
+                "failures": [],
+            }
+        }
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["pushed"] == 0
+        assert len(body["errors"]) == 1
+        assert "No failures to push" in body["errors"][0]
+        mock_rp_class.assert_not_called()
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_missing_failures_key_skips_rp_calls(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """When failures key is absent, return early without connecting to RP."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
+            }
+        }
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["pushed"] == 0
+        assert len(body["errors"]) == 1
+        assert "No failures to push" in body["errors"][0]
+        mock_rp_class.assert_not_called()
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_child_job_empty_failures_skips_rp_calls(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """When scoped child job has empty failures, return early."""
+        mock_get_result.return_value = {
+            "status": "completed",
+            "result": {
+                "job_name": "parent-pipeline",
+                "build_number": 1,
+                "jenkins_url": "https://jenkins.example.com/job/parent/1/",
+                "failures": [
+                    {
+                        "test_name": "test_parent",
+                        "error": "err",
+                        "analysis": {
+                            "classification": "PRODUCT BUG",
+                            "details": "d",
+                        },
+                    }
+                ],
+                "child_job_analyses": [
+                    {
+                        "job_name": "child-job",
+                        "build_number": 42,
+                        "jenkins_url": "https://jenkins.example.com/job/child-job/42/",
+                        "failures": [],
+                        "failed_children": [],
+                    }
+                ],
+            },
+        }
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post(
+            "/results/some-job-id/push-reportportal",
+            params={"child_job_name": "child-job", "child_build_number": 42},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["pushed"] == 0
+        assert len(body["errors"]) == 1
+        assert "No failures to push" in body["errors"][0]
+        mock_rp_class.assert_not_called()
+
+
 class TestRPPushDebugLogging:
     """Verify normal-state RP paths log at DEBUG, not ERROR."""
 
@@ -984,7 +1094,13 @@ class TestRPPushDebugLogging:
             "result": {
                 "job_name": "my-job",
                 "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
-                "failures": [],
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
             }
         }
         mock_rp = MagicMock()
@@ -1018,9 +1134,10 @@ class TestRPPushDebugLogging:
     @patch("jenkins_job_insight.main.logger")
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
-    def test_no_jji_failures_logs_debug(
+    def test_empty_failures_early_guard_does_not_log_error(
         self, mock_get_result, mock_rp_class, mock_logger, _rp_enabled_env
     ):
+        """Empty failures triggers early guard without ERROR logs."""
         mock_get_result.return_value = {
             "result": {
                 "job_name": "my-job",
@@ -1028,14 +1145,6 @@ class TestRPPushDebugLogging:
                 "failures": [],
             }
         }
-        mock_rp = MagicMock()
-        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
-        mock_rp.__exit__ = MagicMock(return_value=False)
-        mock_rp.find_launch.return_value = 42
-        mock_rp.get_failed_items.return_value = [
-            {"id": 1, "name": "test_a", "status": "FAILED"}
-        ]
-        mock_rp_class.return_value = mock_rp
 
         from jenkins_job_insight.main import app
 
@@ -1044,19 +1153,11 @@ class TestRPPushDebugLogging:
         assert response.status_code == 200
         assert response.json()["pushed"] == 0
 
-        # Normal state: logged at DEBUG, not ERROR
-        debug_calls = [
-            c
-            for c in mock_logger.debug.call_args_list
-            if "no jji failures" in str(c).lower()
-        ]
-        assert debug_calls, "Expected DEBUG log for 'no JJI failures'"
-        error_calls = [
-            c
-            for c in mock_logger.error.call_args_list
-            if "no jji failures" in str(c).lower()
-        ]
-        assert not error_calls, "Should NOT log 'no JJI failures' at ERROR"
+        error_calls = mock_logger.error.call_args_list
+        assert not error_calls, (
+            "Early guard for empty failures should not produce ERROR logs"
+        )
+        mock_rp_class.assert_not_called()
 
 
 class TestCapabilitiesEndpoint:

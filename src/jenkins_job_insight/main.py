@@ -2474,6 +2474,10 @@ async def _execute_rp_push(
         )
         report_url = f"{report_url}#{anchor}"
 
+    failures_data = result_data.get("failures", [])
+    if not failures_data:
+        return _rp_push_error_result("No failures to push to Report Portal.")
+
     # Called only when reportportal_enabled is True, which guarantees these
     # fields are set (see Settings.reportportal_enabled property).  Explicit
     # checks narrow the Optional types for mypy and survive python -O.
@@ -2584,7 +2588,6 @@ async def _execute_rp_push(
             )
 
         # Build FailureAnalysis objects from stored result
-        failures_data = result_data.get("failures", [])
         try:
             jji_failures = [FailureAnalysis.model_validate(f) for f in failures_data]
         except ValidationError as exc:
@@ -2592,17 +2595,6 @@ async def _execute_rp_push(
                 status_code=422,
                 detail=f"Stored result contains invalid failure data: {exc.error_count()} validation error(s)",
             ) from exc
-
-        if not jji_failures:
-            logger.debug(
-                "RP push: no JJI failures in stored result for job='%s', launch_id=%d",
-                job_name,
-                launch_id,
-            )
-            return _rp_push_error_result(
-                "No JJI failures found in stored result.",
-                launch_id=launch_id,
-            )
 
         try:
             matched = await asyncio.to_thread(
