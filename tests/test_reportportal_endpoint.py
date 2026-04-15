@@ -721,6 +721,102 @@ class TestRPPushHTTPErrors:
         assert "TypeError" in body["errors"][0]
         assert "matching RP items" in body["errors"][0]
 
+    @patch("jenkins_job_insight.main.logger")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_ambiguous_launch_returns_200_with_error(
+        self, mock_get_result, mock_rp_class, mock_logger, _rp_enabled_env
+    ):
+        """AmbiguousLaunchError from find_launch returns errors and logs WARNING."""
+        from jenkins_job_insight.reportportal import AmbiguousLaunchError
+
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.side_effect = AmbiguousLaunchError(
+            count=3,
+            job_name="my-job",
+            jenkins_url="https://jenkins.example.com/job/my-job/1/",
+        )
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["pushed"] == 0
+        assert len(body["errors"]) == 1
+        assert "Ambiguous" in body["errors"][0]
+        assert "my-project" in body["errors"][0]
+
+        # Ambiguous launch is logged at WARNING, not ERROR
+        warning_calls = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if "ambiguous" in str(c).lower()
+        ]
+        assert warning_calls, "Expected WARNING log for ambiguous launch"
+        error_calls = [
+            c for c in mock_logger.error.call_args_list if "ambiguous" in str(c).lower()
+        ]
+        assert not error_calls, "Should NOT log ambiguous launch at ERROR"
+
+    @patch("jenkins_job_insight.main.logger")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_rp_client_constructor_failure_returns_200_with_error(
+        self, mock_get_result, mock_rp_class, mock_logger, _rp_enabled_env
+    ):
+        """RPClient constructor failure returns errors and logs ERROR."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "jenkins_url": "https://jenkins.example.com/job/my-job/1/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp_class.side_effect = ConnectionError("Name resolution failed")
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job3/push-reportportal")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["pushed"] == 0
+        assert len(body["errors"]) == 1
+        assert "ConnectionError" in body["errors"][0]
+        assert "Name resolution failed" in body["errors"][0]
+
+        # Constructor failure is logged at ERROR
+        error_calls = [
+            c
+            for c in mock_logger.error.call_args_list
+            if "name resolution" in str(c).lower()
+        ]
+        assert error_calls, "Expected ERROR log for constructor failure"
+
 
 class TestRPPushDebugLogging:
     """Verify normal-state RP paths log at DEBUG, not ERROR."""
