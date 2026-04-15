@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import threading
 import warnings
 from typing import TYPE_CHECKING, Literal
 
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from jenkins_job_insight.models import FailureAnalysis
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+_RPCLIENT_INIT_LOCK = threading.Lock()
 
 
 class AmbiguousLaunchError(Exception):
@@ -81,7 +83,7 @@ class ReportPortalClient:
         # The library prints to sys.stderr on connection failure before
         # raising; we catch the exception ourselves and log a clean error.
         try:
-            with contextlib.redirect_stderr(io.StringIO()):
+            with _RPCLIENT_INIT_LOCK, contextlib.redirect_stderr(io.StringIO()):
                 self._rp_client = RPClient(
                     endpoint=url.rstrip("/"),
                     project=project,
@@ -460,9 +462,11 @@ class ReportPortalClient:
                     len(bulk_issues),
                     exc,
                 )
+                detail = str(exc).strip()
                 error_msg = (
                     f"Failed to update {len(bulk_issues)} RP item(s):"
                     f" {type(exc).__name__}"
+                    f"{f': {detail}' if detail else ''}"
                 )
                 errors.append(error_msg)
 

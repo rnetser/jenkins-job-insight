@@ -2390,12 +2390,23 @@ async def push_to_reportportal(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _rp_push_error_result(message: str, *, launch_id: int | None = None) -> dict:
+def _rp_push_error_result(
+    message: str,
+    *,
+    job_name: str = "",
+    build_number: int | None = None,
+    launch_id: int | None = None,
+) -> dict:
     """Build a standard RP push failure response."""
+    context = (
+        f" (job='{job_name}' #{build_number})"
+        if job_name and build_number is not None
+        else ""
+    )
     return {
         "pushed": 0,
         "unmatched": [],
-        "errors": [message],
+        "errors": [f"{message}{context}"],
         "launch_id": launch_id,
     }
 
@@ -2481,7 +2492,11 @@ async def _execute_rp_push(
 
     failures_data = result_data.get("failures", [])
     if not failures_data:
-        return _rp_push_error_result("No failures to push to Report Portal.")
+        return _rp_push_error_result(
+            "No failures to push to Report Portal.",
+            job_name=result_data.get("job_name", ""),
+            build_number=result_data.get("build_number"),
+        )
 
     # Called only when reportportal_enabled is True, which guarantees these
     # fields are set (see Settings.reportportal_enabled property).  Explicit
@@ -2550,7 +2565,9 @@ async def _execute_rp_push(
                 build_number,
                 jenkins_url,
             )
-            return _rp_push_error_result(error_msg)
+            return _rp_push_error_result(
+                error_msg, job_name=job_name, build_number=build_number
+            )
 
         if launch_id is None:
             logger.error(
@@ -2563,7 +2580,9 @@ async def _execute_rp_push(
             )
             return _rp_push_error_result(
                 f"No RP launch found for job '{job_name}' #{build_number}"
-                f" in project '{settings.reportportal_project}'"
+                f" in project '{settings.reportportal_project}'",
+                job_name=job_name,
+                build_number=build_number,
             )
 
         try:
@@ -2580,7 +2599,12 @@ async def _execute_rp_push(
                 job_name,
                 build_number,
             )
-            return _rp_push_error_result(error_msg, launch_id=launch_id)
+            return _rp_push_error_result(
+                error_msg,
+                job_name=job_name,
+                build_number=build_number,
+                launch_id=launch_id,
+            )
         if not failed_items:
             logger.debug(
                 "RP push: no failed items in launch_id=%d for job='%s'",
@@ -2616,7 +2640,12 @@ async def _execute_rp_push(
                 build_number,
                 launch_id,
             )
-            return _rp_push_error_result(error_msg, launch_id=launch_id)
+            return _rp_push_error_result(
+                error_msg,
+                job_name=job_name,
+                build_number=build_number,
+                launch_id=launch_id,
+            )
 
         if not matched and failed_items and jji_failures:
             rp_names = [item.get("name", "") for item in failed_items]
@@ -2633,7 +2662,12 @@ async def _execute_rp_push(
                 launch_id,
                 overlap_error,
             )
-            return _rp_push_error_result(overlap_error, launch_id=launch_id)
+            return _rp_push_error_result(
+                overlap_error,
+                job_name=job_name,
+                build_number=build_number,
+                launch_id=launch_id,
+            )
 
         # Get history classifications for matched tests (concurrent queries)
         unique_test_names = list(
@@ -2679,7 +2713,12 @@ async def _execute_rp_push(
                 build_number,
                 launch_id,
             )
-            return _rp_push_error_result(error_msg, launch_id=launch_id)
+            return _rp_push_error_result(
+                error_msg,
+                job_name=job_name,
+                build_number=build_number,
+                launch_id=launch_id,
+            )
 
         push_result["launch_id"] = launch_id
         return push_result

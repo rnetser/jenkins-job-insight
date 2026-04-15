@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests as _requests
 
+import jenkins_job_insight.reportportal as rp_module
 from jenkins_job_insight.reportportal import ReportPortalClient
 
 
@@ -768,6 +769,7 @@ class TestPushClassifications:
         assert result["pushed"] == 0
         assert len(result["errors"]) == 1
         assert "ConnectionError" in result["errors"][0]
+        assert "connection refused" in result["errors"][0]
 
         # Verify error logged with error details
         error_calls = [
@@ -795,3 +797,39 @@ class TestClose:
         client.close()
         mock_sess.close.assert_called_once()
         mock_rp.close.assert_called_once()
+
+
+# -- thread-safety tests ----------------------------------------------------
+
+
+class TestRPClientInitLock:
+    """Verify RPClient init is serialised via a module-level threading lock."""
+
+    def test_module_level_lock_exists_and_is_threading_lock(self):
+        """_RPCLIENT_INIT_LOCK must be a threading.Lock at module scope."""
+        assert hasattr(rp_module, "_RPCLIENT_INIT_LOCK")
+        # threading.Lock() returns _thread.lock; check it has acquire/release
+        lock = rp_module._RPCLIENT_INIT_LOCK
+        assert callable(getattr(lock, "acquire", None))
+        assert callable(getattr(lock, "release", None))
+
+    def test_init_acquires_lock_around_redirect_stderr(self):
+        """Constructor must acquire _RPCLIENT_INIT_LOCK while redirecting stderr."""
+        acquired_during_init = []
+
+        original_rpclient = rp_module.RPClient
+
+        def spy_rpclient(*args, **kwargs):
+            """Record whether the lock is held when RPClient.__init__ runs."""
+            lock = rp_module._RPCLIENT_INIT_LOCK
+            # locked() returns True when the lock is held by any thread
+            acquired_during_init.append(lock.locked())
+            return original_rpclient(*args, **kwargs)
+
+        with patch.object(rp_module, "RPClient", side_effect=spy_rpclient):
+            ReportPortalClient(url="http://rp.example.com", token="tok", project="proj")
+
+        assert acquired_during_init, "RPClient was never called"
+        assert acquired_during_init[0] is True, (
+            "_RPCLIENT_INIT_LOCK was NOT held when RPClient was initialised"
+        )

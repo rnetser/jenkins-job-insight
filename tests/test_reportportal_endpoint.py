@@ -1262,3 +1262,329 @@ class TestRPErrorMessage:
         result = _rp_error_message(exc, "connecting")
         assert "ConnectionError" in result
         assert "connection refused" in result
+
+
+class TestRpPushErrorResultContext:
+    """Unit tests for _rp_push_error_result job/build context in error messages."""
+
+    def test_no_context_when_args_omitted(self, _rp_enabled_env):
+        """Without job_name/build_number, error message has no context suffix."""
+        from jenkins_job_insight.main import _rp_push_error_result
+
+        result = _rp_push_error_result("Some error")
+        assert result["errors"] == ["Some error"]
+
+    def test_context_appended_when_both_provided(self, _rp_enabled_env):
+        """With job_name and build_number, context suffix is appended."""
+        from jenkins_job_insight.main import _rp_push_error_result
+
+        result = _rp_push_error_result("Some error", job_name="my-job", build_number=42)
+        assert len(result["errors"]) == 1
+        assert "Some error" in result["errors"][0]
+        assert "(job='my-job' #42)" in result["errors"][0]
+
+    def test_no_context_when_job_name_empty(self, _rp_enabled_env):
+        """Empty job_name means no context suffix."""
+        from jenkins_job_insight.main import _rp_push_error_result
+
+        result = _rp_push_error_result("Some error", job_name="", build_number=42)
+        assert result["errors"] == ["Some error"]
+
+    def test_no_context_when_build_number_none(self, _rp_enabled_env):
+        """None build_number means no context suffix."""
+        from jenkins_job_insight.main import _rp_push_error_result
+
+        result = _rp_push_error_result(
+            "Some error", job_name="my-job", build_number=None
+        )
+        assert result["errors"] == ["Some error"]
+
+    def test_context_with_build_number_zero(self, _rp_enabled_env):
+        """build_number=0 is valid (not None) and should produce context."""
+        from jenkins_job_insight.main import _rp_push_error_result
+
+        result = _rp_push_error_result("Some error", job_name="my-job", build_number=0)
+        assert "(job='my-job' #0)" in result["errors"][0]
+
+    def test_launch_id_preserved_with_context(self, _rp_enabled_env):
+        """launch_id is still set correctly when context is also provided."""
+        from jenkins_job_insight.main import _rp_push_error_result
+
+        result = _rp_push_error_result(
+            "Some error", job_name="my-job", build_number=5, launch_id=99
+        )
+        assert result["launch_id"] == 99
+        assert "(job='my-job' #5)" in result["errors"][0]
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_early_guard_includes_context(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """Early guard (no failures) includes job/build context in error."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "context-job",
+                "build_number": 77,
+                "jenkins_url": "https://jenkins.example.com/job/context-job/77/",
+                "failures": [],
+            }
+        }
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["pushed"] == 0
+        assert "No failures to push" in body["errors"][0]
+        assert "(job='context-job' #77)" in body["errors"][0]
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_find_launch_error_includes_context(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """find_launch exception error includes job/build context."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "ctx-job",
+                "build_number": 55,
+                "jenkins_url": "https://jenkins.example.com/job/ctx-job/55/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.side_effect = ConnectionError("refused")
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        body = response.json()
+        assert "(job='ctx-job' #55)" in body["errors"][0]
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_no_launch_found_includes_context(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """No launch found error includes job/build context."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "ctx-job",
+                "build_number": 33,
+                "jenkins_url": "https://jenkins.example.com/job/ctx-job/33/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = None
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        body = response.json()
+        assert "(job='ctx-job' #33)" in body["errors"][0]
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_get_failed_items_error_includes_context(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """get_failed_items error includes job/build context."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "ctx-job",
+                "build_number": 44,
+                "jenkins_url": "https://jenkins.example.com/job/ctx-job/44/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.side_effect = RuntimeError("network err")
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        body = response.json()
+        assert "(job='ctx-job' #44)" in body["errors"][0]
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_match_failures_error_includes_context(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """match_failures error includes job/build context."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "ctx-job",
+                "build_number": 66,
+                "jenkins_url": "https://jenkins.example.com/job/ctx-job/66/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.return_value = [{"id": 1, "name": "test_a"}]
+        mock_rp.match_failures.side_effect = TypeError("boom")
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        body = response.json()
+        assert "(job='ctx-job' #66)" in body["errors"][0]
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_no_overlap_error_includes_context(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """No overlap error includes job/build context."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "ctx-job",
+                "build_number": 22,
+                "jenkins_url": "https://jenkins.example.com/job/ctx-job/22/",
+                "failures": [
+                    {
+                        "test_name": "test_alpha",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.return_value = [
+            {"id": 1, "name": "test_beta", "status": "FAILED"}
+        ]
+        mock_rp.match_failures.return_value = []
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        body = response.json()
+        assert "(job='ctx-job' #22)" in body["errors"][0]
+
+    @patch(
+        "jenkins_job_insight.main.get_history_classification", new_callable=AsyncMock
+    )
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_push_classifications_error_includes_context(
+        self, mock_get_result, mock_rp_class, mock_get_cls, _rp_enabled_env
+    ):
+        """push_classifications error includes job/build context."""
+        mock_get_cls.return_value = ""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "ctx-job",
+                "build_number": 11,
+                "jenkins_url": "https://jenkins.example.com/job/ctx-job/11/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.return_value = [
+            {"id": 1, "name": "test_a", "status": "FAILED"}
+        ]
+        mock_failure = MagicMock()
+        mock_failure.test_name = "test_a"
+        mock_rp.match_failures.return_value = [
+            ({"id": 1, "name": "test_a"}, mock_failure)
+        ]
+        mock_rp.push_classifications.side_effect = RuntimeError("timeout")
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        body = response.json()
+        assert "(job='ctx-job' #11)" in body["errors"][0]
+
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_constructor_failure_has_no_context(
+        self, mock_get_result, mock_rp_class, _rp_enabled_env
+    ):
+        """Constructor failure should NOT have job/build context (not in scope)."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "ctx-job",
+                "build_number": 88,
+                "jenkins_url": "https://jenkins.example.com/job/ctx-job/88/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp_class.side_effect = ConnectionError("DNS failed")
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        body = response.json()
+        # Constructor failure has no job/build context
+        assert "(job=" not in body["errors"][0]
