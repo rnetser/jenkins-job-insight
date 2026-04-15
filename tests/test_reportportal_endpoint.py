@@ -724,6 +724,159 @@ class TestRPPushHTTPErrors:
     @patch("jenkins_job_insight.main.logger")
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
+    def test_get_failed_items_error_log_includes_build_number(
+        self, mock_get_result, mock_rp_class, mock_logger, _rp_enabled_env
+    ):
+        """get_failed_items error log must include build_number for debugging."""
+        import requests as _requests
+
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "build_number": 77,
+                "jenkins_url": "https://jenkins.example.com/job/my-job/77/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_response.text = '{"message": "Access denied"}'
+        mock_response.json.return_value = {"message": "Access denied"}
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.side_effect = _requests.exceptions.HTTPError(
+            response=mock_response
+        )
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job1/push-reportportal")
+        assert response.status_code == 200
+
+        # Verify error log includes build_number
+        error_calls = [
+            c for c in mock_logger.error.call_args_list if "RP push failed" in str(c)
+        ]
+        assert error_calls, "Expected ERROR log for get_failed_items failure"
+        log_fmt = error_calls[0][0][0]  # format string
+        log_args = error_calls[0][0][1:]  # positional args
+        rendered = log_fmt % log_args
+        assert "77" in rendered, f"build_number (77) missing from error log: {rendered}"
+
+    @patch("jenkins_job_insight.main.logger")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_match_failures_error_log_includes_build_number(
+        self, mock_get_result, mock_rp_class, mock_logger, _rp_enabled_env
+    ):
+        """match_failures error log must include build_number for debugging."""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "build_number": 88,
+                "jenkins_url": "https://jenkins.example.com/job/my-job/88/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.return_value = [{"id": 1, "name": "test_a"}]
+        mock_rp.match_failures.side_effect = TypeError("unexpected None")
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job2/push-reportportal")
+        assert response.status_code == 200
+
+        # Verify error log includes build_number
+        error_calls = [
+            c for c in mock_logger.error.call_args_list if "RP push failed" in str(c)
+        ]
+        assert error_calls, "Expected ERROR log for match_failures failure"
+        log_fmt = error_calls[0][0][0]
+        log_args = error_calls[0][0][1:]
+        rendered = log_fmt % log_args
+        assert "88" in rendered, f"build_number (88) missing from error log: {rendered}"
+
+    @patch("jenkins_job_insight.main.logger")
+    @patch(
+        "jenkins_job_insight.main.get_history_classification", new_callable=AsyncMock
+    )
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
+    def test_push_classifications_error_log_includes_build_number(
+        self, mock_get_result, mock_rp_class, mock_get_cls, mock_logger, _rp_enabled_env
+    ):
+        """push_classifications error log must include build_number for debugging."""
+        mock_get_cls.return_value = ""
+        mock_get_result.return_value = {
+            "result": {
+                "job_name": "my-job",
+                "build_number": 99,
+                "jenkins_url": "https://jenkins.example.com/job/my-job/99/",
+                "failures": [
+                    {
+                        "test_name": "test_a",
+                        "error": "err",
+                        "analysis": {"classification": "PRODUCT BUG", "details": "d"},
+                    }
+                ],
+            }
+        }
+        mock_rp = MagicMock()
+        mock_rp.__enter__ = MagicMock(return_value=mock_rp)
+        mock_rp.__exit__ = MagicMock(return_value=False)
+        mock_rp.find_launch.return_value = 42
+        mock_rp.get_failed_items.return_value = [
+            {"id": 1, "name": "test_a", "status": "FAILED"}
+        ]
+        mock_failure = MagicMock()
+        mock_failure.test_name = "test_a"
+        mock_rp.match_failures.return_value = [
+            ({"id": 1, "name": "test_a"}, mock_failure)
+        ]
+        mock_rp.push_classifications.side_effect = RuntimeError("network timeout")
+        mock_rp_class.return_value = mock_rp
+
+        from jenkins_job_insight.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/results/job3/push-reportportal")
+        assert response.status_code == 200
+
+        # Verify error log includes build_number
+        error_calls = [
+            c for c in mock_logger.error.call_args_list if "RP push failed" in str(c)
+        ]
+        assert error_calls, "Expected ERROR log for push_classifications failure"
+        log_fmt = error_calls[0][0][0]
+        log_args = error_calls[0][0][1:]
+        rendered = log_fmt % log_args
+        assert "99" in rendered, f"build_number (99) missing from error log: {rendered}"
+
+    @patch("jenkins_job_insight.main.logger")
+    @patch("jenkins_job_insight.main.ReportPortalClient")
+    @patch("jenkins_job_insight.main.get_result")
     def test_ambiguous_launch_returns_200_with_error(
         self, mock_get_result, mock_rp_class, mock_logger, _rp_enabled_env
     ):

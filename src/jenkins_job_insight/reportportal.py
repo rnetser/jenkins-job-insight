@@ -31,8 +31,8 @@ class AmbiguousLaunchError(Exception):
         self.job_name = job_name
         self.jenkins_url = jenkins_url
         super().__init__(
-            f"Found {count} launches named '{job_name}'"
-            f" but none matched jenkins_url '{jenkins_url}'"
+            f"Found {count} launches matching jenkins_url='{jenkins_url}'"
+            f" for job '{job_name}'. Cannot disambiguate."
         )
 
 
@@ -182,48 +182,43 @@ class ReportPortalClient:
         return result
 
     def find_launch(self, job_name: str, jenkins_url: str) -> int | None:
-        """Find an RP launch matching the given Jenkins job.
+        """Find an RP launch matching the given Jenkins build.
 
-        Searches by exact match on launch name. If multiple launches share
-        the same name, disambiguates by checking whether the launch description
-        contains *jenkins_url*.
+        Searches recent launches in the project and matches by checking
+        whether the launch **description** contains *jenkins_url*.  The
+        Jenkins URL is unique per build and is a reliable identifier
+        regardless of launch naming conventions.
 
         Args:
-            job_name: Jenkins job name to search for.
-            jenkins_url: Full Jenkins build URL for disambiguation.
+            job_name: Jenkins job name (used for error context).
+            jenkins_url: Full Jenkins build URL used as identifier.
 
         Returns:
             Numeric launch ID, or ``None`` if no match found.
 
         Raises:
-            AmbiguousLaunchError: Multiple launches share the same name
-                and none could be disambiguated by *jenkins_url*.
+            AmbiguousLaunchError: Multiple launches matched by
+                description (URL query) and cannot be disambiguated.
         """
         base = self._rp_client.base_url_v1
         url = f"{base}/launch"
-        all_launches = self._paginate_get(
+
+        url_matches = self._paginate_get(
             url,
             {
-                "filter.eq.name": job_name,
+                "filter.cnt.description": jenkins_url,
                 "page.size": 50,
                 "page.sort": "startTime,desc",
             },
         )
 
-        if not all_launches:
-            return None
+        if len(url_matches) == 1:
+            return url_matches[0]["id"]
 
-        if len(all_launches) == 1:
-            return all_launches[0]["id"]
+        if len(url_matches) > 1:
+            raise AmbiguousLaunchError(len(url_matches), job_name, jenkins_url)
 
-        # Multiple launches with the same name -- match by Jenkins URL in description
-        for launch in all_launches:
-            desc = launch.get("description", "") or ""
-            if jenkins_url in desc:
-                return launch["id"]
-
-        # Ambiguous: multiple launches, none matched by URL — refuse to guess
-        raise AmbiguousLaunchError(len(all_launches), job_name, jenkins_url)
+        return None
 
     def get_failed_items(self, launch_id: int) -> list[dict]:
         """Get all failed test items from a launch.

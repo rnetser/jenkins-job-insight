@@ -175,7 +175,13 @@ class TestFindLaunch:
         mock_session = MagicMock()
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "content": [{"id": 42, "name": "my-job", "description": ""}],
+            "content": [
+                {
+                    "id": 42,
+                    "name": "my-job",
+                    "description": "http://jenkins.example.com/job/my-job/1/",
+                }
+            ],
             "page": {"totalPages": 1},
         }
         mock_response.raise_for_status = MagicMock()
@@ -217,10 +223,10 @@ class TestFindLaunch:
             url="http://rp.example.com", token="tok", project="proj"
         )
         mock_session = MagicMock()
+        # URL filter returns exactly the one launch whose description contains the URL
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "content": [
-                {"id": 10, "name": "my-job", "description": "old run"},
                 {
                     "id": 20,
                     "name": "my-job",
@@ -247,12 +253,13 @@ class TestFindLaunch:
         client = ReportPortalClient(
             url="http://rp.example.com", token="tok", project="proj"
         )
+        jenkins_url = "http://jenkins/job/my-job/99/"
         mock_session = MagicMock()
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "content": [
-                {"id": 10, "name": "my-job", "description": "run A"},
-                {"id": 20, "name": "my-job", "description": "run B"},
+                {"id": 10, "name": "my-job", "description": jenkins_url},
+                {"id": 20, "name": "my-job", "description": jenkins_url},
             ],
             "page": {"totalPages": 1},
         }
@@ -264,17 +271,19 @@ class TestFindLaunch:
         client._session = mock_session
 
         with pytest.raises(AmbiguousLaunchError) as exc_info:
-            client.find_launch("my-job", "http://jenkins/job/my-job/99/")
+            client.find_launch("my-job", jenkins_url)
         assert exc_info.value.count == 2
         assert exc_info.value.job_name == "my-job"
+        assert exc_info.value.jenkins_url == jenkins_url
 
     def test_paginates_across_multiple_pages(self):
         client = ReportPortalClient(
             url="http://rp.example.com", token="tok", project="proj"
         )
+        # URL filter query paginates across 2 pages; match is on page 2
         page1_response = MagicMock()
         page1_response.json.return_value = {
-            "content": [{"id": 10, "name": "my-job", "description": "old run"}],
+            "content": [],
             "page": {"totalPages": 2},
         }
         page1_response.raise_for_status = MagicMock()

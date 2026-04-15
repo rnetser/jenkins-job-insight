@@ -2506,10 +2506,12 @@ async def _execute_rp_push(
     with rp_client_ctx as rp_client:
         jenkins_url = result_data.get("jenkins_url", "")
         job_name = result_data.get("job_name", "")
+        build_number = result_data.get("build_number", 0)
 
         logger.debug(
-            "RP push: searching for launch name='%s', jenkins_url='%s'",
+            "RP push: searching for launch job='%s' #%s, jenkins_url='%s'",
             job_name,
+            build_number,
             jenkins_url,
         )
         try:
@@ -2523,33 +2525,35 @@ async def _execute_rp_push(
             )
             return _rp_push_error_result(
                 f"Ambiguous RP launch: found {exc.count} launches"
-                f" named '{job_name}' in project"
+                f" for '{job_name}' #{build_number} in project"
                 f" '{settings.reportportal_project}'"
-                f" but none matched the Jenkins build URL."
-                f" Add the Jenkins URL to the RP launch description"
-                f" to disambiguate."
+                f" whose description contains the Jenkins build URL."
+                f" Remove duplicate launches to disambiguate."
             )
         except Exception as exc:
             error_msg = _rp_error_message(
-                exc, f"searching RP launches for job '{job_name}'"
+                exc, f"searching RP launches for job '{job_name}' #{build_number}"
             )
             logger.error(
-                "RP push failed: %s, jenkins_url='%s'",
+                "RP push failed: %s, job='%s' #%s, jenkins_url='%s'",
                 error_msg,
+                job_name,
+                build_number,
                 jenkins_url,
             )
             return _rp_push_error_result(error_msg)
 
         if launch_id is None:
             logger.error(
-                "RP push failed: no launch found for job='%s' in project='%s',"
+                "RP push failed: no launch found for job='%s' #%s in project='%s',"
                 " jenkins_url='%s'",
                 job_name,
+                build_number,
                 settings.reportportal_project,
                 jenkins_url,
             )
             return _rp_push_error_result(
-                f"No RP launch found for job '{job_name}'"
+                f"No RP launch found for job '{job_name}' #{build_number}"
                 f" in project '{settings.reportportal_project}'"
             )
 
@@ -2562,9 +2566,10 @@ async def _execute_rp_push(
                 exc, f"fetching failed items from RP launch {launch_id}"
             )
             logger.error(
-                "RP push failed: %s, job='%s'",
+                "RP push failed: %s, job='%s' #%s",
                 error_msg,
                 job_name,
+                build_number,
             )
             return _rp_push_error_result(error_msg, launch_id=launch_id)
         if not failed_items:
@@ -2608,8 +2613,10 @@ async def _execute_rp_push(
                 exc, f"matching RP items to JJI failures for job '{job_name}'"
             )
             logger.error(
-                "RP push failed: %s, launch_id=%d",
+                "RP push failed: %s, job='%s' #%s, launch_id=%d",
                 error_msg,
+                job_name,
+                build_number,
                 launch_id,
             )
             return _rp_push_error_result(error_msg, launch_id=launch_id)
@@ -2669,8 +2676,10 @@ async def _execute_rp_push(
                 f"pushing classifications to RP for job '{job_name}'",
             )
             logger.error(
-                "RP push failed: %s, launch_id=%d",
+                "RP push failed: %s, job='%s' #%s, launch_id=%d",
                 error_msg,
+                job_name,
+                build_number,
                 launch_id,
             )
             return _rp_push_error_result(error_msg, launch_id=launch_id)
