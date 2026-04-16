@@ -417,11 +417,8 @@ class TestParsePeerResponse:
             agrees=False, classification="PRODUCT BUG"
         )
         # First code block contains valid JSON but not a dict (an array).
-        # Strategy 2 currently only tries the first block, so this fails
-        # even though the second block has the valid dict.
-        # Strategy 3 (brace matching) won't help because the greedy regex
-        # matches from the first `{` in the array element to the last `}`
-        # in the valid JSON, producing invalid JSON.
+        # Strategy 2 tries each fenced block in order, skipping non-dict
+        # blocks, so the valid dict in the second block is found.
         raw = (
             "Here is my thinking:\n"
             '```json\n[{"step": "analysis"}, {"step": "review"}]\n```\n'
@@ -432,6 +429,147 @@ class TestParsePeerResponse:
         assert "_failed" not in result
         assert result["agrees"] is False
         assert result["classification"] == "PRODUCT BUG"
+
+    @pytest.mark.parametrize(
+        "preamble,agrees,classification,reasoning,suggested_changes",
+        [
+            pytest.param(
+                (
+                    "I've verified the key claims in the source code:\n"
+                    "1. `infraUtils.groovy` line 39: `cp -fv ${JIRA_CFG_FILE} "
+                    "${WORKSPACE}/mtv-api-tests/jira.cfg` -- confirmed\n"
+                    "2. `pyproject.toml` line 59: `pytest-jira>=0.3.23` is a "
+                    "dependency -- confirmed\n\n"
+                ),
+                True,
+                "CODE ISSUE",
+                "The analysis is correct",
+                "",
+                id="shell_variables_in_preamble",
+            ),
+            pytest.param(
+                (
+                    "Checking the pipeline script:\n"
+                    "- Line 12: `echo ${BUILD_NUMBER}`\n"
+                    "- Line 45: `def config = ${env.CONFIG_MAP}`\n"
+                    '- Line 78: `sh "curl -X POST ${API_URL}/v2/results"`\n\n'
+                    "All references verified.\n\n"
+                ),
+                False,
+                "PRODUCT BUG",
+                "The root cause is in the product",
+                "Fix the API endpoint",
+                id="multiple_braces_in_preamble",
+            ),
+            pytest.param(
+                (
+                    "I've carefully reviewed the orchestrator's analysis and the "
+                    "relevant source code.\n\n"
+                    "Key observations:\n"
+                    "1. The test `test_network_timeout` asserts a 30s timeout\n"
+                    "2. The config in `${PROJECT_ROOT}/settings.yaml` sets it to 60s\n"
+                    '3. The Jenkinsfile runs: `sh "export TIMEOUT=${DEFAULT_TIMEOUT}"` '
+                    "on line 142\n"
+                    "4. The `Makefile` target uses `${CURDIR}/bin/run-tests`\n\n"
+                    "Given these findings, the classification is accurate.\n\n"
+                ),
+                True,
+                "CODE ISSUE",
+                "Timeout mismatch between config and test assertion",
+                "Update the test to expect 60s",
+                id="json_at_end_after_text",
+            ),
+        ],
+    )
+    def test_parse_peer_response_preamble_with_braces(
+        self, preamble, agrees, classification, reasoning, suggested_changes
+    ) -> None:
+        """JSON is correctly extracted when prefatory text contains curly braces."""
+        from jenkins_job_insight.peer_analysis import _parse_peer_response
+
+        raw = preamble + _make_peer_json_response(
+            agrees=agrees,
+            classification=classification,
+            reasoning=reasoning,
+            suggested_changes=suggested_changes,
+        )
+        result = _parse_peer_response(raw)
+        assert "_failed" not in result
+        assert result["agrees"] is agrees
+        assert result["classification"] == classification
+        assert result["reasoning"] == reasoning
+
+    def test_parse_peer_response_trailing_text_after_json(self) -> None:
+        """JSON followed by trailing text is still parsed correctly."""
+        from jenkins_job_insight.peer_analysis import _parse_peer_response
+
+        raw = (
+            _make_peer_json_response(
+                agrees=True,
+                classification="CODE ISSUE",
+                reasoning="Test is broken",
+            )
+            + "\n\nHope this helps! Let me know if you need more details."
+        )
+        result = _parse_peer_response(raw)
+        assert "_failed" not in result
+        assert result["agrees"] is True
+        assert result["classification"] == "CODE ISSUE"
+
+    def test_parse_peer_response_nested_object_not_returned(self) -> None:
+        """Inner nested objects are skipped; the root peer response is returned."""
+        from jenkins_job_insight.peer_analysis import _parse_peer_response
+
+        # JSON with a nested object — iterating from last '{' should NOT
+        # return the inner {"nested": true} dict.
+        raw = (
+            "Some preamble text\n"
+            '{"agrees": true, "classification": "CODE ISSUE", '
+            '"reasoning": "Valid analysis", "extra": {"nested": true}}'
+        )
+        result = _parse_peer_response(raw)
+        assert "_failed" not in result
+        assert result["agrees"] is True
+        assert result["classification"] == "CODE ISSUE"
+        assert result["reasoning"] == "Valid analysis"
+
+    def test_parse_peer_response_wrong_shape_dict_falls_through(self) -> None:
+        """Top-level JSON dict without peer keys falls through to later strategies."""
+        from jenkins_job_insight.peer_analysis import _parse_peer_response
+
+        # The AI wraps its response in extra metadata — Strategy 1 should
+        # reject the top-level dict (no peer keys) and Strategy 3 should
+        # recover the actual peer response embedded inside.
+        inner = _make_peer_json_response(
+            agrees=True,
+            classification="CODE ISSUE",
+            reasoning="Correct analysis",
+        )
+        raw = f'{{"metadata": "wrapper", "response": {inner}}}'
+        result = _parse_peer_response(raw)
+        assert "_failed" not in result
+        assert result["agrees"] is True
+        assert result["classification"] == "CODE ISSUE"
+
+    def test_parse_peer_response_wrapper_with_peer_key_falls_through(self) -> None:
+        """Wrapper dict with a top-level peer key does not short-circuit parsing."""
+        from jenkins_job_insight.peer_analysis import _parse_peer_response
+
+        # A wrapper that has 'classification' at top level but the real peer
+        # payload is nested under 'response'. Strategy 1 should reject the
+        # outer dict (missing agrees/reasoning) and Strategy 3 should recover
+        # the inner peer response.
+        inner = _make_peer_json_response(
+            agrees=True,
+            classification="CODE ISSUE",
+            reasoning="Correct analysis",
+        )
+        raw = f'{{"classification": "CODE ISSUE", "response": {inner}}}'
+        result = _parse_peer_response(raw)
+        assert "_failed" not in result
+        assert result["agrees"] is True
+        assert result["classification"] == "CODE ISSUE"
+        assert result["reasoning"] == "Correct analysis"
 
 
 # ===========================================================================

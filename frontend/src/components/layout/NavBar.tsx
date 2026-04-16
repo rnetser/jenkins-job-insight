@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
+import { Bug } from 'lucide-react'
 import { UserBadge } from './UserBadge'
 import { cn } from '@/lib/utils'
 
@@ -37,7 +38,19 @@ export function NavBar() {
             ))}
           </nav>
         </div>
-        <UserBadge />
+        <div className="flex items-center gap-3">
+          <a
+            href="https://github.com/myk-org/jenkins-job-insight/issues/new"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Report a bug on GitHub"
+            className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium text-text-tertiary transition-colors duration-150 hover:bg-surface-hover hover:text-text-secondary"
+          >
+            <Bug className="h-4 w-4 shrink-0" />
+            Report Bug
+          </a>
+          <UserBadge />
+        </div>
       </div>
     </header>
   )

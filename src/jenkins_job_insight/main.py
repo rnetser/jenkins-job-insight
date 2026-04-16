@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import math
 import os
 import time as _time
@@ -18,6 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field, SecretStr, ValidationError
 from simple_logger.logger import get_logger
+
+from jenkins_job_insight.logging_context import JobIdFilter, job_id_var
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
@@ -90,6 +93,28 @@ from jenkins_job_insight.storage import (
 FAVICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="0.9em" font-size="90">\xf0\x9f\x94\x8d</text></svg>'
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+
+# Install job_id filter on ALL logger handlers so module loggers
+# (which use propagate=False via python-simple-logger) get the prefix.
+_job_id_filter = JobIdFilter()
+
+
+def _install_job_id_filter() -> None:
+    """Attach JobIdFilter to every handler on every known logger."""
+    for name in [None, *list(logging.Logger.manager.loggerDict)]:
+        _logger = logging.getLogger(name)
+        for handler in getattr(_logger, "handlers", []):
+            if _job_id_filter not in handler.filters:
+                handler.addFilter(_job_id_filter)
+
+
+_install_job_id_filter()
+
+
+async def _bind_job_id(job_id: str) -> None:
+    """FastAPI dependency that binds job_id to the logging context."""
+    job_id_var.set(job_id)
+
 
 # Statuses that indicate the analysis is still in progress.
 IN_PROGRESS_STATUSES = ("pending", "running", "waiting")
@@ -454,6 +479,7 @@ async def _deferred_resume_waiting_jobs(waiting_jobs: list[dict]) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _install_job_id_filter()
     await init_db()
     waiting_jobs = await storage.mark_stale_results_failed()
     if waiting_jobs:
@@ -827,6 +853,7 @@ async def process_analysis_with_id(
         body: The analysis request.
         settings: Application settings.
     """
+    job_id_var.set(job_id)
     logger.info(
         f"Analysis request received for {body.job_name} #{body.build_number} "
         f"(job_id: {job_id})"
@@ -1094,6 +1121,7 @@ async def _enqueue_analysis_job(
     job setup, persistence, and response shaping.
     """
     job_id = str(uuid.uuid4())
+    job_id_var.set(job_id)
     jenkins_url = build_jenkins_url(
         merged.jenkins_url, body.job_name, body.build_number
     )
@@ -1182,6 +1210,7 @@ async def analyze_failures(
 
         if not test_failures:
             job_id = str(uuid.uuid4())
+            job_id_var.set(job_id)
             analysis_result = FailureAnalysisResult(
                 job_id=job_id,
                 status="completed",
@@ -1211,6 +1240,7 @@ async def analyze_failures(
     additional_repos_list = resolve_additional_repos(body, merged)
 
     job_id = str(uuid.uuid4())
+    job_id_var.set(job_id)
     logger.info(
         f"Direct failure analysis request received with {len(test_failures)} failures (job_id: {job_id})"
     )
@@ -1375,6 +1405,7 @@ async def re_analyze(
     request: Request,
     body: BaseAnalysisRequest,
     background_tasks: BackgroundTasks,
+    _: None = Depends(_bind_job_id),
 ) -> dict:
     """Re-analyze a previously analyzed job with the same (or overridden) settings.
 
@@ -1428,7 +1459,9 @@ async def re_analyze(
 
 
 @app.get("/results/{job_id}", response_model=None)
-async def get_job_result(request: Request, job_id: str, response: Response):
+async def get_job_result(
+    request: Request, job_id: str, response: Response, _: None = Depends(_bind_job_id)
+):
     """Retrieve stored result by job_id, or serve SPA for browser requests."""
     # Content negotiation: browsers requesting HTML get the SPA
     accept = request.headers.get("accept", "")
@@ -1614,7 +1647,7 @@ async def _resolve_effective_failure(
 
 
 @app.get("/results/{job_id}/comments")
-async def get_comments(job_id: str) -> dict:
+async def get_comments(job_id: str, _: None = Depends(_bind_job_id)) -> dict:
     """Get all comments and review states for a job."""
     logger.debug(f"GET /results/{job_id}/comments")
     comments = await storage.get_comments_for_job(job_id)
@@ -1623,7 +1656,12 @@ async def get_comments(job_id: str) -> dict:
 
 
 @app.post("/results/{job_id}/comments", status_code=201)
-async def add_comment(job_id: str, body: AddCommentRequest, request: Request) -> dict:
+async def add_comment(
+    job_id: str,
+    body: AddCommentRequest,
+    request: Request,
+    _: None = Depends(_bind_job_id),
+) -> dict:
     """Add a comment to a test failure."""
     logger.debug(f"POST /results/{job_id}/comments: test_name={body.test_name}")
     await _validate_test_name_in_result(
@@ -1652,7 +1690,7 @@ async def add_comment(job_id: str, body: AddCommentRequest, request: Request) ->
 
 @app.delete("/results/{job_id}/comments/{comment_id}")
 async def delete_comment_endpoint(
-    job_id: str, comment_id: int, request: Request
+    job_id: str, comment_id: int, request: Request, _: None = Depends(_bind_job_id)
 ) -> dict:
     """Delete a comment. Username check is a UI courtesy, not security.
 
@@ -1674,7 +1712,12 @@ async def delete_comment_endpoint(
 
 
 @app.put("/results/{job_id}/reviewed")
-async def set_reviewed(job_id: str, body: SetReviewedRequest, request: Request) -> dict:
+async def set_reviewed(
+    job_id: str,
+    body: SetReviewedRequest,
+    request: Request,
+    _: None = Depends(_bind_job_id),
+) -> dict:
     """Toggle the reviewed state for a test failure."""
     logger.debug(
         f"PUT /results/{job_id}/reviewed: test_name={body.test_name}, reviewed={body.reviewed}"
@@ -1702,7 +1745,9 @@ async def set_reviewed(job_id: str, body: SetReviewedRequest, request: Request) 
 
 @app.post("/results/{job_id}/enrich-comments")
 async def enrich_comments(
-    job_id: str, settings: Settings = Depends(get_settings)
+    job_id: str,
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(_bind_job_id),
 ) -> dict:
     """Fetch live statuses for GitHub PRs and Jira tickets found in comments."""
     logger.debug(f"POST /results/{job_id}/enrich-comments")
@@ -1898,6 +1943,7 @@ async def preview_github_issue(
     body: PreviewIssueRequest,
     request: Request,
     settings: Settings = Depends(get_settings),
+    _: None = Depends(_bind_job_id),
 ) -> dict:
     """Generate preview content for a GitHub issue from a failure analysis."""
     logger.debug(
@@ -1968,6 +2014,7 @@ async def preview_jira_bug(
     body: PreviewIssueRequest,
     request: Request,
     settings: Settings = Depends(get_settings),
+    _: None = Depends(_bind_job_id),
 ) -> dict:
     """Generate preview content for a Jira bug from a failure analysis."""
     logger.debug(f"POST /results/{job_id}/preview-jira-bug: test_name={body.test_name}")
@@ -2180,6 +2227,7 @@ async def create_github_issue_endpoint(
     body: CreateIssueRequest,
     request: Request,
     settings: Settings = Depends(get_settings),
+    _: None = Depends(_bind_job_id),
 ) -> dict:
     """Create a GitHub issue from a failure analysis."""
     logger.debug(
@@ -2271,6 +2319,7 @@ async def create_jira_bug_endpoint(
     body: CreateIssueRequest,
     request: Request,
     settings: Settings = Depends(get_settings),
+    _: None = Depends(_bind_job_id),
 ) -> dict:
     """Create a Jira bug from a failure analysis."""
     logger.debug(f"POST /results/{job_id}/create-jira-bug: test_name={body.test_name}")
@@ -2359,6 +2408,7 @@ async def push_to_reportportal(
         default=None, description="Child build number for pipeline child push"
     ),
     settings: Settings = Depends(get_settings),
+    _: None = Depends(_bind_job_id),
 ) -> dict:
     """Push JJI classifications into Report Portal test items.
 
@@ -2427,29 +2477,16 @@ def _log_and_return_rp_error(
     detail = log_msg or user_msg
     if launch_id is not None:
         logger.error(
-            "RP push failed: %s, job='%s' #%s, launch_id=%d",
-            detail,
-            job_name,
-            build_number,
-            launch_id,
+            f"RP push failed: {detail}, job='{job_name}' #{build_number}, launch_id={launch_id}"
         )
     elif jenkins_url:
         logger.error(
-            "RP push failed: %s, job='%s' #%s, jenkins_url='%s'",
-            detail,
-            job_name,
-            build_number,
-            jenkins_url,
+            f"RP push failed: {detail}, job='{job_name}' #{build_number}, jenkins_url='{jenkins_url}'"
         )
     elif build_number is not None:
-        logger.error(
-            "RP push failed: %s, job='%s' #%s",
-            detail,
-            job_name,
-            build_number,
-        )
+        logger.error(f"RP push failed: {detail}, job='{job_name}' #{build_number}")
     else:
-        logger.error("RP push failed: %s", detail)
+        logger.error(f"RP push failed: {detail}")
     return _rp_push_error_result(
         user_msg,
         launch_id=launch_id,
@@ -2627,7 +2664,8 @@ async def _execute_rp_push(
 
         if launch_id is None:
             return _log_and_return_rp_error(
-                "No RP launch found.",
+                "No Report Portal launch found. "
+                "Ensure the Jenkins build URL is in the RP launch description.",
                 job_name=job_name,
                 build_number=build_number,
                 jenkins_url=jenkins_url,
@@ -2865,6 +2903,7 @@ async def override_classification_endpoint(
     job_id: str,
     body: OverrideClassificationRequest,
     request: Request,
+    _: None = Depends(_bind_job_id),
 ) -> dict:
     """Override the classification of a failure (CODE ISSUE, PRODUCT BUG, or INFRASTRUCTURE)."""
     logger.debug(
@@ -2919,7 +2958,7 @@ async def override_classification_endpoint(
 
 
 @app.get("/results/{job_id}/review-status")
-async def get_review_status(job_id: str) -> dict:
+async def get_review_status(job_id: str, _: None = Depends(_bind_job_id)) -> dict:
     """Get review summary for a job (used by dashboard)."""
     logger.debug(f"GET /results/{job_id}/review-status")
     return await storage.get_review_status(job_id)
@@ -2933,7 +2972,9 @@ async def list_job_results(limit: int = Query(50, le=100)) -> list[dict]:
 
 
 @app.delete("/results/{job_id}")
-async def delete_job_endpoint(job_id: str, request: Request) -> dict:
+async def delete_job_endpoint(
+    job_id: str, request: Request, _: None = Depends(_bind_job_id)
+) -> dict:
     """Delete an analyzed job and all related data.
 
     This project operates on a trusted network with no authentication.

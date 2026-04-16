@@ -59,6 +59,19 @@ _PEER_RESPONSE_SCHEMA = """CRITICAL: Your response must be ONLY a valid JSON obj
 }"""
 
 _VALID_CLASSIFICATIONS = frozenset({"CODE ISSUE", "PRODUCT BUG"})
+_PEER_RESPONSE_KEYS = frozenset({"agrees", "classification", "reasoning"})
+
+
+def _is_peer_response_dict(data: object) -> bool:
+    """Check whether *data* contains ALL core peer-response keys with correct types."""
+    if not isinstance(data, dict):
+        return False
+    return (
+        _PEER_RESPONSE_KEYS.issubset(data)
+        and isinstance(data.get("agrees"), bool)
+        and isinstance(data.get("classification"), str)
+        and isinstance(data.get("reasoning"), str)
+    )
 
 
 def _normalize_classification(cls: str) -> str:
@@ -119,6 +132,13 @@ def _check_consensus(
 def _parse_peer_response(raw: str) -> dict:
     """Parse a peer's JSON response with fallback extraction.
 
+    Three strategies are tried in order (direct parse, fenced code blocks,
+    brace-delimited substrings). Each strategy only accepts a dict that
+    contains ALL core peer response keys (``agrees``, ``classification``,
+    and ``reasoning``) with correct types (bool, str, str respectively);
+    dicts missing any of these keys or with wrong types are skipped so
+    later strategies can try.
+
     On parse failure returns ``{"_failed": True, "raw": raw}`` so the peer
     is excluded from consensus.
 
@@ -133,9 +153,8 @@ def _parse_peer_response(raw: str) -> dict:
     # Strategy 1: direct JSON parse
     try:
         data = json.loads(raw)
-        if not isinstance(data, dict):
-            return _failed
-        return data
+        if _is_peer_response_dict(data):
+            return data
     except (json.JSONDecodeError, TypeError):
         pass
 
@@ -143,21 +162,24 @@ def _parse_peer_response(raw: str) -> dict:
     for block in re.findall(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL):
         try:
             data = json.loads(block.strip())
-            if isinstance(data, dict):
+            if _is_peer_response_dict(data):
                 return data
         except (json.JSONDecodeError, TypeError):
             continue
 
-    # Strategy 3: brace matching
-    brace_match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if brace_match:
+    # Strategy 3: try brace-delimited substrings, starting from the last '{'.
+    # AI responses typically put the JSON object at the end, after prefatory text.
+    # Starting from the end avoids false starts from shell variables like ${VAR}.
+    # Use raw_decode() to tolerate trailing text after the JSON object.
+    # Require ALL core keys with correct types to skip inner nested objects.
+    decoder = json.JSONDecoder()
+    for match in reversed(list(re.finditer(r"\{", raw))):
         try:
-            data = json.loads(brace_match.group(0))
-            if not isinstance(data, dict):
-                return _failed
-            return data
-        except (json.JSONDecodeError, TypeError):
-            pass
+            data, _ = decoder.raw_decode(raw, match.start())
+            if _is_peer_response_dict(data):
+                return data
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
 
     return _failed
 

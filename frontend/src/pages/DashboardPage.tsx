@@ -198,7 +198,7 @@ export function DashboardPage() {
   }
 
   function getJobRoute(job: DashboardJob): string {
-    return ['waiting', 'pending', 'running'].includes(job.status)
+    return ['waiting', 'pending', 'running', 'failed'].includes(job.status)
       ? `/status/${job.job_id}`
       : `/results/${job.job_id}`
   }
