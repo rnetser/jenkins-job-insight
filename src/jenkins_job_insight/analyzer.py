@@ -1590,6 +1590,12 @@ async def analyze_job(
                 ai_provider, ai_model, cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, [])
             )
             if not ok:
+                logger.error(
+                    "AI CLI sanity check failed for job %s (%s/%s)",
+                    job_id,
+                    ai_provider,
+                    ai_model,
+                )
                 return AnalysisResult(
                     job_id=job_id,
                     job_name=request.job_name,

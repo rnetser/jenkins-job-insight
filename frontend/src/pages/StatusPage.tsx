@@ -5,7 +5,10 @@ import { formatTimestamp, isAnalysisTimeout, INVALID_DATE_FALLBACK } from '@/lib
 import type { ResultResponse } from '@/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Clock, Loader2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Clock, ExternalLink, Loader2, RotateCw } from 'lucide-react'
+import { StatusChip } from '@/components/shared/StatusChip'
+import { ReAnalyzeDialog } from './report/ReAnalyzeDialog'
 
 const POLL_MS = 10_000
 
@@ -77,6 +80,7 @@ export function StatusPage() {
   const [data, setData] = useState<ResultResponse | null>(null)
   const [error, setError] = useState('')
   const [terminalErrorKind, setTerminalErrorKind] = useState<'not_found' | 'unauthorized' | 'failed' | null>(null)
+  const [reAnalyzeOpen, setReAnalyzeOpen] = useState(false)
   const intervalRef = useRef<ReturnType<typeof setInterval>>(null)
   const prevLogLenRef = useRef(0)
   const logEndRef = useRef<HTMLDivElement>(null)
@@ -96,6 +100,7 @@ export function StatusPage() {
     setData(null)
     setError('')
     setTerminalErrorKind(null)
+    setReAnalyzeOpen(false)
     prevLogLenRef.current = 0
 
     async function poll() {
@@ -174,7 +179,7 @@ export function StatusPage() {
   }, [stepLog.length])
 
   const status = data?.status ?? terminalErrorKind ?? 'pending'
-  const isTimeout = isAnalysisTimeout(status, error)
+  const isTimeout = isAnalysisTimeout(status, error, data?.result?.summary)
   const displayStatus = isTimeout ? 'timeout' : status
   const queuedAtDisplay = data?.created_at ? formatTimestamp(data.created_at) : null
 
@@ -192,17 +197,69 @@ export function StatusPage() {
   const statusBadgeLabel = displayStatus.replace(/_/g, ' ').toUpperCase()
 
   return (
-    <div className="relative flex min-h-screen items-start justify-center overflow-x-hidden overflow-y-auto bg-surface-page py-8 sm:items-center">
-      {/* Scan-line overlay */}
-      <div
-        className="pointer-events-none absolute inset-0 opacity-[0.015]"
-        style={{
-          backgroundImage:
-            'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(56,139,253,.3) 2px, rgba(56,139,253,.3) 4px)',
-        }}
-      />
+    <>
+      {/* Sticky header for failed jobs — matches report page layout */}
+      {terminalErrorKind === 'failed' && data?.result && (
+        <div className="sticky top-14 z-40 w-full bg-surface-page/95 backdrop-blur-sm border-b border-border-muted">
+          <div className="mx-auto max-w-[1400px] px-4 py-3 sm:px-6 lg:px-8">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="font-display text-lg font-bold text-text-primary truncate">
+                {data.result.job_name || jobId}
+              </h1>
+              {data.result.build_number > 0 && (
+                data.jenkins_url ? (
+                  <a href={String(data.jenkins_url)} target="_blank" rel="noopener noreferrer" className="font-mono text-sm text-text-link hover:underline">
+                    #{data.result.build_number}
+                  </a>
+                ) : (
+                  <span className="font-mono text-sm text-text-tertiary">#{data.result.build_number}</span>
+                )
+              )}
+              <StatusChip status={displayStatus} />
+              {data.result.request_params?.ai_provider && (
+                <Badge variant="outline" className="text-[10px]">
+                  {data.result.request_params.ai_provider}{data.result.request_params.ai_model ? ` / ${data.result.request_params.ai_model}` : ''}
+                </Badge>
+              )}
+              <div className="ml-auto flex items-center gap-3">
+                {data.result.request_params && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 text-xs"
+                    onClick={() => setReAnalyzeOpen(true)}
+                  >
+                    <RotateCw className="h-3.5 w-3.5" />
+                    Re-Analyze
+                  </Button>
+                )}
+                {data.jenkins_url && (
+                  <a
+                    href={String(data.jenkins_url)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-xs text-text-link hover:underline"
+                  >
+                    Jenkins <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
-      <div className="relative z-10 w-full max-w-xl px-4">
+      <div className="relative flex min-h-screen items-start justify-center overflow-x-hidden overflow-y-auto bg-surface-page py-8 sm:items-center">
+        {/* Scan-line overlay */}
+        <div
+          className="pointer-events-none absolute inset-0 opacity-[0.015]"
+          style={{
+            backgroundImage:
+              'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(56,139,253,.3) 2px, rgba(56,139,253,.3) 4px)',
+          }}
+        />
+
+        <div className="relative z-10 w-full max-w-xl px-4">
         <Card className="animate-slide-up border-border-muted">
           <CardContent className="flex flex-col items-center gap-6 p-8">
             {/* Pulsing / spinning indicator */}
@@ -255,7 +312,7 @@ export function StatusPage() {
                       </h2>
                     </div>
                     <p className="mt-2 text-sm text-signal-orange/80 bg-signal-orange/10 rounded-md px-3 py-2">
-                      {error}
+                      The AI analysis timed out. You can re-analyze with a longer timeout.
                     </p>
                   </>
                 ) : (
@@ -264,8 +321,9 @@ export function StatusPage() {
                       {terminalErrorTitles[terminalErrorKind] ?? terminalErrorTitles.failed}
                     </h2>
                     <p className="mt-2 text-sm text-signal-red/80 bg-signal-red/10 rounded-md px-3 py-2">
-                      {error}
+                      Analysis failed. You can re-analyze or check server logs for details.
                     </p>
+
                   </>
                 )
               ) : (
@@ -304,7 +362,7 @@ export function StatusPage() {
               <Row
                 label="STATUS"
                 value={
-                  <Badge variant={isRunning || isWaiting ? 'default' : 'outline'}>
+                  <Badge variant={isRunning || isWaiting ? 'default' : displayStatus === 'timeout' ? 'warning' : displayStatus === 'failed' ? 'destructive' : 'outline'}>
                     {statusBadgeLabel}
                   </Badge>
                 }
@@ -381,7 +439,18 @@ export function StatusPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+
+      </div>
+
+      {jobId && terminalErrorKind === 'failed' && data?.result?.request_params && (
+        <ReAnalyzeDialog
+          open={reAnalyzeOpen}
+          onOpenChange={setReAnalyzeOpen}
+          result={data.result}
+          jobId={jobId}
+        />
+      )}
+    </>
   )
 }
 

@@ -1405,7 +1405,11 @@ class TestRpPushErrorResult:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/results/job1/push-reportportal")
         body = response.json()
-        assert "No RP launch found" in body["errors"][0]
+        assert "No Report Portal launch found." in body["errors"][0]
+        assert (
+            "Ensure the Jenkins build URL is in the RP launch description"
+            in body["errors"][0]
+        )
         assert "(job=" not in body["errors"][0]
 
     @patch("jenkins_job_insight.main.ReportPortalClient")

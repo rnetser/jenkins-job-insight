@@ -159,8 +159,7 @@ function ReportContent() {
         }
 
         if (resultRes.status === 'failed') {
-          const errorMsg = resultRes.result?.error ?? 'Analysis failed'
-          dispatch({ type: 'SET_ERROR', payload: String(errorMsg) })
+          navigate(`/status/${jobId}`, { replace: true })
           return
         }
 
