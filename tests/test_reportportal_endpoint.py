@@ -1208,7 +1208,7 @@ class TestRPErrorMessage:
         from jenkins_job_insight.main import _rp_error_message
 
         exc = self._make_exc_with_response(json_return={"message": "Token expired"})
-        user_msg, log_msg = _rp_error_message(exc, "finding launch")
+        user_msg, _log_msg = _rp_error_message(exc, "finding launch")
         assert "Token expired" in user_msg
         assert "500" in user_msg
         assert "finding launch" in user_msg
