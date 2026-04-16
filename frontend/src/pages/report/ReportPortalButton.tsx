@@ -161,17 +161,7 @@ export function ReportPortalButton({ jobId, jobName, buildNumber, childJobName, 
                 className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-text-tertiary"
               />
 
-              {pushError && (
-                <p className="text-sm text-signal-red break-words">{pushError}</p>
-              )}
 
-              {pushResult && pushResult.errors.length > 0 && (
-                <ul className="space-y-1 text-xs text-signal-red/80 max-h-48 overflow-y-auto">
-                  {pushResult.errors.map((err, i) => (
-                    <li key={i} className="break-words" title={err}>{err}</li>
-                  ))}
-                </ul>
-              )}
             </div>
           )}
 

@@ -30,7 +30,7 @@ _RPCLIENT_INIT_LOCK = threading.Lock()
 # so any internal wait on it returns instantly.
 #
 # This patches a name-mangled private method; if a future library upgrade
-# removes it, the AttributeError here will surface immediately at import
+# removes it, the ImportError here will surface immediately at import
 # time rather than silently reverting to noisy behaviour.
 _PREFETCH_ATTR = "_RPClient__init_api_info_prefetch"
 if not hasattr(RPClient, _PREFETCH_ATTR):
