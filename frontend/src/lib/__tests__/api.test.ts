@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api, ApiError, userErrorMessage } from '../api'
+import { api, ApiError } from '../api'
 
 describe('api', () => {
   beforeEach(() => {
@@ -47,51 +47,5 @@ describe('api', () => {
     const [, options] = fetchSpy.mock.calls[0]
     expect(options?.method).toBe('POST')
     expect(options?.body).toBe(JSON.stringify({ name: 'test' }))
-  })
-})
-
-describe('userErrorMessage', () => {
-  it('extracts string detail from ApiError body', () => {
-    const err = new ApiError(404, 'Not Found', { detail: 'Job not found' })
-    expect(userErrorMessage(err)).toBe('Job not found')
-  })
-
-  it('summarises array detail from ApiError body (FastAPI validation)', () => {
-    const err = new ApiError(422, 'Unprocessable Entity', {
-      detail: [
-        { loc: ['body', 'name'], msg: 'field required', type: 'value_error.missing' },
-        { loc: ['body', 'age'], msg: 'not a valid integer', type: 'type_error.integer' },
-      ],
-    })
-    expect(userErrorMessage(err)).toBe('field required (and 1 more)')
-  })
-
-  it('shows count for array detail without msg field', () => {
-    const err = new ApiError(422, 'Unprocessable Entity', {
-      detail: ['error1', 'error2'],
-    })
-    expect(userErrorMessage(err)).toBe('Validation failed (2 errors)')
-  })
-
-  it('falls back to ApiError message when no detail', () => {
-    const err = new ApiError(500, 'Internal Server Error', { error: 'something' })
-    expect(userErrorMessage(err)).toBe('API error 500: Internal Server Error')
-  })
-
-  it('uses Error.message for non-ApiError errors', () => {
-    const err = new TypeError('network failure')
-    expect(userErrorMessage(err)).toBe('network failure')
-  })
-
-  it('returns fallback for non-Error values', () => {
-    expect(userErrorMessage('boom')).toBe('An unexpected error occurred')
-    expect(userErrorMessage(null, 'custom fallback')).toBe('custom fallback')
-  })
-
-  it('handles single-item array detail without extra count', () => {
-    const err = new ApiError(422, 'Unprocessable Entity', {
-      detail: [{ msg: 'field required' }],
-    })
-    expect(userErrorMessage(err)).toBe('field required')
   })
 })

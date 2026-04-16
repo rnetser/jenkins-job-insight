@@ -7,7 +7,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { api, userErrorMessage } from '@/lib/api'
+import { api } from '@/lib/api'
 import { Upload, Loader2, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react'
 import type { ReportPortalPushResult } from '@/types'
 import { useReportState } from './ReportContext'
@@ -67,12 +67,12 @@ export function ReportPortalButton({ jobId, jobName, buildNumber, childJobName, 
   const [pushing, setPushing] = useState(false)
   const [resultDialogOpen, setResultDialogOpen] = useState(false)
   const [pushResult, setPushResult] = useState<ReportPortalPushResult | null>(null)
-  const [pushError, setPushError] = useState('')
+  const [pushFailed, setPushFailed] = useState(false)
 
   const handlePush = useCallback(async () => {
     setConfirmOpen(false)
     setPushing(true)
-    setPushError('')
+    setPushFailed(false)
     setPushResult(null)
     try {
       const params = new URLSearchParams()
@@ -82,8 +82,8 @@ export function ReportPortalButton({ jobId, jobName, buildNumber, childJobName, 
       const result = await api.post<ReportPortalPushResult>(`/results/${jobId}/push-reportportal${qs ? `?${qs}` : ''}`)
       setPushResult(result)
       setResultDialogOpen(true)
-    } catch (err) {
-      setPushError(userErrorMessage(err, 'Failed to push to Report Portal'))
+    } catch {
+      setPushFailed(true)
       setResultDialogOpen(true)
     } finally {
       setPushing(false)
@@ -96,7 +96,7 @@ export function ReportPortalButton({ jobId, jobName, buildNumber, childJobName, 
 
   const hasResultErrors = !!(pushResult && pushResult.errors.length > 0)
   const hasUnmatched = !!(pushResult && pushResult.unmatched.length > 0)
-  const isFullFailure = pushError || (pushResult && pushResult.pushed === 0 && hasResultErrors)
+  const isFullFailure = pushFailed || (pushResult && pushResult.pushed === 0 && hasResultErrors)
   const isPartialSuccess = pushResult && pushResult.pushed > 0 && (hasResultErrors || hasUnmatched)
   const isNoop = !!(pushResult && pushResult.pushed === 0 && !hasResultErrors && hasUnmatched)
 

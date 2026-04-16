@@ -63,34 +63,5 @@ export const api = {
     request<T>(path, { method: 'DELETE' }),
 }
 
-/** Extract a short user-facing message from an error.
- *
- *  - ApiError with a string `detail` → use it directly.
- *  - ApiError with an array `detail` (FastAPI validation) → short summary.
- *  - ApiError without detail → "API error {status}: {statusText}".
- *  - Any other Error → its `.message`.
- *  - Non-Error → generic fallback.
- */
-export function userErrorMessage(err: unknown, fallback = 'An unexpected error occurred'): string {
-  if (err instanceof ApiError) {
-    const body = err.body as Record<string, unknown> | null | undefined
-    if (body && typeof body === 'object') {
-      if (typeof body.detail === 'string') return body.detail
-      if (Array.isArray(body.detail) && body.detail.length > 0) {
-        const first = body.detail[0]
-        const msg = typeof first === 'object' && first !== null && 'msg' in first
-          ? String((first as Record<string, unknown>).msg)
-          : undefined
-        const count = body.detail.length
-        return msg
-          ? `${msg}${count > 1 ? ` (and ${count - 1} more)` : ''}`
-          : `Validation failed (${count} error${count !== 1 ? 's' : ''})`
-      }
-    }
-    return err.message
-  }
-  if (err instanceof Error) return err.message
-  return fallback
-}
 
 export { ApiError }
