@@ -6,8 +6,6 @@ classification results, analysis text, and Jira matches into RP launches.
 
 from __future__ import annotations
 
-import contextlib
-import io
 import os
 import threading
 import warnings
@@ -23,6 +21,31 @@ if TYPE_CHECKING:
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 _RPCLIENT_INIT_LOCK = threading.Lock()
+
+# Disable RPClient's background "RP-API-Info-Prefetch" thread.  RPClient
+# spawns a daemon thread during __init__ that calls get_api_info(); when
+# RP is unreachable the library dumps full exception tracebacks to logs.
+# We never use api_info (all API calls go through our own Session), so
+# prevent the thread from starting and set the prefetch event immediately
+# so any internal wait on it returns instantly.
+#
+# This patches a name-mangled private method; if a future library upgrade
+# removes it, the AttributeError here will surface immediately at import
+# time rather than silently reverting to noisy behaviour.
+_PREFETCH_ATTR = "_RPClient__init_api_info_prefetch"
+if not hasattr(RPClient, _PREFETCH_ATTR):
+    raise ImportError(
+        f"reportportal_client.RPClient no longer has '{_PREFETCH_ATTR}'; "
+        "update the prefetch suppression patch in reportportal.py"
+    )
+
+
+def _noop_prefetch(self: RPClient) -> None:  # type: ignore[no-untyped-def]
+    """No-op replacement: skip the background thread, mark event done."""
+    self._api_info_prefetched.set()
+
+
+setattr(RPClient, _PREFETCH_ATTR, _noop_prefetch)
 
 
 class AmbiguousLaunchError(Exception):
@@ -79,20 +102,21 @@ class ReportPortalClient:
         self._session.headers["Authorization"] = f"Bearer {token}"
         self._session.verify = verify_ssl
         self._suppress_ssl_warnings = not verify_ssl
-        # Suppress RPClient's own traceback output from get_api_info().
-        # The library prints to sys.stderr on connection failure before
-        # raising; we catch the exception ourselves and log a clean error.
+        if not _RPCLIENT_INIT_LOCK.acquire(timeout=30):
+            self._session.close()
+            raise TimeoutError("Timed out waiting for RPClient initialisation lock")
         try:
-            with _RPCLIENT_INIT_LOCK, contextlib.redirect_stderr(io.StringIO()):
-                self._rp_client = RPClient(
-                    endpoint=url.rstrip("/"),
-                    project=project,
-                    api_key=token,
-                    verify_ssl=verify_ssl,
-                )
+            self._rp_client = RPClient(
+                endpoint=url.rstrip("/"),
+                project=project,
+                api_key=token,
+                verify_ssl=verify_ssl,
+            )
         except Exception:
             self._session.close()
             raise
+        finally:
+            _RPCLIENT_INIT_LOCK.release()
 
     def __enter__(self) -> ReportPortalClient:
         return self
@@ -418,27 +442,20 @@ class ReportPortalClient:
                 logger.info("Pushed %d classification(s) to RP in one batch", pushed)
             except _requests.exceptions.HTTPError as exc:
                 status = exc.response.status_code if exc.response is not None else None
-                detail = ""
+                rp_message = ""
                 response_body = ""
                 if exc.response is not None:
                     response_body = exc.response.text
                     try:
                         rp_body = exc.response.json()
-                        raw_detail = (
-                            rp_body.get("message", response_body)
+                        raw = (
+                            rp_body.get("message")
                             if isinstance(rp_body, dict)
-                            else response_body
+                            else None
                         )
-                        detail = (
-                            raw_detail
-                            if isinstance(raw_detail, str)
-                            else response_body
-                            if raw_detail is None
-                            else str(raw_detail)
-                        )
+                        rp_message = raw if isinstance(raw, str) else ""
                     except Exception:
-                        detail = response_body
-                log_detail = detail.replace("\r", "\\r").replace("\n", "\\n")
+                        pass
                 log_body = response_body.replace("\r", "\\r").replace("\n", "\\n")
                 logger.error(
                     "RP batch update failed: status=%s, url=%s,"
@@ -446,13 +463,13 @@ class ReportPortalClient:
                     status,
                     url,
                     len(bulk_issues),
-                    log_detail or "(no detail)",
+                    rp_message or "(no detail)",
                     log_body,
                 )
-                suffix = f": {detail}" if detail else ""
+                suffix = f": {rp_message}" if rp_message else ""
                 error_msg = (
-                    f"{status or 'HTTP'} error updating"
-                    f" {len(bulk_issues)} item(s){suffix}"
+                    f"Error updating {len(bulk_issues)} item(s)"
+                    f" (HTTP {status or '?'}){suffix}"
                 )
                 errors.append(error_msg)
             except Exception as exc:
@@ -462,13 +479,7 @@ class ReportPortalClient:
                     len(bulk_issues),
                     exc,
                 )
-                detail = str(exc).strip()
-                error_msg = (
-                    f"Failed to update {len(bulk_issues)} RP item(s):"
-                    f" {type(exc).__name__}"
-                    f"{f': {detail}' if detail else ''}"
-                )
-                errors.append(error_msg)
+                errors.append(f"Error updating {len(bulk_issues)} RP item(s)")
 
         return {
             "pushed": pushed,

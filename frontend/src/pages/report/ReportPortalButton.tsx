@@ -4,11 +4,10 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { api } from '@/lib/api'
+import { api, userErrorMessage } from '@/lib/api'
 import { Upload, Loader2, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react'
 import type { ReportPortalPushResult } from '@/types'
 import { useReportState } from './ReportContext'
@@ -84,7 +83,7 @@ export function ReportPortalButton({ jobId, jobName, buildNumber, childJobName, 
       setPushResult(result)
       setResultDialogOpen(true)
     } catch (err) {
-      setPushError(err instanceof Error ? err.message : 'Failed to push to Report Portal')
+      setPushError(userErrorMessage(err, 'Failed to push to Report Portal'))
       setResultDialogOpen(true)
     } finally {
       setPushing(false)
@@ -125,15 +124,7 @@ export function ReportPortalButton({ jobId, jobName, buildNumber, childJobName, 
               <Upload className="h-5 w-5 text-text-secondary" />
               Confirm Push
             </DialogTitle>
-            <DialogDescription>
-              Push failure classifications to Report Portal?
-            </DialogDescription>
-            <RPPushMetadata
-              project={reportportalProject}
-              jobName={displayJobName}
-              buildNumber={displayBuildNumber}
-              className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-text-secondary"
-            />
+
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>
@@ -158,48 +149,31 @@ export function ReportPortalButton({ jobId, jobName, buildNumber, childJobName, 
                 <><CheckCircle2 className="h-5 w-5 text-signal-green" /> Pushed {pushResult?.pushed ?? 0} classification{pushResult?.pushed !== 1 ? 's' : ''} to Report Portal.</>
               )}
             </DialogTitle>
-            <RPPushMetadata
-              project={reportportalProject}
-              jobName={displayJobName}
-              buildNumber={displayBuildNumber}
-              launchId={pushResult?.launch_id ?? undefined}
-              className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-text-tertiary"
-            />
           </DialogHeader>
 
-          <div className="space-y-3 py-2 min-w-0">
-            {pushError && (
-              <p className="text-sm text-signal-red break-words">{pushError}</p>
-            )}
+          {(isFullFailure || isPartialSuccess || isNoop) && (
+            <div className="space-y-3 py-2 min-w-0">
+              <RPPushMetadata
+                project={reportportalProject}
+                jobName={displayJobName}
+                buildNumber={displayBuildNumber}
+                launchId={pushResult?.launch_id ?? undefined}
+                className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-text-tertiary"
+              />
 
-            {pushResult && pushResult.unmatched.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-1.5 text-sm text-signal-orange">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                  <span>{pushResult.unmatched.length} unmatched test{pushResult.unmatched.length !== 1 ? 's' : ''}</span>
-                </div>
-                <ul className="ml-6 space-y-0.5 text-xs text-text-tertiary max-h-32 overflow-y-auto">
-                  {pushResult.unmatched.map((name, index) => (
-                    <li key={`${name}-${index}`} className="font-mono break-all" title={name}>{name}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+              {pushError && (
+                <p className="text-sm text-signal-red break-words">{pushError}</p>
+              )}
 
-            {pushResult && pushResult.errors.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-1.5 text-sm text-signal-red">
-                  <XCircle className="h-4 w-4 flex-shrink-0" />
-                  <span>{pushResult.errors.length} error{pushResult.errors.length !== 1 ? 's' : ''}</span>
-                </div>
-                <ul className="ml-6 space-y-1 text-xs text-signal-red/80 max-h-48 overflow-y-auto">
+              {pushResult && pushResult.errors.length > 0 && (
+                <ul className="space-y-1 text-xs text-signal-red/80 max-h-48 overflow-y-auto">
                   {pushResult.errors.map((err, i) => (
                     <li key={i} className="break-words" title={err}>{err}</li>
                   ))}
                 </ul>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
 
           <DialogFooter>
             <Button variant="outline" onClick={handleClose}>

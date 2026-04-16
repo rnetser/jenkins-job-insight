@@ -768,8 +768,7 @@ class TestPushClassifications:
         )
         assert result["pushed"] == 0
         assert len(result["errors"]) == 1
-        assert "ConnectionError" in result["errors"][0]
-        assert "connection refused" in result["errors"][0]
+        assert "Error updating" in result["errors"][0]
 
         # Verify error logged with error details
         error_calls = [
@@ -813,8 +812,8 @@ class TestRPClientInitLock:
         assert callable(getattr(lock, "acquire", None))
         assert callable(getattr(lock, "release", None))
 
-    def test_init_acquires_lock_around_redirect_stderr(self):
-        """Constructor must acquire _RPCLIENT_INIT_LOCK while redirecting stderr."""
+    def test_init_acquires_lock_during_rpclient_creation(self):
+        """Constructor must hold _RPCLIENT_INIT_LOCK while creating RPClient."""
         acquired_during_init = []
 
         original_rpclient = rp_module.RPClient
@@ -833,3 +832,18 @@ class TestRPClientInitLock:
         assert acquired_during_init[0] is True, (
             "_RPCLIENT_INIT_LOCK was NOT held when RPClient was initialised"
         )
+
+    def test_init_timeout_when_lock_held(self):
+        """TimeoutError raised when lock cannot be acquired within timeout."""
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = False  # Simulate timeout
+        with patch.object(rp_module, "_RPCLIENT_INIT_LOCK", mock_lock):
+            with pytest.raises(TimeoutError, match="Timed out waiting"):
+                ReportPortalClient(
+                    url="http://rp.example.com",
+                    token="tok",
+                    project="proj",
+                )
+        mock_lock.acquire.assert_called_once_with(timeout=30)
+        # Lock release should NOT be called since acquire failed
+        mock_lock.release.assert_not_called()

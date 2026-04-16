@@ -261,8 +261,8 @@ class TestPushReportPortalEndpoint:
         assert data["pushed"] == 0
         assert len(data["errors"]) == 1
         assert "No overlap" in data["errors"][0]
-        assert "test_beta" in data["errors"][0]
-        assert "test_alpha" in data["errors"][0]
+        # Test names are in server logs only, not user-facing
+        assert "test_beta" not in data["errors"][0]
 
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
@@ -641,8 +641,8 @@ class TestRPPushHTTPErrors:
         body = response.json()
         assert body["pushed"] == 0
         assert len(body["errors"]) == 1
-        assert "ConnectionError" in body["errors"][0]
-        assert "connection refused" in body["errors"][0]
+        assert "Error" in body["errors"][0]
+        assert "searching RP launches" in body["errors"][0]
 
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
@@ -727,7 +727,7 @@ class TestRPPushHTTPErrors:
         assert body["pushed"] == 0
         assert body["launch_id"] == 42
         assert len(body["errors"]) == 1
-        assert "TypeError" in body["errors"][0]
+        assert "Error" in body["errors"][0]
         assert "matching RP items" in body["errors"][0]
 
     @patch("jenkins_job_insight.main.logger")
@@ -924,7 +924,7 @@ class TestRPPushHTTPErrors:
         assert body["pushed"] == 0
         assert len(body["errors"]) == 1
         assert "Ambiguous" in body["errors"][0]
-        assert "my-project" in body["errors"][0]
+        assert "Remove duplicate" in body["errors"][0]
 
         # Ambiguous launch is logged at WARNING, not ERROR
         warning_calls = [
@@ -968,8 +968,8 @@ class TestRPPushHTTPErrors:
         body = response.json()
         assert body["pushed"] == 0
         assert len(body["errors"]) == 1
-        assert "ConnectionError" in body["errors"][0]
-        assert "Name resolution failed" in body["errors"][0]
+        assert "Error" in body["errors"][0]
+        assert "connecting to Report Portal" in body["errors"][0]
 
         # Constructor failure is logged at ERROR
         error_calls = [
@@ -978,6 +978,10 @@ class TestRPPushHTTPErrors:
             if "name resolution" in str(c).lower()
         ]
         assert error_calls, "Expected ERROR log for constructor failure"
+        # RP URL must appear in log (not in user-facing error)
+        assert "reportportal_url=" in str(error_calls[0]), (
+            "Log should include reportportal_url for operator debugging"
+        )
 
 
 class TestRPPushEarlyGuard:
@@ -1200,49 +1204,59 @@ class TestRPErrorMessage:
         return exc
 
     def test_dict_body_extracts_message_field(self, _rp_enabled_env):
-        """When RP returns a JSON dict with 'message', extract it."""
+        """When RP returns a JSON dict with 'message', extract it for user."""
         from jenkins_job_insight.main import _rp_error_message
 
         exc = self._make_exc_with_response(json_return={"message": "Token expired"})
-        result = _rp_error_message(exc, "finding launch")
-        assert "Token expired" in result
+        user_msg, log_msg = _rp_error_message(exc, "finding launch")
+        assert "Token expired" in user_msg
+        assert "500" in user_msg
+        assert "finding launch" in user_msg
 
-    def test_dict_body_without_message_falls_back_to_text(self, _rp_enabled_env):
-        """When RP returns a JSON dict without 'message', fall back to resp.text."""
+    def test_dict_body_without_message_shows_status_only(self, _rp_enabled_env):
+        """When RP returns a JSON dict without 'message', user sees status only."""
         from jenkins_job_insight.main import _rp_error_message
 
         exc = self._make_exc_with_response(
             json_return={"error": "something else"},
             text="raw response text",
         )
-        result = _rp_error_message(exc, "finding launch")
-        assert "raw response text" in result
+        user_msg, log_msg = _rp_error_message(exc, "finding launch")
+        # User sees status + operation, no raw text
+        assert "500" in user_msg
+        assert "finding launch" in user_msg
+        # Raw text only in log
+        assert "raw response text" in log_msg
 
-    def test_list_body_falls_back_to_text(self, _rp_enabled_env):
-        """When RP returns a JSON array, fall back to resp.text (not AttributeError)."""
+    def test_list_body_shows_status_only(self, _rp_enabled_env):
+        """When RP returns a JSON array, user sees status only (no crash)."""
         from jenkins_job_insight.main import _rp_error_message
 
         exc = self._make_exc_with_response(
             json_return=["error1", "error2"],
             text="the raw text",
         )
-        result = _rp_error_message(exc, "finding launch")
-        # Must contain the fallback text, not crash with AttributeError
-        assert "the raw text" in result
+        user_msg, log_msg = _rp_error_message(exc, "finding launch")
+        assert "500" in user_msg
+        assert "finding launch" in user_msg
+        # Raw text only in log
+        assert "the raw text" in log_msg
 
-    def test_string_body_falls_back_to_text(self, _rp_enabled_env):
-        """When RP returns a plain JSON string, fall back to resp.text."""
+    def test_string_body_shows_status_only(self, _rp_enabled_env):
+        """When RP returns a plain JSON string, user sees status only."""
         from jenkins_job_insight.main import _rp_error_message
 
         exc = self._make_exc_with_response(
             json_return="just a string",
             text="the raw text",
         )
-        result = _rp_error_message(exc, "finding launch")
-        assert "the raw text" in result
+        user_msg, log_msg = _rp_error_message(exc, "finding launch")
+        assert "500" in user_msg
+        # Raw text only in log
+        assert "the raw text" in log_msg
 
-    def test_json_parse_failure_falls_back_to_text(self, _rp_enabled_env):
-        """When resp.json() raises, fall back to resp.text."""
+    def test_json_parse_failure_shows_status_only(self, _rp_enabled_env):
+        """When resp.json() raises, user sees status only, log has raw text."""
         from jenkins_job_insight.main import _rp_error_message
 
         resp = MagicMock()
@@ -1251,77 +1265,62 @@ class TestRPErrorMessage:
         resp.json.side_effect = ValueError("No JSON")
         exc = Exception("boom")
         exc.response = resp
-        result = _rp_error_message(exc, "finding launch")
-        assert "Bad Gateway" in result
+        user_msg, log_msg = _rp_error_message(exc, "finding launch")
+        assert "502" in user_msg
+        assert "finding launch" in user_msg
+        # Full text only in log
+        assert "Bad Gateway" in log_msg
 
-    def test_no_response_uses_exc_str(self, _rp_enabled_env):
-        """When exc has no .response, use str(exc) as detail."""
+    def test_no_response_shows_operation_only(self, _rp_enabled_env):
+        """When exc has no .response, user sees operation only; log has detail."""
         from jenkins_job_insight.main import _rp_error_message
 
         exc = ConnectionError("connection refused")
-        result = _rp_error_message(exc, "connecting")
-        assert "ConnectionError" in result
-        assert "connection refused" in result
+        user_msg, log_msg = _rp_error_message(exc, "connecting")
+        # User sees short message
+        assert user_msg == "Error connecting"
+        # Log has full detail
+        assert "ConnectionError" in log_msg
+        assert "connection refused" in log_msg
+
+    def test_rp_message_shown_to_user_but_raw_body_only_in_log(self, _rp_enabled_env):
+        """RP JSON message goes to user; full response body only in log."""
+        from jenkins_job_insight.main import _rp_error_message
+
+        exc = self._make_exc_with_response(
+            json_return={"message": "Access denied"},
+            text='{"message": "Access denied", "debug": "lots of internal detail"}',
+        )
+        user_msg, log_msg = _rp_error_message(exc, "pushing classifications")
+        assert "Access denied" in user_msg
+        assert "internal detail" not in user_msg
+        assert "internal detail" in log_msg
 
 
-class TestRpPushErrorResultContext:
-    """Unit tests for _rp_push_error_result job/build context in error messages."""
+class TestRpPushErrorResult:
+    """Unit tests for _rp_push_error_result."""
 
-    def test_no_context_when_args_omitted(self, _rp_enabled_env):
-        """Without job_name/build_number, error message has no context suffix."""
+    def test_message_preserved_as_is(self, _rp_enabled_env):
+        """Error message is returned verbatim — no context suffix."""
         from jenkins_job_insight.main import _rp_push_error_result
 
         result = _rp_push_error_result("Some error")
         assert result["errors"] == ["Some error"]
 
-    def test_context_appended_when_both_provided(self, _rp_enabled_env):
-        """With job_name and build_number, context suffix is appended."""
+    def test_launch_id_preserved(self, _rp_enabled_env):
+        """launch_id is set correctly."""
         from jenkins_job_insight.main import _rp_push_error_result
 
-        result = _rp_push_error_result("Some error", job_name="my-job", build_number=42)
-        assert len(result["errors"]) == 1
-        assert "Some error" in result["errors"][0]
-        assert "(job='my-job' #42)" in result["errors"][0]
-
-    def test_no_context_when_job_name_empty(self, _rp_enabled_env):
-        """Empty job_name means no context suffix."""
-        from jenkins_job_insight.main import _rp_push_error_result
-
-        result = _rp_push_error_result("Some error", job_name="", build_number=42)
-        assert result["errors"] == ["Some error"]
-
-    def test_no_context_when_build_number_none(self, _rp_enabled_env):
-        """None build_number means no context suffix."""
-        from jenkins_job_insight.main import _rp_push_error_result
-
-        result = _rp_push_error_result(
-            "Some error", job_name="my-job", build_number=None
-        )
-        assert result["errors"] == ["Some error"]
-
-    def test_context_with_build_number_zero(self, _rp_enabled_env):
-        """build_number=0 is valid (not None) and should produce context."""
-        from jenkins_job_insight.main import _rp_push_error_result
-
-        result = _rp_push_error_result("Some error", job_name="my-job", build_number=0)
-        assert "(job='my-job' #0)" in result["errors"][0]
-
-    def test_launch_id_preserved_with_context(self, _rp_enabled_env):
-        """launch_id is still set correctly when context is also provided."""
-        from jenkins_job_insight.main import _rp_push_error_result
-
-        result = _rp_push_error_result(
-            "Some error", job_name="my-job", build_number=5, launch_id=99
-        )
+        result = _rp_push_error_result("Some error", launch_id=99)
         assert result["launch_id"] == 99
-        assert "(job='my-job' #5)" in result["errors"][0]
+        assert result["errors"] == ["Some error"]
 
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
-    def test_early_guard_includes_context(
+    def test_early_guard_error_is_clean(
         self, mock_get_result, mock_rp_class, _rp_enabled_env
     ):
-        """Early guard (no failures) includes job/build context in error."""
+        """Early guard (no failures) returns a short error without context suffix."""
         mock_get_result.return_value = {
             "result": {
                 "job_name": "context-job",
@@ -1339,14 +1338,14 @@ class TestRpPushErrorResultContext:
         body = response.json()
         assert body["pushed"] == 0
         assert "No failures to push" in body["errors"][0]
-        assert "(job='context-job' #77)" in body["errors"][0]
+        assert "(job=" not in body["errors"][0]
 
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
-    def test_find_launch_error_includes_context(
+    def test_find_launch_error_is_clean(
         self, mock_get_result, mock_rp_class, _rp_enabled_env
     ):
-        """find_launch exception error includes job/build context."""
+        """find_launch exception error has no context suffix."""
         mock_get_result.return_value = {
             "result": {
                 "job_name": "ctx-job",
@@ -1372,14 +1371,15 @@ class TestRpPushErrorResultContext:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/results/job1/push-reportportal")
         body = response.json()
-        assert "(job='ctx-job' #55)" in body["errors"][0]
+        assert "searching RP launches" in body["errors"][0]
+        assert "(job=" not in body["errors"][0]
 
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
-    def test_no_launch_found_includes_context(
+    def test_no_launch_found_is_clean(
         self, mock_get_result, mock_rp_class, _rp_enabled_env
     ):
-        """No launch found error includes job/build context."""
+        """No launch found error is short and has no context suffix."""
         mock_get_result.return_value = {
             "result": {
                 "job_name": "ctx-job",
@@ -1405,14 +1405,15 @@ class TestRpPushErrorResultContext:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/results/job1/push-reportportal")
         body = response.json()
-        assert "(job='ctx-job' #33)" in body["errors"][0]
+        assert "No RP launch found" in body["errors"][0]
+        assert "(job=" not in body["errors"][0]
 
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
-    def test_get_failed_items_error_includes_context(
+    def test_get_failed_items_error_is_clean(
         self, mock_get_result, mock_rp_class, _rp_enabled_env
     ):
-        """get_failed_items error includes job/build context."""
+        """get_failed_items error has no context suffix."""
         mock_get_result.return_value = {
             "result": {
                 "job_name": "ctx-job",
@@ -1439,14 +1440,15 @@ class TestRpPushErrorResultContext:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/results/job1/push-reportportal")
         body = response.json()
-        assert "(job='ctx-job' #44)" in body["errors"][0]
+        assert "fetching failed items" in body["errors"][0]
+        assert "(job=" not in body["errors"][0]
 
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
-    def test_match_failures_error_includes_context(
+    def test_match_failures_error_is_clean(
         self, mock_get_result, mock_rp_class, _rp_enabled_env
     ):
-        """match_failures error includes job/build context."""
+        """match_failures error has no context suffix."""
         mock_get_result.return_value = {
             "result": {
                 "job_name": "ctx-job",
@@ -1474,14 +1476,15 @@ class TestRpPushErrorResultContext:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/results/job1/push-reportportal")
         body = response.json()
-        assert "(job='ctx-job' #66)" in body["errors"][0]
+        assert "matching RP items" in body["errors"][0]
+        assert "(job=" not in body["errors"][0]
 
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
-    def test_no_overlap_error_includes_context(
+    def test_no_overlap_error_is_clean(
         self, mock_get_result, mock_rp_class, _rp_enabled_env
     ):
-        """No overlap error includes job/build context."""
+        """No overlap error has no context suffix."""
         mock_get_result.return_value = {
             "result": {
                 "job_name": "ctx-job",
@@ -1511,17 +1514,18 @@ class TestRpPushErrorResultContext:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/results/job1/push-reportportal")
         body = response.json()
-        assert "(job='ctx-job' #22)" in body["errors"][0]
+        assert "No overlap" in body["errors"][0]
+        assert "(job=" not in body["errors"][0]
 
     @patch(
         "jenkins_job_insight.main.get_history_classification", new_callable=AsyncMock
     )
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
-    def test_push_classifications_error_includes_context(
+    def test_push_classifications_error_is_clean(
         self, mock_get_result, mock_rp_class, mock_get_cls, _rp_enabled_env
     ):
-        """push_classifications error includes job/build context."""
+        """push_classifications error has no context suffix."""
         mock_get_cls.return_value = ""
         mock_get_result.return_value = {
             "result": {
@@ -1557,14 +1561,15 @@ class TestRpPushErrorResultContext:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/results/job1/push-reportportal")
         body = response.json()
-        assert "(job='ctx-job' #11)" in body["errors"][0]
+        assert "pushing classifications" in body["errors"][0]
+        assert "(job=" not in body["errors"][0]
 
     @patch("jenkins_job_insight.main.ReportPortalClient")
     @patch("jenkins_job_insight.main.get_result")
-    def test_constructor_failure_has_no_context(
+    def test_constructor_failure_is_clean(
         self, mock_get_result, mock_rp_class, _rp_enabled_env
     ):
-        """Constructor failure should NOT have job/build context (not in scope)."""
+        """Constructor failure has no context suffix."""
         mock_get_result.return_value = {
             "result": {
                 "job_name": "ctx-job",
@@ -1586,5 +1591,5 @@ class TestRpPushErrorResultContext:
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/results/job1/push-reportportal")
         body = response.json()
-        # Constructor failure has no job/build context
+        assert "connecting to Report Portal" in body["errors"][0]
         assert "(job=" not in body["errors"][0]
