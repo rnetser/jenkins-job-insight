@@ -176,6 +176,7 @@ function ReportContent() {
           dispatch({ type: 'SET_GITHUB_ISSUES_ENABLED', payload: resultRes.capabilities?.github_issues_enabled ?? false })
           dispatch({ type: 'SET_JIRA_ISSUES_ENABLED', payload: resultRes.capabilities?.jira_issues_enabled ?? false })
           dispatch({ type: 'SET_REPORTPORTAL_AVAILABLE', payload: resultRes.capabilities?.reportportal ?? false })
+          dispatch({ type: 'SET_REPORTPORTAL_PROJECT', payload: resultRes.capabilities?.reportportal_project ?? '' })
           dispatch({ type: 'SET_SERVER_JIRA_PROJECT_KEY', payload: resultRes.capabilities?.server_jira_project_key ?? '' })
         }
 
@@ -397,7 +398,7 @@ function ReportContent() {
           )}
           <div className="ml-auto flex items-center gap-3">
             {state.reportportalAvailable && (result.child_job_analyses ?? []).length === 0 && (
-              <ReportPortalButton jobId={result.job_id} />
+              <ReportPortalButton jobId={result.job_id} jobName={result.job_name ?? result.job_id} buildNumber={result.build_number} />
             )}
             {result.request_params && (
               <Button

@@ -7,6 +7,7 @@ classification results, analysis text, and Jira matches into RP launches.
 from __future__ import annotations
 
 import os
+import threading
 import warnings
 from typing import TYPE_CHECKING, Literal
 
@@ -19,6 +20,46 @@ if TYPE_CHECKING:
     from jenkins_job_insight.models import FailureAnalysis
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
+_RPCLIENT_INIT_LOCK = threading.Lock()
+
+# Disable RPClient's background "RP-API-Info-Prefetch" thread.  RPClient
+# spawns a daemon thread during __init__ that calls get_api_info(); when
+# RP is unreachable the library dumps full exception tracebacks to logs.
+# We never use api_info (all API calls go through our own Session), so
+# prevent the thread from starting and set the prefetch event immediately
+# so any internal wait on it returns instantly.
+#
+# This patches a name-mangled private method; if a future library upgrade
+# removes it, the ImportError here will surface immediately at import
+# time rather than silently reverting to noisy behaviour.
+_PREFETCH_ATTR = "_RPClient__init_api_info_prefetch"
+if not hasattr(RPClient, _PREFETCH_ATTR):
+    raise ImportError(
+        f"reportportal_client.RPClient no longer has '{_PREFETCH_ATTR}'; "
+        "update the prefetch suppression patch in reportportal.py"
+    )
+
+
+def _noop_prefetch(self: RPClient) -> None:  # type: ignore[no-untyped-def]
+    """No-op replacement: skip the background thread, mark event done."""
+    self._api_info_prefetched.set()
+
+
+setattr(RPClient, _PREFETCH_ATTR, _noop_prefetch)
+
+
+class AmbiguousLaunchError(Exception):
+    """Multiple RP launches matched but none could be disambiguated."""
+
+    def __init__(self, count: int, job_name: str, jenkins_url: str) -> None:
+        self.count = count
+        self.job_name = job_name
+        self.jenkins_url = jenkins_url
+        super().__init__(
+            f"Found {count} launches matching jenkins_url='{jenkins_url}'"
+            f" for job '{job_name}'. Cannot disambiguate."
+        )
+
 
 # JJI classification -> RP defect type category
 _CLASSIFICATION_MAP: dict[str, str] = {
@@ -61,12 +102,21 @@ class ReportPortalClient:
         self._session.headers["Authorization"] = f"Bearer {token}"
         self._session.verify = verify_ssl
         self._suppress_ssl_warnings = not verify_ssl
-        self._rp_client = RPClient(
-            endpoint=url.rstrip("/"),
-            project=project,
-            api_key=token,
-            verify_ssl=verify_ssl,
-        )
+        if not _RPCLIENT_INIT_LOCK.acquire(timeout=30):
+            self._session.close()
+            raise TimeoutError("Timed out waiting for RPClient initialisation lock")
+        try:
+            self._rp_client = RPClient(
+                endpoint=url.rstrip("/"),
+                project=project,
+                api_key=token,
+                verify_ssl=verify_ssl,
+            )
+        except Exception:
+            self._session.close()
+            raise
+        finally:
+            _RPCLIENT_INIT_LOCK.release()
 
     def __enter__(self) -> ReportPortalClient:
         return self
@@ -158,49 +208,42 @@ class ReportPortalClient:
         return result
 
     def find_launch(self, job_name: str, jenkins_url: str) -> int | None:
-        """Find an RP launch matching the given Jenkins job.
+        """Find an RP launch matching the given Jenkins build.
 
-        Searches by exact match on launch name. If multiple launches share
-        the same name, disambiguates by checking whether the launch description
-        contains *jenkins_url*.
+        Searches recent launches in the project and matches by checking
+        whether the launch **description** contains *jenkins_url*.  The
+        Jenkins URL is unique per build and is a reliable identifier
+        regardless of launch naming conventions.
 
         Args:
-            job_name: Jenkins job name to search for.
-            jenkins_url: Full Jenkins build URL for disambiguation.
+            job_name: Jenkins job name (used for error context).
+            jenkins_url: Full Jenkins build URL used as identifier.
 
         Returns:
             Numeric launch ID, or ``None`` if no match found.
+
+        Raises:
+            AmbiguousLaunchError: Multiple launches matched by
+                description (URL query) and cannot be disambiguated.
         """
         base = self._rp_client.base_url_v1
         url = f"{base}/launch"
-        all_launches = self._paginate_get(
+
+        url_matches = self._paginate_get(
             url,
             {
-                "filter.eq.name": job_name,
+                "filter.cnt.description": jenkins_url,
                 "page.size": 50,
                 "page.sort": "startTime,desc",
             },
         )
 
-        if not all_launches:
-            return None
+        if len(url_matches) == 1:
+            return url_matches[0]["id"]
 
-        if len(all_launches) == 1:
-            return all_launches[0]["id"]
+        if len(url_matches) > 1:
+            raise AmbiguousLaunchError(len(url_matches), job_name, jenkins_url)
 
-        # Multiple launches with the same name -- match by Jenkins URL in description
-        for launch in all_launches:
-            desc = launch.get("description", "") or ""
-            if jenkins_url in desc:
-                return launch["id"]
-
-        # Ambiguous: multiple launches, none matched by URL — refuse to guess
-        logger.warning(
-            "Found %d launches named '%s' but none matched jenkins_url '%s'",
-            len(all_launches),
-            job_name,
-            jenkins_url,
-        )
         return None
 
     def get_failed_items(self, launch_id: int) -> list[dict]:
@@ -238,10 +281,12 @@ class ReportPortalClient:
 
         Matching strategy (in order):
         1. Exact match on ``name`` or ``codeRef``
-        2. Dotted-suffix match in either direction: JJI FQN ends with
-           ``.{rp_name}`` *or* RP name ends with ``.{jji_name}``.  This
-           handles both cases where JJI stores the fully-qualified name
-           and RP stores the short name, and vice-versa.
+        2. Dotted-suffix match on ``name`` in either direction: JJI FQN
+           ends with ``.{rp_name}`` *or* RP name ends with
+           ``.{jji_name}``.
+        3. Dotted-suffix match on ``codeRef`` in either direction: JJI
+           FQN ends with ``.{rp_codeRef}`` *or* RP codeRef ends with
+           ``.{jji_name}``.
 
         Args:
             rp_items: List of RP item dicts.
@@ -397,29 +442,44 @@ class ReportPortalClient:
                 logger.info("Pushed %d classification(s) to RP in one batch", pushed)
             except _requests.exceptions.HTTPError as exc:
                 status = exc.response.status_code if exc.response is not None else None
-                detail = ""
+                rp_message = ""
+                response_body = ""
                 if exc.response is not None:
+                    response_body = exc.response.text
                     try:
                         rp_body = exc.response.json()
-                        detail = rp_body.get("message", "")
+                        raw = (
+                            rp_body.get("message")
+                            if isinstance(rp_body, dict)
+                            else None
+                        )
+                        rp_message = raw if isinstance(raw, str) else ""
                     except Exception:
-                        detail = ""
-                logger.debug("RP batch update failed: %s", exc)
-                suffix = f": {detail}" if detail else ""
-                error_msg = (
-                    f"{status or 'HTTP'} error updating"
-                    f" {len(bulk_issues)} item(s){suffix}"
+                        pass
+                log_body = response_body.replace("\r", "\\r").replace("\n", "\\n")
+                logger.error(
+                    "RP batch update failed: status=%s, url=%s,"
+                    " items=%d, detail=%s, response_body=%s",
+                    status,
+                    url,
+                    len(bulk_issues),
+                    rp_message or "(no detail)",
+                    log_body,
                 )
-                logger.warning(error_msg)
+                suffix = f": {rp_message}" if rp_message else ""
+                error_msg = (
+                    f"Error updating {len(bulk_issues)} item(s)"
+                    f" (HTTP {status or '?'}){suffix}"
+                )
                 errors.append(error_msg)
             except Exception as exc:
-                logger.debug("RP batch update failed: %s", exc)
-                error_msg = (
-                    f"Failed to update {len(bulk_issues)} RP item(s):"
-                    f" {type(exc).__name__}"
+                logger.error(
+                    "RP batch update failed: url=%s, items=%d, error=%s",
+                    url,
+                    len(bulk_issues),
+                    exc,
                 )
-                logger.warning(error_msg)
-                errors.append(error_msg)
+                errors.append(f"Error updating {len(bulk_issues)} RP item(s)")
 
         return {
             "pushed": pushed,

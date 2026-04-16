@@ -4,31 +4,75 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { Upload, Loader2, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react'
 import type { ReportPortalPushResult } from '@/types'
+import { useReportState } from './ReportContext'
+
+interface RPPushMetadataProps {
+  project?: string
+  jobName?: string
+  buildNumber?: number
+  launchId?: number
+  className?: string
+}
+
+function RPPushMetadata({ project, jobName, buildNumber, launchId, className }: RPPushMetadataProps) {
+  return (
+    <dl className={className}>
+      {project && (
+        <>
+          <dt className="font-medium">Project</dt>
+          <dd className="font-mono truncate" title={project}>{project}</dd>
+        </>
+      )}
+      {jobName && (
+        <>
+          <dt className="font-medium">Job</dt>
+          <dd className="font-mono truncate" title={jobName}>{jobName}</dd>
+        </>
+      )}
+      {buildNumber != null && (
+        <>
+          <dt className="font-medium">Build</dt>
+          <dd className="font-mono">#{buildNumber}</dd>
+        </>
+      )}
+      {launchId != null && (
+        <>
+          <dt className="font-medium">Launch ID</dt>
+          <dd className="font-mono">{launchId}</dd>
+        </>
+      )}
+    </dl>
+  )
+}
 
 interface ReportPortalButtonProps {
   jobId: string
+  jobName: string
+  buildNumber: number
   childJobName?: string
   childBuildNumber?: number
 }
 
-export function ReportPortalButton({ jobId, childJobName, childBuildNumber }: ReportPortalButtonProps) {
+export function ReportPortalButton({ jobId, jobName, buildNumber, childJobName, childBuildNumber }: ReportPortalButtonProps) {
+  const { reportportalProject } = useReportState()
+  const displayJobName = childJobName ?? jobName
+  const displayBuildNumber = childBuildNumber ?? buildNumber
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pushing, setPushing] = useState(false)
   const [resultDialogOpen, setResultDialogOpen] = useState(false)
   const [pushResult, setPushResult] = useState<ReportPortalPushResult | null>(null)
-  const [pushError, setPushError] = useState('')
+  const [pushFailed, setPushFailed] = useState(false)
 
   const handlePush = useCallback(async () => {
     setConfirmOpen(false)
     setPushing(true)
-    setPushError('')
+    setPushFailed(false)
     setPushResult(null)
     try {
       const params = new URLSearchParams()
@@ -38,8 +82,8 @@ export function ReportPortalButton({ jobId, childJobName, childBuildNumber }: Re
       const result = await api.post<ReportPortalPushResult>(`/results/${jobId}/push-reportportal${qs ? `?${qs}` : ''}`)
       setPushResult(result)
       setResultDialogOpen(true)
-    } catch (err) {
-      setPushError(err instanceof Error ? err.message : 'Failed to push to Report Portal')
+    } catch {
+      setPushFailed(true)
       setResultDialogOpen(true)
     } finally {
       setPushing(false)
@@ -52,7 +96,7 @@ export function ReportPortalButton({ jobId, childJobName, childBuildNumber }: Re
 
   const hasResultErrors = !!(pushResult && pushResult.errors.length > 0)
   const hasUnmatched = !!(pushResult && pushResult.unmatched.length > 0)
-  const isFullFailure = pushError || (pushResult && pushResult.pushed === 0 && hasResultErrors)
+  const isFullFailure = pushFailed || (pushResult && pushResult.pushed === 0 && hasResultErrors)
   const isPartialSuccess = pushResult && pushResult.pushed > 0 && (hasResultErrors || hasUnmatched)
   const isNoop = !!(pushResult && pushResult.pushed === 0 && !hasResultErrors && hasUnmatched)
 
@@ -80,9 +124,7 @@ export function ReportPortalButton({ jobId, childJobName, childBuildNumber }: Re
               <Upload className="h-5 w-5 text-text-secondary" />
               Confirm Push
             </DialogTitle>
-            <DialogDescription>
-              Push failure classifications to Report Portal?
-            </DialogDescription>
+
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>
@@ -107,46 +149,21 @@ export function ReportPortalButton({ jobId, childJobName, childBuildNumber }: Re
                 <><CheckCircle2 className="h-5 w-5 text-signal-green" /> Pushed {pushResult?.pushed ?? 0} classification{pushResult?.pushed !== 1 ? 's' : ''} to Report Portal.</>
               )}
             </DialogTitle>
-            {pushResult?.launch_id != null && (
-              <p className="text-xs text-text-tertiary mt-1">
-                Launch ID: <span className="font-mono">{pushResult.launch_id}</span>
-              </p>
-            )}
           </DialogHeader>
 
-          <div className="space-y-3 py-2 min-w-0">
-            {pushError && (
-              <p className="text-sm text-signal-red break-words">{pushError}</p>
-            )}
+          {(isFullFailure || isPartialSuccess || isNoop) && (
+            <div className="space-y-3 py-2 min-w-0">
+              <RPPushMetadata
+                project={reportportalProject}
+                jobName={displayJobName}
+                buildNumber={displayBuildNumber}
+                launchId={pushResult?.launch_id ?? undefined}
+                className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-text-tertiary"
+              />
 
-            {pushResult && pushResult.unmatched.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-1.5 text-sm text-signal-orange">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                  <span>{pushResult.unmatched.length} unmatched test{pushResult.unmatched.length !== 1 ? 's' : ''}</span>
-                </div>
-                <ul className="ml-6 space-y-0.5 text-xs text-text-tertiary max-h-32 overflow-y-auto">
-                  {pushResult.unmatched.map((name, index) => (
-                    <li key={`${name}-${index}`} className="font-mono break-all" title={name}>{name}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
 
-            {pushResult && pushResult.errors.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-1.5 text-sm text-signal-red">
-                  <XCircle className="h-4 w-4 flex-shrink-0" />
-                  <span>{pushResult.errors.length} error{pushResult.errors.length !== 1 ? 's' : ''}</span>
-                </div>
-                <ul className="ml-6 space-y-1 text-xs text-signal-red/80 max-h-48 overflow-y-auto">
-                  {pushResult.errors.map((err, i) => (
-                    <li key={i} className="break-words" title={err}>{err}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
           <DialogFooter>
             <Button variant="outline" onClick={handleClose}>
