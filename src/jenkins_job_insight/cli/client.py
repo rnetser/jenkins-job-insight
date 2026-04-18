@@ -576,15 +576,14 @@ class JJIClient:
         self, github_token: str = "", jira_email: str = "", jira_token: str = ""
     ) -> dict:
         """Save user tokens. PUT /api/user/tokens"""
-        return self._request(
-            "PUT",
-            "/api/user/tokens",
-            json={
-                "github_token": github_token,
-                "jira_email": jira_email,
-                "jira_token": jira_token,
-            },
-        )
+        body: dict = {}
+        if github_token:
+            body["github_token"] = github_token
+        if jira_email:
+            body["jira_email"] = jira_email
+        if jira_token:
+            body["jira_token"] = jira_token
+        return self._request("PUT", "/api/user/tokens", json=body)
 
     # -- Token Validation -----------------------------------------------------
 

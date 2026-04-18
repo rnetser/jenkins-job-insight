@@ -14,7 +14,10 @@ from typing import get_args
 import aiosqlite
 from simple_logger.logger import get_logger
 
-from jenkins_job_insight.encryption import strip_sensitive_from_response
+from jenkins_job_insight.encryption import (
+    get_hmac_secret,
+    strip_sensitive_from_response,
+)
 from jenkins_job_insight.models import (
     HistoryClassificationLiteral,
     OverrideClassificationLiteral,
@@ -51,21 +54,6 @@ def validate_api_key(key: str) -> None:
         raise ValueError(msg)
 
 
-def _get_hmac_secret() -> str:
-    """Get the HMAC secret for API key hashing.
-
-    Uses JJI_ENCRYPTION_KEY (same key used for at-rest encryption) as
-    the HMAC pepper. This is deliberately separate from ADMIN_KEY so
-    that rotating ADMIN_KEY does not invalidate delegated API key hashes.
-
-    Falls back to the auto-generated file-based key when
-    JJI_ENCRYPTION_KEY is not set (same resolution as encryption.py).
-    """
-    from jenkins_job_insight.encryption import get_hmac_secret
-
-    return get_hmac_secret()
-
-
 def hash_api_key(key: str) -> str:
     """Hash an API key with HMAC-SHA256 for storage.
 
@@ -78,7 +66,7 @@ def hash_api_key(key: str) -> str:
     Returns:
         Hex-encoded HMAC-SHA256 digest.
     """
-    secret = _get_hmac_secret()
+    secret = get_hmac_secret()
     return hmac.new(secret.encode(), key.encode(), hashlib.sha256).hexdigest()
 
 
@@ -371,6 +359,13 @@ async def init_db() -> None:
                 expires_at TIMESTAMP NOT NULL
             )
         """)
+
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_username ON sessions (username)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at)"
+        )
 
         await db.commit()
 
@@ -2394,8 +2389,23 @@ async def get_user_by_username(username: str) -> dict | None:
 
 
 async def delete_admin_user(username: str) -> bool:
-    """Delete an admin user. Returns True if deleted."""
+    """Delete an admin user. Returns True if deleted.
+
+    Raises ValueError if this would delete the last admin user.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
+        # Check this wouldn't delete the last admin
+        cursor = await db.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        admin_count = (await cursor.fetchone())[0]
+        if admin_count <= 1:
+            # Check if the target is actually an admin
+            cursor = await db.execute(
+                "SELECT role FROM users WHERE username = ?", (username,)
+            )
+            row = await cursor.fetchone()
+            if row and row[0] == "admin":
+                raise ValueError("Cannot delete the last admin user")
+
         # Delete sessions first
         await db.execute("DELETE FROM sessions WHERE username = ?", (username,))
         cursor = await db.execute(

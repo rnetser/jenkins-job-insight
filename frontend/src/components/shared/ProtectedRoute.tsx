@@ -8,15 +8,18 @@ interface Props {
 }
 
 export function ProtectedRoute({ children, adminOnly }: Props) {
-  const { isAdmin, loading } = useAuth()
+  const { isAdmin, loading, username } = useAuth()
 
-  if (!isLoggedIn()) {
+  // Wait for auth to resolve before any redirect
+  if (loading) return null
+
+  // Use auth context username (resolves from session OR cookie)
+  if (!username && !isLoggedIn()) {
     return <Navigate to="/register" replace />
   }
 
-  if (adminOnly) {
-    if (loading) return null  // Prevent flash while checking admin status
-    if (!isAdmin) return <Navigate to="/" replace />
+  if (adminOnly && !isAdmin) {
+    return <Navigate to="/" replace />
   }
 
   return <>{children}</>

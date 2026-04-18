@@ -2,6 +2,8 @@ const COOKIE_NAME = 'jji_username'
 const GITHUB_TOKEN_KEY = 'jji_github_token'
 const JIRA_TOKEN_KEY = 'jji_jira_token'
 const JIRA_EMAIL_KEY = 'jji_jira_email'
+// Display-only UI hints — NOT an authorization boundary.
+// All admin gating is enforced server-side in AuthMiddleware.
 const ADMIN_KEY = 'jji_is_admin'
 const ROLE_KEY = 'jji_role'
 

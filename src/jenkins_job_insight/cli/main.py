@@ -1585,7 +1585,11 @@ def auth_login(
     api_key: str = typer.Option(..., "--api-key", "-k", help="Admin API key."),
     json_output: bool = _JSON_OPTION,
 ):
-    """Login as admin user."""
+    """Validate admin credentials. This does not persist a session.
+
+    For persistent auth, set api_key in ~/.config/jji/config.toml or use
+    --api-key / JJI_API_KEY on each command.
+    """
     data = _run_client_command(
         json_output,
         lambda c: c.login(username, api_key),

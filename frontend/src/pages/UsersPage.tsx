@@ -262,7 +262,7 @@ export function UsersPage() {
                     {user.role === 'admin' ? (
                       <Shield className="h-3.5 w-3.5 text-signal-amber" />
                     ) : (
-                      <div className="h-2 w-2 rounded-full bg-signal-green" />
+                      <span className="h-2 w-2 rounded-full bg-signal-green" />
                     )}
                     {user.username}
                   </span>
@@ -406,6 +406,9 @@ export function UsersPage() {
               <CopyableKey label="New API Key" value={rotatedKey.new_api_key} />
             </div>
           ) : null}
+          {actionError && !rotatedKey && (
+            <p className="text-xs text-signal-red px-1">{actionError}</p>
+          )}
           <DialogFooter>
             {rotatedKey ? (
               <Button onClick={closeRotateDialog}>Done</Button>
@@ -446,6 +449,9 @@ export function UsersPage() {
               <CopyableKey label="API Key" value={roleChangeResult.api_key} />
             </div>
           ) : null}
+          {actionError && !roleChangeResult && (
+            <p className="text-xs text-signal-red px-1">{actionError}</p>
+          )}
           <DialogFooter>
             {roleChangeResult ? (
               <Button onClick={closeRoleChangeDialog}>Done</Button>

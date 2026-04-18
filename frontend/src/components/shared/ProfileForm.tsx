@@ -61,6 +61,16 @@ function TokenField({ id, label, value, onChange, show, onToggleShow, validation
   )
 }
 
+function persistTokensToServer(gh: string, je: string, jt: string) {
+  api.put('/api/user/tokens', {
+    github_token: gh,
+    jira_email: je,
+    jira_token: jt,
+  }).catch((err) => {
+    console.error('Failed to sync tokens to server:', err)
+  })
+}
+
 export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
   const [username, setUsernameValue] = useState(getUsername())
   const [apiKey, setApiKey] = useState('')
@@ -95,14 +105,7 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
         setGithubToken(githubToken.trim())
         setJiraEmail(jiraEmail.trim())
         setJiraToken(jiraToken.trim())
-        // Persist tokens server-side (fire and forget)
-        api.put('/api/user/tokens', {
-          github_token: githubToken.trim(),
-          jira_email: jiraEmail.trim(),
-          jira_token: jiraToken.trim(),
-        }).catch(() => {
-          // Server save failed — tokens still in localStorage
-        })
+        persistTokensToServer(githubToken.trim(), jiraEmail.trim(), jiraToken.trim())
         setSaving(false)
         onSaved()
         return
@@ -136,14 +139,7 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
     setGithubToken(githubToken.trim())
     setJiraEmail(jiraEmail.trim())
     setJiraToken(jiraToken.trim())
-    // Persist tokens server-side (fire and forget)
-    api.put('/api/user/tokens', {
-      github_token: githubToken.trim(),
-      jira_email: jiraEmail.trim(),
-      jira_token: jiraToken.trim(),
-    }).catch(() => {
-      // Server save failed — tokens still in localStorage
-    })
+    persistTokensToServer(githubToken.trim(), jiraEmail.trim(), jiraToken.trim())
     setSaving(false)
     onSaved()
   }
@@ -204,31 +200,35 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
             />
           </div>
 
-          {/* Admin Authentication Divider */}
-          <div className="flex items-center gap-3 py-1">
-            <div className="h-px flex-1 bg-border-muted" />
-            <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">
-              Admin Authentication
-            </span>
-            <div className="h-px flex-1 bg-border-muted" />
-          </div>
-          <p className="text-xs text-text-tertiary">
-            Provide your API key for admin access. Leave empty for regular user access.
-          </p>
+          {onAdminLogin && (
+            <>
+              {/* Admin Authentication Divider */}
+              <div className="flex items-center gap-3 py-1">
+                <div className="h-px flex-1 bg-border-muted" />
+                <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">
+                  Admin Authentication
+                </span>
+                <div className="h-px flex-1 bg-border-muted" />
+              </div>
+              <p className="text-xs text-text-tertiary">
+                Provide your API key for admin access. Leave empty for regular user access.
+              </p>
 
-          {/* API Key field */}
-          <TokenField
-            id="api-key"
-            label="API Key"
-            value={apiKey}
-            onChange={(v) => { setApiKey(v); setApiKeyError(null) }}
-            show={showApiKey}
-            onToggleShow={() => setShowApiKey(!showApiKey)}
-            validation={null}
-            error={apiKeyError}
-            placeholder="Enter API key..."
-            helpContent={<>Admin API key provided by your server administrator.</>}
-          />
+              {/* API Key field */}
+              <TokenField
+                id="api-key"
+                label="API Key"
+                value={apiKey}
+                onChange={(v) => { setApiKey(v); setApiKeyError(null) }}
+                show={showApiKey}
+                onToggleShow={() => setShowApiKey(!showApiKey)}
+                validation={null}
+                error={apiKeyError}
+                placeholder="Enter API key..."
+                helpContent={<>Admin API key provided by your server administrator.</>}
+              />
+            </>
+          )}
 
           {/* Tracker Tokens Divider */}
           <div className="flex items-center gap-3 py-1">

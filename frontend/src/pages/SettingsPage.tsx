@@ -23,7 +23,7 @@ export function SettingsPage() {
         onAdminLogin={async (u, k) => { await login(u, k) }}
       />
       <p className="mt-4 text-center text-xs text-text-tertiary">
-        Tokens are stored locally in your browser and sent only when validating, previewing, or creating issues.
+        Tokens are stored locally and synced to the server (encrypted at rest) for cross-browser access.
       </p>
     </div>
   )

@@ -53,6 +53,23 @@ def _admin_login(
     return resp.cookies
 
 
+def _wait_for_user_tracked(client, username, timeout=2.0):
+    """Poll until user appears in admin users list."""
+    import time
+
+    cookies = _admin_login(client)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        resp = client.get("/api/admin/users", cookies=cookies)
+        users = resp.json().get("users", [])
+        if any(u["username"] == username for u in users):
+            # Clear admin session cookies so subsequent requests aren't affected
+            client.cookies.clear()
+            return
+        time.sleep(0.05)
+    raise TimeoutError(f"User '{username}' not tracked within {timeout}s")
+
+
 class TestAuthLogin:
     def test_admin_login_success(self, client):
         resp = client.post(
@@ -164,11 +181,14 @@ class TestAdminUsers:
 
     def test_delete_admin_user(self, client):
         cookies = _admin_login(client)
-        # Create then delete
+        # Create two admins so we can safely delete one (last-admin guard)
+        client.post("/api/admin/users", json={"username": "keeper"}, cookies=cookies)
         client.post("/api/admin/users", json={"username": "todelete"}, cookies=cookies)
         resp = client.delete("/api/admin/users/todelete", cookies=cookies)
         assert resp.status_code == 200
         assert resp.json()["deleted"] == "todelete"
+        # Clean up
+        client.delete("/api/admin/users/keeper", cookies=cookies)
 
     def test_delete_self_forbidden(self, client):
         cookies = _admin_login(client)
@@ -343,11 +363,9 @@ class TestChangeUserRole:
 class TestUserTokens:
     def test_save_and_get_tokens(self, client):
         """Tokens round-trip through encrypt/decrypt."""
-        import time
-
         # Track a user first
         client.get("/api/dashboard", cookies={"jji_username": "tokenuser"})
-        time.sleep(0.1)
+        _wait_for_user_tracked(client, "tokenuser")
         # Save tokens
         resp = client.put(
             "/api/user/tokens",
@@ -384,10 +402,8 @@ class TestUserTokens:
 
     def test_save_partial_tokens(self, client):
         """Saving one token should NOT wipe others."""
-        import time
-
         client.get("/api/dashboard", cookies={"jji_username": "partial"})
-        time.sleep(0.1)
+        _wait_for_user_tracked(client, "partial")
 
         # Save all three tokens
         client.put(
@@ -417,12 +433,11 @@ class TestUserTokens:
     def test_tokens_encrypted_at_rest(self, client, temp_db_path):
         """Verify tokens are not stored as plaintext in the DB."""
         import asyncio
-        import time
 
         import aiosqlite
 
         client.get("/api/dashboard", cookies={"jji_username": "enctest"})
-        time.sleep(0.1)
+        _wait_for_user_tracked(client, "enctest")
         client.put(
             "/api/user/tokens",
             json={"github_token": "ghp_secret_value"},
@@ -529,15 +544,7 @@ class TestAdminDeleteComment:
 class TestUserTracking:
     def test_regular_user_tracked(self, client):
         """Regular user activity is tracked in the users table."""
-        import time
-
         # Make a request as a regular user
         client.get("/api/dashboard", cookies={"jji_username": "trackeduser"})
-        # Give the fire-and-forget task a moment
-        time.sleep(0.1)
-        # Check the user was tracked
-        cookies = _admin_login(client)
-        resp = client.get("/api/admin/users", cookies=cookies)
-        users = resp.json()["users"]
-        usernames = [u["username"] for u in users]
-        assert "trackeduser" in usernames
+        # Poll until the fire-and-forget task completes
+        _wait_for_user_tracked(client, "trackeduser")

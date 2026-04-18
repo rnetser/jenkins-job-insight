@@ -595,7 +595,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Track regular user activity (non-admin, has username)
         if username and not is_admin:
             # Fire and forget — don't block the request
-            asyncio.create_task(_safe_track_user(username))
+            task = asyncio.create_task(_safe_track_user(username))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
 
         # Admin-only path enforcement
         if path.startswith("/api/admin/"):
@@ -3452,6 +3454,17 @@ def _serve_spa() -> HTMLResponse:
 # --- Auth endpoints ---
 
 
+async def _read_json_object(request: Request) -> dict:
+    """Parse request body as a JSON object. Raises HTTPException on invalid input."""
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+    return body
+
+
 def _require_admin(request: Request) -> None:
     """Raise 403 if the request is not from an authenticated admin."""
     if not request.state.is_admin:
@@ -3461,10 +3474,7 @@ def _require_admin(request: Request) -> None:
 @app.post("/api/auth/login")
 async def login(request: Request) -> JSONResponse:
     """Authenticate admin with username + API key. Returns session cookie."""
-    try:
-        body = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    body = await _read_json_object(request)
 
     username = str(body.get("username", ""))
     api_key = str(body.get("api_key", ""))
@@ -3473,10 +3483,6 @@ async def login(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Username and api_key are required")
 
     settings = get_settings()
-    if not settings.admin_key:
-        raise HTTPException(
-            status_code=503, detail="Admin authentication not configured"
-        )
     is_admin = False
     authenticated = False
 
@@ -3580,10 +3586,7 @@ async def save_user_tokens_endpoint(request: Request) -> JSONResponse:
     username = request.state.username
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
-    try:
-        body = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    body = await _read_json_object(request)
 
     kwargs: dict[str, str | None] = {}
     if "github_token" in body:
@@ -3608,10 +3611,7 @@ async def save_user_tokens_endpoint(request: Request) -> JSONResponse:
 async def create_admin_user_endpoint(request: Request) -> JSONResponse:
     """Create a new admin user. Returns the generated API key."""
     _require_admin(request)
-    try:
-        body = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    body = await _read_json_object(request)
 
     username = body.get("username", "")
     if not username:
@@ -3638,7 +3638,10 @@ async def delete_admin_user_endpoint(request: Request, username: str) -> dict:
     if username == request.state.username:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
 
-    deleted = await storage.delete_admin_user(username)
+    try:
+        deleted = await storage.delete_admin_user(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(
             status_code=404, detail=f"Admin user '{username}' not found"
@@ -3661,10 +3664,7 @@ async def change_user_role_endpoint(request: Request, username: str) -> JSONResp
     if username == request.state.username:
         raise HTTPException(status_code=400, detail="Cannot change your own role")
 
-    try:
-        body = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    body = await _read_json_object(request)
 
     new_role = body.get("role", "")
     if not new_role:
@@ -3706,11 +3706,19 @@ async def rotate_key_endpoint(request: Request, username: str) -> JSONResponse:
         body_bytes = await request.body()
         if body_bytes and body_bytes.strip():
             body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(
+                    status_code=400, detail="JSON body must be an object"
+                )
             custom_key = body.get("new_key")
         else:
             custom_key = None
-    except Exception:
-        custom_key = None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid JSON body: {exc}"
+        ) from exc
 
     try:
         new_key = await storage.rotate_admin_key(username, custom_key=custom_key)

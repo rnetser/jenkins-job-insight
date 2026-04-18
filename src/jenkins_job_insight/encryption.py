@@ -223,7 +223,7 @@ def encrypt_value(value: str) -> str:
 
 
 def decrypt_value(value: str) -> str:
-    """Decrypt a single string value. Returns plaintext, or empty string on failure."""
+    """Decrypt a single string value. Returns plaintext, or original value on failure."""
     if not value or not value.startswith(_ENCRYPTED_PREFIX):
         return value or ""
     fernet = _get_fernet()
@@ -231,8 +231,10 @@ def decrypt_value(value: str) -> str:
     try:
         return fernet.decrypt(ciphertext.encode()).decode()
     except InvalidToken:
-        logger.warning("Failed to decrypt value: encryption key may have changed")
-        return ""
+        logger.warning(
+            "Failed to decrypt value: encryption key may have changed. Preserving ciphertext."
+        )
+        return value  # Preserve the encrypted value instead of returning ""
 
 
 def decrypt_sensitive_fields(params: dict) -> dict:

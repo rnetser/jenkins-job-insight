@@ -31,7 +31,7 @@ export function RegisterPage() {
           />
         </div>
         <p className="mt-6 animate-slide-up text-center text-xs text-text-tertiary [animation-delay:160ms] [animation-fill-mode:backwards]">
-          Tokens are stored locally in your browser and sent only when validating, previewing, or creating issues.<br />
+          Tokens are stored locally and synced to the server (encrypted at rest) for cross-browser access.<br />
           Admin API key enables admin features via server-side session.
         </p>
       </div>

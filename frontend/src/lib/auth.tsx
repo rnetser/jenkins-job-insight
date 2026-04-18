@@ -18,9 +18,9 @@ async function syncTokensFromServer(forUsername: string) {
   if (!forUsername) return
   try {
     const tokens = await api.get<{ github_token: string; jira_email: string; jira_token: string }>('/api/user/tokens')
-    if (tokens.github_token) setGithubToken(tokens.github_token)
-    if (tokens.jira_email) setJiraEmail(tokens.jira_email)
-    if (tokens.jira_token) setJiraToken(tokens.jira_token)
+    setGithubToken(tokens.github_token)
+    setJiraEmail(tokens.jira_email)
+    setJiraToken(tokens.jira_token)
   } catch {
     // Server tokens not available — keep localStorage values
   }
