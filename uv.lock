@@ -571,7 +571,7 @@ wheels = [
 
 [[package]]
 name = "jenkins-job-insight"
-version = "2.4.0"
+version = "3.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "ai-cli-runner" },
