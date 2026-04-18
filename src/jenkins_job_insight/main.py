@@ -3571,6 +3571,13 @@ async def get_user_tokens_endpoint(request: Request) -> JSONResponse:
     username = request.state.username
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
+    # Verify user exists in DB (prevents reading tokens for unregistered usernames)
+    user = await storage.get_user_by_username(username)
+    if not user:
+        return JSONResponse(
+            content={"github_token": "", "jira_email": "", "jira_token": ""},
+            headers={"Cache-Control": "no-store"},
+        )
     tokens = await storage.get_user_tokens(username)
     return JSONResponse(
         content=tokens,
@@ -3588,6 +3595,10 @@ async def save_user_tokens_endpoint(request: Request) -> JSONResponse:
     username = request.state.username
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
+    # Verify user exists in DB
+    user = await storage.get_user_by_username(username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found. Register first.")
     body = await _read_json_object(request)
 
     kwargs: dict[str, str | None] = {}

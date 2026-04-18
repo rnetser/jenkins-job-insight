@@ -2542,7 +2542,7 @@ async def get_session(token: str) -> dict | None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT * FROM sessions WHERE token = ? AND expires_at > datetime('now')",
+            "SELECT username, is_admin, created_at, expires_at FROM sessions WHERE token = ? AND expires_at > datetime('now')",
             (token_hash,),
         )
         row = await cursor.fetchone()
@@ -2617,7 +2617,7 @@ async def save_user_tokens(
     params.append(username)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            f"UPDATE users SET {', '.join(updates)} WHERE username = ?",
+            f"UPDATE users SET {', '.join(updates)} WHERE username = ?",  # noqa: S608 — columns are hardcoded literals
             params,
         )
         await db.commit()

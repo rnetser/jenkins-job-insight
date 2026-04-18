@@ -419,6 +419,15 @@ class TestUserTokens:
         data = resp.json()
         assert data["github_token"] == ""
 
+    def test_save_tokens_for_untracked_user(self, client):
+        """Saving tokens for a user not yet in DB should return 404."""
+        resp = client.put(
+            "/api/user/tokens",
+            json={"github_token": "ghp_new"},
+            cookies={"jji_username": "brand_new_user"},
+        )
+        assert resp.status_code == 404
+
     def test_save_partial_tokens(self, client):
         """Saving one token should NOT wipe others."""
         client.get("/api/dashboard", cookies={"jji_username": "partial"})

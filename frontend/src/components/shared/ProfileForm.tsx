@@ -98,18 +98,22 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
     setSaving(true)
     setApiKeyError(null)
 
+    async function commitProfile(trimmedUsername: string) {
+      setUsername(trimmedUsername)
+      setGithubToken(githubToken.trim())
+      setJiraEmail(jiraEmail.trim())
+      setJiraToken(jiraToken.trim())
+      await persistTokensToServer(githubToken.trim(), jiraEmail.trim(), jiraToken.trim())
+    }
+
     // Try admin login if API key is provided
     if (apiKey.trim() && onAdminLogin) {
       try {
         await onAdminLogin(trimmed, apiKey.trim())
         // Admin login succeeded — also save the username cookie
-        setUsername(trimmed)
-        setGithubToken(githubToken.trim())
-        setJiraEmail(jiraEmail.trim())
-        setJiraToken(jiraToken.trim())
-        await persistTokensToServer(githubToken.trim(), jiraEmail.trim(), jiraToken.trim())
+        await commitProfile(trimmed)
         setSaving(false)
-        onSaved()
+        await onSaved()
         return
       } catch (err) {
         setSaving(false)
@@ -130,20 +134,15 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
         needsGithubValidation ? validateGithub() : Promise.resolve(),
         needsJiraValidation ? validateJira() : Promise.resolve(),
       ])
-      setSaving(false)
 
       const results = validations.map((r) => r.status === 'fulfilled' ? r.value : false)
-      if (needsGithubValidation && results[0] === false) return
-      if (needsJiraValidation && results[1] === false) return
+      if (needsGithubValidation && results[0] === false) { setSaving(false); return }
+      if (needsJiraValidation && results[1] === false) { setSaving(false); return }
     }
 
-    setUsername(trimmed)
-    setGithubToken(githubToken.trim())
-    setJiraEmail(jiraEmail.trim())
-    setJiraToken(jiraToken.trim())
-    await persistTokensToServer(githubToken.trim(), jiraEmail.trim(), jiraToken.trim())
+    await commitProfile(trimmed)
     setSaving(false)
-    onSaved()
+    await onSaved()
   }
 
   async function validateToken(
