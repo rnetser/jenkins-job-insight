@@ -131,7 +131,12 @@ def _resolve_encryption_secret() -> str:
 
 
 def get_hmac_secret() -> str:
-    """Return the HMAC secret for API key hashing."""
+    """Return the HMAC secret for API key hashing.
+
+    Uses the same secret as Fernet at-rest encryption
+    (``JJI_ENCRYPTION_KEY`` or auto-generated file key).
+    Rotating this secret invalidates all stored API key hashes.
+    """
     return _resolve_encryption_secret()
 
 
