@@ -2519,7 +2519,12 @@ async def list_users() -> list[dict]:
 
 
 async def track_user(username: str) -> None:
-    """Track user activity — insert if new, update last_seen if existing."""
+    """Track user activity — insert if new, update last_seen if existing.
+
+    Skips the reserved 'admin' username (bootstrap superuser).
+    """
+    if username.lower() == "admin":
+        return
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO users (username, role) VALUES (?, 'user') "

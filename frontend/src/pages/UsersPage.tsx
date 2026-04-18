@@ -285,50 +285,54 @@ export function UsersPage() {
                   {user.last_seen ? formatTimestamp(user.last_seen) : '—'}
                 </TableCell>
                 <TableCell className="text-right">
-                  <div className="flex items-center justify-end gap-1">
-                    {/* Role select */}
-                    <Select
-                      value={user.role}
-                      onValueChange={(newRole) => {
-                        if (newRole !== user.role) {
-                          setRoleChangeTarget({ username: user.username, currentRole: user.role, newRole })
-                        }
-                      }}
-                    >
-                      <SelectTrigger className="h-7 w-[80px] text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="user">user</SelectItem>
-                        <SelectItem value="admin">admin</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {/* Rotate key — only for admins (regular users have no API key) */}
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Rotate key for ${user.username}`}
-                      className={`h-7 w-7${user.role !== 'admin' ? ' invisible' : ''}`}
-                      title="Rotate API key"
-                      disabled={user.role !== 'admin'}
-                      onClick={() => setRotateTarget(user.username)}
-                    >
-                      <RefreshCw className="h-3.5 w-3.5 text-text-tertiary hover:text-signal-blue" />
-                    </Button>
-                    {/* Delete */}
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Delete ${user.username}`}
-                      className="h-7 w-7"
-                      title="Delete user"
-                      onClick={() => setDeleteTarget(user.username)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5 text-text-tertiary hover:text-signal-red" />
-                    </Button>
-                  </div>
+                  {user.username === 'admin' ? (
+                    <span className="text-xs text-text-tertiary italic">built-in</span>
+                  ) : (
+                    <div className="flex items-center justify-end gap-1">
+                      {/* Role select */}
+                      <Select
+                        value={user.role}
+                        onValueChange={(newRole) => {
+                          if (newRole !== user.role) {
+                            setRoleChangeTarget({ username: user.username, currentRole: user.role, newRole })
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="h-7 w-[80px] text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="user">user</SelectItem>
+                          <SelectItem value="admin">admin</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {/* Rotate key — only for admins (regular users have no API key) */}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Rotate key for ${user.username}`}
+                        className={`h-7 w-7${user.role !== 'admin' ? ' invisible' : ''}`}
+                        title="Rotate API key"
+                        disabled={user.role !== 'admin'}
+                        onClick={() => setRotateTarget(user.username)}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5 text-text-tertiary hover:text-signal-blue" />
+                      </Button>
+                      {/* Delete */}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Delete ${user.username}`}
+                        className="h-7 w-7"
+                        title="Delete user"
+                        onClick={() => setDeleteTarget(user.username)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-text-tertiary hover:text-signal-red" />
+                      </Button>
+                    </div>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
