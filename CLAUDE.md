@@ -182,13 +182,15 @@ When adding a new analysis setting:
 5. Add the field to `ServerConfig` in `cli/config.py`
 
 Exceptions (server-level only, no payload equivalent):
+- `ADMIN_KEY` — server-only bootstrap secret for admin superuser authentication; never expose via request payloads, CLI flags, or shared config files
 - `DEBUG` — server reload toggle
-- `LOG_LEVEL` — server log verbosity
-- `PUBLIC_BASE_URL` — trusted server-only origin for building absolute links; never derive from request headers to prevent host-header injection
 - `ENABLE_GITHUB_ISSUES` — server capability toggle for GitHub issue creation
 - `ENABLE_REPORTPORTAL` — server capability toggle for Report Portal integration
 - `JJI_ENCRYPTION_KEY` — server-only secret for at-rest encryption; never expose via request payloads, CLI flags, or shared config files
-- Security-sensitive credentials for preview/create-issue endpoints (`GITHUB_TOKEN`, `TESTS_REPO_URL`, Jira credentials, `REPORTPORTAL_URL`, `REPORTPORTAL_API_TOKEN`, `REPORTPORTAL_PROJECT`) — these use deployment config, not per-request overrides
+- `LOG_LEVEL` — server log verbosity
+- `PUBLIC_BASE_URL` — trusted server-only origin for building absolute links; never derive from request headers to prevent host-header injection
+- `SECURE_COOKIES` — server-only deployment toggle for HTTPS cookie flags (default: True, set False for local HTTP dev)
+- Security-sensitive credentials for preview/create-issue endpoints (`ADMIN_KEY`, `GITHUB_TOKEN`, `TESTS_REPO_URL`, Jira credentials, `REPORTPORTAL_URL`, `REPORTPORTAL_API_TOKEN`, `REPORTPORTAL_PROJECT`) — these use deployment config, not per-request overrides
 
 ### Sensitive Data Handling
 

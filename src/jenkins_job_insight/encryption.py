@@ -197,6 +197,28 @@ def strip_sensitive_from_response(result_data: dict) -> dict:
     return result
 
 
+def encrypt_value(value: str) -> str:
+    """Encrypt a single string value. Returns prefixed ciphertext."""
+    if not value:
+        return ""
+    fernet = _get_fernet()
+    token = fernet.encrypt(value.encode()).decode()
+    return f"{_ENCRYPTED_PREFIX}{token}"
+
+
+def decrypt_value(value: str) -> str:
+    """Decrypt a single string value. Returns plaintext, or empty string on failure."""
+    if not value or not value.startswith(_ENCRYPTED_PREFIX):
+        return value or ""
+    fernet = _get_fernet()
+    ciphertext = value[len(_ENCRYPTED_PREFIX) :]
+    try:
+        return fernet.decrypt(ciphertext.encode()).decode()
+    except InvalidToken:
+        logger.warning("Failed to decrypt value: encryption key may have changed")
+        return ""
+
+
 def decrypt_sensitive_fields(params: dict) -> dict:
     """Return a shallow copy of *params* with sensitive values decrypted.
 

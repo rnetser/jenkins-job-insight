@@ -31,12 +31,18 @@ classifications_app = typer.Typer(
     help="List test classifications.", no_args_is_help=True
 )
 config_app = typer.Typer(help="Manage JJI configuration.")
+auth_app = typer.Typer(help="Authentication commands.", no_args_is_help=True)
+admin_app = typer.Typer(help="Admin management commands.", no_args_is_help=True)
+admin_users_app = typer.Typer(help="Manage admin users.", no_args_is_help=True)
 
 app.add_typer(results_app, name="results")
 app.add_typer(history_app, name="history")
 app.add_typer(comments_app, name="comments")
 app.add_typer(classifications_app, name="classifications")
 app.add_typer(config_app, name="config")
+app.add_typer(auth_app, name="auth")
+app.add_typer(admin_app, name="admin")
+admin_app.add_typer(admin_users_app, name="users")
 
 # -- Global state managed via app callback ------------------------------------
 
@@ -58,7 +64,10 @@ def _get_client(server_url: str = "", username: str = "") -> JJIClient:
     url = server_url or _state.get("server_url", "")
     uname = username or _state.get("username", "")
     verify_ssl = not _state.get("no_verify_ssl", False)
-    return JJIClient(server_url=url, username=uname, verify_ssl=verify_ssl)
+    api_key = _state.get("api_key", "")
+    return JJIClient(
+        server_url=url, username=uname, verify_ssl=verify_ssl, api_key=api_key
+    )
 
 
 def _handle_error(err: JJIError) -> None:
@@ -66,7 +75,12 @@ def _handle_error(err: JJIError) -> None:
     typer.echo(f"Error: {err}", err=True)
     if err.status_code == 401:
         typer.echo(
-            "Hint: Use --user <name> or set JJI_USERNAME to authenticate.",
+            "Hint: Use --api-key or set JJI_API_KEY to authenticate as admin.",
+            err=True,
+        )
+    elif err.status_code == 403:
+        typer.echo(
+            "Hint: This action requires admin access. Use --api-key or set JJI_API_KEY.",
             err=True,
         )
     raise typer.Exit(code=1)
@@ -206,6 +220,12 @@ def main_callback(
         envvar="JJI_USERNAME",
         help="Username displayed in comments and reviews.",
     ),
+    api_key: str = typer.Option(
+        "",
+        "--api-key",
+        envvar="JJI_API_KEY",
+        help="Admin API key for Bearer token authentication.",
+    ),
     no_verify_ssl: bool | None = typer.Option(
         None,
         "--no-verify-ssl",
@@ -252,6 +272,13 @@ def main_callback(
     _state["username"] = username
     _state["no_verify_ssl"] = no_verify_ssl
     _state["server_config"] = cfg
+
+    if api_key:
+        _state["api_key"] = api_key
+    elif cfg and cfg.api_key:
+        _state["api_key"] = cfg.api_key
+    else:
+        _state["api_key"] = ""
 
 
 # -- Health -------------------------------------------------------------------
@@ -1547,6 +1574,162 @@ def override_classification_cmd(
         print_output(data, columns=[], as_json=True)
     else:
         typer.echo(f"Classification overridden to: {data.get('classification', '')}")
+
+
+# -- Auth ---------------------------------------------------------------------
+
+
+@auth_app.command("login")
+def auth_login(
+    username: str = typer.Option(..., "--username", "-u", help="Admin username."),
+    api_key: str = typer.Option(..., "--api-key", "-k", help="Admin API key."),
+    json_output: bool = _JSON_OPTION,
+):
+    """Login as admin user."""
+    data = _run_client_command(
+        json_output,
+        lambda c: c.login(username, api_key),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
+        role = data.get("role", "user")
+        is_admin = data.get("is_admin", False)
+        typer.echo(
+            f"Logged in as {data.get('username', username)} (role: {role}, admin: {is_admin})"
+        )
+
+
+@auth_app.command("logout")
+def auth_logout(
+    json_output: bool = _JSON_OPTION,
+):
+    """Logout (clear admin session)."""
+    _run_client_command(json_output, lambda c: c.logout())
+
+
+@auth_app.command("whoami")
+def auth_whoami(
+    json_output: bool = _JSON_OPTION,
+):
+    """Show current authenticated user info."""
+    _run_client_command(
+        json_output,
+        lambda c: c.auth_me(),
+        columns=["username", "role", "is_admin"],
+    )
+
+
+# -- Admin --------------------------------------------------------------------
+
+
+@admin_users_app.command("list")
+def admin_users_list(
+    json_output: bool = _JSON_OPTION,
+):
+    """List all users (admin and regular)."""
+    data = _run_client_command(
+        json_output,
+        lambda c: c.admin_list_users(),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
+        users = data.get("users", [])
+        if users:
+            print_output(
+                users,
+                columns=["username", "role", "created_at", "last_seen"],
+                labels={"created_at": "CREATED", "last_seen": "LAST SEEN"},
+                as_json=False,
+            )
+        else:
+            typer.echo("No users found.")
+
+
+@admin_users_app.command("create")
+def admin_users_create(
+    username: str = typer.Argument(..., help="Username for the new admin user."),
+    json_output: bool = _JSON_OPTION,
+):
+    """Create a new admin user. The API key is shown once \u2014 save it."""
+    data = _run_client_command(
+        json_output,
+        lambda c: c.admin_create_user(username),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
+        typer.echo(f"Created admin user: {data.get('username', username)}")
+        typer.echo(f"API Key: {data.get('api_key', '(not returned)')}")
+        typer.echo("")
+        typer.echo(
+            "\u26a0\ufe0f  Save this API key now \u2014 it cannot be retrieved later."
+        )
+
+
+@admin_users_app.command("delete")
+def admin_users_delete(
+    username: str = typer.Argument(..., help="Username of the admin to delete."),
+    json_output: bool = _JSON_OPTION,
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Skip confirmation prompt."
+    ),
+):
+    """Delete an admin user."""
+    if not force:
+        confirm = typer.confirm(f"Delete admin user '{username}'?")
+        if not confirm:
+            raise typer.Abort()
+    _run_client_command(
+        json_output,
+        lambda c: c.admin_delete_user(username),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
+        typer.echo(f"Deleted admin user: {username}")
+
+
+@admin_users_app.command("rotate-key")
+def admin_users_rotate_key(
+    username: str = typer.Argument(
+        ..., help="Username of the admin to rotate key for."
+    ),
+    json_output: bool = _JSON_OPTION,
+):
+    """Rotate an admin user's API key. The new key is shown once."""
+    data = _run_client_command(
+        json_output,
+        lambda c: c.admin_rotate_key(username),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
+        typer.echo(f"Rotated API key for: {data.get('username', username)}")
+        typer.echo(f"New API Key: {data.get('new_api_key', '(not returned)')}")
+        typer.echo("")
+        typer.echo(
+            "\u26a0\ufe0f  Save this API key now \u2014 it cannot be retrieved later."
+        )
+
+
+@admin_users_app.command("change-role")
+def admin_users_change_role(
+    username: str = typer.Argument(..., help="Username to change role for."),
+    role: str = typer.Argument(..., help="New role: 'admin' or 'user'."),
+    json_output: bool = _JSON_OPTION,
+):
+    """Change a user's role. Promoting to admin generates an API key."""
+    data = _run_client_command(
+        json_output,
+        lambda c: c.admin_change_role(username, role),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
+        typer.echo(f"Changed role of '{data.get('username', username)}' to '{role}'")
+        api_key = data.get("api_key")
+        if api_key:
+            typer.echo(f"API Key: {api_key}")
+            typer.echo("")
+            typer.echo(
+                "\u26a0\ufe0f  Save this API key now \u2014 it cannot be retrieved later."
+            )
 
 
 # -- Config -------------------------------------------------------------------

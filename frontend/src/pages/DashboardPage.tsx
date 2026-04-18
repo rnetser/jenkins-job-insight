@@ -33,6 +33,7 @@ import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { SortableHeader } from '@/components/shared/SortableHeader'
 import { useTableSort } from '@/lib/useTableSort'
 import { Trash2, MessageSquare, CheckCircle2, GitFork, AlertTriangle } from 'lucide-react'
+import { useAuth } from '@/lib/auth'
 
 const STATUS_FILTER_ALL = 'ALL'
 const STATUS_FILTER_OPTIONS = [STATUS_FILTER_ALL, 'completed', 'running', 'waiting', 'pending', 'failed', 'timeout'] as const
@@ -96,6 +97,7 @@ function getJobDisplayName(job: DashboardJob | null | undefined): string {
 
 export function DashboardPage() {
   const navigate = useNavigate()
+  const { isAdmin } = useAuth()
   const [jobs, setJobs] = useState<DashboardJob[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -276,9 +278,11 @@ export function DashboardPage() {
                 <SortableHeader label="Comments" sortKey="comment_count" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-center" />
                 <SortableHeader label="Children" sortKey="child_job_count" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-center" />
                 <SortableHeader label="Created" sortKey="created_at" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-right" />
-                <TableHead className="w-10">
-                  <span className="sr-only">Actions</span>
-                </TableHead>
+                {isAdmin && (
+                  <TableHead className="w-10">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -397,21 +401,23 @@ export function DashboardPage() {
                     </TableCell>
 
                     {/* Delete */}
-                    <TableCell>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Delete analysis ${getJobDisplayName(job)}`}
-                        className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setDeleteTarget(job)
-                        }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-text-tertiary hover:text-signal-red" />
-                      </Button>
-                    </TableCell>
+                    {isAdmin && (
+                      <TableCell>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Delete analysis ${getJobDisplayName(job)}`}
+                          className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setDeleteTarget(job)
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-text-tertiary hover:text-signal-red" />
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 )
               })}

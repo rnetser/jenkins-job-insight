@@ -1,8 +1,10 @@
 import { useNavigate } from 'react-router-dom'
 import { ProfileForm } from '@/components/shared/ProfileForm'
+import { useAuth } from '@/lib/auth'
 
 export function RegisterPage() {
   const navigate = useNavigate()
+  const { login, refreshAuth } = useAuth()
 
   return (
     <div className="relative flex min-h-screen items-center justify-center bg-surface-page overflow-hidden">
@@ -23,10 +25,14 @@ export function RegisterPage() {
         </div>
         {/* Form */}
         <div className="animate-slide-up [animation-delay:80ms] [animation-fill-mode:backwards]">
-          <ProfileForm onSaved={() => navigate('/')} />
+          <ProfileForm
+            onSaved={async () => { await refreshAuth(); navigate('/') }}
+            onAdminLogin={async (u, k) => { await login(u, k) }}
+          />
         </div>
         <p className="mt-6 animate-slide-up text-center text-xs text-text-tertiary [animation-delay:160ms] [animation-fill-mode:backwards]">
-          Tokens are stored locally in your browser and sent only when validating, previewing, or creating issues.<br />No account or password required.
+          Tokens are stored locally in your browser and sent only when validating, previewing, or creating issues.<br />
+          Admin API key enables admin features via server-side session.
         </p>
       </div>
     </div>

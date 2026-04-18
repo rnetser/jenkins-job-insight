@@ -175,6 +175,12 @@ class Settings(BaseSettings):
     poll_interval_minutes: int = Field(default=2, gt=0)
     max_wait_minutes: int = Field(default=0, ge=0)
 
+    # Admin authentication
+    admin_key: str = Field(
+        default="", repr=False
+    )  # JJI_ADMIN_KEY — bootstraps admin superuser
+    secure_cookies: bool = True  # Set to False for local HTTP dev
+
     # Trusted public base URL — used for result_url and tracker links.
     # When set, _extract_base_url() returns this value verbatim.
     # When unset, _extract_base_url() returns an empty string (relative

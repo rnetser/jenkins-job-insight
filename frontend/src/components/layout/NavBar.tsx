@@ -1,15 +1,21 @@
 import { Link, useLocation } from 'react-router-dom'
 import { Bug } from 'lucide-react'
 import { UserBadge } from './UserBadge'
+import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
-const NAV_LINKS = [
+const BASE_NAV_LINKS = [
   { to: '/', label: 'Dashboard' },
   { to: '/history', label: 'History' },
 ]
 
 export function NavBar() {
   const location = useLocation()
+  const { isAdmin } = useAuth()
+
+  const navLinks = isAdmin
+    ? [...BASE_NAV_LINKS, { to: '/admin/users', label: 'Users' }]
+    : BASE_NAV_LINKS
 
   return (
     <header className="sticky top-0 z-50 border-b border-border-default bg-surface-card/95 backdrop-blur-sm">
@@ -22,7 +28,7 @@ export function NavBar() {
             JJI
           </Link>
           <nav className="flex items-center gap-1">
-            {NAV_LINKS.map(({ to, label }) => (
+            {navLinks.map(({ to, label }) => (
               <Link
                 key={to}
                 to={to}

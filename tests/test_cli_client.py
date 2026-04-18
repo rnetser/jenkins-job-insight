@@ -1185,3 +1185,169 @@ class TestJJIClientPushReportPortal:
         with pytest.raises(JJIError) as exc_info:
             client.push_reportportal("job-123")
         assert exc_info.value.status_code == 400
+
+
+class TestJJIClientAuth:
+    def test_login(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert request.url.path == "/api/auth/login"
+            body = json.loads(request.content)
+            assert body["username"] == "admin"
+            assert body["api_key"] == "test-key"  # noqa: S105  # pragma: allowlist secret
+            return httpx.Response(
+                200,
+                json={"username": "admin", "role": "admin", "is_admin": True},
+            )
+
+        client = _make_client(handler)
+        result = client.login("admin", "test-key")
+        assert result["username"] == "admin"
+        assert result["is_admin"] is True
+
+    def test_logout(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert request.url.path == "/api/auth/logout"
+            return httpx.Response(200, json={"status": "logged_out"})
+
+        client = _make_client(handler)
+        result = client.logout()
+        assert result["status"] == "logged_out"
+
+    def test_auth_me(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert request.url.path == "/api/auth/me"
+            return httpx.Response(
+                200,
+                json={"username": "admin", "role": "admin", "is_admin": True},
+            )
+
+        client = _make_client(handler)
+        result = client.auth_me()
+        assert result["username"] == "admin"
+
+    def test_login_wrong_key(self):
+        client = _make_client(
+            lambda request: httpx.Response(401, json={"detail": "Invalid credentials"})
+        )
+        with pytest.raises(JJIError) as exc_info:
+            client.login("admin", "wrong-key")
+        assert exc_info.value.status_code == 401
+
+
+class TestJJIClientAdminUsers:
+    def test_admin_list_users(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert request.url.path == "/api/admin/users"
+            return httpx.Response(
+                200,
+                json={"users": [{"username": "admin", "role": "admin"}]},
+            )
+
+        client = _make_client(handler)
+        result = client.admin_list_users()
+        assert "users" in result
+        assert result["users"][0]["username"] == "admin"
+
+    def test_admin_create_user(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert request.url.path == "/api/admin/users"
+            body = json.loads(request.content)
+            assert body["username"] == "newadmin"
+            return httpx.Response(
+                200,
+                json={
+                    "username": "newadmin",
+                    "api_key": "not-a-real-key",  # pragma: allowlist secret
+                    "role": "admin",
+                },
+            )
+
+        client = _make_client(handler)
+        result = client.admin_create_user("newadmin")
+        assert result["username"] == "newadmin"
+        assert "api_key" in result
+
+    def test_admin_delete_user(self):
+        def handler(request):
+            assert request.method == "DELETE"
+            assert "/api/admin/users/oldadmin" in str(request.url)
+            return httpx.Response(200, json={"deleted": "oldadmin"})
+
+        client = _make_client(handler)
+        result = client.admin_delete_user("oldadmin")
+        assert result["deleted"] == "oldadmin"
+
+    def test_admin_rotate_key(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert "/api/admin/users/myuser/rotate-key" in str(request.url)
+            return httpx.Response(
+                200,
+                json={
+                    "username": "myuser",
+                    "new_api_key": "not-a-real-key",  # pragma: allowlist secret
+                },
+            )
+
+        client = _make_client(handler)
+        result = client.admin_rotate_key("myuser")
+        assert result["username"] == "myuser"
+        assert result["new_api_key"] == "not-a-real-key"  # pragma: allowlist secret
+
+    def test_admin_change_role(self):
+        def handler(request):
+            assert request.url.path == "/api/admin/users/myuser/role"
+            assert request.method == "PUT"
+            body = json.loads(request.content)
+            assert body["role"] == "admin"
+            return httpx.Response(
+                200,
+                json={
+                    "username": "myuser",
+                    "role": "admin",
+                    "api_key": "not-a-real-key",  # pragma: allowlist secret
+                },
+            )
+
+        client = _make_client(handler, api_key="test-key")
+        result = client.admin_change_role("myuser", "admin")
+        assert result["role"] == "admin"
+        assert result["api_key"] == "not-a-real-key"  # pragma: allowlist secret
+
+    def test_admin_create_user_forbidden(self):
+        client = _make_client(
+            lambda request: httpx.Response(
+                403, json={"detail": "Admin access required"}
+            )
+        )
+        with pytest.raises(JJIError) as exc_info:
+            client.admin_create_user("newadmin")
+        assert exc_info.value.status_code == 403
+
+
+class TestJJIClientApiKeyHeader:
+    def test_api_key_sent_as_bearer_header(self):
+        def check_header(request):
+            auth = request.headers.get("authorization", "")
+            assert auth == "Bearer test-api-key"  # noqa: S105
+            return httpx.Response(
+                200,
+                json={"username": "admin", "role": "admin", "is_admin": True},
+            )
+
+        client = _make_client(check_header, api_key="test-api-key")  # noqa: S106
+        client.auth_me()
+
+    def test_no_api_key_no_auth_header(self):
+        def check_no_auth(request):
+            auth = request.headers.get("authorization", "")
+            assert auth == ""
+            return httpx.Response(200, json={"status": "ok"})
+
+        client = _make_client(check_no_auth)
+        client.health()

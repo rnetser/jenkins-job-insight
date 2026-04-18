@@ -13,6 +13,38 @@
 /** Shared status union matching the backend contract. */
 export type AnalysisStatus = 'waiting' | 'pending' | 'running' | 'completed' | 'failed'
 
+// -- Auth -----------------------------------------------------------
+
+export interface AuthUser {
+  username: string
+  role: string
+  is_admin: boolean
+}
+
+export interface AdminUser {
+  username: string
+  role: string
+  created_at: string
+  last_seen: string | null
+}
+
+export interface CreateUserResponse {
+  username: string
+  api_key: string
+  role: string
+}
+
+export interface RotateKeyResponse {
+  username: string
+  new_api_key: string
+}
+
+export interface ChangeRoleResponse {
+  username: string
+  role: string
+  api_key?: string
+}
+
 // -- Analysis domain ------------------------------------------------
 
 export interface JiraMatch {

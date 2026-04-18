@@ -504,14 +504,25 @@ class TestErrorHandling:
         assert result.exit_code != 0
         assert "404" in result.output or "not found" in result.output.lower()
 
-    def test_401_error_hints_about_user_flag(self, mock_client):
-        """_handle_error should hint about --user when server returns 401."""
+    def test_401_error_hints_about_api_key_flag(self, mock_client):
+        """_handle_error should hint about --api-key when server returns 401."""
         mock_client.delete_job.side_effect = JJIError(
             status_code=401, detail="Please register a username first"
         )
         result = runner.invoke(app, ["results", "delete", "job-123"])
         assert result.exit_code == 1
-        assert "--user" in result.output
+        assert "--api-key" in result.output
+        assert "JJI_API_KEY" in result.output
+
+    def test_403_error_hints_about_admin_access(self, mock_client):
+        """_handle_error should hint about admin access when server returns 403."""
+        mock_client.delete_job.side_effect = JJIError(
+            status_code=403, detail="Admin access required"
+        )
+        result = runner.invoke(app, ["results", "delete", "job-123"])
+        assert result.exit_code == 1
+        assert "admin access" in result.output.lower()
+        assert "--api-key" in result.output
 
 
 class TestNullFieldHandling:
@@ -1368,7 +1379,7 @@ class TestNoVerifySSL:
             result = runner.invoke(app, ["--no-verify-ssl", "health"])
             assert result.exit_code == 0
             mock_cls.assert_called_once_with(
-                server_url=_TEST_SERVER, username="", verify_ssl=False
+                server_url=_TEST_SERVER, username="", verify_ssl=False, api_key=""
             )
 
     def test_without_no_verify_ssl_flag(self):
@@ -1390,7 +1401,7 @@ class TestNoVerifySSL:
             result = runner.invoke(app, ["health"])
             assert result.exit_code == 0
             mock_cls.assert_called_once_with(
-                server_url=_TEST_SERVER, username="", verify_ssl=True
+                server_url=_TEST_SERVER, username="", verify_ssl=True, api_key=""
             )
 
     def test_no_verify_ssl_env_var(self):
@@ -1417,7 +1428,7 @@ class TestNoVerifySSL:
             result = runner.invoke(app, ["health"])
             assert result.exit_code == 0
             mock_cls.assert_called_once_with(
-                server_url=_TEST_SERVER, username="", verify_ssl=False
+                server_url=_TEST_SERVER, username="", verify_ssl=False, api_key=""
             )
 
 
@@ -2374,3 +2385,330 @@ class TestPushRpCommand:
             child_job_name="my-child",
             child_build_number=42,
         )
+
+
+class TestAuthLoginCommand:
+    def test_auth_login(self, mock_client):
+        mock_client.login.return_value = {
+            "username": "admin",
+            "role": "admin",
+            "is_admin": True,
+        }
+        result = runner.invoke(
+            app,
+            ["auth", "login", "--username", "admin", "--api-key", "test-key"],  # noqa: S106
+        )
+        assert result.exit_code == 0
+        assert "Logged in as admin" in result.output
+        assert "admin: True" in result.output
+        mock_client.login.assert_called_once_with("admin", "test-key")
+
+    def test_auth_login_json(self, mock_client):
+        mock_client.login.return_value = {
+            "username": "admin",
+            "role": "admin",
+            "is_admin": True,
+        }
+        result = runner.invoke(
+            app,
+            ["--json", "auth", "login", "--username", "admin", "--api-key", "key"],  # noqa: S106
+        )
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["is_admin"] is True
+
+    def test_auth_login_error(self, mock_client):
+        mock_client.login.side_effect = JJIError(status_code=401, detail="Invalid")
+        result = runner.invoke(
+            app,
+            ["auth", "login", "--username", "admin", "--api-key", "bad"],  # noqa: S106
+        )
+        assert result.exit_code == 1
+        assert "Error" in result.output
+
+
+class TestAuthLogoutCommand:
+    def test_auth_logout(self, mock_client):
+        mock_client.logout.return_value = {"status": "logged_out"}
+        result = runner.invoke(app, ["auth", "logout"])
+        assert result.exit_code == 0
+
+    def test_auth_logout_json(self, mock_client):
+        mock_client.logout.return_value = {"status": "logged_out"}
+        result = runner.invoke(app, ["--json", "auth", "logout"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["status"] == "logged_out"
+
+
+class TestAuthWhoamiCommand:
+    def test_auth_whoami(self, mock_client):
+        mock_client.auth_me.return_value = {
+            "username": "admin",
+            "role": "admin",
+            "is_admin": True,
+        }
+        result = runner.invoke(app, ["auth", "whoami"])
+        assert result.exit_code == 0
+        assert "admin" in result.output
+
+    def test_auth_whoami_json(self, mock_client):
+        mock_client.auth_me.return_value = {
+            "username": "testuser",
+            "role": "user",
+            "is_admin": False,
+        }
+        result = runner.invoke(app, ["--json", "auth", "whoami"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["username"] == "testuser"
+        assert parsed["is_admin"] is False
+
+
+class TestAdminUsersListCommand:
+    def test_admin_users_list(self, mock_client):
+        mock_client.admin_list_users.return_value = {
+            "users": [
+                {
+                    "username": "admin",
+                    "role": "admin",
+                    "created_at": "2026-01-01",
+                    "last_seen": "2026-04-18",
+                },
+            ]
+        }
+        result = runner.invoke(app, ["admin", "users", "list"])
+        assert result.exit_code == 0
+        assert "admin" in result.output
+
+    def test_admin_users_list_json(self, mock_client):
+        mock_client.admin_list_users.return_value = {
+            "users": [{"username": "admin", "role": "admin"}]
+        }
+        result = runner.invoke(app, ["--json", "admin", "users", "list"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert "users" in parsed
+
+
+class TestAdminUsersCreateCommand:
+    def test_admin_users_create(self, mock_client):
+        mock_client.admin_create_user.return_value = {
+            "username": "newadmin",
+            "api_key": "not-a-real-key",  # pragma: allowlist secret
+            "role": "admin",
+        }
+        result = runner.invoke(app, ["admin", "users", "create", "newadmin"])
+        assert result.exit_code == 0
+        assert "Created admin user: newadmin" in result.output
+        assert "not-a-real-key" in result.output
+        assert "Save this API key" in result.output
+        mock_client.admin_create_user.assert_called_once_with("newadmin")
+
+    def test_admin_users_create_json(self, mock_client):
+        mock_client.admin_create_user.return_value = {
+            "username": "newadmin",
+            "api_key": "not-a-real-key",  # pragma: allowlist secret
+            "role": "admin",
+        }
+        result = runner.invoke(app, ["--json", "admin", "users", "create", "newadmin"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["username"] == "newadmin"
+        assert parsed["api_key"] == "not-a-real-key"  # pragma: allowlist secret
+
+    def test_admin_users_create_error(self, mock_client):
+        mock_client.admin_create_user.side_effect = JJIError(
+            status_code=403, detail="Admin access required"
+        )
+        result = runner.invoke(app, ["admin", "users", "create", "newadmin"])
+        assert result.exit_code == 1
+
+
+class TestAdminUsersDeleteCommand:
+    def test_admin_users_delete_with_force(self, mock_client):
+        mock_client.admin_delete_user.return_value = {"deleted": "oldadmin"}
+        result = runner.invoke(app, ["admin", "users", "delete", "oldadmin", "--force"])
+        assert result.exit_code == 0
+        assert "Deleted admin user: oldadmin" in result.output
+        mock_client.admin_delete_user.assert_called_once_with("oldadmin")
+
+    def test_admin_users_delete_with_confirm(self, mock_client):
+        mock_client.admin_delete_user.return_value = {"deleted": "oldadmin"}
+        result = runner.invoke(
+            app, ["admin", "users", "delete", "oldadmin"], input="y\n"
+        )
+        assert result.exit_code == 0
+        assert "Deleted admin user: oldadmin" in result.output
+
+    def test_admin_users_delete_aborted(self, mock_client):
+        result = runner.invoke(
+            app, ["admin", "users", "delete", "oldadmin"], input="n\n"
+        )
+        assert result.exit_code != 0  # Abort
+
+    def test_admin_users_delete_json(self, mock_client):
+        mock_client.admin_delete_user.return_value = {"deleted": "oldadmin"}
+        result = runner.invoke(
+            app, ["--json", "admin", "users", "delete", "oldadmin", "--force"]
+        )
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["deleted"] == "oldadmin"
+
+
+class TestAdminUsersRotateKeyCommand:
+    def test_admin_users_rotate_key(self, mock_client):
+        mock_client.admin_rotate_key.return_value = {
+            "username": "myuser",
+            "new_api_key": "not-a-real-key",  # pragma: allowlist secret
+        }
+        result = runner.invoke(app, ["admin", "users", "rotate-key", "myuser"])
+        assert result.exit_code == 0
+        assert "Rotated API key for: myuser" in result.output
+        assert "not-a-real-key" in result.output
+        assert "Save this API key" in result.output
+        mock_client.admin_rotate_key.assert_called_once_with("myuser")
+
+    def test_admin_users_rotate_key_json(self, mock_client):
+        mock_client.admin_rotate_key.return_value = {
+            "username": "myuser",
+            "new_api_key": "not-a-real-key",  # pragma: allowlist secret
+        }
+        result = runner.invoke(
+            app, ["--json", "admin", "users", "rotate-key", "myuser"]
+        )
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["new_api_key"] == "not-a-real-key"  # pragma: allowlist secret
+
+    def test_admin_users_rotate_key_error(self, mock_client):
+        mock_client.admin_rotate_key.side_effect = JJIError(
+            status_code=404, detail="User not found"
+        )
+        result = runner.invoke(app, ["admin", "users", "rotate-key", "nonexistent"])
+        assert result.exit_code == 1
+
+
+class TestAdminUsersChangeRole:
+    def test_change_role_promote(self, mock_client):
+        mock_client.admin_change_role.return_value = {
+            "username": "myuser",
+            "role": "admin",
+            "api_key": "not-a-real-key",  # pragma: allowlist secret
+        }
+        result = runner.invoke(
+            app, ["admin", "users", "change-role", "myuser", "admin"]
+        )
+        assert result.exit_code == 0
+        assert "admin" in result.output
+        assert "not-a-real-key" in result.output
+
+    def test_change_role_demote(self, mock_client):
+        mock_client.admin_change_role.return_value = {
+            "username": "myuser",
+            "role": "user",
+        }
+        result = runner.invoke(app, ["admin", "users", "change-role", "myuser", "user"])
+        assert result.exit_code == 0
+        assert "user" in result.output
+        assert "API Key" not in result.output
+
+    def test_change_role_json(self, mock_client):
+        mock_client.admin_change_role.return_value = {
+            "username": "myuser",
+            "role": "admin",
+            "api_key": "not-a-real-key",  # pragma: allowlist secret
+        }
+        result = runner.invoke(
+            app, ["--json", "admin", "users", "change-role", "myuser", "admin"]
+        )
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert output["role"] == "admin"
+
+
+class TestApiKeyOption:
+    def test_api_key_passed_to_client(self):
+        """--api-key should cause _get_client to create client with api_key."""
+        with (
+            patch.dict(
+                os.environ,
+                {"JJI_SERVER": _TEST_SERVER, "JJI_USERNAME": ""},
+                clear=True,
+            ),
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=ServerConfig(url=_TEST_SERVER),
+            ),
+            patch("jenkins_job_insight.cli.main.JJIClient") as mock_cls,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.health.return_value = {"status": "healthy"}
+            mock_cls.return_value = mock_instance
+            result = runner.invoke(
+                app,
+                ["--api-key", "my-secret-key", "health"],  # noqa: S106
+            )
+            assert result.exit_code == 0
+            mock_cls.assert_called_once_with(
+                server_url=_TEST_SERVER,
+                username="",
+                verify_ssl=True,
+                api_key="my-secret-key",  # pragma: allowlist secret
+            )
+
+    def test_api_key_from_config(self):
+        """api_key from config should be used when --api-key is not given."""
+        cfg = ServerConfig(
+            url=_TEST_SERVER,
+            api_key="config-key",  # pragma: allowlist secret
+        )
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=cfg,
+            ),
+            patch("jenkins_job_insight.cli.main.JJIClient") as mock_cls,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.health.return_value = {"status": "healthy"}
+            mock_cls.return_value = mock_instance
+            result = runner.invoke(app, ["health"])
+            assert result.exit_code == 0
+            mock_cls.assert_called_once_with(
+                server_url=_TEST_SERVER,
+                username="",
+                verify_ssl=True,
+                api_key="config-key",  # pragma: allowlist secret
+            )
+
+    def test_cli_api_key_overrides_config(self):
+        """CLI --api-key should override config api_key."""
+        cfg = ServerConfig(
+            url=_TEST_SERVER,
+            api_key="config-key",  # pragma: allowlist secret
+        )
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch(
+                "jenkins_job_insight.cli.main.get_server_config",
+                return_value=cfg,
+            ),
+            patch("jenkins_job_insight.cli.main.JJIClient") as mock_cls,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.health.return_value = {"status": "healthy"}
+            mock_cls.return_value = mock_instance
+            result = runner.invoke(
+                app,
+                ["--api-key", "cli-key", "health"],  # noqa: S106
+            )
+            assert result.exit_code == 0
+            mock_cls.assert_called_once_with(
+                server_url=_TEST_SERVER,
+                username="",
+                verify_ssl=True,
+                api_key="cli-key",  # pragma: allowlist secret
+            )
