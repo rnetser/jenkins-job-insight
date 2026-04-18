@@ -186,7 +186,7 @@ Exceptions (server-level only, no payload equivalent):
 - `DEBUG` — server reload toggle
 - `ENABLE_GITHUB_ISSUES` — server capability toggle for GitHub issue creation
 - `ENABLE_REPORTPORTAL` — server capability toggle for Report Portal integration
-- `JJI_ENCRYPTION_KEY` — server-only secret for at-rest encryption; never expose via request payloads, CLI flags, or shared config files
+- `JJI_ENCRYPTION_KEY` — server-only secret for at-rest encryption AND HMAC pepper for delegated admin API key hashes; never expose via request payloads, CLI flags, or shared config files. **Rotating this key invalidates both encrypted data (tokens) and all stored delegated admin API key hashes** — operators must re-issue delegated admin API keys after rotation
 - `LOG_LEVEL` — server log verbosity
 - `PUBLIC_BASE_URL` — trusted server-only origin for building absolute links; never derive from request headers to prevent host-header injection
 - `SECURE_COOKIES` — server-only deployment toggle for HTTPS cookie flags (default: True, set False for local HTTP dev)
