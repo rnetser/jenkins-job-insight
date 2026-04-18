@@ -1,7 +1,11 @@
 """SQLite storage for analysis results."""
 
+import hashlib
+import hmac
 import json
 import os
+import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections.abc import Callable
@@ -10,7 +14,10 @@ from typing import get_args
 import aiosqlite
 from simple_logger.logger import get_logger
 
-from jenkins_job_insight.encryption import strip_sensitive_from_response
+from jenkins_job_insight.encryption import (
+    get_hmac_secret,
+    strip_sensitive_from_response,
+)
 from jenkins_job_insight.models import (
     HistoryClassificationLiteral,
     OverrideClassificationLiteral,
@@ -33,6 +40,44 @@ _PRIMARY_CLASSIFICATIONS_SQL = (
 _HISTORY_CLASSIFICATIONS_SQL = (
     "(" + ", ".join(f"'{c}'" for c in HISTORY_CLASSIFICATIONS) + ")"
 )
+
+# --- Auth constants and helpers ---
+SESSION_TTL_HOURS = 8
+SESSION_TTL_SECONDS = SESSION_TTL_HOURS * 3600
+MIN_KEY_LENGTH = 16
+
+
+def validate_api_key(key: str) -> None:
+    """Validate API key meets minimum requirements."""
+    if len(key) < MIN_KEY_LENGTH:
+        msg = f"API key must be at least {MIN_KEY_LENGTH} characters long"
+        raise ValueError(msg)
+
+
+def hash_api_key(key: str) -> str:
+    """Hash an API key with HMAC-SHA256 for storage.
+
+    Uses the encryption key (JJI_ENCRYPTION_KEY) as the HMAC secret,
+    which is stable across ADMIN_KEY rotations.
+
+    Args:
+        key: The raw API key to hash.
+
+    Returns:
+        Hex-encoded HMAC-SHA256 digest.
+    """
+    secret = get_hmac_secret()
+    return hmac.new(secret.encode(), key.encode(), hashlib.sha256).hexdigest()
+
+
+def generate_api_key() -> str:
+    """Generate a random API key."""
+    return f"jji_{secrets.token_urlsafe(32)}"
+
+
+def _hash_session_token(token: str) -> str:
+    """Hash a session token for storage."""
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def parse_result_json(raw: str | None, *, job_id: str = "") -> dict | None:
@@ -288,6 +333,40 @@ async def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_tc_classification ON test_classifications (classification)"
         )
 
+        # Users table — tracks all users (regular and admin)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                api_key_hash TEXT UNIQUE,
+                role TEXT NOT NULL DEFAULT 'user',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Migration: add encrypted token columns to users table
+        for col in ("github_token_enc", "jira_email_enc", "jira_token_enc"):
+            await _migrate_add_column(db, "users", col, "TEXT NOT NULL DEFAULT ''")
+
+        # Sessions table — admin session tokens
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL
+            )
+        """)
+
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_username ON sessions (username)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at)"
+        )
+
         await db.commit()
 
     # Backfill failure_history from existing results (runs once when table is empty).
@@ -358,12 +437,11 @@ async def add_comment(
 
 
 async def delete_comment(comment_id: int, username: str, job_id: str = "") -> bool:
-    """Delete a comment. Username check is a UI courtesy, not security.
+    """Delete a comment by ID, optionally scoped to username and job_id.
 
-    DESIGN DECISION: No authentication in this project.
-    All users are trusted. Username matching is a UI convenience
-    (shows delete button only for your own comments), NOT a security control.
-    Any user can delete any comment. See issue #55 for future auth plans.
+    When username is empty, the delete is not scoped by owner — the caller
+    is responsible for ensuring this is only used for admin-authorized requests.
+    When username is non-empty, only comments matching that username are deleted.
 
     Returns True if deleted, False if not found.
     """
@@ -2263,3 +2341,312 @@ async def get_ai_configs() -> list[dict]:
         )
         rows = await cursor.fetchall()
         return [{"ai_provider": row[0], "ai_model": row[1]} for row in rows]
+
+
+# --- Auth storage functions ---
+
+
+async def create_admin_user(username: str) -> tuple[str, str]:
+    """Create an admin user and return (username, raw_api_key).
+    Raises ValueError if username is invalid or taken."""
+    if username.lower() == "admin":
+        msg = "Username 'admin' is reserved"
+        raise ValueError(msg)
+    if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{1,49}$", username):
+        msg = f"Invalid username: '{username}'. Must be 2-50 alphanumeric characters, dots, hyphens, underscores."
+        raise ValueError(msg)
+    raw_key = generate_api_key()
+    key_hash = hash_api_key(raw_key)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO users (username, api_key_hash, role) VALUES (?, ?, 'admin')",
+            (username, key_hash),
+        )
+        await db.commit()
+    return username, raw_key
+
+
+async def get_user_by_key(api_key: str) -> dict | None:
+    """Look up a user by their raw API key."""
+    key_hash = hash_api_key(api_key)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT id, username, role, created_at, last_seen FROM users WHERE api_key_hash = ?",
+            (key_hash,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def get_user_by_username(username: str) -> dict | None:
+    """Look up a user by username."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT id, username, role, created_at, last_seen FROM users WHERE username = ?",
+            (username,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def delete_admin_user(username: str) -> bool:
+    """Delete an admin user. Returns True if deleted.
+
+    Raises ValueError if this would delete the last admin user.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await db.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+            admin_count = (await cursor.fetchone())[0]
+            if admin_count <= 1:
+                cursor = await db.execute(
+                    "SELECT role FROM users WHERE username = ?", (username,)
+                )
+                row = await cursor.fetchone()
+                if row and row[0] == "admin":
+                    await db.execute("ROLLBACK")
+                    raise ValueError("Cannot delete the last admin user")
+
+            await db.execute("DELETE FROM sessions WHERE username = ?", (username,))
+            cursor = await db.execute(
+                "DELETE FROM users WHERE username = ? AND role = 'admin'",
+                (username,),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+        except ValueError:
+            raise
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
+async def change_user_role(username: str, new_role: str) -> tuple[str, str]:
+    """Change a user's role. Returns (username, raw_api_key).
+
+    When promoting to admin, generates a new API key.
+    When demoting to user, removes the API key and invalidates sessions.
+
+    Args:
+        username: The user to change.
+        new_role: The new role ('admin' or 'user').
+
+    Returns:
+        Tuple of (username, raw_api_key). raw_api_key is empty when demoting.
+
+    Raises:
+        ValueError: If username not found, role is invalid, or already has the role.
+    """
+    if new_role not in ("admin", "user"):
+        msg = f"Invalid role: '{new_role}'. Must be 'admin' or 'user'."
+        raise ValueError(msg)
+    if username.lower() == "admin":
+        msg = "Cannot change role of reserved 'admin' user"
+        raise ValueError(msg)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT username, role FROM users WHERE username = ?", (username,)
+        )
+        user = await cursor.fetchone()
+        if not user:
+            msg = f"User '{username}' not found"
+            raise ValueError(msg)
+        if user["role"] == new_role:
+            msg = f"User '{username}' already has role '{new_role}'"
+            raise ValueError(msg)
+
+        raw_key = ""
+        if new_role == "admin":
+            # Promoting to admin — use transaction for atomicity
+            raw_key = generate_api_key()
+            key_hash = hash_api_key(raw_key)
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "UPDATE users SET role = 'admin', api_key_hash = ? WHERE username = ?",
+                    (key_hash, username),
+                )
+                if cursor.rowcount == 0:
+                    await db.execute("ROLLBACK")
+                    raise ValueError(f"User '{username}' not found")
+                await db.commit()
+            except ValueError:
+                raise
+            except Exception:
+                await db.execute("ROLLBACK")
+                raise
+        else:
+            # Demoting to user — use transaction for atomic last-admin check
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM users WHERE role = 'admin' AND username != ?",
+                    (username,),
+                )
+                other_admins = (await cursor.fetchone())[0]
+                if other_admins == 0:
+                    await db.execute("ROLLBACK")
+                    raise ValueError("Cannot demote the last admin user")
+                await db.execute(
+                    "UPDATE users SET role = 'user', api_key_hash = NULL WHERE username = ?",
+                    (username,),
+                )
+                await db.execute("DELETE FROM sessions WHERE username = ?", (username,))
+                await db.commit()
+            except ValueError:
+                raise
+            except Exception:
+                await db.execute("ROLLBACK")
+                raise
+
+            return username, raw_key
+
+    return username, raw_key
+
+
+async def list_users() -> list[dict]:
+    """List all users (without key hashes)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT id, username, role, created_at, last_seen FROM users ORDER BY created_at DESC"
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+
+
+async def track_user(username: str) -> None:
+    """Track user activity — insert if new, update last_seen if existing."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO users (username, role) VALUES (?, 'user') "
+            "ON CONFLICT(username) DO UPDATE SET last_seen = CURRENT_TIMESTAMP",
+            (username,),
+        )
+        await db.commit()
+
+
+async def create_session(
+    username: str, is_admin: bool = False, ttl_hours: int = SESSION_TTL_HOURS
+) -> str:
+    """Create an opaque session token. Returns raw token."""
+    token = secrets.token_urlsafe(32)
+    token_hash = _hash_session_token(token)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+    expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO sessions (token, username, is_admin, expires_at) VALUES (?, ?, ?, ?)",
+            (token_hash, username, 1 if is_admin else 0, expires_str),
+        )
+        await db.commit()
+    return token
+
+
+async def get_session(token: str) -> dict | None:
+    """Look up a session. Returns None if expired or not found."""
+    token_hash = _hash_session_token(token)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT username, is_admin, created_at, expires_at FROM sessions WHERE token = ? AND expires_at > datetime('now')",
+            (token_hash,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def delete_session(token: str) -> None:
+    """Delete a session (logout)."""
+    token_hash = _hash_session_token(token)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM sessions WHERE token = ?", (token_hash,))
+        await db.commit()
+
+
+async def rotate_admin_key(username: str, custom_key: str | None = None) -> str:
+    """Generate or set a new API key for an admin user. Returns the raw new key."""
+    if custom_key:
+        validate_api_key(custom_key)
+        raw_key = custom_key
+    else:
+        raw_key = generate_api_key()
+    key_hash = hash_api_key(raw_key)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE users SET api_key_hash = ? WHERE username = ? AND role = 'admin'",
+            (key_hash, username),
+        )
+        if cursor.rowcount == 0:
+            msg = f"Admin user '{username}' not found"
+            raise ValueError(msg)
+        # Invalidate all existing sessions for this user
+        await db.execute("DELETE FROM sessions WHERE username = ?", (username,))
+        await db.commit()
+    return raw_key
+
+
+async def cleanup_expired_sessions() -> None:
+    """Remove expired sessions."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM sessions WHERE expires_at <= datetime('now')")
+        await db.commit()
+
+
+async def save_user_tokens(
+    username: str,
+    *,
+    github_token: str | None = None,
+    jira_email: str | None = None,
+    jira_token: str | None = None,
+) -> None:
+    """Save encrypted user tokens. Only updates fields that are explicitly provided (not None).
+
+    Pass empty string to clear a field. Omit (None) to leave unchanged.
+    """
+    from jenkins_job_insight.encryption import encrypt_value
+
+    updates = []
+    params: list[str] = []
+    if github_token is not None:
+        updates.append("github_token_enc = ?")
+        params.append(encrypt_value(github_token))
+    if jira_email is not None:
+        updates.append("jira_email_enc = ?")
+        params.append(encrypt_value(jira_email))
+    if jira_token is not None:
+        updates.append("jira_token_enc = ?")
+        params.append(encrypt_value(jira_token))
+
+    if not updates:
+        return
+
+    params.append(username)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            f"UPDATE users SET {', '.join(updates)} WHERE username = ?",  # noqa: S608 — columns are hardcoded literals
+            params,
+        )
+        await db.commit()
+
+
+async def get_user_tokens(username: str) -> dict[str, str]:
+    """Get decrypted user tokens. Returns dict with github_token, jira_email, jira_token."""
+    from jenkins_job_insight.encryption import decrypt_value
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT github_token_enc, jira_email_enc, jira_token_enc FROM users WHERE username = ?",
+            (username,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return {"github_token": "", "jira_email": "", "jira_token": ""}
+        return {
+            "github_token": decrypt_value(row[0] or ""),
+            "jira_email": decrypt_value(row[1] or ""),
+            "jira_token": decrypt_value(row[2] or ""),
+        }

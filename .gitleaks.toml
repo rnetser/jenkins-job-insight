@@ -11,4 +11,7 @@ paths = [
     '''tests/test_config\.py''',
     '''tests/test_main\.py''',
     '''tests/conftest\.py''',
+    '''tests/test_cli_main\.py''',
+    '''tests/test_cli_client\.py''',
+    '''tests/test_auth\.py''',
 ]

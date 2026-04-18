@@ -36,15 +36,20 @@ class JJIClient:
         timeout: float = 30.0,
         username: str = "",
         verify_ssl: bool = True,
+        api_key: str = "",
     ):
         self.server_url = server_url.rstrip("/")
         cookies = {}
         if username:
             cookies["jji_username"] = username
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         self._client = httpx.Client(
             base_url=self.server_url,
             timeout=timeout,
             cookies=cookies,
+            headers=headers,
             verify=verify_ssl,
         )
 
@@ -102,6 +107,54 @@ class JJIClient:
             )
 
         return response.json()
+
+    # -- Auth -----------------------------------------------------------------
+
+    def login(self, username: str, api_key: str) -> dict:
+        """Login as admin. POST /api/auth/login"""
+        return self._request(
+            "POST",
+            "/api/auth/login",
+            json={"username": username, "api_key": api_key},
+        )
+
+    def logout(self) -> dict:
+        """Logout (clear session). POST /api/auth/logout"""
+        return self._request("POST", "/api/auth/logout")
+
+    def auth_me(self) -> dict:
+        """Get current user info. GET /api/auth/me"""
+        return self._request("GET", "/api/auth/me")
+
+    # -- Admin ----------------------------------------------------------------
+
+    def admin_list_users(self) -> dict:
+        """List all users. GET /api/admin/users"""
+        return self._request("GET", "/api/admin/users")
+
+    def admin_create_user(self, username: str) -> dict:
+        """Create an admin user. POST /api/admin/users"""
+        return self._request(
+            "POST",
+            "/api/admin/users",
+            json={"username": username},
+        )
+
+    def admin_delete_user(self, username: str) -> dict:
+        """Delete an admin user. DELETE /api/admin/users/{username}"""
+        return self._request("DELETE", f"/api/admin/users/{username}")
+
+    def admin_rotate_key(self, username: str) -> dict:
+        """Rotate an admin user's API key. POST /api/admin/users/{username}/rotate-key"""
+        return self._request("POST", f"/api/admin/users/{username}/rotate-key")
+
+    def admin_change_role(self, username: str, role: str) -> dict:
+        """Change a user's role. PUT /api/admin/users/{username}/role"""
+        return self._request(
+            "PUT",
+            f"/api/admin/users/{username}/role",
+            json={"role": role},
+        )
 
     # -- Health ---------------------------------------------------------------
 
@@ -512,6 +565,25 @@ class JJIClient:
             json=payload,
             accept_statuses=(201,),
         )
+
+    # -- User Tokens ----------------------------------------------------------
+
+    def get_user_tokens(self) -> dict:
+        """Get saved user tokens. GET /api/user/tokens"""
+        return self._request("GET", "/api/user/tokens")
+
+    def save_user_tokens(
+        self, github_token: str = "", jira_email: str = "", jira_token: str = ""
+    ) -> dict:
+        """Save user tokens. PUT /api/user/tokens"""
+        body: dict = {}
+        if github_token:
+            body["github_token"] = github_token
+        if jira_email:
+            body["jira_email"] = jira_email
+        if jira_token:
+            body["jira_token"] = jira_token
+        return self._request("PUT", "/api/user/tokens", json=body)
 
     # -- Token Validation -----------------------------------------------------
 

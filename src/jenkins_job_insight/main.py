@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import logging
 import math
@@ -90,6 +91,21 @@ from jenkins_job_insight.storage import (
 )
 
 # Inline favicon
+
+
+# Semaphore to limit concurrent track_user tasks
+_track_user_semaphore = asyncio.Semaphore(10)
+
+
+async def _safe_track_user(username: str) -> None:
+    """Track user activity with bounded concurrency, swallowing any errors."""
+    try:
+        async with _track_user_semaphore:
+            await storage.track_user(username)
+    except Exception:
+        logger.debug("Failed to track user activity for %s", username, exc_info=True)
+
+
 FAVICON_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="0.9em" font-size="90">\xf0\x9f\x94\x8d</text></svg>'
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -481,6 +497,7 @@ async def _deferred_resume_waiting_jobs(waiting_jobs: list[dict]) -> None:
 async def lifespan(app: FastAPI):
     _install_job_id_filter()
     await init_db()
+    await storage.cleanup_expired_sessions()
     waiting_jobs = await storage.mark_stale_results_failed()
     if waiting_jobs:
         # Schedule resumption as a background task so it runs after the
@@ -508,25 +525,88 @@ if _FRONTEND_DIR.is_dir():
     )
 
 
-class UsernameMiddleware(BaseHTTPMiddleware):
-    """Middleware that checks for jji_username cookie and redirects to /register if missing."""
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Authenticate requests: admin via session/Bearer, regular users via cookie."""
+
+    _PUBLIC_PATHS = frozenset(
+        {
+            "/register",
+            "/health",
+            "/favicon.ico",
+        }
+    )
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        # Allow register page, health check, static assets, and API paths without auth
+
+        # Set defaults
+        request.state.username = ""
+        request.state.is_admin = False
+        request.state.role = "user"
+
+        # Public paths and static assets — pass through
         if (
-            path in ("/register", "/health", "/favicon.ico", "/api")
-            or path.startswith("/register")
+            path in self._PUBLIC_PATHS
             or path.startswith("/assets/")
-            or path.startswith("/api/")
+            or path.startswith("/register")
         ):
             return await call_next(request)
 
-        username = request.cookies.get("jji_username", "")
-        request.state.username = username
+        settings = get_settings()
+        is_admin = False
+        username = ""
+        authenticated_admin = False
 
-        # Only redirect browser (HTML) requests without auth
+        # 1. Check session cookie (jji_session) — admin session
+        session_token = request.cookies.get("jji_session")
+        if session_token:
+            session = await storage.get_session(session_token)
+            if session:
+                is_admin = bool(session["is_admin"])
+                username = str(session["username"])
+                authenticated_admin = is_admin
+
+        # 2. Check Bearer token — admin API key or admin_key
+        if not authenticated_admin:
+            auth_header = request.headers.get("authorization", "")
+            if auth_header.startswith("Bearer "):
+                token = auth_header[7:]
+                if settings.admin_key and hmac.compare_digest(
+                    token, settings.admin_key
+                ):
+                    is_admin = True
+                    username = "admin"
+                    authenticated_admin = True
+                else:
+                    user = await storage.get_user_by_key(token)
+                    if user and user.get("role") == "admin":
+                        is_admin = True
+                        username = str(user["username"])
+                        authenticated_admin = True
+
+        # 3. Fall back to jji_username cookie (regular users)
         if not username:
+            username = request.cookies.get("jji_username", "")
+
+        request.state.username = username
+        request.state.is_admin = is_admin
+        request.state.role = "admin" if is_admin else "user"
+
+        # Track user activity (update last_seen for all users)
+        if username:
+            task = asyncio.create_task(_safe_track_user(username))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+
+        # Admin-only path enforcement
+        if path.startswith("/api/admin/"):
+            if not authenticated_admin:
+                return JSONResponse(
+                    status_code=403, content={"detail": "Admin access required"}
+                )
+
+        # Redirect to /register if no username for browser HTML requests (keep existing behavior)
+        if not username and not path.startswith("/api/"):
             accept = request.headers.get("accept", "")
             if "text/html" in accept:
                 return RedirectResponse(url="/register", status_code=303)
@@ -534,7 +614,7 @@ class UsernameMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-app.add_middleware(UsernameMiddleware)
+app.add_middleware(AuthMiddleware)
 
 
 @app.get("/", include_in_schema=False)
@@ -1672,7 +1752,7 @@ async def add_comment(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
 
-    username = request.cookies.get("jji_username", "")
+    username = request.state.username
     try:
         comment_id = await storage.add_comment(
             job_id=job_id,
@@ -1692,21 +1772,26 @@ async def add_comment(
 async def delete_comment_endpoint(
     job_id: str, comment_id: int, request: Request, _: None = Depends(_bind_job_id)
 ) -> dict:
-    """Delete a comment. Username check is a UI courtesy, not security.
+    """Delete a comment. Username scoping is a UI courtesy.
 
-    This project has no authentication — all users are trusted.
-    See issue #55 for future auth plans.
+    Admin users can delete any comment. Regular users can only delete
+    their own comments (matched by username).
     """
     logger.debug(f"DELETE /results/{job_id}/comments/{comment_id}")
-    username = request.cookies.get("jji_username", "")
+    username = request.state.username
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
 
-    deleted = await storage.delete_comment(comment_id, username, job_id=job_id)
+    # Admins can delete any comment; regular users only their own
+    delete_username = "" if request.state.is_admin else username
+    deleted = await storage.delete_comment(comment_id, delete_username, job_id=job_id)
     if not deleted:
-        raise HTTPException(
-            status_code=404, detail="Comment not found or not owned by you"
+        detail = (
+            "Comment not found"
+            if request.state.is_admin
+            else "Comment not found or not owned by you"
         )
+        raise HTTPException(status_code=404, detail=detail)
 
     return {"status": "deleted"}
 
@@ -1725,7 +1810,7 @@ async def set_reviewed(
     await _validate_test_name_in_result(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
-    username = request.cookies.get("jji_username", "")
+    username = request.state.username
     try:
         await storage.set_reviewed(
             job_id=job_id,
@@ -2251,7 +2336,7 @@ async def create_github_issue_endpoint(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
 
-    username = request.cookies.get("jji_username", "")
+    username = request.state.username
     issue_body = body.body
     if username:
         issue_body += f"\n\n---\n_Reported by: {username} via jenkins-job-insight_"
@@ -2339,7 +2424,7 @@ async def create_jira_bug_endpoint(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
 
-    username = request.cookies.get("jji_username", "")
+    username = request.state.username
     bug_body = body.body
     if username:
         bug_body += f"\n\n----\nReported by: {username} via jenkins-job-insight"
@@ -2913,7 +2998,7 @@ async def override_classification_endpoint(
     await _validate_test_name_in_result(
         job_id, body.test_name, body.child_job_name, body.child_build_number
     )
-    username = request.cookies.get("jji_username", "")
+    username = request.state.username
 
     # Look up parent_job_name for the test_classifications entry
     parent_job_name = await storage.get_parent_job_name_for_test(
@@ -2975,28 +3060,15 @@ async def list_job_results(limit: int = Query(50, le=100)) -> list[dict]:
 async def delete_job_endpoint(
     job_id: str, request: Request, _: None = Depends(_bind_job_id)
 ) -> dict:
-    """Delete an analyzed job and all related data.
-
-    This project operates on a trusted network with no authentication.
-    All users can perform all actions. The username cookie check below
-    is a UI convenience (prevents accidental deletions from scripts),
-    not a security boundary. See issue #55 for future auth plans.
-    """
-    # Basic sanity check — not security. All users are trusted.
-    # This just ensures a human with a registered name is making the request.
-    username = request.cookies.get("jji_username", "")
-    if not username:
-        raise HTTPException(
-            status_code=401,
-            detail="Please register a username first",
-        )
+    """Delete an analyzed job and all related data. Admin only."""
+    _require_admin(request)
 
     result = await storage.get_result(job_id)
     if not result:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
     await storage.delete_job(job_id)
-    logger.info(f"Deleted job {job_id} by user {username}")
+    logger.info(f"[AUDIT] Admin '{request.state.username}' deleted job {job_id}")
     return {"status": "deleted", "job_id": job_id}
 
 
@@ -3289,7 +3361,7 @@ async def classify_test(request: Request, body: ClassifyTestRequest) -> dict:
             detail="KNOWN_BUG requires non-empty references (e.g., Jira tickets or historical bug URLs).",
         )
 
-    created_by = request.cookies.get("jji_username", "ai")
+    created_by = request.state.username or "ai"
 
     # Human classifications are visible immediately.
     # AI classifications become visible after analysis completes
@@ -3376,6 +3448,305 @@ def _serve_spa() -> HTMLResponse:
     if not index_file.is_file():
         raise HTTPException(status_code=404, detail="Frontend not built")
     return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
+
+
+# --- Auth endpoints ---
+
+
+async def _read_json_object(request: Request) -> dict:
+    """Parse request body as a JSON object. Raises HTTPException on invalid input."""
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+    return body
+
+
+def _require_admin(request: Request) -> None:
+    """Raise 403 if the request is not from an authenticated admin."""
+    if not request.state.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+@app.post("/api/auth/login")
+async def login(request: Request) -> JSONResponse:
+    """Authenticate admin with username + API key. Returns session cookie."""
+    body = await _read_json_object(request)
+
+    username = str(body.get("username", ""))
+    api_key = str(body.get("api_key", ""))
+
+    if not username or not api_key:
+        raise HTTPException(status_code=400, detail="Username and api_key are required")
+
+    settings = get_settings()
+    is_admin = False
+    authenticated = False
+
+    # Check admin_key — username must be "admin"
+    if (
+        username == "admin"
+        and settings.admin_key
+        and hmac.compare_digest(api_key, settings.admin_key)
+    ):
+        is_admin = True
+        authenticated = True
+    else:
+        # Check user API key
+        user = await storage.get_user_by_key(api_key)
+        if user and user["username"] == username:
+            authenticated = True
+            if user.get("role") == "admin":
+                is_admin = True
+
+    if not authenticated:
+        logger.info(f"[AUDIT] Failed login attempt for username '{username}'")
+        raise HTTPException(status_code=401, detail="Invalid username or API key")
+
+    session_token = await storage.create_session(username, is_admin=is_admin)
+    response = JSONResponse(
+        content={
+            "username": username,
+            "role": "admin" if is_admin else "user",
+            "is_admin": is_admin,
+        }
+    )
+    response.set_cookie(
+        "jji_session",
+        session_token,
+        httponly=True,
+        samesite="strict",
+        secure=settings.secure_cookies,
+        max_age=storage.SESSION_TTL_SECONDS,
+    )
+    # Also set jji_username cookie for compatibility
+    response.set_cookie(
+        "jji_username",
+        username,
+        samesite="lax",
+        secure=settings.secure_cookies,
+        max_age=365 * 24 * 60 * 60,
+    )
+    logger.info(f"[AUDIT] Login success: user='{username}' is_admin={is_admin}")
+    return response
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request) -> JSONResponse:
+    """Clear admin session."""
+    session_token = request.cookies.get("jji_session")
+    if session_token:
+        await storage.delete_session(session_token)
+    settings = get_settings()
+    response = JSONResponse(content={"ok": True})
+    response.delete_cookie(
+        "jji_session",
+        httponly=True,
+        samesite="strict",
+        secure=settings.secure_cookies,
+    )
+    return response
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request) -> JSONResponse:
+    """Return current user info."""
+    return JSONResponse(
+        content={
+            "username": request.state.username,
+            "role": request.state.role,
+            "is_admin": request.state.is_admin,
+        }
+    )
+
+
+# --- User token endpoints ---
+
+
+@app.get("/api/user/tokens")
+async def get_user_tokens_endpoint(request: Request) -> JSONResponse:
+    """Get the current user's saved tokens."""
+    username = request.state.username
+    if not username:
+        raise HTTPException(status_code=401, detail="Username required")
+    # Verify user exists in DB (prevents reading tokens for unregistered usernames)
+    user = await storage.get_user_by_username(username)
+    if not user:
+        return JSONResponse(
+            content={"github_token": "", "jira_email": "", "jira_token": ""},
+            headers={"Cache-Control": "no-store"},
+        )
+    tokens = await storage.get_user_tokens(username)
+    return JSONResponse(
+        content=tokens,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.put("/api/user/tokens")
+async def save_user_tokens_endpoint(request: Request) -> JSONResponse:
+    """Save tokens for the current user. Tokens are encrypted at rest.
+
+    Only fields present in the JSON body are updated. Omitted fields are left unchanged.
+    Pass empty string to clear a field.
+    """
+    username = request.state.username
+    if not username:
+        raise HTTPException(status_code=401, detail="Username required")
+    # Verify user exists in DB
+    user = await storage.get_user_by_username(username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found. Register first.")
+    body = await _read_json_object(request)
+
+    kwargs: dict[str, str | None] = {}
+    if "github_token" in body:
+        kwargs["github_token"] = body["github_token"]
+    if "jira_email" in body:
+        kwargs["jira_email"] = body["jira_email"]
+    if "jira_token" in body:
+        kwargs["jira_token"] = body["jira_token"]
+
+    if not kwargs:
+        return JSONResponse(content={"ok": True})
+
+    await storage.save_user_tokens(username, **kwargs)
+    logger.debug(f"Saved tokens for user '{username}'")
+    return JSONResponse(content={"ok": True})
+
+
+# --- Admin endpoints ---
+
+
+@app.post("/api/admin/users")
+async def create_admin_user_endpoint(request: Request) -> JSONResponse:
+    """Create a new admin user. Returns the generated API key."""
+    _require_admin(request)
+    body = await _read_json_object(request)
+
+    username = body.get("username", "")
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required")
+
+    try:
+        username, raw_key = await storage.create_admin_user(username)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    logger.info(
+        f"[AUDIT] Admin '{request.state.username}' created admin user '{username}'"
+    )
+    return JSONResponse(
+        content={"username": username, "api_key": raw_key, "role": "admin"},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.delete("/api/admin/users/{username}")
+async def delete_admin_user_endpoint(request: Request, username: str) -> dict:
+    """Delete an admin user."""
+    _require_admin(request)
+    if username == request.state.username:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+
+    try:
+        deleted = await storage.delete_admin_user(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(
+            status_code=404, detail=f"Admin user '{username}' not found"
+        )
+
+    logger.info(
+        f"[AUDIT] Admin '{request.state.username}' deleted admin user '{username}'"
+    )
+    return {"deleted": username}
+
+
+@app.put("/api/admin/users/{username}/role")
+async def change_user_role_endpoint(request: Request, username: str) -> JSONResponse:
+    """Change a user's role (promote to admin or demote to user).
+
+    When promoting to admin, an API key is generated and returned.
+    When demoting to user, the API key is removed and sessions invalidated.
+    """
+    _require_admin(request)
+    if username == request.state.username:
+        raise HTTPException(status_code=400, detail="Cannot change your own role")
+
+    body = await _read_json_object(request)
+
+    new_role = body.get("role", "")
+    if not new_role:
+        raise HTTPException(status_code=400, detail="Role is required")
+
+    try:
+        username, raw_key = await storage.change_user_role(username, new_role)
+    except ValueError as exc:
+        detail = str(exc)
+        status = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status, detail=detail) from exc
+
+    logger.info(
+        f"[AUDIT] Admin '{request.state.username}' changed role of '{username}' to '{new_role}'"
+    )
+
+    content: dict = {"username": username, "role": new_role}
+    if raw_key:
+        content["api_key"] = raw_key
+    return JSONResponse(
+        content=content,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/admin/users")
+async def list_users_endpoint(request: Request) -> dict:
+    """List all users (admin and regular)."""
+    _require_admin(request)
+    users = await storage.list_users()
+    return {"users": users}
+
+
+@app.post("/api/admin/users/{username}/rotate-key")
+async def rotate_key_endpoint(request: Request, username: str) -> JSONResponse:
+    """Rotate an admin user's API key."""
+    _require_admin(request)
+    try:
+        body_bytes = await request.body()
+        if body_bytes and body_bytes.strip():
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(
+                    status_code=400, detail="JSON body must be an object"
+                )
+            custom_key = body.get("new_key")
+        else:
+            custom_key = None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid JSON body: {exc}"
+        ) from exc
+
+    try:
+        new_key = await storage.rotate_admin_key(username, custom_key=custom_key)
+    except ValueError as exc:
+        detail = str(exc)
+        status = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status, detail=detail) from exc
+
+    logger.info(
+        f"[AUDIT] Admin '{request.state.username}' rotated key for '{username}'"
+    )
+    return JSONResponse(
+        content={"username": username, "new_api_key": new_key},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # SPA catch-all routes — must be AFTER all API routes

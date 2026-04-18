@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import {
   setUsername,
   setGithubToken,
@@ -16,7 +16,8 @@ import { Button } from '@/components/ui/button'
 import { Eye, EyeOff } from 'lucide-react'
 
 interface ProfileFormProps {
-  onSaved: () => void
+  onSaved: () => void | Promise<void>
+  onAdminLogin?: (username: string, apiKey: string) => Promise<void>
 }
 
 interface TokenValidationResult {
@@ -25,7 +26,7 @@ interface TokenValidationResult {
   message: string
 }
 
-function TokenField({ id, label, value, onChange, show, onToggleShow, validation, placeholder, helpContent }: {
+function TokenField({ id, label, value, onChange, show, onToggleShow, validation, error, placeholder, helpContent, optionalLabel = true }: {
   id: string
   label: string
   value: string
@@ -33,13 +34,15 @@ function TokenField({ id, label, value, onChange, show, onToggleShow, validation
   show: boolean
   onToggleShow: () => void
   validation: TokenValidationResult | null
+  error?: string | null
   placeholder: string
   helpContent: ReactNode
+  optionalLabel?: boolean
 }) {
   return (
     <div className="space-y-1.5">
       <label htmlFor={id} className="block font-display text-xs font-medium uppercase tracking-widest text-text-secondary">
-        {label} <span className="text-text-tertiary font-normal normal-case tracking-normal">(optional)</span>
+        {label} {optionalLabel && <span className="text-text-tertiary font-normal normal-case tracking-normal">(optional)</span>}
       </label>
       <div className="relative">
         <Input id={id} type={show ? 'text' : 'password'} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete="off" className="h-10 pr-10 font-mono" />
@@ -50,13 +53,31 @@ function TokenField({ id, label, value, onChange, show, onToggleShow, validation
       {validation && (
         <p className={`text-xs ${validation.valid ? 'text-signal-green' : 'text-signal-red'}`}>{validation.message}</p>
       )}
+      {error && (
+        <p className="text-xs text-signal-red">{error}</p>
+      )}
       <p className="text-xs text-text-tertiary">{helpContent}</p>
     </div>
   )
 }
 
-export function ProfileForm({ onSaved }: ProfileFormProps) {
+async function persistTokensToServer(gh: string, je: string, jt: string) {
+  try {
+    await api.put('/api/user/tokens', {
+      github_token: gh,
+      jira_email: je,
+      jira_token: jt,
+    })
+  } catch (err) {
+    console.error('Failed to sync tokens to server:', err)
+  }
+}
+
+export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
   const [username, setUsernameValue] = useState(getUsername())
+  const [apiKey, setApiKey] = useState('')
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null)
   const [githubToken, setGithubTokenValue] = useState(getGithubToken())
   const [jiraEmail, setJiraEmailValue] = useState(getJiraEmail())
   const [jiraToken, setJiraTokenValue] = useState(getJiraToken())
@@ -74,29 +95,54 @@ export function ProfileForm({ onSaved }: ProfileFormProps) {
     const trimmed = username.trim()
     if (!trimmed) return
 
+    setSaving(true)
+    setApiKeyError(null)
+
+    async function commitProfile(trimmedUsername: string) {
+      setUsername(trimmedUsername)
+      setGithubToken(githubToken.trim())
+      setJiraEmail(jiraEmail.trim())
+      setJiraToken(jiraToken.trim())
+      await persistTokensToServer(githubToken.trim(), jiraEmail.trim(), jiraToken.trim())
+    }
+
+    // Try admin login if API key is provided
+    if (apiKey.trim() && onAdminLogin) {
+      try {
+        await onAdminLogin(trimmed, apiKey.trim())
+        // Admin login succeeded — also save the username cookie
+        await commitProfile(trimmed)
+        setSaving(false)
+        await onSaved()
+        return
+      } catch (err) {
+        setSaving(false)
+        if (err instanceof ApiError && err.status === 401) {
+          setApiKeyError('Invalid username or API key')
+        } else {
+          setApiKeyError('Login failed — please try again')
+        }
+        return
+      }
+    }
+
     const needsGithubValidation = githubToken.trim() && (!githubValidation || !githubValidation.valid)
     const needsJiraValidation = jiraToken.trim() && (!jiraValidation || !jiraValidation.valid)
 
     if (needsGithubValidation || needsJiraValidation) {
-      setSaving(true)
       const validations = await Promise.allSettled([
         needsGithubValidation ? validateGithub() : Promise.resolve(),
         needsJiraValidation ? validateJira() : Promise.resolve(),
       ])
-      setSaving(false)
 
-      // Check if any validation failed — block save
       const results = validations.map((r) => r.status === 'fulfilled' ? r.value : false)
-      // validateGithub/validateJira return true if valid, false if invalid
-      if (needsGithubValidation && results[0] === false) return
-      if (needsJiraValidation && results[1] === false) return
+      if (needsGithubValidation && results[0] === false) { setSaving(false); return }
+      if (needsJiraValidation && results[1] === false) { setSaving(false); return }
     }
 
-    setUsername(trimmed)
-    setGithubToken(githubToken.trim())
-    setJiraEmail(jiraEmail.trim())
-    setJiraToken(jiraToken.trim())
-    onSaved()
+    await commitProfile(trimmed)
+    setSaving(false)
+    await onSaved()
   }
 
   async function validateToken(
@@ -155,7 +201,37 @@ export function ProfileForm({ onSaved }: ProfileFormProps) {
             />
           </div>
 
-          {/* Divider */}
+          {onAdminLogin && (
+            <>
+              {/* Admin Authentication Divider */}
+              <div className="flex items-center gap-3 py-1">
+                <div className="h-px flex-1 bg-border-muted" />
+                <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">
+                  Admin Authentication
+                </span>
+                <div className="h-px flex-1 bg-border-muted" />
+              </div>
+              <p className="text-xs text-text-tertiary">
+                Provide your API key for admin access. Leave empty for regular user access.
+              </p>
+
+              {/* API Key field */}
+              <TokenField
+                id="api-key"
+                label="API Key"
+                value={apiKey}
+                onChange={(v) => { setApiKey(v); setApiKeyError(null) }}
+                show={showApiKey}
+                onToggleShow={() => setShowApiKey(!showApiKey)}
+                validation={null}
+                error={apiKeyError}
+                placeholder="Enter API key..."
+                helpContent={<>Admin API key provided by your server administrator.</>}
+              />
+            </>
+          )}
+
+          {/* Tracker Tokens Divider */}
           <div className="flex items-center gap-3 py-1">
             <div className="h-px flex-1 bg-border-muted" />
             <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">
@@ -224,7 +300,7 @@ export function ProfileForm({ onSaved }: ProfileFormProps) {
           />
 
           <Button type="submit" className="w-full" disabled={!username.trim() || saving || validatingGithub || validatingJira}>
-            {saving ? 'Validating tokens...' : 'Save'}
+            {saving ? 'Saving...' : 'Save'}
           </Button>
           </fieldset>
         </form>

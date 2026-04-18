@@ -41,6 +41,7 @@ def build_test_env(**overrides: str) -> dict[str, str]:
 def make_test_client(
     handler: Callable[[httpx.Request], httpx.Response],
     username: str = "",
+    api_key: str = "",
 ) -> JJIClient:
     """Create a JJIClient with a mock transport for testing.
 
@@ -52,13 +53,17 @@ def make_test_client(
     cookies = {}
     if username:
         cookies["jji_username"] = username
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     mock_http = httpx.Client(
         transport=httpx.MockTransport(handler),
         base_url=CLI_TEST_BASE_URL,
         cookies=cookies,
+        headers=headers,
     )
-    client = JJIClient(CLI_TEST_BASE_URL, username=username)
+    client = JJIClient(CLI_TEST_BASE_URL, username=username, api_key=api_key)
     client._client.close()
     client._client = mock_http
     return client

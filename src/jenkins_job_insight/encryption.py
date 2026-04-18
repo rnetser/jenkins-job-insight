@@ -125,17 +125,19 @@ def _get_or_create_key_file() -> str:
     return key
 
 
-def _get_fernet() -> Fernet:
-    """Return a ``Fernet`` instance using the configured encryption key.
+def _resolve_encryption_secret() -> str:
+    """Return the raw encryption secret (env var or file-based fallback)."""
+    return os.environ.get("JJI_ENCRYPTION_KEY", "") or _get_or_create_key_file()
 
-    Key resolution order:
-    1. ``JJI_ENCRYPTION_KEY`` environment variable (recommended for production).
-    2. Auto-generated file-based key (``~/.local/share/jji/.encryption_key``).
-    """
-    secret = os.environ.get("JJI_ENCRYPTION_KEY", "")
-    if not secret:
-        secret = _get_or_create_key_file()
-    return Fernet(_derive_fernet_key(secret))
+
+def get_hmac_secret() -> str:
+    """Return the HMAC secret for API key hashing."""
+    return _resolve_encryption_secret()
+
+
+def _get_fernet() -> Fernet:
+    """Return a Fernet instance using the configured encryption key."""
+    return Fernet(_derive_fernet_key(_resolve_encryption_secret()))
 
 
 def encrypt_sensitive_fields(params: dict) -> dict:
@@ -195,6 +197,30 @@ def strip_sensitive_from_response(result_data: dict) -> dict:
         params.pop(key, None)
     result["request_params"] = params
     return result
+
+
+def encrypt_value(value: str) -> str:
+    """Encrypt a single string value. Returns prefixed ciphertext."""
+    if not value:
+        return ""
+    fernet = _get_fernet()
+    token = fernet.encrypt(value.encode()).decode()
+    return f"{_ENCRYPTED_PREFIX}{token}"
+
+
+def decrypt_value(value: str) -> str:
+    """Decrypt a single string value. Returns plaintext, or original value on failure."""
+    if not value or not value.startswith(_ENCRYPTED_PREFIX):
+        return value or ""
+    fernet = _get_fernet()
+    ciphertext = value[len(_ENCRYPTED_PREFIX) :]
+    try:
+        return fernet.decrypt(ciphertext.encode()).decode()
+    except InvalidToken:
+        logger.warning(
+            "Failed to decrypt value: encryption key may have changed. Preserving ciphertext."
+        )
+        return value  # Preserve the encrypted value instead of returning ""
 
 
 def decrypt_sensitive_fields(params: dict) -> dict:

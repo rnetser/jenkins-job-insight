@@ -2,6 +2,10 @@ const COOKIE_NAME = 'jji_username'
 const GITHUB_TOKEN_KEY = 'jji_github_token'
 const JIRA_TOKEN_KEY = 'jji_jira_token'
 const JIRA_EMAIL_KEY = 'jji_jira_email'
+// Display-only UI hints — NOT an authorization boundary.
+// All admin gating is enforced server-side in AuthMiddleware.
+const ADMIN_KEY = 'jji_is_admin'
+const ROLE_KEY = 'jji_role'
 
 export function getUsername(): string {
   const match = document.cookie.match(
@@ -68,11 +72,53 @@ export function setJiraEmail(email: string): void {
   writeStoredValue(JIRA_EMAIL_KEY, email)
 }
 
+export function getIsAdmin(): boolean {
+  try {
+    return localStorage.getItem(ADMIN_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+export function setIsAdmin(isAdmin: boolean): void {
+  try {
+    if (isAdmin) {
+      localStorage.setItem(ADMIN_KEY, 'true')
+    } else {
+      localStorage.removeItem(ADMIN_KEY)
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function getRole(): string {
+  try {
+    return localStorage.getItem(ROLE_KEY) ?? 'user'
+  } catch {
+    return 'user'
+  }
+}
+
+export function setRole(role: string): void {
+  try {
+    if (role && role !== 'user') {
+      localStorage.setItem(ROLE_KEY, role)
+    } else {
+      localStorage.removeItem(ROLE_KEY)
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export function clearTokens(): void {
   try {
     localStorage.removeItem(GITHUB_TOKEN_KEY)
     localStorage.removeItem(JIRA_TOKEN_KEY)
     localStorage.removeItem(JIRA_EMAIL_KEY)
+    localStorage.removeItem(ADMIN_KEY)
+    localStorage.removeItem(ROLE_KEY)
   } catch {
     // Storage unavailable — silently ignore
   }
