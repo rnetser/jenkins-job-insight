@@ -93,10 +93,15 @@ from jenkins_job_insight.storage import (
 # Inline favicon
 
 
+# Semaphore to limit concurrent track_user tasks
+_track_user_semaphore = asyncio.Semaphore(10)
+
+
 async def _safe_track_user(username: str) -> None:
-    """Track user activity, swallowing any errors."""
+    """Track user activity with bounded concurrency, swallowing any errors."""
     try:
-        await storage.track_user(username)
+        async with _track_user_semaphore:
+            await storage.track_user(username)
     except Exception:
         logger.debug("Failed to track user activity for %s", username, exc_info=True)
 
@@ -492,9 +497,6 @@ async def _deferred_resume_waiting_jobs(waiting_jobs: list[dict]) -> None:
 async def lifespan(app: FastAPI):
     _install_job_id_filter()
     await init_db()
-    settings = get_settings()
-    if settings.admin_key:
-        storage.configure_admin_key(settings.admin_key)
     await storage.cleanup_expired_sessions()
     waiting_jobs = await storage.mark_stale_results_failed()
     if waiting_jobs:
@@ -1769,21 +1771,26 @@ async def add_comment(
 async def delete_comment_endpoint(
     job_id: str, comment_id: int, request: Request, _: None = Depends(_bind_job_id)
 ) -> dict:
-    """Delete a comment. Username check is a UI courtesy, not security.
+    """Delete a comment. Username scoping is a UI courtesy.
 
-    This project has no authentication — all users are trusted.
-    See issue #55 for future auth plans.
+    Admin users can delete any comment. Regular users can only delete
+    their own comments (matched by username).
     """
     logger.debug(f"DELETE /results/{job_id}/comments/{comment_id}")
     username = request.state.username
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
 
-    deleted = await storage.delete_comment(comment_id, username, job_id=job_id)
+    # Admins can delete any comment; regular users only their own
+    delete_username = "" if request.state.is_admin else username
+    deleted = await storage.delete_comment(comment_id, delete_username, job_id=job_id)
     if not deleted:
-        raise HTTPException(
-            status_code=404, detail="Comment not found or not owned by you"
+        detail = (
+            "Comment not found"
+            if request.state.is_admin
+            else "Comment not found or not owned by you"
         )
+        raise HTTPException(status_code=404, detail=detail)
 
     return {"status": "deleted"}
 
@@ -3466,6 +3473,10 @@ async def login(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Username and api_key are required")
 
     settings = get_settings()
+    if not settings.admin_key:
+        raise HTTPException(
+            status_code=503, detail="Admin authentication not configured"
+        )
     is_admin = False
     authenticated = False
 
@@ -3513,7 +3524,7 @@ async def login(request: Request) -> JSONResponse:
         secure=settings.secure_cookies,
         max_age=365 * 24 * 60 * 60,
     )
-    logger.info(f"[AUDIT] Admin login: '{username}'")
+    logger.info(f"[AUDIT] Login success: user='{username}' is_admin={is_admin}")
     return response
 
 
@@ -3561,7 +3572,11 @@ async def get_user_tokens_endpoint(request: Request) -> JSONResponse:
 
 @app.put("/api/user/tokens")
 async def save_user_tokens_endpoint(request: Request) -> JSONResponse:
-    """Save tokens for the current user. Tokens are encrypted at rest."""
+    """Save tokens for the current user. Tokens are encrypted at rest.
+
+    Only fields present in the JSON body are updated. Omitted fields are left unchanged.
+    Pass empty string to clear a field.
+    """
     username = request.state.username
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
@@ -3570,12 +3585,18 @@ async def save_user_tokens_endpoint(request: Request) -> JSONResponse:
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
 
-    await storage.save_user_tokens(
-        username,
-        github_token=body.get("github_token", ""),
-        jira_email=body.get("jira_email", ""),
-        jira_token=body.get("jira_token", ""),
-    )
+    kwargs: dict[str, str | None] = {}
+    if "github_token" in body:
+        kwargs["github_token"] = body["github_token"]
+    if "jira_email" in body:
+        kwargs["jira_email"] = body["jira_email"]
+    if "jira_token" in body:
+        kwargs["jira_token"] = body["jira_token"]
+
+    if not kwargs:
+        return JSONResponse(content={"ok": True})
+
+    await storage.save_user_tokens(username, **kwargs)
     logger.debug(f"Saved tokens for user '{username}'")
     return JSONResponse(content={"ok": True})
 

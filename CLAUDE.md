@@ -182,7 +182,7 @@ When adding a new analysis setting:
 5. Add the field to `ServerConfig` in `cli/config.py`
 
 Exceptions (server-level only, no payload equivalent):
-- `ADMIN_KEY` — server-only bootstrap secret for admin superuser authentication; never expose via request payloads, CLI flags, or shared config files
+- `ADMIN_KEY` — server-only bootstrap secret for admin superuser authentication; never expose via request payloads, CLI flags, or shared config files. Rotating `ADMIN_KEY` only affects the bootstrap admin login — delegated admin API keys use `JJI_ENCRYPTION_KEY` for HMAC hashing and are not affected by `ADMIN_KEY` rotation.
 - `DEBUG` — server reload toggle
 - `ENABLE_GITHUB_ISSUES` — server capability toggle for GitHub issue creation
 - `ENABLE_REPORTPORTAL` — server capability toggle for Report Portal integration

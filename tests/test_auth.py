@@ -27,20 +27,17 @@ def client(_init_db, temp_db_path):
         os.environ,
         {
             "ADMIN_KEY": "test-admin-key-16chars",  # pragma: allowlist secret
+            "JJI_ENCRYPTION_KEY": "test-encryption-key-for-hmac",  # pragma: allowlist secret
             "SECURE_COOKIES": "false",
         },
     ):
         get_settings.cache_clear()
         with patch.object(storage, "DB_PATH", temp_db_path):
-            storage.configure_admin_key(
-                "test-admin-key-16chars"
-            )  # pragma: allowlist secret
             from jenkins_job_insight.main import app
 
             with TestClient(app) as c:
                 yield c
         get_settings.cache_clear()
-        storage.configure_admin_key("")  # cleanup
 
 
 def _admin_login(
@@ -386,21 +383,36 @@ class TestUserTokens:
         assert data["github_token"] == ""
 
     def test_save_partial_tokens(self, client):
-        """Can save just one token without affecting others."""
+        """Saving one token should NOT wipe others."""
         import time
 
         client.get("/api/dashboard", cookies={"jji_username": "partial"})
         time.sleep(0.1)
-        # Save only github_token
+
+        # Save all three tokens
         client.put(
             "/api/user/tokens",
-            json={"github_token": "ghp_only"},
+            json={
+                "github_token": "ghp_original",
+                "jira_email": "orig@test.com",
+                "jira_token": "jira_orig",
+            },
             cookies={"jji_username": "partial"},
         )
+
+        # Now update ONLY github_token
+        client.put(
+            "/api/user/tokens",
+            json={"github_token": "ghp_updated"},
+            cookies={"jji_username": "partial"},
+        )
+
+        # Verify jira tokens were NOT wiped
         resp = client.get("/api/user/tokens", cookies={"jji_username": "partial"})
         data = resp.json()
-        assert data["github_token"] == "ghp_only"
-        assert data["jira_email"] == ""
+        assert data["github_token"] == "ghp_updated"
+        assert data["jira_email"] == "orig@test.com"  # NOT wiped
+        assert data["jira_token"] == "jira_orig"  # NOT wiped
 
     def test_tokens_encrypted_at_rest(self, client, temp_db_path):
         """Verify tokens are not stored as plaintext in the DB."""
@@ -430,6 +442,88 @@ class TestUserTokens:
                 assert raw.startswith("enc:")  # Encrypted
 
         asyncio.run(check())
+
+
+class TestAdminDeleteComment:
+    def test_admin_can_delete_other_users_comment(self, client):
+        """Admin should be able to delete comments from other users."""
+        import asyncio
+
+        cookies = _admin_login(client)
+
+        # Create a result with a failure so comment endpoints work
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_foo",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        asyncio.run(
+            storage.save_result(
+                "test-job-1", "http://jenkins/1", "completed", result_data
+            )
+        )
+
+        # Add a comment directly as "regularuser"
+        comment_id = asyncio.run(
+            storage.add_comment(
+                job_id="test-job-1",
+                test_name="test_foo",
+                comment="regular user comment",
+                username="regularuser",
+            )
+        )
+
+        # Admin deletes the regular user's comment
+        resp = client.delete(
+            f"/results/test-job-1/comments/{comment_id}",
+            cookies=cookies,
+        )
+        assert resp.status_code == 200
+
+    def test_regular_user_cannot_delete_other_users_comment(self, client):
+        """Regular user should NOT be able to delete another user's comment."""
+        import asyncio
+
+        # Create a result with a failure
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_bar",
+                    "error": "err",
+                    "analysis": {"classification": "CODE ISSUE"},
+                }
+            ],
+        }
+        asyncio.run(
+            storage.save_result(
+                "test-job-2", "http://jenkins/2", "completed", result_data
+            )
+        )
+
+        # Add a comment directly as "alice"
+        comment_id = asyncio.run(
+            storage.add_comment(
+                job_id="test-job-2",
+                test_name="test_bar",
+                comment="alice's comment",
+                username="alice",
+            )
+        )
+
+        # "bob" tries to delete alice's comment — should fail
+        resp = client.delete(
+            f"/results/test-job-2/comments/{comment_id}",
+            cookies={"jji_username": "bob"},
+        )
+        assert resp.status_code == 404  # Not found (not owned by bob)
 
 
 class TestUserTracking:

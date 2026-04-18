@@ -14,6 +14,18 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null)
 
+async function syncTokensFromServer(forUsername: string) {
+  if (!forUsername) return
+  try {
+    const tokens = await api.get<{ github_token: string; jira_email: string; jira_token: string }>('/api/user/tokens')
+    if (tokens.github_token) setGithubToken(tokens.github_token)
+    if (tokens.jira_email) setJiraEmail(tokens.jira_email)
+    if (tokens.jira_token) setJiraToken(tokens.jira_token)
+  } catch {
+    // Server tokens not available — keep localStorage values
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [username, setUsernameState] = useState(getUsername())
   const [isAdmin, setIsAdminState] = useState(getIsAdmin())
@@ -31,17 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (me.username) {
         setUsername(me.username)
       }
-      // Sync tokens from server to localStorage
-      if (me.username) {
-        try {
-          const tokens = await api.get<{ github_token: string; jira_email: string; jira_token: string }>('/api/user/tokens')
-          if (tokens.github_token) setGithubToken(tokens.github_token)
-          if (tokens.jira_email) setJiraEmail(tokens.jira_email)
-          if (tokens.jira_token) setJiraToken(tokens.jira_token)
-        } catch {
-          // Server tokens not available — keep localStorage values
-        }
-      }
+      await syncTokensFromServer(me.username)
     } catch {
       // Any error means no valid admin session — fall back to cookie identity
       const cookieUsername = getUsername()
@@ -50,17 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setRoleState('user')
       setIsAdmin(false)
       setRole('user')
-      // Sync tokens from server to localStorage for cookie-based users
-      if (cookieUsername) {
-        try {
-          const tokens = await api.get<{ github_token: string; jira_email: string; jira_token: string }>('/api/user/tokens')
-          if (tokens.github_token) setGithubToken(tokens.github_token)
-          if (tokens.jira_email) setJiraEmail(tokens.jira_email)
-          if (tokens.jira_token) setJiraToken(tokens.jira_token)
-        } catch {
-          // Server tokens not available — keep localStorage values
-        }
-      }
+      await syncTokensFromServer(cookieUsername)
     } finally {
       setLoading(false)
     }

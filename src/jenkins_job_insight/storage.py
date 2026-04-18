@@ -51,39 +51,35 @@ def validate_api_key(key: str) -> None:
         raise ValueError(msg)
 
 
-# Module-level admin key, set by configure_admin_key() at startup.
-_admin_key: str = ""
+def _get_hmac_secret() -> str:
+    """Get the HMAC secret for API key hashing.
+
+    Uses JJI_ENCRYPTION_KEY (same key used for at-rest encryption) as
+    the HMAC pepper. This is deliberately separate from ADMIN_KEY so
+    that rotating ADMIN_KEY does not invalidate delegated API key hashes.
+
+    Falls back to the auto-generated file-based key when
+    JJI_ENCRYPTION_KEY is not set (same resolution as encryption.py).
+    """
+    from jenkins_job_insight.encryption import get_hmac_secret
+
+    return get_hmac_secret()
 
 
-def configure_admin_key(key: str) -> None:
-    """Set the admin key used for API key HMAC hashing."""
-    global _admin_key
-    _admin_key = key
-
-
-def _get_admin_key() -> str:
-    """Get the admin key, raising if not configured."""
-    if not _admin_key:
-        msg = "Admin key not configured — call configure_admin_key() at startup"
-        raise RuntimeError(msg)
-    return _admin_key
-
-
-def hash_api_key(key: str, hmac_secret: str) -> str:
+def hash_api_key(key: str) -> str:
     """Hash an API key with HMAC-SHA256 for storage.
+
+    Uses the encryption key (JJI_ENCRYPTION_KEY) as the HMAC secret,
+    which is stable across ADMIN_KEY rotations.
 
     Args:
         key: The raw API key to hash.
-        hmac_secret: The HMAC secret (typically Settings.admin_key).
-            Required — callers must provide the secret explicitly.
 
     Returns:
         Hex-encoded HMAC-SHA256 digest.
     """
-    if not hmac_secret:
-        msg = "HMAC secret is required for API key hashing (set ADMIN_KEY env var)"
-        raise RuntimeError(msg)
-    return hmac.new(hmac_secret.encode(), key.encode(), hashlib.sha256).hexdigest()
+    secret = _get_hmac_secret()
+    return hmac.new(secret.encode(), key.encode(), hashlib.sha256).hexdigest()
 
 
 def generate_api_key() -> str:
@@ -446,12 +442,11 @@ async def add_comment(
 
 
 async def delete_comment(comment_id: int, username: str, job_id: str = "") -> bool:
-    """Delete a comment. Username check is a UI courtesy, not security.
+    """Delete a comment by ID, optionally scoped to username and job_id.
 
-    DESIGN DECISION: No authentication in this project.
-    All users are trusted. Username matching is a UI convenience
-    (shows delete button only for your own comments), NOT a security control.
-    Any user can delete any comment. See issue #55 for future auth plans.
+    When username is empty, the delete is not scoped by owner — the caller
+    is responsible for ensuring this is only used for admin-authorized requests.
+    When username is non-empty, only comments matching that username are deleted.
 
     Returns True if deleted, False if not found.
     """
@@ -2366,7 +2361,7 @@ async def create_admin_user(username: str) -> tuple[str, str]:
         msg = f"Invalid username: '{username}'. Must be 2-50 alphanumeric characters, dots, hyphens, underscores."
         raise ValueError(msg)
     raw_key = generate_api_key()
-    key_hash = hash_api_key(raw_key, _get_admin_key())
+    key_hash = hash_api_key(raw_key)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO users (username, api_key_hash, role) VALUES (?, ?, 'admin')",
@@ -2378,7 +2373,7 @@ async def create_admin_user(username: str) -> tuple[str, str]:
 
 async def get_user_by_key(api_key: str) -> dict | None:
     """Look up a user by their raw API key."""
-    key_hash = hash_api_key(api_key, _get_admin_key())
+    key_hash = hash_api_key(api_key)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
@@ -2433,7 +2428,6 @@ async def change_user_role(username: str, new_role: str) -> tuple[str, str]:
     if username.lower() == "admin":
         msg = "Cannot change role of reserved 'admin' user"
         raise ValueError(msg)
-
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
@@ -2451,7 +2445,7 @@ async def change_user_role(username: str, new_role: str) -> tuple[str, str]:
         if new_role == "admin":
             # Promoting to admin — generate API key
             raw_key = generate_api_key()
-            key_hash = hash_api_key(raw_key, _get_admin_key())
+            key_hash = hash_api_key(raw_key)
             await db.execute(
                 "UPDATE users SET role = 'admin', api_key_hash = ? WHERE username = ?",
                 (key_hash, username),
@@ -2534,7 +2528,7 @@ async def rotate_admin_key(username: str, custom_key: str | None = None) -> str:
         raw_key = custom_key
     else:
         raw_key = generate_api_key()
-    key_hash = hash_api_key(raw_key, _get_admin_key())
+    key_hash = hash_api_key(raw_key)
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "UPDATE users SET api_key_hash = ? WHERE username = ? AND role = 'admin'",
@@ -2559,11 +2553,14 @@ async def cleanup_expired_sessions() -> None:
 async def save_user_tokens(
     username: str,
     *,
-    github_token: str = "",
-    jira_email: str = "",
-    jira_token: str = "",
+    github_token: str | None = None,
+    jira_email: str | None = None,
+    jira_token: str | None = None,
 ) -> None:
-    """Save encrypted user tokens. Only updates non-empty values."""
+    """Save encrypted user tokens. Only updates fields that are explicitly provided (not None).
+
+    Pass empty string to clear a field. Omit (None) to leave unchanged.
+    """
     from jenkins_job_insight.encryption import encrypt_value
 
     updates = []
