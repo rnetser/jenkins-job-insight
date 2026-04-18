@@ -125,33 +125,19 @@ def _get_or_create_key_file() -> str:
     return key
 
 
+def _resolve_encryption_secret() -> str:
+    """Return the raw encryption secret (env var or file-based fallback)."""
+    return os.environ.get("JJI_ENCRYPTION_KEY", "") or _get_or_create_key_file()
+
+
 def get_hmac_secret() -> str:
-    """Return the HMAC secret for API key hashing.
-
-    Uses the same key resolution as Fernet encryption:
-    1. JJI_ENCRYPTION_KEY environment variable
-    2. Auto-generated file-based key
-
-    This is separate from ADMIN_KEY to decouple key rotation
-    from API key hash invalidation.
-    """
-    secret = os.environ.get("JJI_ENCRYPTION_KEY", "")
-    if not secret:
-        secret = _get_or_create_key_file()
-    return secret
+    """Return the HMAC secret for API key hashing."""
+    return _resolve_encryption_secret()
 
 
 def _get_fernet() -> Fernet:
-    """Return a ``Fernet`` instance using the configured encryption key.
-
-    Key resolution order:
-    1. ``JJI_ENCRYPTION_KEY`` environment variable (recommended for production).
-    2. Auto-generated file-based key (``~/.local/share/jji/.encryption_key``).
-    """
-    secret = os.environ.get("JJI_ENCRYPTION_KEY", "")
-    if not secret:
-        secret = _get_or_create_key_file()
-    return Fernet(_derive_fernet_key(secret))
+    """Return a Fernet instance using the configured encryption key."""
+    return Fernet(_derive_fernet_key(_resolve_encryption_secret()))
 
 
 def encrypt_sensitive_fields(params: dict) -> dict:

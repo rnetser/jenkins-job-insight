@@ -2383,7 +2383,10 @@ async def get_user_by_username(username: str) -> dict | None:
     """Look up a user by username."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM users WHERE username = ?", (username,))
+        cursor = await db.execute(
+            "SELECT id, username, role, created_at, last_seen FROM users WHERE username = ?",
+            (username,),
+        )
         row = await cursor.fetchone()
         return dict(row) if row else None
 
@@ -2461,7 +2464,16 @@ async def change_user_role(username: str, new_role: str) -> tuple[str, str]:
                 (key_hash, username),
             )
         else:
-            # Demoting to user — remove API key and invalidate sessions
+            # Demoting to user — ensure at least one admin remains
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM users WHERE role = 'admin' AND username != ?",
+                (username,),
+            )
+            remaining = (await cursor.fetchone())[0]
+            if remaining < 1:
+                msg = "Cannot demote the last admin user"
+                raise ValueError(msg)
+            # Remove API key and invalidate sessions
             await db.execute(
                 "UPDATE users SET role = 'user', api_key_hash = NULL WHERE username = ?",
                 (username,),

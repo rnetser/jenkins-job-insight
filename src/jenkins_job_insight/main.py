@@ -3573,7 +3573,10 @@ async def get_user_tokens_endpoint(request: Request) -> JSONResponse:
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
     tokens = await storage.get_user_tokens(username)
-    return JSONResponse(content=tokens)
+    return JSONResponse(
+        content=tokens,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.put("/api/user/tokens")

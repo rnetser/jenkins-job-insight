@@ -62,11 +62,12 @@ function TokenField({ id, label, value, onChange, show, onToggleShow, validation
 }
 
 function persistTokensToServer(gh: string, je: string, jt: string) {
-  api.put('/api/user/tokens', {
-    github_token: gh,
-    jira_email: je,
-    jira_token: jt,
-  }).catch((err) => {
+  const body: Record<string, string> = {}
+  if (gh) body.github_token = gh
+  if (je) body.jira_email = je
+  if (jt) body.jira_token = jt
+  if (Object.keys(body).length === 0) return
+  api.put('/api/user/tokens', body).catch((err) => {
     console.error('Failed to sync tokens to server:', err)
   })
 }

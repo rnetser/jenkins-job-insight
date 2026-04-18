@@ -276,15 +276,17 @@ class TestBearerTokenAuth:
 class TestChangeUserRole:
     def test_promote_user_to_admin(self, client):
         cookies = _admin_login(client)
-        # Create as admin first, demote to user, then promote back
+        # Create two admins so we can safely demote one (last-admin guard)
         client.post(
             "/api/admin/users", json={"username": "promoteuser"}, cookies=cookies
         )
+        client.post("/api/admin/users", json={"username": "keeper"}, cookies=cookies)
         client.put(
             "/api/admin/users/promoteuser/role",
             json={"role": "user"},
             cookies=cookies,
         )
+        client.delete("/api/admin/users/keeper", cookies=cookies)
         # Now promote from user to admin
         resp = client.put(
             "/api/admin/users/promoteuser/role",
@@ -299,8 +301,9 @@ class TestChangeUserRole:
 
     def test_demote_admin_to_user(self, client):
         cookies = _admin_login(client)
-        # Create admin user
+        # Create two admins so we can safely demote one (last-admin guard)
         client.post("/api/admin/users", json={"username": "demoteme"}, cookies=cookies)
+        client.post("/api/admin/users", json={"username": "keeper2"}, cookies=cookies)
         # Demote to user
         resp = client.put(
             "/api/admin/users/demoteme/role",
@@ -311,6 +314,22 @@ class TestChangeUserRole:
         data = resp.json()
         assert data["role"] == "user"
         assert "api_key" not in data  # No key for regular users
+        # Clean up
+        client.delete("/api/admin/users/keeper2", cookies=cookies)
+
+    def test_demote_last_admin_blocked(self, client):
+        cookies = _admin_login(client)
+        # Create a single admin — demoting should be blocked
+        client.post("/api/admin/users", json={"username": "onlyadmin"}, cookies=cookies)
+        resp = client.put(
+            "/api/admin/users/onlyadmin/role",
+            json={"role": "user"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 400
+        assert "last admin" in resp.json()["detail"].lower()
+        # Clean up
+        client.delete("/api/admin/users/onlyadmin", cookies=cookies)
 
     def test_change_role_requires_admin(self, client):
         resp = client.put(
