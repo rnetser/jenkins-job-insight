@@ -2397,26 +2397,31 @@ async def delete_admin_user(username: str) -> bool:
     Raises ValueError if this would delete the last admin user.
     """
     async with aiosqlite.connect(DB_PATH) as db:
-        # Check this wouldn't delete the last admin
-        cursor = await db.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
-        admin_count = (await cursor.fetchone())[0]
-        if admin_count <= 1:
-            # Check if the target is actually an admin
-            cursor = await db.execute(
-                "SELECT role FROM users WHERE username = ?", (username,)
-            )
-            row = await cursor.fetchone()
-            if row and row[0] == "admin":
-                raise ValueError("Cannot delete the last admin user")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await db.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+            admin_count = (await cursor.fetchone())[0]
+            if admin_count <= 1:
+                cursor = await db.execute(
+                    "SELECT role FROM users WHERE username = ?", (username,)
+                )
+                row = await cursor.fetchone()
+                if row and row[0] == "admin":
+                    await db.execute("ROLLBACK")
+                    raise ValueError("Cannot delete the last admin user")
 
-        # Delete sessions first
-        await db.execute("DELETE FROM sessions WHERE username = ?", (username,))
-        cursor = await db.execute(
-            "DELETE FROM users WHERE username = ? AND role = 'admin'",
-            (username,),
-        )
-        await db.commit()
-        return cursor.rowcount > 0
+            await db.execute("DELETE FROM sessions WHERE username = ?", (username,))
+            cursor = await db.execute(
+                "DELETE FROM users WHERE username = ? AND role = 'admin'",
+                (username,),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+        except ValueError:
+            raise
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
 
 
 async def change_user_role(username: str, new_role: str) -> tuple[str, str]:
@@ -2464,21 +2469,30 @@ async def change_user_role(username: str, new_role: str) -> tuple[str, str]:
                 (key_hash, username),
             )
         else:
-            # Demoting to user — ensure at least one admin remains
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM users WHERE role = 'admin' AND username != ?",
-                (username,),
-            )
-            remaining = (await cursor.fetchone())[0]
-            if remaining < 1:
-                msg = "Cannot demote the last admin user"
-                raise ValueError(msg)
-            # Remove API key and invalidate sessions
-            await db.execute(
-                "UPDATE users SET role = 'user', api_key_hash = NULL WHERE username = ?",
-                (username,),
-            )
-            await db.execute("DELETE FROM sessions WHERE username = ?", (username,))
+            # Demoting to user — use transaction for atomic last-admin check
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM users WHERE role = 'admin' AND username != ?",
+                    (username,),
+                )
+                other_admins = (await cursor.fetchone())[0]
+                if other_admins == 0:
+                    await db.execute("ROLLBACK")
+                    raise ValueError("Cannot demote the last admin user")
+                await db.execute(
+                    "UPDATE users SET role = 'user', api_key_hash = NULL WHERE username = ?",
+                    (username,),
+                )
+                await db.execute("DELETE FROM sessions WHERE username = ?", (username,))
+                await db.commit()
+            except ValueError:
+                raise
+            except Exception:
+                await db.execute("ROLLBACK")
+                raise
+
+            return username, raw_key
 
         await db.commit()
     return username, raw_key
@@ -2495,7 +2509,7 @@ async def list_users() -> list[dict]:
 
 
 async def track_user(username: str) -> None:
-    """Track a regular user — insert if new, update last_seen if existing."""
+    """Track user activity — insert if new, update last_seen if existing."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO users (username, role) VALUES (?, 'user') "

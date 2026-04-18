@@ -400,9 +400,9 @@ class TestUserTokens:
         resp = client.get("/api/user/tokens", cookies={"jji_username": "tokenuser"})
         assert resp.status_code == 200
         data = resp.json()
-        assert data["github_token"] == "ghp_test123"
+        assert data["github_token"] == "ghp_test123"  # noqa: S105
         assert data["jira_email"] == "a@b.com"
-        assert data["jira_token"] == "jira_tok"
+        assert data["jira_token"] == "jira_tok"  # noqa: S105
 
     def test_get_tokens_no_user(self, client):
         resp = client.get("/api/user/tokens")
@@ -445,9 +445,9 @@ class TestUserTokens:
         # Verify jira tokens were NOT wiped
         resp = client.get("/api/user/tokens", cookies={"jji_username": "partial"})
         data = resp.json()
-        assert data["github_token"] == "ghp_updated"
+        assert data["github_token"] == "ghp_updated"  # noqa: S105
         assert data["jira_email"] == "orig@test.com"  # NOT wiped
-        assert data["jira_token"] == "jira_orig"  # NOT wiped
+        assert data["jira_token"] == "jira_orig"  # NOT wiped  # noqa: S105
 
     def test_tokens_encrypted_at_rest(self, client, temp_db_path):
         """Verify tokens are not stored as plaintext in the DB."""

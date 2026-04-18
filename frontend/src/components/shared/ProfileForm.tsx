@@ -61,15 +61,16 @@ function TokenField({ id, label, value, onChange, show, onToggleShow, validation
   )
 }
 
-function persistTokensToServer(gh: string, je: string, jt: string) {
-  const body: Record<string, string> = {}
-  if (gh) body.github_token = gh
-  if (je) body.jira_email = je
-  if (jt) body.jira_token = jt
-  if (Object.keys(body).length === 0) return
-  api.put('/api/user/tokens', body).catch((err) => {
+async function persistTokensToServer(gh: string, je: string, jt: string) {
+  try {
+    await api.put('/api/user/tokens', {
+      github_token: gh,
+      jira_email: je,
+      jira_token: jt,
+    })
+  } catch (err) {
     console.error('Failed to sync tokens to server:', err)
-  })
+  }
 }
 
 export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
@@ -106,7 +107,7 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
         setGithubToken(githubToken.trim())
         setJiraEmail(jiraEmail.trim())
         setJiraToken(jiraToken.trim())
-        persistTokensToServer(githubToken.trim(), jiraEmail.trim(), jiraToken.trim())
+        await persistTokensToServer(githubToken.trim(), jiraEmail.trim(), jiraToken.trim())
         setSaving(false)
         onSaved()
         return
@@ -140,7 +141,7 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
     setGithubToken(githubToken.trim())
     setJiraEmail(jiraEmail.trim())
     setJiraToken(jiraToken.trim())
-    persistTokensToServer(githubToken.trim(), jiraEmail.trim(), jiraToken.trim())
+    await persistTokensToServer(githubToken.trim(), jiraEmail.trim(), jiraToken.trim())
     setSaving(false)
     onSaved()
   }

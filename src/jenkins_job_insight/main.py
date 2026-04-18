@@ -592,9 +592,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.is_admin = is_admin
         request.state.role = "admin" if is_admin else "user"
 
-        # Track regular user activity (non-admin, has username)
-        if username and not is_admin:
-            # Fire and forget — don't block the request
+        # Track user activity (update last_seen for all users)
+        if username:
             task = asyncio.create_task(_safe_track_user(username))
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
