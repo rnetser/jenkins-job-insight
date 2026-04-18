@@ -2461,13 +2461,24 @@ async def change_user_role(username: str, new_role: str) -> tuple[str, str]:
 
         raw_key = ""
         if new_role == "admin":
-            # Promoting to admin — generate API key
+            # Promoting to admin — use transaction for atomicity
             raw_key = generate_api_key()
             key_hash = hash_api_key(raw_key)
-            await db.execute(
-                "UPDATE users SET role = 'admin', api_key_hash = ? WHERE username = ?",
-                (key_hash, username),
-            )
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "UPDATE users SET role = 'admin', api_key_hash = ? WHERE username = ?",
+                    (key_hash, username),
+                )
+                if cursor.rowcount == 0:
+                    await db.execute("ROLLBACK")
+                    raise ValueError(f"User '{username}' not found")
+                await db.commit()
+            except ValueError:
+                raise
+            except Exception:
+                await db.execute("ROLLBACK")
+                raise
         else:
             # Demoting to user — use transaction for atomic last-admin check
             await db.execute("BEGIN IMMEDIATE")
@@ -2494,7 +2505,6 @@ async def change_user_role(username: str, new_role: str) -> tuple[str, str]:
 
             return username, raw_key
 
-        await db.commit()
     return username, raw_key
 
 
