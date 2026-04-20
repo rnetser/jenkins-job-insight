@@ -313,6 +313,7 @@ def _reconstruct_from_params(
         "jenkins_user",
         "jenkins_password",
         "jenkins_ssl_verify",
+        "jenkins_timeout",
         "wait_for_completion",
         "poll_interval_minutes",
         "max_wait_minutes",
@@ -774,6 +775,7 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
             "jenkins_user",
             "jenkins_password",
             "jenkins_ssl_verify",
+            "jenkins_timeout",
         ]
         for field in jenkins_fields:
             value = getattr(body, field, None)
@@ -844,6 +846,8 @@ async def _wait_for_jenkins_completion(
     jenkins_ssl_verify: bool,
     poll_interval_minutes: int,
     max_wait_minutes: int,
+    jenkins_timeout: int = 30,
+    max_consecutive_failures: int = 5,
 ) -> tuple[bool, str]:
     """Poll Jenkins until the build finishes.
 
@@ -857,6 +861,9 @@ async def _wait_for_jenkins_completion(
         poll_interval_minutes: Minutes between polls.
         max_wait_minutes: Maximum minutes to wait before timing out.
             0 means no limit (poll forever until job finishes).
+        jenkins_timeout: Jenkins API request timeout in seconds.
+        max_consecutive_failures: Number of consecutive transient errors
+            allowed before giving up. Defaults to 5.
 
     Returns:
         A tuple of (success, error_message). success is True if the build
@@ -865,24 +872,45 @@ async def _wait_for_jenkins_completion(
     import jenkins
 
     from jenkins_job_insight.jenkins import JenkinsClient
+    from jenkins_job_insight.utils import is_jenkins_connectivity_error
 
     client = JenkinsClient(
         url=jenkins_url,
         username=jenkins_user,
         password=jenkins_password,
         ssl_verify=jenkins_ssl_verify,
+        timeout=jenkins_timeout,
     )
+
+    unreachable_error = (
+        "Cannot reach Jenkins; please verify the Jenkins URL, credentials, "
+        "and network connectivity"
+    )
+
+    try:
+        await asyncio.to_thread(client.get_whoami)
+    except Exception as e:
+        if not is_jenkins_connectivity_error(e):
+            raise
+        logger.error("Cannot reach Jenkins at %s: %s", jenkins_url, e, exc_info=True)
+        return False, (
+            "Jenkins reachability check failed; please verify the Jenkins URL, "
+            "credentials, and network connectivity"
+        )
 
     if max_wait_minutes > 0:
         deadline: float | None = _time.monotonic() + max_wait_minutes * 60
     else:
         deadline = None  # No limit
 
+    consecutive_failures = 0
+
     while True:
         try:
             build_info = await asyncio.to_thread(
                 client.get_build_info_safe, job_name, build_number
             )
+            consecutive_failures = 0
 
             if build_info and not build_info.get("building", True):
                 logger.info(
@@ -900,12 +928,27 @@ async def _wait_for_jenkins_completion(
             )
             return False, f"Jenkins job {job_name} #{build_number} not found (404)"
 
-        except (OSError, TimeoutError) as e:
-            logger.warning(f"Transient error checking Jenkins status: {e}")
-
         except Exception as e:
-            logger.error(f"Non-transient error checking Jenkins status: {e}")
-            return False, f"Jenkins poll failed: {e}"
+            if not is_jenkins_connectivity_error(e):
+                logger.error(
+                    "Non-transient error checking Jenkins status", exc_info=True
+                )
+                return False, "Jenkins poll failed; check server logs for details"
+            consecutive_failures += 1
+            logger.warning(
+                "Transient error checking Jenkins status (%d/%d): %s",
+                consecutive_failures,
+                max_consecutive_failures,
+                e,
+            )
+            if consecutive_failures >= max_consecutive_failures:
+                logger.error(
+                    "Cannot reach Jenkins at %s after %d consecutive failures",
+                    jenkins_url,
+                    consecutive_failures,
+                    exc_info=True,
+                )
+                return False, unreachable_error
 
         if deadline is not None:
             remaining = deadline - _time.monotonic()
@@ -972,17 +1015,20 @@ async def process_analysis_with_id(
                 jenkins_ssl_verify=settings.jenkins_ssl_verify,
                 poll_interval_minutes=settings.poll_interval_minutes,
                 max_wait_minutes=settings.max_wait_minutes,
+                jenkins_timeout=settings.jenkins_timeout,
             )
 
             if not completed:
+                fail_data = {
+                    "job_name": body.job_name,
+                    "build_number": body.build_number,
+                    "error": wait_error,
+                }
+                await _preserve_request_params(job_id, fail_data)
                 await update_status(
                     job_id,
                     "failed",
-                    {
-                        "job_name": body.job_name,
-                        "build_number": body.build_number,
-                        "error": wait_error,
-                    },
+                    fail_data,
                 )
                 return
 
@@ -1060,13 +1106,13 @@ async def process_analysis_with_id(
     except Exception as e:
         logger.exception(f"Analysis failed for job {job_id}")
         error_detail = format_exception_with_type(e)
-        fail_data: dict = {
+        error_data: dict = {
             "job_name": body.job_name,
             "build_number": body.build_number,
             "error": error_detail,
         }
-        await _preserve_request_params(job_id, fail_data)
-        await update_status(job_id, "failed", fail_data)
+        await _preserve_request_params(job_id, error_data)
+        await update_status(job_id, "failed", error_data)
 
 
 def _build_base_request_params(
@@ -1157,6 +1203,7 @@ def _build_request_params(
             "jenkins_user": merged.jenkins_user,
             "jenkins_password": merged.jenkins_password,
             "jenkins_ssl_verify": merged.jenkins_ssl_verify,
+            "jenkins_timeout": merged.jenkins_timeout,
             "wait_for_completion": merged.wait_for_completion,
             "poll_interval_minutes": merged.poll_interval_minutes,
             "max_wait_minutes": merged.max_wait_minutes,

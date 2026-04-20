@@ -501,6 +501,11 @@ def analyze(
         "--jenkins-ssl-verify/--no-jenkins-ssl-verify",
         help="Jenkins SSL certificate verification.",
     ),
+    jenkins_timeout: int | None = typer.Option(
+        None,
+        "--jenkins-timeout",
+        help="Jenkins API request timeout in seconds.",
+    ),
     jenkins_artifacts_max_size_mb: int = typer.Option(
         None,
         "--jenkins-artifacts-max-size-mb",
@@ -589,6 +594,7 @@ def analyze(
         "--jira-max-results": jira_max_results,
         "--ai-cli-timeout": ai_cli_timeout,
         "--jenkins-artifacts-max-size-mb": jenkins_artifacts_max_size_mb,
+        "--jenkins-timeout": jenkins_timeout,
     }
     for flag_name, flag_value in _positive_int_fields.items():
         if flag_value is not None and flag_value <= 0:
@@ -626,12 +632,14 @@ def analyze(
         _cfg_int_fields = {
             "ai_cli_timeout": cfg.ai_cli_timeout,
             "jira_max_results": cfg.jira_max_results,
+            "jenkins_timeout": cfg.jenkins_timeout,
             "poll_interval_minutes": cfg.poll_interval_minutes,
             "max_wait_minutes": cfg.max_wait_minutes,
         }
         _cfg_int_defaults = {
             "ai_cli_timeout": ServerConfig.ai_cli_timeout,
             "jira_max_results": ServerConfig.jira_max_results,
+            "jenkins_timeout": ServerConfig.jenkins_timeout,
             "poll_interval_minutes": ServerConfig.poll_interval_minutes,
             "max_wait_minutes": ServerConfig.max_wait_minutes,
         }
@@ -690,6 +698,7 @@ def analyze(
         "jira_max_results": jira_max_results,
         "ai_cli_timeout": ai_cli_timeout,
         "jenkins_artifacts_max_size_mb": jenkins_artifacts_max_size_mb,
+        "jenkins_timeout": jenkins_timeout,
         "poll_interval_minutes": poll_interval,
         "max_wait_minutes": max_wait,
     }
