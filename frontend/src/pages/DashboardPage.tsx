@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { GITHUB_REPO_URL } from '@/lib/constants'
 import type { DashboardJob } from '@/types'
@@ -27,11 +27,13 @@ import {
 } from '@/components/ui/tooltip'
 import { Skeleton } from '@/components/ui/skeleton'
 import { parseApiTimestamp, isAnalysisTimeout, formatDuration, formatTimestamp } from '@/lib/utils'
+import { utcStartOfDateInput, utcEndOfDateInput } from '@/lib/dateRange'
 import { StatusChip } from '@/components/shared/StatusChip'
 import { SearchInput } from '@/components/shared/SearchInput'
 import { Pagination } from '@/components/shared/Pagination'
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { SortableHeader } from '@/components/shared/SortableHeader'
+import { DateRangeFilter } from '@/components/shared/DateRangeFilter'
 import { useTableSort } from '@/lib/useTableSort'
 import { Trash2, MessageSquare, CheckCircle2, GitFork, AlertTriangle, Github } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
@@ -106,6 +108,33 @@ export function DashboardPage() {
   const { sortKey, sortDir, handleSort } = useTableSort('dash', 'created_at', 'desc', ['created_at'])
   const [page, setPage] = useState(1)
   const [perPage, setPerPage] = useState(20)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const dateFrom = searchParams.get('date_from') ?? ''
+  const dateTo = searchParams.get('date_to') ?? ''
+  const setDateFrom = useCallback((value: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (value) next.set('date_from', value)
+      else next.delete('date_from')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
+  const setDateTo = useCallback((value: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (value) next.set('date_to', value)
+      else next.delete('date_to')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
+  const clearDates = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      next.delete('date_from')
+      next.delete('date_to')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
   const [deleteTarget, setDeleteTarget] = useState<DashboardJob | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -140,17 +169,28 @@ export function DashboardPage() {
     const interval = setInterval(fetchJobs, 10_000)
     return () => clearInterval(interval)
   }, [fetchJobs])
-  useEffect(() => { setPage(1) }, [search, statusFilter, perPage])
+  useEffect(() => { setPage(1) }, [search, statusFilter, perPage, dateFrom, dateTo])
 
   const filtered = useMemo(() => {
+    const fromBound = dateFrom ? utcStartOfDateInput(dateFrom) : null
+    const toBound = dateTo ? utcEndOfDateInput(dateTo) : null
+
     return jobs.filter((j) => {
       const displayStatus = isAnalysisTimeout(j.status, j.error, j.summary) ? 'timeout' : j.status
       if (statusFilter !== STATUS_FILTER_ALL && displayStatus !== statusFilter) return false
+
+      if (fromBound || toBound) {
+        const jobDate = parseApiTimestamp(j.created_at)
+        if (Number.isNaN(jobDate.getTime())) return false
+        if (fromBound && jobDate < fromBound) return false
+        if (toBound && jobDate > toBound) return false
+      }
+
       if (!search) return true
       const q = search.toLowerCase()
       return (j.job_name ?? '').toLowerCase().includes(q) || j.job_id.toLowerCase().includes(q)
     })
-  }, [jobs, search, statusFilter])
+  }, [jobs, search, statusFilter, dateFrom, dateTo])
 
   const sorted = useMemo(() => {
     const copy = [...filtered]
@@ -247,6 +287,7 @@ export function DashboardPage() {
                 ))}
               </SelectContent>
             </Select>
+            <DateRangeFilter from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} onClear={clearDates} />
             <Select value={String(perPage)} onValueChange={(v) => setPerPage(Number(v))}>
               <SelectTrigger aria-label="Rows per page" className="w-full sm:w-20">
                 <SelectValue />
@@ -277,7 +318,9 @@ export function DashboardPage() {
         ) : pageJobs.length === 0 && (!error || jobs.length > 0) ? (
           <div className="flex flex-col items-center justify-center rounded-lg border border-border-muted bg-surface-card py-16 text-center animate-fade-in">
             <p className="text-text-secondary">
-              {search ? 'No jobs match your search.' : 'No analysis runs yet.'}
+              {search || statusFilter !== STATUS_FILTER_ALL || dateFrom || dateTo
+                ? 'No jobs match your filters.'
+                : 'No analysis runs yet.'}
             </p>
           </div>
         ) : error && jobs.length === 0 ? null : (
