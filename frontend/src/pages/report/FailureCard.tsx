@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
+import { useState, useMemo, type ReactNode } from 'react'
+import { useClipboard } from '@/lib/useClipboard'
 import type { GroupedFailure } from '@/types'
 import { buildFileUrl, buildRepoUrls, isSafeHref, matchRepo, type RepoUrl } from '@/lib/autoLink'
 import { isCommentInScope } from '@/lib/grouping'
@@ -80,30 +81,12 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
   const [selectedProvider, setSelectedProvider] = useState(result?.ai_provider ?? '')
   const [selectedModel, setSelectedModel] = useState(result?.ai_model ?? '')
   const [includeLinks, setIncludeLinks] = useState(false)
-  const [copiedSection, setCopiedSection] = useState<string | null>(null)
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null)
+  const { copiedKey: copiedSection, copy: copyToClipboard } = useClipboard()
 
   const repoUrls = useMemo<RepoUrl[]>(
     () => buildRepoUrls(result?.request_params),
     [result?.request_params],
   )
-
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current)
-    }
-  }, [])
-
-  function copyToClipboard(text: string, section: string) {
-    if (!navigator.clipboard?.writeText) return
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopiedSection(section)
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current)
-      copyTimeoutRef.current = setTimeout(() => setCopiedSection(null), 2000)
-    }).catch(() => {
-      setCopiedSection(null)
-    })
-  }
 
   function getModelsForProvider(provider: string) {
     return [...new Set(aiConfigs.filter((c) => c.ai_provider === provider).map((c) => c.ai_model))]
@@ -201,9 +184,18 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
           >
             {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-text-tertiary" /> : <ChevronRight className="h-4 w-4 shrink-0 text-text-tertiary" />}
             <div className="min-w-0 flex-1">
-              <p className="truncate font-display text-sm font-medium text-text-primary">{rep.test_name}</p>
+              <p className="truncate font-display text-sm font-medium text-text-primary" title={rep.test_name}>{rep.test_name}</p>
               {group.count > 1 && <span className="text-xs text-text-tertiary">+{group.count - 1} more with same error</span>}
             </div>
+          </button>
+          <button
+            type="button"
+            className="text-text-tertiary hover:text-text-primary transition-colors shrink-0"
+            onClick={(e) => { e.stopPropagation(); copyToClipboard(rep.test_name, 'test-name') }}
+            title={copiedSection === 'test-name' ? 'Copied test name' : 'Copy test name to clipboard'}
+            aria-label={copiedSection === 'test-name' ? 'Copied test name' : 'Copy test name to clipboard'}
+          >
+            {copiedSection === 'test-name' ? <Check className="h-3 w-3 text-signal-green" /> : <Copy className="h-3 w-3" />}
           </button>
           <div className="flex items-center gap-2 shrink-0">
             <ClassificationBadge classification={classification} />
@@ -259,7 +251,7 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
                 <div className="space-y-1">
                   {group.tests.map((t) => (
                     <div key={t.test_name} className="flex items-center justify-between gap-2">
-                      <p className="font-mono text-xs text-text-secondary truncate">{t.test_name}</p>
+                      <p className="font-mono text-xs text-text-secondary truncate" title={t.test_name}>{t.test_name}</p>
                       <ReviewToggle jobId={jobId} testName={t.test_name} childJobName={scopedChildJobName} childBuildNumber={scopedChildBuildNumber} disabled={reviewingAll} />
                     </div>
                   ))}
