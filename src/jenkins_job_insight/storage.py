@@ -1944,19 +1944,56 @@ async def get_all_failures(
         }
 
 
+async def _delete_job_rows(db: aiosqlite.Connection, job_id: str) -> bool:
+    """Delete all rows for a job across related tables. Returns True if the job existed."""
+    await db.execute("DELETE FROM comments WHERE job_id = ?", (job_id,))
+    await db.execute("DELETE FROM failure_reviews WHERE job_id = ?", (job_id,))
+    await db.execute("DELETE FROM failure_history WHERE job_id = ?", (job_id,))
+    await db.execute("DELETE FROM test_classifications WHERE job_id = ?", (job_id,))
+    cursor = await db.execute("DELETE FROM results WHERE job_id = ?", (job_id,))
+    return cursor.rowcount > 0
+
+
 async def delete_job(job_id: str) -> bool:
     """Delete an analyzed job and all its related data."""
     async with aiosqlite.connect(DB_PATH) as db:
-        # Delete from all related tables
-        await db.execute("DELETE FROM comments WHERE job_id = ?", (job_id,))
-        await db.execute("DELETE FROM failure_reviews WHERE job_id = ?", (job_id,))
-        await db.execute("DELETE FROM failure_history WHERE job_id = ?", (job_id,))
-        await db.execute("DELETE FROM test_classifications WHERE job_id = ?", (job_id,))
-        cursor = await db.execute("DELETE FROM results WHERE job_id = ?", (job_id,))
-        job_existed = cursor.rowcount > 0
+        job_existed = await _delete_job_rows(db, job_id)
         await db.commit()
-
         return job_existed
+
+
+async def delete_jobs_bulk(job_ids: list[str]) -> dict:
+    """Delete multiple jobs and all their related data in a single transaction.
+
+    Returns dict with 'deleted' (list of successfully deleted job_ids) and
+    'failed' (list of dicts with 'job_id' and 'reason' for failures).
+    """
+    deleted = []
+    failed = []
+    # Preserve order while dropping duplicates
+    unique_ids = list(dict.fromkeys(job_ids))
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            for idx, job_id in enumerate(unique_ids):
+                savepoint = f"delete_job_{idx}"
+                await db.execute(f"SAVEPOINT {savepoint}")
+                try:
+                    if await _delete_job_rows(db, job_id):
+                        deleted.append(job_id)
+                    else:
+                        failed.append({"job_id": job_id, "reason": "not found"})
+                    await db.execute(f"RELEASE SAVEPOINT {savepoint}")
+                except Exception:
+                    logger.exception("delete_jobs_bulk: failed to delete %s", job_id)
+                    await db.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    await db.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    failed.append({"job_id": job_id, "reason": "deletion failed"})
+            await db.commit()
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+    return {"deleted": deleted, "failed": failed, "total": len(unique_ids)}
 
 
 async def override_classification(

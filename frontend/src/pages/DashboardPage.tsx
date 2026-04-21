@@ -40,6 +40,10 @@ import { useAuth } from '@/lib/auth'
 
 const STATUS_FILTER_ALL = 'ALL'
 const STATUS_FILTER_OPTIONS = [STATUS_FILTER_ALL, 'completed', 'running', 'waiting', 'pending', 'failed', 'timeout'] as const
+const BULK_DELETE_LIMIT = 500
+
+const BULK_SELECT_CHECKBOX_CLASS =
+  "h-4 w-4 cursor-pointer appearance-none rounded border border-text-tertiary bg-surface-elevated checked:bg-signal-blue checked:border-signal-blue checked:bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22white%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M12.207%204.793a1%201%200%20010%201.414l-5%205a1%201%200%2001-1.414%200l-2-2a1%201%200%20011.414-1.414L6.5%209.086l4.293-4.293a1%201%200%20011.414%200z%22%2F%3E%3C%2Fsvg%3E')] checked:bg-no-repeat checked:bg-center transition-all"
 
 function MetricCell({ value, displayValue, icon, tone, tooltipText }: {
   value: number | null | undefined
@@ -138,6 +142,20 @@ export function DashboardPage() {
   const [deleteTarget, setDeleteTarget] = useState<DashboardJob | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
+  const [bulkResultMessage, setBulkResultMessage] = useState<string | null>(null)
+  const selectAllRef = useRef<HTMLInputElement>(null)
+
+  const showCheckboxes = selectedIds.size > 0
+
+  useEffect(() => {
+    if (!isAdmin && selectedIds.size > 0) {
+      clearSelection()
+      setBulkDeleteConfirm(false)
+    }
+  }, [isAdmin, selectedIds])
 
   const fetchSeqRef = useRef(0)
   const inFlightRef = useRef(false)
@@ -221,9 +239,87 @@ export function DashboardPage() {
   const safePage = Math.min(page, totalPages)
   const pageJobs = sorted.slice((safePage - 1) * perPage, safePage * perPage)
 
+  const pageJobIds = useMemo(() => pageJobs.map(j => j.job_id), [pageJobs])
+  const allPageSelected = pageJobIds.length > 0 && pageJobIds.every(id => selectedIds.has(id))
+  const somePageSelected = pageJobIds.some(id => selectedIds.has(id))
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = somePageSelected && !allPageSelected
+    }
+  }, [somePageSelected, allPageSelected])
+
   useEffect(() => {
     if (page !== safePage) setPage(safePage)
   }, [page, safePage])
+
+  function toggleSelect(jobId: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(jobId)) next.delete(jobId)
+      else next.add(jobId)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (allPageSelected) {
+        pageJobIds.forEach(id => next.delete(id))
+      } else {
+        pageJobIds.forEach(id => next.add(id))
+      }
+      return next
+    })
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set())
+    setBulkResultMessage(null)
+  }
+
+  const bulkDeleteDescription = useMemo(() => {
+    const names = jobs.filter((j) => selectedIds.has(j.job_id)).map((j) => j.job_name || j.job_id)
+    return `Permanently delete ${names.join(', ')}? This cannot be undone.`
+  }, [jobs, selectedIds])
+
+  function enforceBulkDeleteLimit(count: number, closeConfirm = false): boolean {
+    if (count <= BULK_DELETE_LIMIT) return true
+    setBulkResultMessage(`Select ${BULK_DELETE_LIMIT} or fewer jobs to bulk delete.`)
+    if (closeConfirm) setBulkDeleteConfirm(false)
+    return false
+  }
+
+  async function handleBulkDelete() {
+    const jobIdsToDelete = [...selectedIds]
+    if (jobIdsToDelete.length === 0) return
+    if (!enforceBulkDeleteLimit(jobIdsToDelete.length, true)) return
+    setBulkDeleting(true)
+    try {
+      const data = await api.delete<{ deleted: string[]; failed: { job_id: string; reason: string }[]; total?: number }>(
+        '/api/results/bulk',
+        { job_ids: jobIdsToDelete },
+      )
+      const deletedSet = new Set(data.deleted)
+      fetchSeqRef.current += 1
+      setJobs(prev => prev.filter(j => !deletedSet.has(j.job_id)))
+      if (data.failed.length > 0) {
+        const details = data.failed.map(f => `${f.job_id}: ${f.reason}`).join('; ')
+        setSelectedIds(new Set(data.failed.map(f => f.job_id)))
+        setBulkResultMessage(
+          `Deleted ${data.deleted.length} of ${data.total ?? jobIdsToDelete.length}. Failed: ${details}`
+        )
+      } else {
+        clearSelection()
+      }
+    } catch (err) {
+      setBulkResultMessage(err instanceof Error ? err.message : 'Failed to bulk delete')
+    } finally {
+      setBulkDeleting(false)
+      setBulkDeleteConfirm(false)
+    }
+  }
 
   async function handleDelete() {
     if (!deleteTarget) return
@@ -298,8 +394,24 @@ export function DashboardPage() {
                 <SelectItem value="50">50</SelectItem>
               </SelectContent>
             </Select>
+
           </div>
         </div>
+
+        {/* Bulk result message */}
+        {bulkResultMessage && (
+          <div role="alert" className="flex items-center justify-between rounded-lg border border-signal-red/30 bg-signal-red/10 px-4 py-3 text-sm text-signal-red">
+            <span>{bulkResultMessage}</span>
+            <button
+              type="button"
+              onClick={() => setBulkResultMessage(null)}
+              className="ml-4 shrink-0 rounded p-1 hover:bg-signal-red/20 transition-colors"
+              aria-label="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Error */}
         {error && (
@@ -327,6 +439,18 @@ export function DashboardPage() {
           <Table>
             <TableHeader>
               <TableRow className="bg-surface-card hover:bg-surface-card">
+                {isAdmin && (
+                  <TableHead className="w-10">
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      checked={allPageSelected}
+                      onChange={toggleSelectAll}
+                      className={BULK_SELECT_CHECKBOX_CLASS}
+                      aria-label="Select all"
+                    />
+                  </TableHead>
+                )}
                 <SortableHeader label="Job" sortKey="job_name" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="w-[40%]" />
                 <SortableHeader label="Status" sortKey="status" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} />
                 <SortableHeader label="Failures" sortKey="failure_count" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-center" />
@@ -352,10 +476,22 @@ export function DashboardPage() {
                 return (
                   <TableRow
                     key={job.job_id}
-                    className={`group cursor-pointer animate-slide-up ${i % 2 === 0 ? 'bg-surface-card' : 'bg-surface-elevated/40'}`}
+                    className={`group cursor-pointer animate-slide-up ${selectedIds.has(job.job_id) ? 'bg-accent-blue/10' : i % 2 === 0 ? 'bg-surface-card' : 'bg-surface-elevated/40'}`}
                     style={{ animationDelay: `${i * 30}ms`, animationFillMode: 'backwards' }}
-                    onClick={() => handleRowClick(job)}
+                    onClick={() => isAdmin && selectedIds.size > 0 ? toggleSelect(job.job_id) : handleRowClick(job)}
                   >
+                    {isAdmin && (
+                      <TableCell className="w-10">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(job.job_id)}
+                          onChange={(e) => { e.stopPropagation(); toggleSelect(job.job_id) }}
+                          onClick={(e) => e.stopPropagation()}
+                          className={`${BULK_SELECT_CHECKBOX_CLASS} ${showCheckboxes ? '' : 'opacity-0 group-hover:opacity-100'}`}
+                          aria-label={`Select ${getJobDisplayName(job)}`}
+                        />
+                      </TableCell>
+                    )}
                     {/* Job name + build (with left accent border) */}
                     <TableCell className={`border-l-4 ${borderColor}`}>
                       <div>
@@ -485,6 +621,32 @@ export function DashboardPage() {
           <Pagination page={safePage} totalPages={totalPages} onPageChange={setPage} />
         )}
 
+        {isAdmin && selectedIds.size > 0 && (
+          <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-border-muted bg-surface-card/95 backdrop-blur-sm px-6 py-3 animate-slide-up">
+            <div className="mx-auto flex max-w-screen-xl items-center justify-between">
+              <span className="text-sm text-text-secondary">
+                {selectedIds.size} {selectedIds.size === 1 ? 'job' : 'jobs'} selected
+              </span>
+              <div className="flex items-center gap-3">
+                <Button variant="ghost" size="sm" onClick={clearSelection}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => {
+                    if (!enforceBulkDeleteLimit(selectedIds.size)) return
+                    setBulkDeleteConfirm(true)
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                  Delete ({selectedIds.size})
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <ConfirmDialog
           open={deleteTarget !== null}
           onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
@@ -494,6 +656,17 @@ export function DashboardPage() {
           variant="destructive"
           onConfirm={handleDelete}
           loading={deleting}
+        />
+
+        <ConfirmDialog
+          open={isAdmin && bulkDeleteConfirm}
+          onOpenChange={(open) => { if (!open) setBulkDeleteConfirm(false) }}
+          title="Delete selected analyses"
+          description={bulkDeleteDescription}
+          confirmLabel={`Delete ${selectedIds.size}`}
+          variant="destructive"
+          onConfirm={handleBulkDelete}
+          loading={bulkDeleting}
         />
       </div>
     </TooltipProvider>
