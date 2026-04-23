@@ -44,6 +44,13 @@ from jenkins_job_insight.encryption import (
     encrypt_sensitive_fields,
 )
 from jenkins_job_insight.jira import enrich_with_jira_matches
+from jenkins_job_insight.monitoring import (
+    build_health_response,
+    dispatch_alert,
+    error_tracker,
+    render_prometheus_metrics,
+    validate_startup_config,
+)
 from jenkins_job_insight.reportportal import AmbiguousLaunchError, ReportPortalClient
 from jenkins_job_insight.bug_creation import (
     _parse_github_repo_url,
@@ -498,6 +505,16 @@ async def _deferred_resume_waiting_jobs(waiting_jobs: list[dict]) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _install_job_id_filter()
+
+    # Startup config validation
+    config_result = validate_startup_config()
+    for error in config_result.errors:
+        logger.error("[startup] %s", error)
+    for warning in config_result.warnings:
+        logger.warning("[startup] %s", warning)
+    if config_result.errors:
+        raise RuntimeError("Startup configuration validation failed")
+
     await init_db()
     await storage.cleanup_expired_sessions()
     waiting_jobs = await storage.mark_stale_results_failed()
@@ -527,6 +544,47 @@ if _FRONTEND_DIR.is_dir():
     )
 
 
+class ErrorTrackingMiddleware(BaseHTTPMiddleware):
+    """Track request counts and error rates for monitoring."""
+
+    _SKIP_PATHS = frozenset({"/health", "/api/health", "/metrics", "/favicon.ico"})
+
+    def _schedule_high_error_rate_alert(self) -> None:
+        """Check 5xx error rate and schedule an alert if it exceeds the threshold."""
+        try:
+            snap = error_tracker.snapshot()
+            total_requests = snap["total_requests"]
+            server_errors = snap.get("error_counts", {}).get("5xx", 0)
+            server_error_rate = server_errors / total_requests if total_requests else 0
+            if server_error_rate > 0.5 and total_requests >= 10:
+                task = asyncio.create_task(
+                    dispatch_alert(
+                        "high_error_rate",
+                        f"\u26a0\ufe0f JJI high 5xx error rate: {server_error_rate:.0%} "
+                        f"({server_errors}/{total_requests} requests "
+                        f"in {snap['window_seconds']}s window)",
+                    )
+                )
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
+        except Exception:  # noqa: BLE001 — alert scheduling must never break request handling
+            logger.debug("Failed to schedule high-error-rate alert", exc_info=True)
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path in self._SKIP_PATHS:
+            return await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            error_tracker.record_request(500)
+            self._schedule_high_error_rate_alert()
+            raise
+        error_tracker.record_request(response.status_code)
+        if response.status_code >= 500:
+            self._schedule_high_error_rate_alert()
+        return response
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """Authenticate requests: admin via session/Bearer, regular users via cookie."""
 
@@ -534,6 +592,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         {
             "/register",
             "/health",
+            "/api/health",
+            "/metrics",
             "/favicon.ico",
         }
     )
@@ -617,6 +677,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(AuthMiddleware)
+app.add_middleware(ErrorTrackingMiddleware)
 
 
 @app.get("/", include_in_schema=False)
@@ -3490,8 +3551,57 @@ async def get_ai_configs_endpoint() -> list[dict]:
 
 @app.get("/health")
 async def health_check() -> dict:
-    """Health check endpoint."""
+    """Basic health check endpoint (legacy, lightweight)."""
     return {"status": "healthy"}
+
+
+@app.get("/api/health")
+async def health_check_detailed() -> Response:
+    """Detailed health endpoint with dependency checks and error rates.
+
+    Returns:
+        200 for healthy/degraded, 503 for unhealthy.
+    """
+    settings = get_settings()
+    db_path = str(storage.DB_PATH)
+    result = await build_health_response(settings, db_path)
+    status_code = 503 if result["status"] == "unhealthy" else 200
+    return JSONResponse(content=result, status_code=status_code)
+
+
+@app.get("/metrics")
+async def prometheus_metrics() -> Response:
+    """Prometheus metrics endpoint."""
+    # Compute health_up from a lightweight health check
+    settings = get_settings()
+    db_path = str(storage.DB_PATH)
+    try:
+        health = await build_health_response(settings, db_path)
+        health_up = 0 if health["status"] == "unhealthy" else 1
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to compute health status for metrics", exc_info=True)
+        health_up = 0
+
+    # Count active analyses
+    active_analyses: int | None = None
+    try:
+        import aiosqlite
+
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM results WHERE status IN ('pending', 'running', 'waiting')"
+            )
+            row = await cursor.fetchone()
+            active_analyses = row[0] if row else 0
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to compute active analyses for metrics", exc_info=True)
+
+    return Response(
+        content=render_prometheus_metrics(
+            health_up=health_up, active_analyses=active_analyses
+        ),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @app.get("/favicon.ico", include_in_schema=False)
