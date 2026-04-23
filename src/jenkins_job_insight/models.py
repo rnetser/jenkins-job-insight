@@ -268,6 +268,14 @@ class CodeFix(BaseModel):
     file: str = Field(default="", description="File path to fix")
     line: str = Field(default="", description="Line number")
     change: str = Field(default="", description="Specific code change")
+    original_code: str | None = Field(
+        default=None,
+        description="Optional complete original file content for diff/editor display (raw string, no markdown)",
+    )
+    suggested_code: str | None = Field(
+        default=None,
+        description="Complete replacement file content after applying the suggested fix (raw string, no markdown)",
+    )
 
 
 class AnalysisDetail(BaseModel):
