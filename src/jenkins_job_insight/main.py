@@ -15,6 +15,8 @@ from xml.etree.ElementTree import ParseError
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -76,6 +78,10 @@ from jenkins_job_insight.models import (
     PreviewIssueRequest,
     ReportPortalPushResult,
     SetReviewedRequest,
+)
+from jenkins_job_insight.utils import (
+    _is_sensitive_key,
+    mask_sensitive_fields,
 )
 from jenkins_job_insight.xml_enrichment import (
     build_enriched_xml,
@@ -696,6 +702,92 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(AuthMiddleware)
 app.add_middleware(ErrorTrackingMiddleware)
+
+
+class RequestBodyLoggingMiddleware(BaseHTTPMiddleware):
+    """Log incoming request bodies at DEBUG level with sensitive data masked."""
+
+    async def dispatch(self, request: Request, call_next):
+        if logger.isEnabledFor(logging.DEBUG) and request.method in (
+            "POST",
+            "PUT",
+            "PATCH",
+        ):
+            content_type = request.headers.get("content-type", "")
+            if "application/json" not in content_type.lower():
+                return await call_next(request)
+            body_bytes = await request.body()
+            if body_bytes:
+                try:
+                    body_json = json.loads(body_bytes)
+                    masked = mask_sensitive_fields(body_json)
+                    logger.debug(
+                        "Incoming %s %s body: %s",
+                        request.method,
+                        request.url.path,
+                        json.dumps(masked),
+                    )
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    logger.debug(
+                        "Incoming %s %s body: <non-JSON, %d bytes>",
+                        request.method,
+                        request.url.path,
+                        len(body_bytes),
+                    )
+        return await call_next(request)
+
+
+app.add_middleware(RequestBodyLoggingMiddleware)
+
+
+def _mask_pydantic_error(error: dict) -> dict:
+    """Mask sensitive input values in a Pydantic validation error dict."""
+    result = dict(error)
+    loc = error.get("loc") or ()
+    field = loc[-1] if loc else ""
+    if isinstance(field, str) and _is_sensitive_key(field) and "input" in result:
+        result["input"] = "***"
+    elif "input" in result:
+        result["input"] = mask_sensitive_fields(result["input"])
+    return result
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Log 422 validation error details at DEBUG level, then return standard response."""
+    if logger.isEnabledFor(logging.DEBUG):
+        masked_body = None
+        if exc.body is not None:
+            try:
+                if isinstance(exc.body, (dict, list)):
+                    masked_body = mask_sensitive_fields(exc.body)
+                elif isinstance(exc.body, (str, bytes, bytearray)):
+                    size = (
+                        len(exc.body.encode("utf-8"))
+                        if isinstance(exc.body, str)
+                        else len(exc.body)
+                    )
+                    masked_body = f"<non-JSON, {size} bytes>"
+                else:
+                    masked_body = f"<non-JSON body: {type(exc.body).__name__}>"
+            except Exception:  # noqa: BLE001 — masking must never break the 422 response
+                masked_body = "<unable to mask>"
+        raw_errors = jsonable_encoder(exc.errors())
+        masked_errors = [_mask_pydantic_error(e) for e in raw_errors]
+        logger.debug(
+            "RequestValidationError on %s %s: errors=%s body=%s",
+            request.method,
+            request.url.path,
+            masked_errors,
+            masked_body,
+        )
+    # Response body uses raw (unmasked) errors — only the DEBUG log path is masked.
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(exc.errors())},
+    )
 
 
 @app.get("/", include_in_schema=False)
