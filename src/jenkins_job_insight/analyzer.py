@@ -1513,9 +1513,10 @@ async def analyze_job(
     except Exception as e:
         handle_jenkins_exception(e, job_name, build_number)
 
-    # Check if build passed - return early if yes
+    # Check if build passed - return early if yes (unless force is set)
     build_result = build_info.get("result")
-    if build_result == "SUCCESS":
+    force = getattr(request, "force", False) or settings.force_analysis
+    if build_result == "SUCCESS" and not force:
         return AnalysisResult(
             job_id=job_id,
             job_name=request.job_name,
@@ -1526,6 +1527,10 @@ async def analyze_job(
             ai_provider=ai_provider,
             ai_model=ai_model,
             failures=[],
+        )
+    if build_result == "SUCCESS" and force:
+        logger.info(
+            f"Build {job_name} #{build_number} passed but force=True, continuing analysis"
         )
 
     # Download build artifacts for context

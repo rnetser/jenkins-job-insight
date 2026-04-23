@@ -668,6 +668,11 @@ def analyze(
     max_wait: int = typer.Option(
         None, "--max-wait", help="Maximum minutes to wait for completion."
     ),
+    force: bool | None = typer.Option(
+        None,
+        "--force/--no-force",
+        help="Force analysis even if the build succeeded.",
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Submit a Jenkins job for analysis."""
@@ -751,6 +756,8 @@ def analyze(
             extras["jira_ssl_verify"] = cfg.jira_ssl_verify
         if cfg.wait_for_completion is not None:
             extras["wait_for_completion"] = cfg.wait_for_completion
+        if cfg.force is not None:
+            extras["force"] = cfg.force
 
     # CLI flags override config (highest priority).
     if provider:
@@ -797,6 +804,7 @@ def analyze(
         "jira_ssl_verify": jira_ssl_verify,
         "get_job_artifacts": get_job_artifacts,
         "wait_for_completion": wait_for_completion,
+        "force": force,
     }
     for key, value in _bool_fields.items():
         if value is not None:
