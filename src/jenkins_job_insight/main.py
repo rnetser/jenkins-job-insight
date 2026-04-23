@@ -10,7 +10,7 @@ import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Coroutine, Literal
+from typing import Annotated, Any, Coroutine, Literal
 from xml.etree.ElementTree import ParseError
 
 import httpx
@@ -69,11 +69,13 @@ from jenkins_job_insight.models import (
     AnalyzeRequest,
     BaseAnalysisRequest,
     BulkDeleteRequest,
+    BulkJobMetadataRequest,
     ChildJobAnalysis,
     ClassifyTestRequest,
     CreateIssueRequest,
     FailureAnalysis,
     FailureAnalysisResult,
+    JobMetadataInput,
     OverrideClassificationRequest,
     PreviewIssueRequest,
     ReportPortalPushResult,
@@ -4071,6 +4073,160 @@ async def rotate_key_endpoint(request: Request, username: str) -> JSONResponse:
         content={"username": username, "new_api_key": new_key},
         headers={"Cache-Control": "no-store"},
     )
+
+
+# -- Job Metadata Endpoints ---------------------------------------------------
+
+
+async def _metadata_filters(
+    team: Annotated[str, Query()] = "",
+    tier: Annotated[str, Query()] = "",
+    version: Annotated[str, Query()] = "",
+    label: Annotated[list[str] | None, Query()] = None,
+) -> dict:
+    """Shared dependency for metadata filter query parameters."""
+    return {"team": team, "tier": tier, "version": version, "label": label or []}
+
+
+def _unpack_metadata_filters(
+    filters: dict, endpoint: str
+) -> tuple[str, str, str, list[str]]:
+    """Unpack metadata filter dict and log at DEBUG level."""
+    team, tier, version, label = (
+        filters["team"],
+        filters["tier"],
+        filters["version"],
+        filters["label"],
+    )
+    logger.debug(
+        "%s: team=%r, tier=%r, version=%r, label=%r",
+        endpoint,
+        team,
+        tier,
+        version,
+        label,
+    )
+    return team, tier, version, label
+
+
+@app.get("/api/jobs/metadata")
+async def list_jobs_metadata(
+    filters: Annotated[dict, Depends(_metadata_filters)],
+) -> list[dict]:
+    """List all job metadata, optionally filtered by team, tier, version, or labels."""
+    team, tier, version, label = _unpack_metadata_filters(
+        filters, "GET /api/jobs/metadata"
+    )
+    return await storage.list_jobs_with_metadata(
+        team=team, tier=tier, version=version, labels=label or None
+    )
+
+
+@app.get("/api/jobs/{job_name:path}/metadata")
+async def get_job_metadata_endpoint(job_name: str) -> dict:
+    """Get metadata for a specific job."""
+    logger.debug(f"GET /api/jobs/{job_name}/metadata")
+    result = await storage.get_job_metadata(job_name)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"No metadata for job '{job_name}'")
+    return result
+
+
+@app.put("/api/jobs/{job_name:path}/metadata")
+async def set_job_metadata_endpoint(
+    request: Request,
+    job_name: str,
+    body: JobMetadataInput,
+) -> dict:
+    """Set or update metadata for a job."""
+    _require_admin(request)
+    logger.debug(f"PUT /api/jobs/{job_name}/metadata")
+    current = await storage.get_job_metadata(job_name) or {}
+    return await storage.set_job_metadata(
+        job_name,
+        team=body.team if "team" in body.model_fields_set else current.get("team"),
+        tier=body.tier if "tier" in body.model_fields_set else current.get("tier"),
+        version=body.version
+        if "version" in body.model_fields_set
+        else current.get("version"),
+        labels=body.labels
+        if "labels" in body.model_fields_set
+        else current.get("labels", []),
+    )
+
+
+@app.delete("/api/jobs/{job_name:path}/metadata")
+async def delete_job_metadata_endpoint(request: Request, job_name: str) -> dict:
+    """Delete metadata for a job."""
+    _require_admin(request)
+    logger.debug(f"DELETE /api/jobs/{job_name}/metadata")
+    deleted = await storage.delete_job_metadata(job_name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"No metadata for job '{job_name}'")
+    return {"status": "deleted", "job_name": job_name}
+
+
+@app.put("/api/jobs/metadata/bulk")
+async def bulk_set_job_metadata(
+    request: Request,
+    body: BulkJobMetadataRequest,
+) -> dict:
+    """Bulk import job metadata.
+
+    Unlike PUT /api/jobs/{job_name}/metadata which preserves omitted fields,
+    bulk import performs a full replace — omitted optional fields are set to
+    their defaults (None/empty list).
+    """
+    _require_admin(request)
+    logger.debug(f"PUT /api/jobs/metadata/bulk: {len(body.items)} items")
+    try:
+        items = [item.model_dump() for item in body.items]
+        return await storage.bulk_set_metadata(items)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@app.get("/api/dashboard/filtered")
+async def api_dashboard_filtered(
+    filters: Annotated[dict, Depends(_metadata_filters)],
+) -> list[dict]:
+    """Return dashboard job list filtered by metadata.
+
+    Joins dashboard results with job_metadata. When no filters are
+    provided, returns all jobs (same as /api/dashboard but with
+    metadata attached).
+    """
+    team, tier, version, label = _unpack_metadata_filters(
+        filters, "GET /api/dashboard/filtered"
+    )
+    jobs = await list_results_for_dashboard()
+
+    # If no filters, attach metadata and return all
+    has_filters = bool(team or tier or version or label)
+
+    # Build a lookup of job metadata
+    all_metadata = await storage.list_jobs_with_metadata(
+        team=team if has_filters else "",
+        tier=tier if has_filters else "",
+        version=version if has_filters else "",
+        labels=label if has_filters and label else None,
+    )
+    metadata_by_name = {m["job_name"]: m for m in all_metadata}
+
+    if has_filters:
+        # Only include jobs whose job_name matches filtered metadata
+        filtered_names = set(metadata_by_name.keys())
+        jobs = [j for j in jobs if j.get("job_name", "") in filtered_names]
+
+    # Attach metadata to each job
+    for job in jobs:
+        jn = job.get("job_name", "")
+        if jn in metadata_by_name:
+            job["metadata"] = metadata_by_name[jn]
+        else:
+            job["metadata"] = None
+
+    return jobs
 
 
 # SPA catch-all routes — must be AFTER all API routes
