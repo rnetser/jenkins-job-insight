@@ -271,6 +271,11 @@ def _recompose_repo_spec(url: str, ref: str) -> str:
     return f"{url}:{ref}" if ref else url
 
 
+def _is_encrypted_value(value: Any) -> bool:
+    """Return True if *value* looks like an undecrypted encrypted field."""
+    return isinstance(value, str) and value.startswith("enc:")
+
+
 def _reconstruct_from_params(
     result_data: dict,
 ) -> tuple[AnalyzeRequest, Settings]:
@@ -287,10 +292,17 @@ def _reconstruct_from_params(
     # Fail fast if any sensitive field is still encrypted (key changed / corrupt)
     for _key in SENSITIVE_KEYS:
         _val = params.get(_key)
-        if isinstance(_val, str) and _val.startswith("enc:"):
+        if _is_encrypted_value(_val):
             raise ValueError(
                 f"Cannot resume waiting job: stored {_key} could not be decrypted"
             )
+    for _repo in params.get("additional_repos") or []:
+        if isinstance(_repo, dict):
+            _token = _repo.get("token")
+            if _is_encrypted_value(_token):
+                raise ValueError(
+                    "Cannot resume waiting job: stored additional_repos token could not be decrypted"
+                )
     body = AnalyzeRequest(
         job_name=result_data["job_name"],
         build_number=result_data["build_number"],

@@ -1345,7 +1345,7 @@ class TestCloneAdditionalRepos:
 
         manager = MagicMock(spec=RepositoryManager)
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -1387,7 +1387,7 @@ class TestCloneAdditionalRepos:
 
         manager = MagicMock(spec=RepositoryManager)
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -1429,7 +1429,7 @@ class TestCloneAdditionalRepos:
 
         manager = MagicMock(spec=RepositoryManager)
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -1473,7 +1473,7 @@ class TestCloneAdditionalRepos:
             ),
         ]
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             if "bad" in str(url):
                 raise RuntimeError("Clone failed")
             target.mkdir(parents=True, exist_ok=True)
@@ -1521,7 +1521,7 @@ class TestCloneAdditionalRepos:
 
         manager = MagicMock(spec=RepositoryManager)
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -1570,7 +1570,7 @@ class TestCloneAdditionalRepos:
 
         manager = MagicMock(spec=RepositoryManager)
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -1775,7 +1775,7 @@ class TestAnalyzeJobWorkspacePattern:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             clone_into_calls.append({"url": url, "target": target, "depth": depth})
             target.mkdir(parents=True, exist_ok=True)
             # Create .git to simulate a real clone
@@ -1872,7 +1872,7 @@ class TestAnalyzeJobWorkspacePattern:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             clone_into_calls.append({"url": url, "target": target, "depth": depth})
             target.mkdir(parents=True, exist_ok=True)
             (target / ".git").mkdir(exist_ok=True)
@@ -1962,7 +1962,7 @@ class TestAnalyzeJobWorkspacePattern:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             target.mkdir(parents=True, exist_ok=True)
             (target / ".git").mkdir(exist_ok=True)
             return target
@@ -2065,7 +2065,7 @@ class TestAnalyzeJobWorkspacePattern:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             clone_into_calls.append({"url": url, "target": target, "depth": depth})
             target.mkdir(parents=True, exist_ok=True)
             (target / ".git").mkdir(exist_ok=True)
@@ -2182,7 +2182,7 @@ class TestAnalyzeJobWorkspacePattern:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             target.mkdir(parents=True, exist_ok=True)
             (target / ".git").mkdir(exist_ok=True)
             return target
@@ -2262,7 +2262,7 @@ class TestAnalyzeFailuresWorkspacePattern:
         mock_repo_manager.create_workspace.return_value = workspace_dir
         mock_repo_manager.cleanup.return_value = None
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             clone_into_calls.append({"url": url, "target": target, "depth": depth})
             target.mkdir(parents=True, exist_ok=True)
             (target / ".git").mkdir(exist_ok=True)
@@ -2579,7 +2579,7 @@ class TestCloneAdditionalReposPassesRef:
 
         manager = MagicMock(spec=RepositoryManager)
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -2686,7 +2686,7 @@ class TestAnalyzeJobParsesRepoRef:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             clone_into_calls.append(
                 {"url": url, "target": target, "depth": depth, "branch": branch}
             )
@@ -2783,7 +2783,7 @@ class TestAnalyzeJobParsesRepoRef:
         mock_repo_manager = MagicMock()
         mock_repo_manager.create_workspace.return_value = workspace_dir
 
-        def fake_clone_into(url, target, depth=1, branch=""):
+        def fake_clone_into(url, target, depth=1, branch="", token=None):
             clone_into_calls.append(
                 {"url": url, "target": target, "depth": depth, "branch": branch}
             )

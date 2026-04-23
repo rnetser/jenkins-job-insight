@@ -91,11 +91,16 @@ async def clone_additional_repos(
                 target,
                 depth=1,
                 branch=ar.ref,
+                token=ar.token or None,
             )
             cloned[ar.name] = target
             logger.info(f"Cloned additional repo '{ar.name}' into {target}")
-        except Exception as e:
-            logger.warning(f"Failed to clone additional repo '{ar.name}': {e}")
+        except Exception as e:  # noqa: BLE001 — non-fatal additional repo clone failure
+            logger.warning(
+                "Failed to clone additional repo '%s' (%s)",
+                ar.name,
+                type(e).__name__,
+            )
 
     await asyncio.gather(*[_clone_into_subdir(ar) for ar in additional_repos_list])
 
