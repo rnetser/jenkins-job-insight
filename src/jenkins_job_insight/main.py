@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 import hmac
 import json
 import logging
@@ -654,6 +655,24 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 username = str(session["username"])
                 authenticated_admin = is_admin
 
+                # Renew session (sliding window) — only when <50% TTL remains
+                expires_at_str = session.get("expires_at", "")
+                if expires_at_str:
+                    try:
+                        expires_at = datetime.strptime(
+                            str(expires_at_str), "%Y-%m-%d %H:%M:%S"
+                        ).replace(tzinfo=timezone.utc)
+                        remaining = expires_at - datetime.now(timezone.utc)
+                        if remaining < timedelta(hours=storage.SESSION_TTL_HOURS / 2):
+                            task = asyncio.create_task(
+                                storage.renew_session(session_token)
+                            )
+                            _background_tasks.add(task)
+                            task.add_done_callback(_background_tasks.discard)
+                            request.state.renew_session_token = session_token
+                    except (ValueError, TypeError):
+                        pass
+
         # 2. Check Bearer token — admin API key or admin_key
         if not authenticated_admin:
             auth_header = request.headers.get("authorization", "")
@@ -699,7 +718,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if "text/html" in accept:
                 return RedirectResponse(url="/register", status_code=303)
 
-        return await call_next(request)
+        response = await call_next(request)
+
+        # Refresh session cookie max_age if session was renewed
+        if getattr(request.state, "renew_session_token", None):
+            response.set_cookie(
+                "jji_session",
+                request.state.renew_session_token,
+                httponly=True,
+                samesite="strict",
+                secure=settings.secure_cookies,
+                max_age=storage.SESSION_TTL_SECONDS,
+            )
+
+        return response
 
 
 app.add_middleware(AuthMiddleware)

@@ -1,6 +1,8 @@
 """Tests for admin authentication and user tracking."""
 
+import asyncio
 import os
+import time
 from unittest.mock import patch
 
 import pytest
@@ -623,3 +625,240 @@ class TestUserTracking:
         client.get("/api/dashboard", cookies={"jji_username": "trackeduser"})
         # Poll until the fire-and-forget task completes
         _wait_for_user_tracked(client, "trackeduser")
+
+
+class TestSessionRenewalStorage:
+    """Tests for the renew_session() storage function."""
+
+    def test_renew_session_extends_expiry(self, _init_db, temp_db_path):
+        """renew_session() should extend the session's expires_at."""
+        import aiosqlite
+
+        async def run():
+            # Create a session with a short TTL so we can see the difference
+            token = await storage.create_session("admin", is_admin=True, ttl_hours=1)
+            token_hash = storage._hash_session_token(token)
+
+            # Read original expiry
+            async with aiosqlite.connect(temp_db_path) as db:
+                cursor = await db.execute(
+                    "SELECT expires_at FROM sessions WHERE token = ?",
+                    (token_hash,),
+                )
+                row = await cursor.fetchone()
+                original_expires = row[0]
+
+            # Renew — this uses SESSION_TTL_HOURS (8h) from now
+            await storage.renew_session(token)
+
+            # Read new expiry
+            async with aiosqlite.connect(temp_db_path) as db:
+                cursor = await db.execute(
+                    "SELECT expires_at FROM sessions WHERE token = ?",
+                    (token_hash,),
+                )
+                row = await cursor.fetchone()
+                renewed_expires = row[0]
+
+            # The renewed expiry should be later than the original (1h vs 8h)
+            assert renewed_expires > original_expires
+
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            asyncio.run(run())
+
+    def test_session_valid_after_renewal(self, _init_db, temp_db_path):
+        """Session should still be valid (get_session returns data) after renewal."""
+
+        async def run():
+            token = await storage.create_session("admin", is_admin=True, ttl_hours=1)
+
+            # Verify session is valid before renewal
+            session_before = await storage.get_session(token)
+            assert session_before is not None
+            assert session_before["username"] == "admin"
+
+            # Renew
+            await storage.renew_session(token)
+
+            # Verify session is still valid after renewal
+            session_after = await storage.get_session(token)
+            assert session_after is not None
+            assert session_after["username"] == "admin"
+            assert session_after["is_admin"]
+
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            asyncio.run(run())
+
+
+class TestSessionRenewalMiddleware:
+    """Integration tests for session renewal in AuthMiddleware."""
+
+    def test_authenticated_request_refreshes_session_cookie(self, client, temp_db_path):
+        """An authenticated request should return a refreshed jji_session cookie
+        when less than 50% of the session TTL remains."""
+        import aiosqlite
+
+        # Login to get a session
+        login_resp = client.post(
+            "/api/auth/login",
+            json={
+                "username": "admin",
+                "api_key": "test-admin-key-16chars",  # pragma: allowlist secret
+            },
+        )
+        assert login_resp.status_code == 200
+        session_cookie = login_resp.cookies.get("jji_session")
+        assert session_cookie
+
+        # Shorten expiry so <50% TTL remains, triggering renewal
+        token_hash = storage._hash_session_token(session_cookie)
+
+        async def shorten_expiry():
+            from datetime import datetime, timedelta, timezone
+
+            short_expires = datetime.now(timezone.utc) + timedelta(hours=1)
+            expires_str = short_expires.strftime("%Y-%m-%d %H:%M:%S")
+            async with aiosqlite.connect(temp_db_path) as db:
+                await db.execute(
+                    "UPDATE sessions SET expires_at = ? WHERE token = ?",
+                    (expires_str, token_hash),
+                )
+                await db.commit()
+
+        asyncio.run(shorten_expiry())
+
+        # Make an authenticated request
+        resp = client.get("/api/auth/me", cookies={"jji_session": session_cookie})
+        assert resp.status_code == 200
+        assert resp.json()["is_admin"] is True
+
+        # The response should have a refreshed jji_session cookie
+        refreshed = resp.cookies.get("jji_session")
+        assert refreshed is not None
+        # The cookie value should be the same token (renewal doesn't rotate)
+        assert refreshed == session_cookie
+
+    def test_no_renewal_when_over_half_ttl_remains(self, client):
+        """No renewal should trigger when >50% of session TTL remains (fresh session)."""
+        # Login to get a fresh session (full 8h TTL)
+        login_resp = client.post(
+            "/api/auth/login",
+            json={
+                "username": "admin",
+                "api_key": "test-admin-key-16chars",  # pragma: allowlist secret
+            },
+        )
+        assert login_resp.status_code == 200
+        session_cookie = login_resp.cookies.get("jji_session")
+        assert session_cookie
+
+        # Make an authenticated request — no renewal expected
+        resp = client.get("/api/auth/me", cookies={"jji_session": session_cookie})
+        assert resp.status_code == 200
+        assert resp.json()["is_admin"] is True
+
+        # No refreshed cookie should be set (renewal was skipped)
+        refreshed = resp.cookies.get("jji_session")
+        assert refreshed is None
+
+    def test_session_renewal_updates_db_expiry(self, client, temp_db_path):
+        """Session renewal in middleware should update expires_at in the DB."""
+        import aiosqlite
+
+        # Login to get a session
+        login_resp = client.post(
+            "/api/auth/login",
+            json={
+                "username": "admin",
+                "api_key": "test-admin-key-16chars",  # pragma: allowlist secret
+            },
+        )
+        session_cookie = login_resp.cookies.get("jji_session")
+        token_hash = storage._hash_session_token(session_cookie)
+
+        # Read initial expiry
+        async def get_expiry():
+            async with aiosqlite.connect(temp_db_path) as db:
+                cursor = await db.execute(
+                    "SELECT expires_at FROM sessions WHERE token = ?",
+                    (token_hash,),
+                )
+                row = await cursor.fetchone()
+                return row[0] if row else None
+
+        initial_expires = asyncio.run(get_expiry())
+        assert initial_expires is not None
+
+        # Manually set expiry to 1 hour from now (shorter than SESSION_TTL_HOURS)
+        async def shorten_expiry():
+            from datetime import datetime, timedelta, timezone
+
+            short_expires = datetime.now(timezone.utc) + timedelta(hours=1)
+            expires_str = short_expires.strftime("%Y-%m-%d %H:%M:%S")
+            async with aiosqlite.connect(temp_db_path) as db:
+                await db.execute(
+                    "UPDATE sessions SET expires_at = ? WHERE token = ?",
+                    (expires_str, token_hash),
+                )
+                await db.commit()
+
+        asyncio.run(shorten_expiry())
+        shortened_expires = asyncio.run(get_expiry())
+
+        # Make an authenticated request — middleware should renew
+        client.get("/api/auth/me", cookies={"jji_session": session_cookie})
+
+        # Wait for the fire-and-forget background task to complete
+        time.sleep(0.1)
+
+        # The DB expiry should now be extended beyond the shortened value
+        renewed_expires = asyncio.run(get_expiry())
+        assert renewed_expires > shortened_expires
+
+    def test_expired_session_not_renewed(self, client, temp_db_path):
+        """An expired session should NOT be renewed; user falls back to non-admin."""
+        import aiosqlite
+
+        # Login to get a session
+        login_resp = client.post(
+            "/api/auth/login",
+            json={
+                "username": "admin",
+                "api_key": "test-admin-key-16chars",  # pragma: allowlist secret
+            },
+        )
+        session_cookie = login_resp.cookies.get("jji_session")
+        token_hash = storage._hash_session_token(session_cookie)
+
+        # Manually expire the session in the DB
+        async def expire_session():
+            async with aiosqlite.connect(temp_db_path) as db:
+                await db.execute(
+                    "UPDATE sessions SET expires_at = '2000-01-01 00:00:00' WHERE token = ?",
+                    (token_hash,),
+                )
+                await db.commit()
+
+        asyncio.run(expire_session())
+
+        # Make a request with the expired session — should NOT be admin
+        resp = client.get("/api/auth/me", cookies={"jji_session": session_cookie})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["is_admin"] is False
+
+        # The response should NOT have a refreshed jji_session cookie
+        assert "jji_session" not in resp.cookies
+
+        # Verify the session is still expired in DB (not renewed)
+        async def check_still_expired():
+            async with aiosqlite.connect(temp_db_path) as db:
+                cursor = await db.execute(
+                    "SELECT expires_at FROM sessions WHERE token = ?",
+                    (token_hash,),
+                )
+                row = await cursor.fetchone()
+                assert row is not None
+                assert row[0] == "2000-01-01 00:00:00"
+
+        asyncio.run(check_still_expired())
