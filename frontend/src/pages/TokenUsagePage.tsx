@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { formatCompactNumber, formatCost } from '@/lib/format'
 import { Input } from '@/components/ui/input'
@@ -126,7 +126,13 @@ export function TokenUsagePage() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [providerInput, setProviderInput] = useState('')
-  const debouncedProvider = useDeferredValue(providerInput)
+  const [debouncedProvider, setDebouncedProvider] = useState('')
+
+  // Debounce provider filter input
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedProvider(providerInput), 300)
+    return () => clearTimeout(timer)
+  }, [providerInput])
 
   const { sortKey, sortDir, handleSort } = useTableSort('token-usage', 'cost_usd', 'desc', ['cost_usd', 'calls', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'avg_duration_ms'])
 
@@ -146,42 +152,46 @@ export function TokenUsagePage() {
   }, [])
 
   // Fetch breakdown table
-  const fetchBreakdown = useCallback(async () => {
+  useEffect(() => {
+    let cancelled = false
     const requestId = ++latestRequestIdRef.current
     setBreakdownLoading(true)
-    try {
-      const params = new URLSearchParams()
-      params.set('group_by', groupBy)
-      if (dateFrom) params.set('start_date', dateFrom)
-      if (dateTo) params.set('end_date', dateTo)
-      if (debouncedProvider.trim()) params.set('ai_provider', debouncedProvider.trim())
-      const data = await api.get<TokenUsageBreakdownResponse>(`/api/admin/token-usage?${params.toString()}`)
-      // Discard stale responses from earlier requests
-      if (requestId !== latestRequestIdRef.current) return
-      setBreakdown(
-        data.breakdown.map((row) => ({
-          group: row.group_key,
-          calls: row.call_count,
-          input_tokens: row.input_tokens,
-          output_tokens: row.output_tokens,
-          cache_read_tokens: row.cache_read_tokens,
-          cache_write_tokens: row.cache_write_tokens,
-          cost_usd: row.cost_usd,
-          avg_duration_ms: row.avg_duration_ms,
-        }))
-      )
-      setBreakdownError(null)
-    } catch (err) {
-      if (requestId !== latestRequestIdRef.current) return
-      setBreakdownError(err instanceof Error ? err.message : 'Failed to load breakdown')
-    } finally {
-      if (requestId === latestRequestIdRef.current) {
-        setBreakdownLoading(false)
-      }
-    }
-  }, [groupBy, dateFrom, dateTo, debouncedProvider])
 
-  useEffect(() => { fetchBreakdown() }, [fetchBreakdown])
+    const params = new URLSearchParams()
+    params.set('group_by', groupBy)
+    if (dateFrom) params.set('start_date', dateFrom)
+    if (dateTo) params.set('end_date', dateTo)
+    if (debouncedProvider.trim()) params.set('ai_provider', debouncedProvider.trim())
+
+    api.get<TokenUsageBreakdownResponse>(`/api/admin/token-usage?${params.toString()}`)
+      .then((data) => {
+        if (cancelled || requestId !== latestRequestIdRef.current) return
+        setBreakdown(
+          data.breakdown.map((row) => ({
+            group: row.group_key,
+            calls: row.call_count,
+            input_tokens: row.input_tokens,
+            output_tokens: row.output_tokens,
+            cache_read_tokens: row.cache_read_tokens,
+            cache_write_tokens: row.cache_write_tokens,
+            cost_usd: row.cost_usd,
+            avg_duration_ms: row.avg_duration_ms,
+          }))
+        )
+        setBreakdownError(null)
+      })
+      .catch((err) => {
+        if (cancelled || requestId !== latestRequestIdRef.current) return
+        setBreakdownError(err instanceof Error ? err.message : 'Failed to load breakdown')
+      })
+      .finally(() => {
+        if (!cancelled && requestId === latestRequestIdRef.current) {
+          setBreakdownLoading(false)
+        }
+      })
+
+    return () => { cancelled = true }
+  }, [groupBy, dateFrom, dateTo, debouncedProvider])
 
   const sorted = useMemo(() => {
     const copy = [...breakdown]

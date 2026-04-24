@@ -25,7 +25,7 @@ export function TokenUsageBadge({ usage }: TokenUsageBadgeProps) {
           <p>Input: {usage.total_input_tokens.toLocaleString()} · Output: {usage.total_output_tokens.toLocaleString()}</p>
           {usage.total_cache_read_tokens > 0 && <p>Cache read: {usage.total_cache_read_tokens.toLocaleString()}</p>}
           {usage.total_cache_write_tokens > 0 && <p>Cache write: {usage.total_cache_write_tokens.toLocaleString()}</p>}
-          <p>API calls: {usage.total_calls}</p>
+          <p>API calls: {usage.total_calls.toLocaleString()}</p>
           {usage.total_duration_ms > 0 && <p>Duration: {(usage.total_duration_ms / 1000).toFixed(1)}s</p>}
           {hasCost && <p>Cost: {formatCost(usage.total_cost_usd)}</p>}
         </div>
