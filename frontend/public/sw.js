@@ -1,5 +1,9 @@
 const SW_VERSION = '1.0.0';
 
+self.addEventListener('activate', () => {
+  console.log('Service worker activated, version:', SW_VERSION);
+});
+
 self.addEventListener('push', (event) => {
   let data = {};
   try {

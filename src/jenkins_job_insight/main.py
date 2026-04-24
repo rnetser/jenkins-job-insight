@@ -2081,7 +2081,7 @@ async def add_comment(
 
     # Detect @mentions and send notifications (best-effort, fire-and-forget)
     settings = get_settings()
-    if settings.web_push_enabled:
+    if settings.web_push_enabled and username:
         mentioned = detect_mentions(body.comment)
         if mentioned:
             task = asyncio.create_task(
@@ -4405,9 +4405,6 @@ async def subscribe_notifications(body: PushSubscriptionRequest, request: Reques
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
     _check_allow_list(request)
-    user = await storage.get_user_by_username(username)
-    if not user:
-        raise HTTPException(status_code=400, detail="Username not registered")
     await storage.save_push_subscription(
         username=username,
         endpoint=body.endpoint,
@@ -4420,6 +4417,11 @@ async def subscribe_notifications(body: PushSubscriptionRequest, request: Reques
 @app.post("/api/notifications/unsubscribe")
 async def unsubscribe_notifications(body: UnsubscribeRequest, request: Request):
     """Remove a push subscription."""
+    settings = get_settings()
+    if not settings.web_push_enabled:
+        raise HTTPException(
+            status_code=404, detail="Web Push notifications not configured"
+        )
     username = request.state.username
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
