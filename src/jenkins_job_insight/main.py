@@ -670,9 +670,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
                                 if renewed:
                                     request.state.renew_session_token = session_token
                             except Exception:
-                                pass  # Renewal failed — don't refresh cookie
+                                logger.debug("Session renewal failed", exc_info=True)
                     except (ValueError, TypeError):
-                        pass
+                        logger.debug(
+                            "Failed to parse session expires_at for renewal",
+                            exc_info=True,
+                        )
 
         # 2. Check Bearer token — admin API key or admin_key
         if not authenticated_admin:
