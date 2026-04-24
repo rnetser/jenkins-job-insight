@@ -43,9 +43,16 @@ export async function unsubscribeFromPush(): Promise<boolean> {
     const subscription = await registration.pushManager.getSubscription();
     if (!subscription) return true;
 
-    await api.post('/api/notifications/unsubscribe', {
-      endpoint: subscription.endpoint,
-    });
+    // Try server unsubscribe but don't let failure prevent local cleanup
+    try {
+      await api.post('/api/notifications/unsubscribe', {
+        endpoint: subscription.endpoint,
+      });
+    } catch {
+      // Server record may already be gone — that's fine
+    }
+
+    // Always clear the local subscription
     await subscription.unsubscribe();
     return true;
   } catch {

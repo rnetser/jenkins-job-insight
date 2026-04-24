@@ -4404,6 +4404,7 @@ async def subscribe_notifications(body: PushSubscriptionRequest, request: Reques
     username = request.state.username
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
+    _check_allow_list(request)
     await storage.save_push_subscription(
         username=username,
         endpoint=body.endpoint,
@@ -4419,6 +4420,7 @@ async def unsubscribe_notifications(body: UnsubscribeRequest, request: Request):
     username = request.state.username
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
+    _check_allow_list(request)
     deleted = await storage.delete_push_subscription(body.endpoint, username)
     if not deleted:
         raise HTTPException(status_code=404, detail="Subscription not found")
@@ -4431,6 +4433,7 @@ async def get_mentionable_users(request: Request):
     username = request.state.username
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
+    _check_allow_list(request)
     users = await storage.list_users()
     return {"usernames": [u["username"] for u in users]}
 

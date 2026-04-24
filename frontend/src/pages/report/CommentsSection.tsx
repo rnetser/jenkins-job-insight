@@ -31,12 +31,11 @@ const MENTION_RE = /(?<![a-zA-Z0-9.])@([a-zA-Z0-9_-]+)/g
 
 /** Render a plain-text segment with @mentions highlighted. */
 function renderTextWithMentions(text: string, segIndex: number): ReactNode {
+  MENTION_RE.lastIndex = 0
   const parts: ReactNode[] = []
   let lastIndex = 0
-  // Clone regex to reset state
-  const re = new RegExp(MENTION_RE.source, MENTION_RE.flags)
   let match: RegExpExecArray | null
-  while ((match = re.exec(text)) !== null) {
+  while ((match = MENTION_RE.exec(text)) !== null) {
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index))
     }

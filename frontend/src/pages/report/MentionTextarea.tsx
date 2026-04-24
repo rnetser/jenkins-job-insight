@@ -32,9 +32,9 @@ async function fetchMentionableUsers(): Promise<string[]> {
   if (cachedUsers) return cachedUsers
   if (fetchPromise) return fetchPromise
   fetchPromise = api
-    .get<{ users: string[] }>('/api/users/mentionable')
+    .get<{ usernames: string[] }>('/api/users/mentionable')
     .then((res) => {
-      cachedUsers = res.users
+      cachedUsers = res.usernames ?? []
       return cachedUsers
     })
     .catch(() => {

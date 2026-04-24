@@ -3177,10 +3177,9 @@ async def save_push_subscription(
 
     Upserts by endpoint — a user can have multiple subscriptions (multiple browsers/devices).
     """
-    logger.debug(
-        f"save_push_subscription: username={username}, endpoint={endpoint[:60]}..."
-    )
+    logger.debug(f"save_push_subscription: username={username}, endpoint={endpoint}")
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
         await db.execute(
             "INSERT INTO push_subscriptions (username, endpoint, p256dh_key, auth_key) "
             "VALUES (?, ?, ?, ?) "
@@ -3205,9 +3204,7 @@ async def delete_push_subscription(endpoint: str, username: str) -> bool:
 
     Returns True if deleted, False if not found or not owned by username.
     """
-    logger.debug(
-        f"delete_push_subscription: endpoint={endpoint[:60]}..., username={username}"
-    )
+    logger.debug(f"delete_push_subscription: endpoint={endpoint}, username={username}")
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "DELETE FROM push_subscriptions WHERE endpoint = ? AND username = ?",
@@ -3231,7 +3228,7 @@ async def get_push_subscriptions_for_users(usernames: list[str]) -> list[dict]:
         db.row_factory = aiosqlite.Row
         placeholders = ",".join("?" for _ in usernames)
         cursor = await db.execute(
-            f"SELECT username, endpoint, p256dh_key, auth_key "
+            f"SELECT username, endpoint, p256dh_key, auth_key "  # noqa: S608
             f"FROM push_subscriptions WHERE username IN ({placeholders})",
             usernames,
         )
@@ -3249,7 +3246,7 @@ async def delete_stale_push_subscriptions(endpoints: list[str]) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         placeholders = ",".join("?" for _ in endpoints)
         await db.execute(
-            f"DELETE FROM push_subscriptions WHERE endpoint IN ({placeholders})",
+            f"DELETE FROM push_subscriptions WHERE endpoint IN ({placeholders})",  # noqa: S608
             endpoints,
         )
         await db.commit()

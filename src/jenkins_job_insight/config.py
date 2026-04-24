@@ -356,7 +356,9 @@ class Settings(BaseSettings):
     def web_push_enabled(self) -> bool:
         """Check if Web Push is enabled (all three VAPID settings are non-empty)."""
         return bool(
-            self.vapid_public_key and self.vapid_private_key and self.vapid_claim_email
+            self.vapid_public_key.strip()
+            and self.vapid_private_key.strip()
+            and self.vapid_claim_email.strip()
         )
 
     @property

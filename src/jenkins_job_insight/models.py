@@ -725,7 +725,7 @@ class ReportPortalPushResult(BaseModel):
 class PushSubscriptionRequest(BaseModel):
     """Request body for subscribing to Web Push notifications."""
 
-    endpoint: str = Field(description="Push service endpoint URL")
+    endpoint: str = Field(max_length=2048, description="Push service endpoint URL")
     p256dh_key: str = Field(
         max_length=256, description="Client public key for message encryption"
     )
@@ -742,7 +742,9 @@ class PushSubscriptionRequest(BaseModel):
 class UnsubscribeRequest(BaseModel):
     """Request body for unsubscribing from Web Push notifications."""
 
-    endpoint: str = Field(description="Push service endpoint URL to remove")
+    endpoint: str = Field(
+        max_length=2048, description="Push service endpoint URL to remove"
+    )
 
     @field_validator("endpoint")
     @classmethod

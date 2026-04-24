@@ -37,7 +37,7 @@ function renderTextarea(overrides: Partial<Parameters<typeof MentionTextarea>[0]
 beforeEach(() => {
   vi.clearAllMocks()
   _resetMentionCache()
-  mockGet.mockResolvedValue({ users: ['alice', 'bob', 'charlie'] })
+  mockGet.mockResolvedValue({ usernames: ['alice', 'bob', 'charlie'] })
 })
 
 describe('MentionTextarea', () => {

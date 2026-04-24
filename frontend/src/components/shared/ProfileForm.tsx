@@ -170,7 +170,8 @@ function NotificationToggle() {
 }
 
 export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
-  const [username, setUsernameValue] = useState(getUsername())
+  const [initialUsername] = useState(getUsername)
+  const [username, setUsernameValue] = useState(initialUsername)
   const [apiKey, setApiKey] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [apiKeyError, setApiKeyError] = useState<string | null>(null)
@@ -400,8 +401,8 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
           </Button>
           </fieldset>
 
-          {/* Push Notifications */}
-          <NotificationToggle />
+          {/* Push Notifications — only show when user already has a saved profile */}
+          {initialUsername && <NotificationToggle />}
 
         </form>
       </CardContent>
