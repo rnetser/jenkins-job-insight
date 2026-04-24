@@ -55,7 +55,6 @@ def _admin_login(
 
 def _insert_test_records(client):
     """Insert token usage records via storage layer."""
-    import asyncio
 
     async def _insert():
         await storage.record_token_usage(
@@ -132,6 +131,17 @@ class TestGetTokenUsageEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["total_calls"] == 0
+
+    def test_invalid_group_by_returns_422(self, client) -> None:
+        """Invalid group_by value returns 422."""
+        cookies = _admin_login(client)
+        resp = client.get(
+            "/api/admin/token-usage",
+            params={"group_by": "invalid_field"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 422
+        assert "Invalid group_by" in resp.json()["detail"]
 
 
 class TestGetTokenUsageSummaryEndpoint:

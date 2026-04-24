@@ -55,8 +55,8 @@ class TestRecordAiUsage:
             )
 
     @pytest.mark.asyncio
-    async def test_does_nothing_when_usage_is_none(self) -> None:
-        """Does nothing when usage is None (no crash)."""
+    async def test_records_zeros_when_usage_is_none(self) -> None:
+        """Records with zero token fields when usage is None."""
         result = AIResult(success=True, text="output")
         assert result.usage is None
 
@@ -64,7 +64,41 @@ class TestRecordAiUsage:
             "jenkins_job_insight.token_tracking.storage.record_token_usage",
             new_callable=AsyncMock,
         ) as mock_record:
-            await record_ai_usage(job_id="job-123", result=result, call_type="analysis")
+            await record_ai_usage(
+                job_id="job-123",
+                result=result,
+                call_type="analysis",
+                ai_provider="claude",
+                ai_model="opus-4",
+            )
+            mock_record.assert_called_once_with(
+                job_id="job-123",
+                ai_provider="claude",
+                ai_model="opus-4",
+                call_type="analysis",
+                input_tokens=0,
+                output_tokens=0,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                cost_usd=None,
+                duration_ms=None,
+                prompt_chars=0,
+                response_chars=len("output"),
+            )
+
+    @pytest.mark.asyncio
+    async def test_skips_when_job_id_empty(self) -> None:
+        """Does nothing when job_id is empty."""
+        usage = AITokenUsage(
+            input_tokens=100, output_tokens=50, provider="claude", model="opus"
+        )
+        result = AIResult(success=True, text="output", usage=usage)
+
+        with patch(
+            "jenkins_job_insight.token_tracking.storage.record_token_usage",
+            new_callable=AsyncMock,
+        ) as mock_record:
+            await record_ai_usage(job_id="", result=result, call_type="analysis")
             mock_record.assert_not_called()
 
     @pytest.mark.asyncio

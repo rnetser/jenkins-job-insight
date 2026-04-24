@@ -170,6 +170,49 @@ _CONSOLE_ERROR_PATTERN = re.compile(
 )
 
 
+async def _call_ai_and_record(
+    prompt: str,
+    *,
+    job_id: str,
+    call_type: str,
+    cwd: Path | None = None,
+    ai_provider: str = "",
+    ai_model: str = "",
+    ai_cli_timeout: int | None = None,
+    cli_flags: list[str] | None = None,
+) -> tuple[AIResult, AnalysisDetail | None]:
+    """Call AI CLI with retry, record token usage, and parse the response.
+
+    Returns ``(result, parsed_analysis)``.  ``parsed_analysis`` is ``None``
+    when the AI call failed (``result.success is False``).
+    """
+    result = await _call_ai_cli_with_retry(
+        prompt,
+        cwd=cwd,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        ai_cli_timeout=ai_cli_timeout,
+        cli_flags=cli_flags,
+    )
+
+    await record_ai_usage(
+        job_id=job_id,
+        result=result,
+        call_type=call_type,
+        prompt_chars=len(prompt),
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+    )
+
+    parsed: AnalysisDetail | None = None
+    if result.success:
+        parsed = _parse_json_response(result.text)
+        if parsed is None:
+            parsed = AnalysisDetail(details=result.text)
+
+    return result, parsed
+
+
 async def _call_ai_cli_with_retry(
     prompt: str,
     *,
@@ -1064,8 +1107,10 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
         f"Calling {ai_provider.upper()} CLI for failure group ({len(failures)} tests with same error)"
     )
     logger.info(f"Calling AI CLI with {_format_timeout_log(ai_cli_timeout)}")
-    result = await _call_ai_cli_with_retry(
+    result, parsed = await _call_ai_and_record(
         prompt,
+        job_id=job_id,
+        call_type="primary",
         cwd=repo_path,
         ai_provider=ai_provider,
         ai_model=ai_model,
@@ -1073,18 +1118,7 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
         cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
     )
 
-    await record_ai_usage(
-        job_id=job_id,
-        result=result,
-        call_type="primary",
-        prompt_chars=len(prompt),
-        ai_provider=ai_provider,
-        ai_model=ai_model,
-    )
-
-    if result.success:
-        parsed = _parse_json_response(result.text)
-    else:
+    if parsed is None:
         parsed = AnalysisDetail(details=result.text)
 
     return parsed, error_signature
@@ -1456,8 +1490,10 @@ You have access to the repository if one was cloned. Explore to understand the f
 """
     logger.debug(f"AI prompt length: {len(prompt)} chars")
     logger.info(f"Calling AI CLI with {_format_timeout_log(ai_cli_timeout)}")
-    result = await _call_ai_cli_with_retry(
+    result, parsed_analysis = await _call_ai_and_record(
         prompt,
+        job_id=job_id,
+        call_type="child_console",
         cwd=repo_path,
         ai_provider=ai_provider,
         ai_model=ai_model,
@@ -1465,18 +1501,7 @@ You have access to the repository if one was cloned. Explore to understand the f
         cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
     )
 
-    await record_ai_usage(
-        job_id=job_id,
-        result=result,
-        call_type="child_console",
-        prompt_chars=len(prompt),
-        ai_provider=ai_provider,
-        ai_model=ai_model,
-    )
-
-    if result.success:
-        parsed_analysis = _parse_json_response(result.text)
-    else:
+    if parsed_analysis is None:
         parsed_analysis = AnalysisDetail(details=result.text)
 
     return ChildJobAnalysis(
@@ -1854,22 +1879,15 @@ You have access to the repository if one was cloned. Explore to understand the f
                 logger.info(
                     f"Calling AI CLI with {_format_timeout_log(settings.ai_cli_timeout)}"
                 )
-                result = await _call_ai_cli_with_retry(
+                result, parsed_console = await _call_ai_and_record(
                     prompt,
+                    job_id=job_id,
+                    call_type="main_console",
                     cwd=repo_path,
                     ai_provider=ai_provider,
                     ai_model=ai_model,
                     ai_cli_timeout=settings.ai_cli_timeout,
                     cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
-                )
-
-                await record_ai_usage(
-                    job_id=job_id,
-                    result=result,
-                    call_type="main_console",
-                    prompt_chars=len(prompt),
-                    ai_provider=ai_provider,
-                    ai_model=ai_model,
                 )
 
                 if not result.success:
@@ -1890,7 +1908,7 @@ You have access to the repository if one was cloned. Explore to understand the f
                     FailureAnalysis(
                         test_name=f"{job_name}#{build_number}",
                         error="Console-only analysis",
-                        analysis=_parse_json_response(result.text),
+                        analysis=parsed_console or AnalysisDetail(details=result.text),
                     )
                 ]
 

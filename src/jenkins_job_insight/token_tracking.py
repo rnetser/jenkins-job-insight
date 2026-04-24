@@ -29,21 +29,21 @@ async def record_ai_usage(
     Uses provider/model from result.usage if available, falls back to parameters.
     """
     try:
-        usage = result.usage
-        if usage is None:
+        if not job_id:
             return
 
+        usage = result.usage
         await storage.record_token_usage(
             job_id=job_id,
-            ai_provider=usage.provider or ai_provider,
-            ai_model=usage.model or ai_model,
+            ai_provider=(usage.provider if usage else "") or ai_provider,
+            ai_model=(usage.model if usage else "") or ai_model,
             call_type=call_type,
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            cache_read_tokens=usage.cache_read_tokens,
-            cache_write_tokens=usage.cache_write_tokens,
-            cost_usd=usage.cost_usd,
-            duration_ms=usage.duration_ms,
+            input_tokens=usage.input_tokens if usage else 0,
+            output_tokens=usage.output_tokens if usage else 0,
+            cache_read_tokens=usage.cache_read_tokens if usage else 0,
+            cache_write_tokens=usage.cache_write_tokens if usage else 0,
+            cost_usd=usage.cost_usd if usage else None,
+            duration_ms=usage.duration_ms if usage else None,
             prompt_chars=prompt_chars,
             response_chars=len(result.text),
         )

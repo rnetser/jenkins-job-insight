@@ -1979,16 +1979,18 @@ def token_usage_cmd(
             start_date = start_date or _week_ago()
         elif period == "month":
             start_date = start_date or _month_ago()
+        # period == "all" — no date filter, falls through to main query
 
         if (
-            not start_date
+            period is None
+            and not start_date
             and not end_date
             and not provider
             and not model
             and not call_type
             and not group_by
         ):
-            # Summary mode — no filters specified
+            # Summary dashboard mode — only when no period or filters specified
             data = client.get_token_usage_summary()
             if effective_format == "json":
                 print_output(data, columns=[], as_json=True)

@@ -502,6 +502,9 @@ class FailureAnalysisResult(BaseModel):
         default=None,
         description="Enriched JUnit XML with analysis results (only when raw_xml was provided in request)",
     )
+    token_usage: TokenUsageSummary | None = Field(
+        default=None, description="Token usage summary for this analysis"
+    )
 
 
 class _ChildJobFieldsValidator(BaseModel):

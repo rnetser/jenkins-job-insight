@@ -414,6 +414,12 @@ async def init_db() -> None:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_token_usage_provider ON ai_token_usage (ai_provider)"
         )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_token_usage_model ON ai_token_usage (ai_model)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_token_usage_call_type ON ai_token_usage (call_type)"
+        )
 
         await db.commit()
 
@@ -3002,6 +3008,9 @@ async def get_token_usage_summary(
         conditions.append("created_at >= ?")
         params.append(start_date)
     if end_date:
+        # Normalize date-only to end of day so records from that day are included
+        if len(end_date) == 10:  # YYYY-MM-DD
+            end_date = f"{end_date} 23:59:59"
         conditions.append("created_at <= ?")
         params.append(end_date)
     if ai_provider:
@@ -3071,7 +3080,13 @@ async def get_token_usage_summary(
 
 
 async def get_token_usage_dashboard_summary() -> dict:
-    """Get high-level summary for dashboard cards (today, this week, this month, top models, top jobs)."""
+    """Get high-level summary for dashboard cards.
+
+    Period keys use rolling windows:
+    - ``today``: records created today (date match)
+    - ``this_week``: last 7 rolling days (not calendar week)
+    - ``this_month``: last 30 rolling days (not calendar month)
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 

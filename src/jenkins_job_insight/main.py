@@ -1302,6 +1302,15 @@ async def process_analysis_with_id(
             "error": error_detail,
         }
         await _preserve_request_params(job_id, error_data)
+
+        # Attach token usage even on failure — partial AI calls may have been recorded
+        try:
+            token_summary = await build_token_usage_summary(job_id)
+            if token_summary:
+                error_data["token_usage"] = token_summary.model_dump(mode="json")
+        except Exception:
+            pass
+
         await update_status(job_id, "failed", error_data)
 
 
@@ -3979,6 +3988,12 @@ async def get_token_usage(
 ) -> dict:
     """Get aggregated token usage with optional filters and grouping. Admin only."""
     _require_admin(request)
+    _valid_group_by = {"provider", "model", "call_type", "day", "week", "month", "job"}
+    if group_by and group_by not in _valid_group_by:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid group_by value. Valid: {', '.join(sorted(_valid_group_by))}",
+        )
     return await storage.get_token_usage_summary(
         start_date=start_date,
         end_date=end_date,

@@ -35,6 +35,25 @@ interface BreakdownRow {
   avg_duration_ms: number
 }
 
+interface TokenUsageBreakdownResponse {
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cache_read_tokens: number
+  total_cache_write_tokens: number
+  total_cost_usd: number
+  total_calls: number
+  total_duration_ms: number
+  breakdown: Array<{
+    group_key: string
+    call_count: number
+    input_tokens: number
+    output_tokens: number
+    cache_read_tokens: number
+    cost_usd: number
+    avg_duration_ms: number
+  }>
+}
+
 const GROUP_BY_OPTIONS = [
   { value: 'model', label: 'Model' },
   { value: 'provider', label: 'Provider' },
@@ -126,9 +145,19 @@ export function TokenUsagePage() {
       params.set('group_by', groupBy)
       if (dateFrom) params.set('start_date', dateFrom)
       if (dateTo) params.set('end_date', dateTo)
-      if (providerFilter.trim()) params.set('provider', providerFilter.trim())
-      const data = await api.get<BreakdownRow[]>(`/api/admin/token-usage?${params.toString()}`)
-      setBreakdown(data)
+      if (providerFilter.trim()) params.set('ai_provider', providerFilter.trim())
+      const data = await api.get<TokenUsageBreakdownResponse>(`/api/admin/token-usage?${params.toString()}`)
+      setBreakdown(
+        data.breakdown.map((row) => ({
+          group: row.group_key,
+          calls: row.call_count,
+          input_tokens: row.input_tokens,
+          output_tokens: row.output_tokens,
+          cache_read_tokens: row.cache_read_tokens,
+          cost_usd: row.cost_usd,
+          avg_duration_ms: row.avg_duration_ms,
+        }))
+      )
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load breakdown')
@@ -194,14 +223,14 @@ export function TokenUsagePage() {
             cost={summary.today.cost_usd}
           />
           <SummaryCard
-            title="This Week"
+            title="Last 7 Days"
             icon={<TrendingUp className="h-4 w-4 text-signal-green" />}
             calls={summary.this_week.calls}
             tokens={summary.this_week.tokens}
             cost={summary.this_week.cost_usd}
           />
           <SummaryCard
-            title="This Month"
+            title="Last 30 Days"
             icon={<Calendar className="h-4 w-4 text-signal-orange" />}
             calls={summary.this_month.calls}
             tokens={summary.this_month.tokens}
