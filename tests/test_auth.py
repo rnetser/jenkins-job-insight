@@ -808,12 +808,17 @@ class TestSessionRenewalMiddleware:
         # Make an authenticated request — middleware should renew
         client.get("/api/auth/me", cookies={"jji_session": session_cookie})
 
-        # Wait for the fire-and-forget background task to complete
-        time.sleep(0.1)
-
-        # The DB expiry should now be extended beyond the shortened value
-        renewed_expires = asyncio.run(get_expiry())
-        assert renewed_expires > shortened_expires
+        # Poll until the renewal updates the DB (now synchronous, should be immediate)
+        deadline = time.monotonic() + 2.0
+        renewed_expires = shortened_expires
+        while time.monotonic() < deadline:
+            renewed_expires = asyncio.run(get_expiry())
+            if renewed_expires > shortened_expires:
+                break
+            time.sleep(0.05)
+        assert renewed_expires > shortened_expires, (
+            "Session renewal did not update DB expires_at within timeout"
+        )
 
     def test_expired_session_not_renewed(self, client, temp_db_path):
         """An expired session should NOT be renewed; user falls back to non-admin."""

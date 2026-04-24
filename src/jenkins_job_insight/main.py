@@ -664,12 +664,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         ).replace(tzinfo=timezone.utc)
                         remaining = expires_at - datetime.now(timezone.utc)
                         if remaining < timedelta(hours=storage.SESSION_TTL_HOURS / 2):
-                            task = asyncio.create_task(
-                                storage.renew_session(session_token)
-                            )
-                            _background_tasks.add(task)
-                            task.add_done_callback(_background_tasks.discard)
-                            request.state.renew_session_token = session_token
+                            # Await renewal so cookie refresh is only set after confirmed DB update
+                            try:
+                                await storage.renew_session(session_token)
+                                request.state.renew_session_token = session_token
+                            except Exception:
+                                pass  # Renewal failed — don't refresh cookie
                     except (ValueError, TypeError):
                         pass
 
@@ -722,14 +722,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Refresh session cookie max_age if session was renewed
         if getattr(request.state, "renew_session_token", None):
-            response.set_cookie(
-                "jji_session",
-                request.state.renew_session_token,
-                httponly=True,
-                samesite="strict",
-                secure=settings.secure_cookies,
-                max_age=storage.SESSION_TTL_SECONDS,
-            )
+            # Skip if downstream handler already set/cleared jji_session
+            # (e.g., login sets a new session, logout deletes it)
+            path = request.url.path
+            if path not in ("/api/auth/login", "/api/auth/logout"):
+                settings = get_settings()
+                response.set_cookie(
+                    "jji_session",
+                    request.state.renew_session_token,
+                    httponly=True,
+                    samesite="strict",
+                    secure=settings.secure_cookies,
+                    max_age=storage.SESSION_TTL_SECONDS,
+                )
 
         return response
 
