@@ -193,6 +193,9 @@ Exceptions (server-level only, no payload equivalent):
 - `LOG_LEVEL` — server log verbosity
 - `PUBLIC_BASE_URL` — trusted server-only origin for building absolute links; never derive from request headers to prevent host-header injection
 - `SECURE_COOKIES` — server-only deployment toggle for HTTPS cookie flags (default: True, set False for local HTTP dev)
+- `VAPID_CLAIM_EMAIL` — server-only contact email for VAPID claims (Web Push notifications)
+- `VAPID_PRIVATE_KEY` — server-only VAPID private key for Web Push notifications; never expose via request payloads, CLI flags, or shared config files
+- `VAPID_PUBLIC_KEY` — server-only VAPID public key for Web Push notifications; auto-generated with `VAPID_PRIVATE_KEY` if not set
 - Security-sensitive credentials for preview/create-issue endpoints (`GITHUB_TOKEN`, `TESTS_REPO_URL`, Jira credentials, `REPORTPORTAL_URL`, `REPORTPORTAL_API_TOKEN`, `REPORTPORTAL_PROJECT`) — these use deployment config, not per-request overrides
 
 ### Sensitive Data Handling
@@ -202,6 +205,6 @@ Sensitive data (passwords, API tokens, credentials) must be:
 2. **Stripped from responses** — use `strip_sensitive_from_response()` before returning to API consumers
 3. **Never logged** — do not log passwords, tokens, or credentials at any log level
 
-Sensitive fields: `jenkins_password`, `jenkins_user`, `jira_api_token`, `jira_pat`, `jira_email`, `github_token`, `reportportal_api_token`
+Sensitive fields: `jenkins_password`, `jenkins_user`, `jira_api_token`, `jira_pat`, `jira_email`, `github_token`, `reportportal_api_token`, `vapid_private_key`
 
 Encryption uses Fernet (AES-128-CBC + HMAC-SHA256). Set `JJI_ENCRYPTION_KEY` env var for production; falls back to an auto-generated file-based key under `$XDG_DATA_HOME/jji/.encryption_key` (default: `~/.local/share/jji/.encryption_key`) for development.

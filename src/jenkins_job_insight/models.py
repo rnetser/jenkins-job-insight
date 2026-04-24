@@ -722,6 +722,36 @@ class ReportPortalPushResult(BaseModel):
     launch_id: int | None = Field(default=None, description="Report Portal launch ID")
 
 
+class PushSubscriptionRequest(BaseModel):
+    """Request body for subscribing to Web Push notifications."""
+
+    endpoint: str = Field(description="Push service endpoint URL")
+    p256dh_key: str = Field(
+        max_length=256, description="Client public key for message encryption"
+    )
+    auth_key: str = Field(max_length=256, description="Client authentication secret")
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint_url(cls, v: str) -> str:
+        if not v.startswith("https://"):
+            raise ValueError("Push endpoint must use HTTPS")
+        return v
+
+
+class UnsubscribeRequest(BaseModel):
+    """Request body for unsubscribing from Web Push notifications."""
+
+    endpoint: str = Field(description="Push service endpoint URL to remove")
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint_url(cls, v: str) -> str:
+        if not v.startswith("https://"):
+            raise ValueError("Push endpoint must use HTTPS")
+        return v
+
+
 class BulkDeleteRequest(BaseModel):
     """Request body for bulk-deleting jobs."""
 

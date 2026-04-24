@@ -255,6 +255,11 @@ class Settings(BaseSettings):
         description="Enable Report Portal integration. When None, enabled if REPORTPORTAL_URL, REPORTPORTAL_API_TOKEN, and REPORTPORTAL_PROJECT are configured.",
     )
 
+    # Web Push (VAPID) configuration (optional, server-only)
+    vapid_public_key: str = ""
+    vapid_private_key: str = Field(default="", repr=False)
+    vapid_claim_email: str = ""
+
     @model_validator(mode="after")
     def _normalize_optional_strings(self) -> "Settings":
         """Strip whitespace from optional string fields; blank becomes None."""
@@ -346,6 +351,13 @@ class Settings(BaseSettings):
                     "enable_github_issues is True but GITHUB_TOKEN is not configured"
                 )
         return bool(tests_repo_url and github_token)
+
+    @property
+    def web_push_enabled(self) -> bool:
+        """Check if Web Push is enabled (all three VAPID settings are non-empty)."""
+        return bool(
+            self.vapid_public_key and self.vapid_private_key and self.vapid_claim_email
+        )
 
     @property
     def reportportal_enabled(self) -> bool:

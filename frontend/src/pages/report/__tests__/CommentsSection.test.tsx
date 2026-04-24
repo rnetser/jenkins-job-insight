@@ -17,9 +17,11 @@ vi.mock('@/lib/cookies', () => ({
 
 const mockDelete = vi.fn()
 const mockPost = vi.fn()
+const mockGet = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   api: {
+    get: (...args: unknown[]) => mockGet(...args),
     delete: (...args: unknown[]) => mockDelete(...args),
     post: (...args: unknown[]) => mockPost(...args),
   },
@@ -74,10 +76,14 @@ function renderWithComments(comments: Comment[]) {
 /*  Tests                                                              */
 /* ------------------------------------------------------------------ */
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
   mockDelete.mockResolvedValue({})
   mockPost.mockResolvedValue({ enrichments: {} })
+  mockGet.mockResolvedValue({ users: [] })
+  // Reset mention cache between tests
+  const { _resetMentionCache } = await import('../MentionTextarea')
+  _resetMentionCache()
 })
 
 describe('CommentsSection – delete confirmation', () => {
@@ -140,5 +146,29 @@ describe('CommentsSection – delete confirmation', () => {
       expect(screen.getByRole('alert')).toBeDefined()
       expect(screen.getByText('Network error')).toBeDefined()
     })
+  })
+})
+
+describe('CommentsSection – @mention highlighting', () => {
+  it('highlights @mentions in rendered comments', () => {
+    renderWithComments([makeComment({ comment: 'Hey @alice check this' })])
+    const mention = screen.getByText('@alice')
+    expect(mention.tagName).toBe('SPAN')
+    expect(mention.className).toContain('text-signal-blue')
+    expect(mention.className).toContain('font-semibold')
+  })
+
+  it('does not highlight @domain in email addresses as a mention', () => {
+    renderWithComments([makeComment({ comment: 'Contact user@domain.com for info' })])
+    const mentionSpans = document.querySelectorAll('.text-signal-blue')
+    mentionSpans.forEach((el) => {
+      expect(el.textContent).not.toBe('@domain')
+    })
+  })
+
+  it('renders plain text without @mention styling', () => {
+    renderWithComments([makeComment({ comment: 'No mentions here' })])
+    expect(screen.getByText('No mentions here')).toBeDefined()
+    expect(screen.queryByText(/@/)).toBeNull()
   })
 })

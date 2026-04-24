@@ -65,6 +65,8 @@ from jenkins_job_insight.bug_creation import (
     search_github_duplicates,
     search_jira_duplicates,
 )
+from jenkins_job_insight.comment_enrichment import detect_mentions
+from jenkins_job_insight.notifications import send_mention_notifications
 from jenkins_job_insight.models import (
     AddCommentRequest,
     AnalyzeFailuresRequest,
@@ -80,8 +82,10 @@ from jenkins_job_insight.models import (
     JobMetadataInput,
     OverrideClassificationRequest,
     PreviewIssueRequest,
+    PushSubscriptionRequest,
     ReportPortalPushResult,
     SetReviewedRequest,
+    UnsubscribeRequest,
 )
 from jenkins_job_insight.utils import (
     _is_sensitive_key,
@@ -2074,6 +2078,26 @@ async def add_comment(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Detect @mentions and send notifications (best-effort, fire-and-forget)
+    settings = get_settings()
+    if settings.web_push_enabled:
+        mentioned = detect_mentions(body.comment)
+        if mentioned:
+            task = asyncio.create_task(
+                send_mention_notifications(
+                    mentioned_usernames=mentioned,
+                    comment_author=username,
+                    job_id=job_id,
+                    test_name=body.test_name,
+                    vapid_private_key=settings.vapid_private_key,
+                    vapid_claim_email=settings.vapid_claim_email,
+                    public_base_url=settings.public_base_url,
+                )
+            )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+
     return {"id": comment_id}
 
 
@@ -4353,6 +4377,62 @@ async def api_dashboard_filtered(
             job["metadata"] = None
 
     return jobs
+
+
+# --- Notification endpoints ---
+
+
+@app.get("/api/notifications/vapid-public-key")
+async def get_vapid_public_key():
+    """Return the VAPID public key for frontend push subscription."""
+    settings = get_settings()
+    if not settings.web_push_enabled:
+        raise HTTPException(
+            status_code=404, detail="Web Push notifications not configured"
+        )
+    return {"vapid_public_key": settings.vapid_public_key}
+
+
+@app.post("/api/notifications/subscribe")
+async def subscribe_notifications(body: PushSubscriptionRequest, request: Request):
+    """Register a push subscription for the current user."""
+    settings = get_settings()
+    if not settings.web_push_enabled:
+        raise HTTPException(
+            status_code=404, detail="Web Push notifications not configured"
+        )
+    username = request.state.username
+    if not username:
+        raise HTTPException(status_code=401, detail="Username required")
+    await storage.save_push_subscription(
+        username=username,
+        endpoint=body.endpoint,
+        p256dh_key=body.p256dh_key,
+        auth_key=body.auth_key,
+    )
+    return {"status": "subscribed"}
+
+
+@app.post("/api/notifications/unsubscribe")
+async def unsubscribe_notifications(body: UnsubscribeRequest, request: Request):
+    """Remove a push subscription."""
+    username = request.state.username
+    if not username:
+        raise HTTPException(status_code=401, detail="Username required")
+    deleted = await storage.delete_push_subscription(body.endpoint, username)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return {"status": "unsubscribed"}
+
+
+@app.get("/api/users/mentionable")
+async def get_mentionable_users(request: Request):
+    """Return list of usernames that can be mentioned in comments."""
+    username = request.state.username
+    if not username:
+        raise HTTPException(status_code=401, detail="Username required")
+    users = await storage.list_users()
+    return {"usernames": [u["username"] for u in users]}
 
 
 # SPA catch-all routes — must be AFTER all API routes

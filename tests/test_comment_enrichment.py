@@ -8,6 +8,7 @@ from jenkins_job_insight.comment_enrichment import (
     detect_github_issues,
     detect_github_prs,
     detect_jira_keys,
+    detect_mentions,
     fetch_github_issue_status,
     fetch_github_pr_status,
     fetch_jira_ticket_status,
@@ -68,6 +69,44 @@ class TestDetectJiraKeys:
     def test_no_keys(self):
         keys = detect_jira_keys("no jira here")
         assert keys == []
+
+
+class TestDetectMentions:
+    def test_detect_single_mention(self):
+        result = detect_mentions("Hey @alice, can you check this?")
+        assert result == ["alice"]
+
+    def test_detect_multiple_mentions(self):
+        result = detect_mentions("@bob and @carol please review")
+        assert result == ["bob", "carol"]
+
+    def test_deduplication_preserves_order(self):
+        result = detect_mentions("@alice @bob @alice @carol @bob")
+        assert result == ["alice", "bob", "carol"]
+
+    def test_no_mentions(self):
+        result = detect_mentions("just a regular comment")
+        assert result == []
+
+    def test_excludes_email_addresses(self):
+        result = detect_mentions("Contact user@domain.com for help")
+        assert result == []
+
+    def test_mention_with_hyphens_and_underscores(self):
+        result = detect_mentions("@my-user and @another_user")
+        assert result == ["my-user", "another_user"]
+
+    def test_mention_with_numbers(self):
+        result = detect_mentions("@user123 did this")
+        assert result == ["user123"]
+
+    def test_mention_at_start_of_text(self):
+        result = detect_mentions("@admin please fix")
+        assert result == ["admin"]
+
+    def test_mixed_mentions_and_emails(self):
+        result = detect_mentions("@alice and user@domain.com and @bob")
+        assert result == ["alice", "bob"]
 
 
 class TestFetchGitHubPRStatus:

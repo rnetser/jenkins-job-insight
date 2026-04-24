@@ -65,7 +65,7 @@ repos:
     hooks:
       - id: eslint
         files: \.js$
-        exclude: (eslint\.config\.js|^docs/)
+        exclude: (eslint\.config\.js|^docs/|^frontend/)
         args: [--fix]
         additional_dependencies:
           - eslint@9.38.0

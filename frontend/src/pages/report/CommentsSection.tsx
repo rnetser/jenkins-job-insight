@@ -1,14 +1,14 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, type ReactNode } from 'react'
 import { api } from '@/lib/api'
 import { formatTimestamp } from '@/lib/utils'
 import { isCommentInScope } from '@/lib/grouping'
 import { getUsername } from '@/lib/cookies'
 import { useReportState, useReportDispatch, useRefreshEnrichments } from './ReportContext'
-import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { LinkedText } from '@/components/shared/LinkedText'
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
+import { MentionTextarea } from './MentionTextarea'
 import { Trash2, MessageSquare } from 'lucide-react'
 import type { Comment } from '@/types'
 
@@ -21,6 +21,39 @@ function enrichmentBadgeVariant(status: string): 'success' | 'destructive' | 'de
   if (s === 'merged' || s === 'open') return 'success'
   if (s === 'closed') return 'destructive'
   return 'default'
+}
+
+/* ------------------------------------------------------------------ */
+/*  @mention highlighting in rendered text                             */
+/* ------------------------------------------------------------------ */
+
+const MENTION_RE = /(?<![a-zA-Z0-9.])@([a-zA-Z0-9_-]+)/g
+
+/** Render a plain-text segment with @mentions highlighted. */
+function renderTextWithMentions(text: string, segIndex: number): ReactNode {
+  const parts: ReactNode[] = []
+  let lastIndex = 0
+  // Clone regex to reset state
+  const re = new RegExp(MENTION_RE.source, MENTION_RE.flags)
+  let match: RegExpExecArray | null
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index))
+    }
+    parts.push(
+      <span
+        key={`${segIndex}-m-${match.index}`}
+        className="font-semibold text-signal-blue"
+      >
+        {match[0]}
+      </span>,
+    )
+    lastIndex = match.index + match[0].length
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex))
+  }
+  return parts.length > 0 ? <>{parts}</> : text
 }
 
 /* ------------------------------------------------------------------ */
@@ -195,6 +228,7 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
                     <LinkedText
                       text={c.comment}
                       repoUrls={[]}
+                      renderText={renderTextWithMentions}
                       renderLink={(seg, i) => {
                         const match = badges.find((b) => seg.text === b.key || seg.href === b.key)
                         return (
@@ -233,20 +267,11 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
 
       <div className="space-y-1">
         <div className="flex gap-2">
-          <Textarea
-            aria-label="Add a comment"
+          <MentionTextarea
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={setText}
+            onSubmit={handleSubmit}
             placeholder="Add a comment..."
-            className="min-h-[36px] resize-none text-sm"
-            rows={1}
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing) return
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                handleSubmit()
-              }
-            }}
           />
           <Button size="sm" onClick={handleSubmit} disabled={!text.trim() || submitting} className="shrink-0">
             Post

@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, type FormEvent, type ReactNode } from 'react'
 import { api, ApiError } from '@/lib/api'
 import {
   setUsername,
@@ -10,10 +10,15 @@ import {
   getJiraToken,
   getJiraEmail,
 } from '@/lib/cookies'
+import {
+  getPushSubscriptionState,
+  subscribeToPush,
+  unsubscribeFromPush,
+} from '@/lib/notifications'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Eye, EyeOff } from 'lucide-react'
+import { Eye, EyeOff, Bell, BellOff } from 'lucide-react'
 
 interface ProfileFormProps {
   onSaved: () => void | Promise<void>
@@ -71,6 +76,97 @@ async function persistTokensToServer(gh: string, je: string, jt: string) {
   } catch (err) {
     console.error('Failed to sync tokens to server:', err)
   }
+}
+
+type PushState = 'granted' | 'denied' | 'default' | 'unsupported'
+
+function NotificationToggle() {
+  const [pushState, setPushState] = useState<PushState>('default')
+  const [hasSubscription, setHasSubscription] = useState(false)
+  const [toggling, setToggling] = useState(false)
+
+  const refreshState = useCallback(async () => {
+    const state = await getPushSubscriptionState()
+    setPushState(state)
+    if (state === 'granted' && 'serviceWorker' in navigator) {
+      try {
+        const reg = await navigator.serviceWorker.ready
+        const sub = await reg.pushManager.getSubscription()
+        setHasSubscription(sub !== null)
+      } catch {
+        setHasSubscription(false)
+      }
+    } else {
+      setHasSubscription(false)
+    }
+  }, [])
+
+  useEffect(() => { refreshState() }, [refreshState])
+
+  async function handleToggle() {
+    setToggling(true)
+    try {
+      if (hasSubscription) {
+        const ok = await unsubscribeFromPush()
+        if (ok) setHasSubscription(false)
+      } else {
+        const ok = await subscribeToPush()
+        if (ok) setHasSubscription(true)
+      }
+      await refreshState()
+    } finally {
+      setToggling(false)
+    }
+  }
+
+  if (pushState === 'unsupported') {
+    return (
+      <div className="space-y-1.5 pt-2">
+        <div className="flex items-center gap-3 py-1">
+          <div className="h-px flex-1 bg-border-muted" />
+          <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">Push Notifications</span>
+          <div className="h-px flex-1 bg-border-muted" />
+        </div>
+        <p className="text-xs text-text-tertiary">Push notifications are not supported in this browser.</p>
+      </div>
+    )
+  }
+
+  if (pushState === 'denied') {
+    return (
+      <div className="space-y-1.5 pt-2">
+        <div className="flex items-center gap-3 py-1">
+          <div className="h-px flex-1 bg-border-muted" />
+          <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">Push Notifications</span>
+          <div className="h-px flex-1 bg-border-muted" />
+        </div>
+        <div className="flex items-center gap-2 text-xs text-signal-amber">
+          <BellOff className="h-4 w-4 shrink-0" />
+          <span>Notifications blocked. To re-enable, update this site&apos;s notification permission in your browser settings.</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-1.5 pt-2">
+      <div className="flex items-center gap-3 py-1">
+        <div className="h-px flex-1 bg-border-muted" />
+        <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">Push Notifications</span>
+        <div className="h-px flex-1 bg-border-muted" />
+      </div>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs text-text-secondary">
+          {hasSubscription ? <Bell className="h-4 w-4 text-signal-green" /> : <BellOff className="h-4 w-4" />}
+          <span>{hasSubscription ? 'Notifications enabled' : 'Notifications disabled'}</span>
+        </div>
+        <Button type="button" variant={hasSubscription ? 'outline' : 'default'} size="sm" disabled={toggling} onClick={handleToggle}>
+          {toggling ? 'Updating...' : hasSubscription ? 'Disable' : 'Enable'}
+        </Button>
+      </div>
+      <p className="text-xs text-text-tertiary">Receive browser notifications when someone mentions you in a comment.</p>
+    </div>
+  )
 }
 
 export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
@@ -303,6 +399,10 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
             {saving ? 'Saving...' : 'Save'}
           </Button>
           </fieldset>
+
+          {/* Push Notifications */}
+          <NotificationToggle />
+
         </form>
       </CardContent>
     </Card>

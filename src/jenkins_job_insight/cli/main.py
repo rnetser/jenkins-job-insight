@@ -1340,6 +1340,30 @@ def ai_configs(
         )
 
 
+# -- Users ----------------------------------------------------------------
+# NOTE: Push subscribe/unsubscribe are web-only (browser-specific push
+# subscriptions) and intentionally not exposed via CLI.
+
+
+@app.command("mentionable-users")
+def mentionable_users_cmd(
+    json_output: bool = _JSON_OPTION,
+):
+    """List users that can be mentioned in comments."""
+    data = _run_client_command(
+        json_output,
+        lambda c: c.get_mentionable_users(),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
+        usernames = data.get("usernames", [])
+        if usernames:
+            for name in usernames:
+                typer.echo(name)
+        else:
+            typer.echo("No mentionable users found.")
+
+
 # -- Bug Creation -------------------------------------------------------------
 
 
