@@ -432,21 +432,20 @@ class TestDispatchAlert:
         from jenkins_job_insight import monitoring
 
         monitoring.alert_throttler.reset()
-        with (
-            patch(
-                "jenkins_job_insight.monitoring.send_slack_alert",
-                new_callable=AsyncMock,
-            ) as mock_slack,
-            patch(
-                "jenkins_job_insight.monitoring.send_email_alert_async",
-                new_callable=AsyncMock,
-            ) as mock_email,
-        ):
-            mock_slack.return_value = True
-            mock_email.return_value = True
-            await dispatch_alert("test_event", "test message")
-        mock_slack.assert_called_once_with("test message")
-        mock_email.assert_called_once()
+        original_slack = monitoring.send_slack_alert
+        original_email = monitoring.send_email_alert_async
+        mock_slack = AsyncMock(return_value=True)
+        mock_email = AsyncMock(return_value=True)
+        monitoring.send_slack_alert = mock_slack
+        monitoring.send_email_alert_async = mock_email
+        try:
+            await dispatch_alert("test_dispatch_event", "test message")
+            mock_slack.assert_called_once_with("test message")
+            mock_email.assert_called_once()
+        finally:
+            monitoring.send_slack_alert = original_slack
+            monitoring.send_email_alert_async = original_email
+            monitoring.alert_throttler.reset()
 
     async def test_dispatch_throttled(self):
         from jenkins_job_insight import monitoring
@@ -454,21 +453,19 @@ class TestDispatchAlert:
         monitoring.alert_throttler.reset()
         original_cooldown = monitoring.alert_throttler.cooldown_seconds
         monitoring.alert_throttler.cooldown_seconds = 9999.0
+        original_slack = monitoring.send_slack_alert
+        original_email = monitoring.send_email_alert_async
+        mock_slack = AsyncMock()
+        monitoring.send_slack_alert = mock_slack
+        monitoring.send_email_alert_async = AsyncMock()
         try:
-            with (
-                patch(
-                    "jenkins_job_insight.monitoring.send_slack_alert",
-                    new_callable=AsyncMock,
-                ) as mock_slack,
-                patch(
-                    "jenkins_job_insight.monitoring.send_email_alert_async",
-                    new_callable=AsyncMock,
-                ),
-            ):
-                await dispatch_alert("test_throttle_event", "first")
-                await dispatch_alert("test_throttle_event", "second")
+            await dispatch_alert("test_throttle_direct", "first")
+            await dispatch_alert("test_throttle_direct", "second")
+            # Only first call should go through
             mock_slack.assert_called_once()
         finally:
+            monitoring.send_slack_alert = original_slack
+            monitoring.send_email_alert_async = original_email
             monitoring.alert_throttler.cooldown_seconds = original_cooldown
             monitoring.alert_throttler.reset()
 
