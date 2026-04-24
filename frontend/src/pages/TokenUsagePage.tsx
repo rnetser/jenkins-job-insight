@@ -1,6 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
-import { formatCompactNumber } from '@/pages/report/TokenUsageBadge'
+import { formatCompactNumber, formatCost } from '@/lib/format'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Card, CardContent } from '@/components/ui/card'
@@ -101,12 +101,6 @@ function SummaryCard({ title, icon, calls, tokens, cost }: {
       </CardContent>
     </Card>
   )
-}
-
-function formatCost(value: number | null | undefined): string {
-  if (value == null || value === 0) return '$0.00'
-  if (value < 0.01) return `$${value.toFixed(4)}`
-  return `$${value.toFixed(2)}`
 }
 
 function formatDurationMs(ms: number): string {
@@ -276,7 +270,7 @@ export function TokenUsagePage() {
                     <div key={m.model} className="flex items-center justify-between">
                       <span className="font-mono text-xs text-text-secondary truncate">{m.model}</span>
                       <div className="flex items-center gap-3">
-                        <span className="font-mono text-xs text-text-tertiary">{m.calls} calls</span>
+                        <span className="font-mono text-xs text-text-tertiary">{m.calls.toLocaleString()} calls</span>
                         <span className="font-mono text-xs text-signal-green">{formatCostCell(m.cost_usd)}</span>
                       </div>
                     </div>
@@ -294,7 +288,7 @@ export function TokenUsagePage() {
                     <div key={j.job_id} className="flex items-center justify-between">
                       <span className="font-mono text-xs text-text-secondary truncate">{j.job_id}</span>
                       <div className="flex items-center gap-3">
-                        <span className="font-mono text-xs text-text-tertiary">{j.calls} calls</span>
+                        <span className="font-mono text-xs text-text-tertiary">{j.calls.toLocaleString()} calls</span>
                         <span className="font-mono text-xs text-signal-green">{formatCostCell(j.cost_usd)}</span>
                       </div>
                     </div>

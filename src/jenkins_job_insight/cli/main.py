@@ -1922,7 +1922,7 @@ def _print_token_usage_csv(rows: list[dict]) -> None:
     import sys
 
     if not rows:
-        typer.echo("No data")
+        typer.echo("No data", err=True)
         return
     writer = csv.DictWriter(sys.stdout, fieldnames=rows[0].keys())
     writer.writeheader()

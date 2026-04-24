@@ -1,0 +1,40 @@
+import { describe, expect, it } from 'vitest'
+import { formatCompactNumber, formatCost } from '../format'
+
+describe('formatCompactNumber', () => {
+  it('returns plain number below 1000', () => {
+    expect(formatCompactNumber(0)).toBe('0')
+    expect(formatCompactNumber(999)).toBe('999')
+  })
+
+  it('formats thousands as K', () => {
+    expect(formatCompactNumber(1_000)).toBe('1K')
+    expect(formatCompactNumber(1_500)).toBe('1.5K')
+    expect(formatCompactNumber(15_000)).toBe('15K')
+  })
+
+  it('formats millions as M', () => {
+    expect(formatCompactNumber(1_000_000)).toBe('1M')
+    expect(formatCompactNumber(1_500_000)).toBe('1.5M')
+    expect(formatCompactNumber(10_000_000)).toBe('10M')
+  })
+})
+
+describe('formatCost', () => {
+  it('returns $0.00 for null/undefined/zero', () => {
+    expect(formatCost(null)).toBe('$0.00')
+    expect(formatCost(undefined)).toBe('$0.00')
+    expect(formatCost(0)).toBe('$0.00')
+  })
+
+  it('uses 4 decimal places for values under $0.01', () => {
+    expect(formatCost(0.005)).toBe('$0.0050')
+    expect(formatCost(0.0012)).toBe('$0.0012')
+  })
+
+  it('uses 2 decimal places for values >= $0.01', () => {
+    expect(formatCost(0.01)).toBe('$0.01')
+    expect(formatCost(1.5)).toBe('$1.50')
+    expect(formatCost(123.456)).toBe('$123.46')
+  })
+})
