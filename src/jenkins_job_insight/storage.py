@@ -3039,7 +3039,7 @@ async def get_token_usage_summary(
             "COALESCE(SUM(cost_usd), 0) as total_cost_usd, "
             "COUNT(*) as total_calls, "
             "COALESCE(SUM(duration_ms), 0) as total_duration_ms "
-            f"FROM ai_token_usage{where_clause}"
+            f"FROM ai_token_usage{where_clause}"  # noqa: S608
         )
         cursor = await db.execute(totals_query, params)
         totals = dict(await cursor.fetchone())
@@ -3067,7 +3067,7 @@ async def get_token_usage_summary(
                     "COALESCE(SUM(cost_usd), 0) as cost_usd, "
                     "COUNT(*) as call_count, "
                     "CASE WHEN COUNT(*) > 0 THEN COALESCE(SUM(duration_ms), 0) / COUNT(*) ELSE 0 END as avg_duration_ms "
-                    f"FROM ai_token_usage{where_clause} "
+                    f"FROM ai_token_usage{where_clause} "  # noqa: S608
                     f"GROUP BY {group_column} "
                     "ORDER BY COALESCE(SUM(cost_usd), 0) DESC"
                 )
@@ -3100,7 +3100,7 @@ async def get_token_usage_dashboard_summary() -> dict:
         result: dict = {}
         for period_name, condition in periods.items():
             cursor = await db.execute(
-                f"SELECT COUNT(*) as calls, "
+                f"SELECT COUNT(*) as calls, "  # noqa: S608
                 f"COALESCE(SUM(total_tokens), 0) as tokens, "
                 f"COALESCE(SUM(cost_usd), 0) as cost_usd "
                 f"FROM ai_token_usage WHERE {condition}"
@@ -3109,11 +3109,11 @@ async def get_token_usage_dashboard_summary() -> dict:
 
         # Top models by cost
         cursor = await db.execute(
-            "SELECT ai_model as model, COUNT(*) as calls, "
+            "SELECT ai_provider || ' / ' || ai_model as model, COUNT(*) as calls, "
             "COALESCE(SUM(cost_usd), 0) as cost_usd "
             "FROM ai_token_usage "
             "WHERE created_at >= datetime('now', '-30 days') "
-            "GROUP BY ai_model ORDER BY cost_usd DESC LIMIT 5"
+            "GROUP BY ai_provider, ai_model ORDER BY cost_usd DESC LIMIT 5"
         )
         result["top_models"] = [dict(row) for row in await cursor.fetchall()]
 

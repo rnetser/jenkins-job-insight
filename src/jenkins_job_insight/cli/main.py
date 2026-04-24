@@ -1844,22 +1844,10 @@ def admin_users_change_role(
 # -- Token Usage (Admin) ------------------------------------------------------
 
 
-def _today() -> str:
-    from datetime import date
-
-    return date.today().isoformat()
-
-
-def _week_ago() -> str:
+def _date_offset(days: int = 0) -> str:
     from datetime import date, timedelta
 
-    return (date.today() - timedelta(days=7)).isoformat()
-
-
-def _month_ago() -> str:
-    from datetime import date, timedelta
-
-    return (date.today() - timedelta(days=30)).isoformat()
+    return (date.today() - timedelta(days=days)).isoformat()
 
 
 def _print_token_summary(data: dict) -> None:
@@ -1877,7 +1865,7 @@ def _print_token_summary(data: dict) -> None:
         typer.echo("\nTop Models (30 days):")
         for m in top_models:
             typer.echo(
-                f"  {m['model']}: {m['calls']} calls, ${m.get('cost_usd', 0):.2f}"
+                f"  {m.get('model', 'unknown')}: {m.get('calls', 0)} calls, ${m.get('cost_usd', 0):.2f}"
             )
 
 
@@ -1927,10 +1915,12 @@ def _print_token_usage_csv(rows: list[dict]) -> None:
     import sys
 
     if not rows:
+        typer.echo("No data")
         return
     writer = csv.DictWriter(sys.stdout, fieldnames=rows[0].keys())
     writer.writeheader()
-    writer.writerows(rows)
+    for row in rows:
+        writer.writerow({k: row.get(k, "") for k in rows[0].keys()})
 
 
 @admin_app.command("token-usage")
@@ -1960,6 +1950,19 @@ def token_usage_cmd(
     # --json flag overrides --format
     effective_format = "json" if _state.get("json", False) else output_format
 
+    valid_periods = {"today", "week", "month", "all"}
+    valid_formats = {"table", "json", "csv"}
+    if period and period not in valid_periods:
+        typer.echo(
+            f"Invalid --period: {period}. Valid: {', '.join(sorted(valid_periods))}"
+        )
+        raise typer.Exit(1)
+    if effective_format not in valid_formats:
+        typer.echo(
+            f"Invalid --format: {effective_format}. Valid: {', '.join(sorted(valid_formats))}"
+        )
+        raise typer.Exit(1)
+
     try:
         client = _get_client()
 
@@ -1974,11 +1977,11 @@ def token_usage_cmd(
             return
 
         if period == "today":
-            start_date = start_date or _today()
+            start_date = start_date or _date_offset(0)
         elif period == "week":
-            start_date = start_date or _week_ago()
+            start_date = start_date or _date_offset(7)
         elif period == "month":
-            start_date = start_date or _month_ago()
+            start_date = start_date or _date_offset(30)
         # period == "all" — no date filter, falls through to main query
 
         if (
@@ -1998,9 +2001,9 @@ def token_usage_cmd(
                 # Flatten period rows for CSV output
                 rows = []
                 for period_name in ["today", "this_week", "this_month"]:
-                    period = data.get(period_name, {})
-                    if isinstance(period, dict):
-                        rows.append({"period": period_name, **period})
+                    period_data = data.get(period_name, {})
+                    if isinstance(period_data, dict):
+                        rows.append({"period": period_name, **period_data})
                 _print_token_usage_csv(rows)
             else:
                 _print_token_summary(data)

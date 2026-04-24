@@ -1734,6 +1734,10 @@ async def analyze_failures(
         )
         fail_data = analysis_result.model_dump(mode="json")
         await _preserve_request_params(job_id, fail_data)
+
+        # Attach token usage even on failure — partial AI calls may have been recorded
+        await _attach_token_usage(job_id, fail_data)
+
         await update_status(job_id, "failed", fail_data)
         return JSONResponse(content=_attach_result_links(fail_data, base_url, job_id))
 

@@ -303,6 +303,6 @@ class TestGetTokenUsageDashboardSummary:
         assert result["this_week"]["calls"] == 1
         assert result["this_month"]["calls"] == 1
         assert len(result["top_models"]) == 1
-        assert result["top_models"][0]["model"] == "opus-4"
+        assert result["top_models"][0]["model"] == "claude / opus-4"
         assert len(result["top_jobs"]) == 1
         assert result["top_jobs"][0]["job_id"] == "job-dash"

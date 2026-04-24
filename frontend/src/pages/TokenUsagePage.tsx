@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { formatCompactNumber } from '@/pages/report/TokenUsageBadge'
 import { Input } from '@/components/ui/input'
@@ -31,6 +31,7 @@ interface BreakdownRow {
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number
+  cache_write_tokens: number
   cost_usd: number
   avg_duration_ms: number
 }
@@ -49,6 +50,7 @@ interface TokenUsageBreakdownResponse {
     input_tokens: number
     output_tokens: number
     cache_read_tokens: number
+    cache_write_tokens: number
     cost_usd: number
     avg_duration_ms: number
   }>
@@ -125,7 +127,10 @@ export function TokenUsagePage() {
   const [dateTo, setDateTo] = useState('')
   const [providerFilter, setProviderFilter] = useState('')
 
-  const { sortKey, sortDir, handleSort } = useTableSort('token-usage', 'cost_usd', 'desc', ['cost_usd', 'calls', 'input_tokens', 'output_tokens', 'avg_duration_ms'])
+  const { sortKey, sortDir, handleSort } = useTableSort('token-usage', 'cost_usd', 'desc', ['cost_usd', 'calls', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'avg_duration_ms'])
+
+  // Guard against stale responses when filters change rapidly
+  const latestRequestIdRef = useRef(0)
 
   // Fetch summary cards
   useEffect(() => {
@@ -141,6 +146,7 @@ export function TokenUsagePage() {
 
   // Fetch breakdown table
   const fetchBreakdown = useCallback(async () => {
+    const requestId = ++latestRequestIdRef.current
     setBreakdownLoading(true)
     try {
       const params = new URLSearchParams()
@@ -149,6 +155,8 @@ export function TokenUsagePage() {
       if (dateTo) params.set('end_date', dateTo)
       if (providerFilter.trim()) params.set('ai_provider', providerFilter.trim())
       const data = await api.get<TokenUsageBreakdownResponse>(`/api/admin/token-usage?${params.toString()}`)
+      // Discard stale responses from earlier requests
+      if (requestId !== latestRequestIdRef.current) return
       setBreakdown(
         data.breakdown.map((row) => ({
           group: row.group_key,
@@ -156,15 +164,19 @@ export function TokenUsagePage() {
           input_tokens: row.input_tokens,
           output_tokens: row.output_tokens,
           cache_read_tokens: row.cache_read_tokens,
+          cache_write_tokens: row.cache_write_tokens,
           cost_usd: row.cost_usd,
           avg_duration_ms: row.avg_duration_ms,
         }))
       )
       setBreakdownError(null)
     } catch (err) {
+      if (requestId !== latestRequestIdRef.current) return
       setBreakdownError(err instanceof Error ? err.message : 'Failed to load breakdown')
     } finally {
-      setBreakdownLoading(false)
+      if (requestId === latestRequestIdRef.current) {
+        setBreakdownLoading(false)
+      }
     }
   }, [groupBy, dateFrom, dateTo, providerFilter])
 
@@ -181,6 +193,7 @@ export function TokenUsagePage() {
         case 'input_tokens': cmp = a.input_tokens - b.input_tokens; break
         case 'output_tokens': cmp = a.output_tokens - b.output_tokens; break
         case 'cache_read_tokens': cmp = a.cache_read_tokens - b.cache_read_tokens; break
+        case 'cache_write_tokens': cmp = a.cache_write_tokens - b.cache_write_tokens; break
         case 'cost_usd': cmp = a.cost_usd - b.cost_usd; break
         case 'avg_duration_ms': cmp = a.avg_duration_ms - b.avg_duration_ms; break
         default: cmp = 0
@@ -331,6 +344,7 @@ export function TokenUsagePage() {
               <SortableHeader label="Input Tokens" sortKey="input_tokens" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-right" />
               <SortableHeader label="Output Tokens" sortKey="output_tokens" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-right" />
               <SortableHeader label="Cache Read" sortKey="cache_read_tokens" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-right" />
+              <SortableHeader label="Cache Write" sortKey="cache_write_tokens" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-right" />
               <SortableHeader label="Cost" sortKey="cost_usd" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-right" />
               <SortableHeader label="Avg Duration" sortKey="avg_duration_ms" currentSort={sortKey} currentDirection={sortDir} onSort={handleSort} className="text-right" />
             </TableRow>
@@ -346,6 +360,7 @@ export function TokenUsagePage() {
                 <TableCell className="text-right font-mono text-xs text-text-secondary">{formatCompactNumber(row.input_tokens)}</TableCell>
                 <TableCell className="text-right font-mono text-xs text-text-secondary">{formatCompactNumber(row.output_tokens)}</TableCell>
                 <TableCell className="text-right font-mono text-xs text-text-secondary">{formatCompactNumber(row.cache_read_tokens)}</TableCell>
+                <TableCell className="text-right font-mono text-xs text-text-secondary">{formatCompactNumber(row.cache_write_tokens)}</TableCell>
                 <TableCell className="text-right font-mono text-xs text-signal-green">{formatCostCell(row.cost_usd)}</TableCell>
                 <TableCell className="text-right font-mono text-xs text-text-tertiary">{formatDurationMs(row.avg_duration_ms)}</TableCell>
               </TableRow>
