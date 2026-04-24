@@ -4,12 +4,12 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "ai-cli-runner"
-version = "0.1.2"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "python-simple-logger" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b3/68/ffd15f466d1647851c41806797084a93beee07de52695715e7a95e0997ca/ai_cli_runner-0.1.2.tar.gz", hash = "sha256:30e849333b1aaee44de634922ad9be6781727d24c44dfdd300a9b1df4e7507bf", size = 21945, upload-time = "2026-04-01T20:30:05.769Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dd/db/b818b38345194a66975c42e339e2e65b8cc43792b35bdcade4004f644690/ai_cli_runner-0.2.0.tar.gz", hash = "sha256:087f5596629ff0cb6a25f4663dfac7134aeb763b1b943fedb5dab87c5a10a5ef", size = 29959, upload-time = "2026-04-24T05:47:20.098Z" }
 
 [[package]]
 name = "aiohappyeyeballs"
