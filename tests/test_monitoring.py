@@ -429,9 +429,10 @@ class TestDispatchAlert:
     """Tests for dispatch_alert."""
 
     async def test_dispatch_sends_to_all_channels(self):
-        throttler = AlertThrottler(cooldown_seconds=0.0)
+        from jenkins_job_insight import monitoring
+
+        monitoring.alert_throttler.reset()
         with (
-            patch("jenkins_job_insight.monitoring.alert_throttler", throttler),
             patch(
                 "jenkins_job_insight.monitoring.send_slack_alert",
                 new_callable=AsyncMock,
@@ -448,22 +449,28 @@ class TestDispatchAlert:
         mock_email.assert_called_once()
 
     async def test_dispatch_throttled(self):
-        throttler = AlertThrottler(cooldown_seconds=9999.0)
-        with (
-            patch("jenkins_job_insight.monitoring.alert_throttler", throttler),
-            patch(
-                "jenkins_job_insight.monitoring.send_slack_alert",
-                new_callable=AsyncMock,
-            ) as mock_slack,
-            patch(
-                "jenkins_job_insight.monitoring.send_email_alert_async",
-                new_callable=AsyncMock,
-            ),
-        ):
-            await dispatch_alert("test_event", "first")
-            await dispatch_alert("test_event", "second")
-        # Only first call should go through
-        mock_slack.assert_called_once()
+        from jenkins_job_insight import monitoring
+
+        monitoring.alert_throttler.reset()
+        original_cooldown = monitoring.alert_throttler.cooldown_seconds
+        monitoring.alert_throttler.cooldown_seconds = 9999.0
+        try:
+            with (
+                patch(
+                    "jenkins_job_insight.monitoring.send_slack_alert",
+                    new_callable=AsyncMock,
+                ) as mock_slack,
+                patch(
+                    "jenkins_job_insight.monitoring.send_email_alert_async",
+                    new_callable=AsyncMock,
+                ),
+            ):
+                await dispatch_alert("test_throttle_event", "first")
+                await dispatch_alert("test_throttle_event", "second")
+            mock_slack.assert_called_once()
+        finally:
+            monitoring.alert_throttler.cooldown_seconds = original_cooldown
+            monitoring.alert_throttler.reset()
 
 
 # ---------------------------------------------------------------------------
