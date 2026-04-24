@@ -1841,6 +1841,179 @@ def admin_users_change_role(
             )
 
 
+# -- Token Usage (Admin) ------------------------------------------------------
+
+
+def _today() -> str:
+    from datetime import date
+
+    return date.today().isoformat()
+
+
+def _week_ago() -> str:
+    from datetime import date, timedelta
+
+    return (date.today() - timedelta(days=7)).isoformat()
+
+
+def _month_ago() -> str:
+    from datetime import date, timedelta
+
+    return (date.today() - timedelta(days=30)).isoformat()
+
+
+def _print_token_summary(data: dict) -> None:
+    """Print dashboard summary."""
+    for period_name in ["today", "this_week", "this_month"]:
+        period = data.get(period_name, {})
+        label = period_name.replace("_", " ").title()
+        typer.echo(f"\n{label}:")
+        typer.echo(f"  Calls: {period.get('calls', 0)}")
+        typer.echo(f"  Tokens: {period.get('tokens', 0):,}")
+        typer.echo(f"  Cost: ${period.get('cost_usd', 0):.2f}")
+
+    top_models = data.get("top_models", [])
+    if top_models:
+        typer.echo("\nTop Models (30 days):")
+        for m in top_models:
+            typer.echo(
+                f"  {m['model']}: {m['calls']} calls, ${m.get('cost_usd', 0):.2f}"
+            )
+
+
+def _print_token_usage_table(data: dict) -> None:
+    """Print aggregated token usage."""
+    typer.echo(f"Total calls: {data.get('total_calls', 0)}")
+    typer.echo(f"Input tokens: {data.get('total_input_tokens', 0):,}")
+    typer.echo(f"Output tokens: {data.get('total_output_tokens', 0):,}")
+    typer.echo(f"Cache read: {data.get('total_cache_read_tokens', 0):,}")
+    typer.echo(f"Cache write: {data.get('total_cache_write_tokens', 0):,}")
+    typer.echo(f"Cost: ${data.get('total_cost_usd', 0):.2f}")
+    typer.echo(f"Duration: {data.get('total_duration_ms', 0):,}ms")
+
+    breakdown = data.get("breakdown", [])
+    if breakdown:
+        typer.echo("\nBreakdown:")
+        for row in breakdown:
+            typer.echo(
+                f"  {row.get('group_key', 'N/A')}: "
+                f"{row.get('call_count', 0)} calls, "
+                f"${row.get('cost_usd', 0):.2f}, "
+                f"avg {row.get('avg_duration_ms', 0)}ms"
+            )
+
+
+def _print_job_token_usage(data: dict) -> None:
+    """Print per-job token usage."""
+    typer.echo(f"Job: {data.get('job_id', 'N/A')}")
+    records = data.get("records", [])
+    for rec in records:
+        typer.echo(
+            f"\n  [{rec.get('call_type', '')}] "
+            f"{rec.get('ai_provider', '')}/{rec.get('ai_model', '')}"
+        )
+        typer.echo(
+            f"    Input: {rec.get('input_tokens', 0):,}  "
+            f"Output: {rec.get('output_tokens', 0):,}"
+        )
+        cost = rec.get("cost_usd")
+        cost_str = f"${cost:.4f}" if cost is not None else "N/A"
+        typer.echo(f"    Cost: {cost_str}  Duration: {rec.get('duration_ms', 0)}ms")
+
+
+def _print_token_usage_csv(rows: list[dict]) -> None:
+    """Print token usage as CSV."""
+    import csv
+    import sys
+
+    if not rows:
+        return
+    writer = csv.DictWriter(sys.stdout, fieldnames=rows[0].keys())
+    writer.writeheader()
+    writer.writerows(rows)
+
+
+@admin_app.command("token-usage")
+def token_usage_cmd(
+    period: str | None = typer.Option(None, help="Period: today, week, month, all"),
+    start_date: str | None = typer.Option(
+        None, "--start-date", help="Start date (YYYY-MM-DD)"
+    ),
+    end_date: str | None = typer.Option(
+        None, "--end-date", help="End date (YYYY-MM-DD)"
+    ),
+    provider: str | None = typer.Option(None, help="Filter by AI provider"),
+    model: str | None = typer.Option(None, help="Filter by AI model"),
+    call_type: str | None = typer.Option(None, help="Filter by call type"),
+    group_by: str | None = typer.Option(
+        None,
+        help="Group by: provider, model, call_type, day, week, month, job",
+    ),
+    job_id: str | None = typer.Option(None, help="Get usage for specific job"),
+    output_format: str = typer.Option(
+        "table", "--format", help="Output format: table, json, csv"
+    ),
+    json_output: bool = _JSON_OPTION,
+):
+    """View AI token usage and costs. Admin only."""
+    _set_json(json_output)
+    # --json flag overrides --format
+    effective_format = "json" if _state.get("json", False) else output_format
+
+    try:
+        client = _get_client()
+
+        if job_id:
+            data = client.get_token_usage_for_job(job_id)
+            if effective_format == "json":
+                print_output(data, columns=[], as_json=True)
+            elif effective_format == "csv":
+                _print_token_usage_csv(data.get("records", []))
+            else:
+                _print_job_token_usage(data)
+            return
+
+        if period == "today":
+            start_date = start_date or _today()
+        elif period == "week":
+            start_date = start_date or _week_ago()
+        elif period == "month":
+            start_date = start_date or _month_ago()
+
+        if (
+            not start_date
+            and not end_date
+            and not provider
+            and not model
+            and not call_type
+            and not group_by
+        ):
+            # Summary mode — no filters specified
+            data = client.get_token_usage_summary()
+            if effective_format == "json":
+                print_output(data, columns=[], as_json=True)
+            else:
+                _print_token_summary(data)
+            return
+
+        data = client.get_token_usage(
+            start_date=start_date,
+            end_date=end_date,
+            ai_provider=provider,
+            ai_model=model,
+            call_type=call_type,
+            group_by=group_by,
+        )
+        if effective_format == "json":
+            print_output(data, columns=[], as_json=True)
+        elif effective_format == "csv":
+            _print_token_usage_csv(data.get("breakdown", []))
+        else:
+            _print_token_usage_table(data)
+    except JJIError as err:
+        _handle_error(err)
+
+
 # -- Metadata -----------------------------------------------------------------
 
 

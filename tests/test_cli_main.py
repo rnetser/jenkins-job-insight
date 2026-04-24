@@ -2778,6 +2778,188 @@ class TestAdminUsersChangeRole:
         assert output["role"] == "admin"
 
 
+class TestTokenUsageCommand:
+    def test_token_usage_summary_default(self, mock_client):
+        """No flags → summary mode."""
+        mock_client.get_token_usage_summary.return_value = {
+            "today": {"calls": 10, "tokens": 5000, "cost_usd": 0.05},
+            "this_week": {"calls": 50, "tokens": 25000, "cost_usd": 0.25},
+            "this_month": {"calls": 200, "tokens": 100000, "cost_usd": 1.00},
+            "top_models": [
+                {"model": "claude-sonnet", "calls": 100, "cost_usd": 0.50},
+            ],
+        }
+        result = runner.invoke(app, ["admin", "token-usage"])
+        assert result.exit_code == 0
+        assert "Today" in result.output
+        assert "This Week" in result.output
+        assert "This Month" in result.output
+        assert "claude-sonnet" in result.output
+        mock_client.get_token_usage_summary.assert_called_once()
+
+    def test_token_usage_summary_json(self, mock_client):
+        mock_client.get_token_usage_summary.return_value = {
+            "today": {"calls": 10},
+        }
+        result = runner.invoke(app, ["--json", "admin", "token-usage"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["today"]["calls"] == 10
+
+    def test_token_usage_with_group_by(self, mock_client):
+        """--group-by triggers filtered mode, not summary."""
+        mock_client.get_token_usage.return_value = {
+            "total_calls": 5,
+            "total_input_tokens": 1000,
+            "total_output_tokens": 500,
+            "total_cache_read_tokens": 200,
+            "total_cache_write_tokens": 100,
+            "total_cost_usd": 0.10,
+            "total_duration_ms": 5000,
+            "breakdown": [
+                {
+                    "group_key": "claude",
+                    "call_count": 3,
+                    "cost_usd": 0.06,
+                    "avg_duration_ms": 800,
+                },
+                {
+                    "group_key": "gemini",
+                    "call_count": 2,
+                    "cost_usd": 0.04,
+                    "avg_duration_ms": 600,
+                },
+            ],
+        }
+        result = runner.invoke(app, ["admin", "token-usage", "--group-by", "provider"])
+        assert result.exit_code == 0
+        assert "Total calls: 5" in result.output
+        assert "claude" in result.output
+        assert "gemini" in result.output
+        mock_client.get_token_usage.assert_called_once_with(
+            start_date=None,
+            end_date=None,
+            ai_provider=None,
+            ai_model=None,
+            call_type=None,
+            group_by="provider",
+        )
+
+    def test_token_usage_period_today(self, mock_client):
+        """--period today sets start_date and uses filtered mode."""
+        mock_client.get_token_usage.return_value = {
+            "total_calls": 2,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cache_read_tokens": 0,
+            "total_cache_write_tokens": 0,
+            "total_cost_usd": 0.0,
+            "total_duration_ms": 0,
+            "breakdown": [],
+        }
+        result = runner.invoke(app, ["admin", "token-usage", "--period", "today"])
+        assert result.exit_code == 0
+        # Should have called get_token_usage (not summary) because period sets start_date
+        mock_client.get_token_usage.assert_called_once()
+        call_kwargs = mock_client.get_token_usage.call_args[1]
+        assert call_kwargs["start_date"] is not None
+
+    def test_token_usage_job_id(self, mock_client):
+        """--job-id fetches per-job usage."""
+        mock_client.get_token_usage_for_job.return_value = {
+            "job_id": "abc-123",
+            "records": [
+                {
+                    "call_type": "analysis",
+                    "ai_provider": "claude",
+                    "ai_model": "sonnet",
+                    "input_tokens": 1000,
+                    "output_tokens": 500,
+                    "cost_usd": 0.01,
+                    "duration_ms": 1200,
+                },
+            ],
+        }
+        result = runner.invoke(app, ["admin", "token-usage", "--job-id", "abc-123"])
+        assert result.exit_code == 0
+        assert "Job: abc-123" in result.output
+        assert "analysis" in result.output
+        assert "claude" in result.output
+        mock_client.get_token_usage_for_job.assert_called_once_with("abc-123")
+
+    def test_token_usage_job_id_json(self, mock_client):
+        mock_client.get_token_usage_for_job.return_value = {
+            "job_id": "abc-123",
+            "records": [],
+        }
+        result = runner.invoke(
+            app, ["--json", "admin", "token-usage", "--job-id", "abc-123"]
+        )
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["job_id"] == "abc-123"
+
+    def test_token_usage_csv_format(self, mock_client):
+        mock_client.get_token_usage.return_value = {
+            "total_calls": 1,
+            "breakdown": [
+                {"group_key": "claude", "call_count": 1, "cost_usd": 0.01},
+            ],
+        }
+        result = runner.invoke(
+            app,
+            ["admin", "token-usage", "--group-by", "provider", "--format", "csv"],
+        )
+        assert result.exit_code == 0
+        assert "group_key" in result.output  # CSV header
+        assert "claude" in result.output
+
+    def test_token_usage_error_403(self, mock_client):
+        mock_client.get_token_usage_summary.side_effect = JJIError(
+            status_code=403, detail="Admin access required"
+        )
+        result = runner.invoke(app, ["admin", "token-usage"])
+        assert result.exit_code == 1
+
+    def test_token_usage_with_provider_filter(self, mock_client):
+        """--provider triggers filtered mode."""
+        mock_client.get_token_usage.return_value = {
+            "total_calls": 3,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cache_read_tokens": 0,
+            "total_cache_write_tokens": 0,
+            "total_cost_usd": 0.0,
+            "total_duration_ms": 0,
+            "breakdown": [],
+        }
+        result = runner.invoke(app, ["admin", "token-usage", "--provider", "claude"])
+        assert result.exit_code == 0
+        mock_client.get_token_usage.assert_called_once()
+        call_kwargs = mock_client.get_token_usage.call_args[1]
+        assert call_kwargs["ai_provider"] == "claude"
+
+    def test_token_usage_job_cost_none(self, mock_client):
+        """cost_usd=None should display as N/A."""
+        mock_client.get_token_usage_for_job.return_value = {
+            "job_id": "x",
+            "records": [
+                {
+                    "call_type": "analysis",
+                    "ai_provider": "claude",
+                    "ai_model": "sonnet",
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cost_usd": None,
+                    "duration_ms": 500,
+                },
+            ],
+        }
+        result = runner.invoke(app, ["admin", "token-usage", "--job-id", "x"])
+        assert result.exit_code == 0
+        assert "N/A" in result.output
+
+
 class TestApiKeyOption:
     def test_api_key_passed_to_client(self):
         """--api-key should cause _get_client to create client with api_key."""

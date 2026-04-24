@@ -12,6 +12,7 @@ import { HistoryPage } from '@/pages/HistoryPage'
 import { ReportPage } from '@/pages/ReportPage'
 import { TestHistoryPage } from '@/pages/TestHistoryPage'
 import { UsersPage } from '@/pages/UsersPage'
+import { TokenUsagePage } from '@/pages/TokenUsagePage'
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
             <Route path="/status/:jobId" element={<ProtectedRoute><StatusPage /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
             <Route path="/admin/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
+            <Route path="/admin/token-usage" element={<ProtectedRoute adminOnly><TokenUsagePage /></ProtectedRoute>} />
           </Route>
         </Routes>
       </BrowserRouter>

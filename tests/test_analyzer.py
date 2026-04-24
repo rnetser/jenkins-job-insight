@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import jenkins
 import pytest
+from ai_cli_runner import AIResult
 from fastapi import HTTPException
 
 from jenkins_job_insight.analyzer import (
@@ -118,12 +119,10 @@ class TestCallAiCliWithRetry:
         with patch(
             "jenkins_job_insight.analyzer.call_ai_cli", new_callable=AsyncMock
         ) as mock:
-            mock.return_value = (True, "result")
-            success, output = await _call_ai_cli_with_retry(
-                "prompt", ai_provider="test"
-            )
-            assert success is True
-            assert output == "result"
+            mock.return_value = AIResult(success=True, text="result")
+            result = await _call_ai_cli_with_retry("prompt", ai_provider="test")
+            assert result.success is True
+            assert result.text == "result"
             assert mock.call_count == 1
 
     @pytest.mark.asyncio
@@ -136,14 +135,17 @@ class TestCallAiCliWithRetry:
             patch("jenkins_job_insight.analyzer.asyncio.sleep", new_callable=AsyncMock),
         ):
             mock.side_effect = [
-                (False, "ENOENT: no such file or directory, rename config"),
-                (True, "success after retry"),
+                AIResult(
+                    success=False,
+                    text="ENOENT: no such file or directory, rename config",
+                ),
+                AIResult(success=True, text="success after retry"),
             ]
-            success, output = await _call_ai_cli_with_retry(
+            result = await _call_ai_cli_with_retry(
                 "prompt", ai_provider="test", max_retries=1
             )
-            assert success is True
-            assert output == "success after retry"
+            assert result.success is True
+            assert result.text == "success after retry"
             assert mock.call_count == 2
 
     @pytest.mark.asyncio
@@ -152,12 +154,12 @@ class TestCallAiCliWithRetry:
         with patch(
             "jenkins_job_insight.analyzer.call_ai_cli", new_callable=AsyncMock
         ) as mock:
-            mock.return_value = (False, "some other error")
-            success, output = await _call_ai_cli_with_retry(
+            mock.return_value = AIResult(success=False, text="some other error")
+            result = await _call_ai_cli_with_retry(
                 "prompt", ai_provider="test", max_retries=3
             )
-            assert success is False
-            assert "some other error" in output
+            assert result.success is False
+            assert "some other error" in result.text
             assert mock.call_count == 1
 
     @pytest.mark.asyncio
@@ -169,11 +171,13 @@ class TestCallAiCliWithRetry:
             ) as mock,
             patch("jenkins_job_insight.analyzer.asyncio.sleep", new_callable=AsyncMock),
         ):
-            mock.return_value = (False, "ENOENT: no such file or directory")
-            success, _ = await _call_ai_cli_with_retry(
+            mock.return_value = AIResult(
+                success=False, text="ENOENT: no such file or directory"
+            )
+            result = await _call_ai_cli_with_retry(
                 "prompt", ai_provider="test", max_retries=2
             )
-            assert success is False
+            assert result.success is False
             assert mock.call_count == 3  # initial + 2 retries
 
 
@@ -196,7 +200,7 @@ class TestRunSingleAiAnalysis:
                 "details": "broken assertion",
             }
         )
-        mock_cli = AsyncMock(return_value=(True, ai_response))
+        mock_cli = AsyncMock(return_value=AIResult(success=True, text=ai_response))
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry", mock_cli
         )
@@ -228,7 +232,7 @@ class TestRunSingleAiAnalysis:
         from jenkins_job_insight.analyzer import _run_single_ai_analysis
         from jenkins_job_insight.models import TestFailure
 
-        mock_cli = AsyncMock(return_value=(False, "CLI timeout"))
+        mock_cli = AsyncMock(return_value=AIResult(success=False, text="CLI timeout"))
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry", mock_cli
         )
@@ -286,7 +290,7 @@ class TestRunSingleAiAnalysis:
                 "suggested_changes": "",
             }
         )
-        mock_cli = AsyncMock(return_value=(True, peer_response))
+        mock_cli = AsyncMock(return_value=AIResult(success=True, text=peer_response))
         monkeypatch.setattr(
             "jenkins_job_insight.peer_analysis._call_ai_cli_with_retry", mock_cli
         )
@@ -420,9 +424,9 @@ class TestAnalyzeFailureGroupPeerDelegation:
         from jenkins_job_insight.analyzer import TestFailure, analyze_failure_group
 
         mock_cli = AsyncMock(
-            return_value=(
-                True,
-                '{"classification":"CODE ISSUE","affected_tests":["t"],"details":"d"}',
+            return_value=AIResult(
+                success=True,
+                text='{"classification":"CODE ISSUE","affected_tests":["t"],"details":"d"}',
             )
         )
         monkeypatch.setattr(
@@ -599,7 +603,10 @@ class TestConsoleOnlyPeerWarning:
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
 
@@ -643,7 +650,10 @@ class TestConsoleOnlyPeerWarning:
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
 
@@ -702,12 +712,15 @@ class TestConsoleOnlyPeerWarning:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
         monkeypatch.setattr(
@@ -784,7 +797,7 @@ class TestAnalyzeJobProgressPhases:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
 
         # Mock child job analysis
@@ -885,7 +898,7 @@ class TestAnalyzeJobProgressPhases:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
 
         mock_failure = FailureAnalysis(
@@ -1040,7 +1053,7 @@ class TestAnalyzeJobProgressPhases:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
 
         mock_failure = FailureAnalysis(
@@ -1175,12 +1188,15 @@ class TestForceAnalysisSuccessfulBuild:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
 
@@ -1242,12 +1258,15 @@ class TestForceAnalysisSuccessfulBuild:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
 
@@ -1756,12 +1775,15 @@ class TestAnalyzeJobWorkspacePattern:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
         monkeypatch.setattr(
@@ -1855,12 +1877,15 @@ class TestAnalyzeJobWorkspacePattern:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
         monkeypatch.setattr(
@@ -1946,12 +1971,15 @@ class TestAnalyzeJobWorkspacePattern:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
         monkeypatch.setattr(
@@ -2048,12 +2076,15 @@ class TestAnalyzeJobWorkspacePattern:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
         monkeypatch.setattr(
@@ -2172,7 +2203,7 @@ class TestAnalyzeJobWorkspacePattern:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.update_progress_phase",
@@ -2402,12 +2433,15 @@ class TestWorkspaceAlwaysCreated:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
         monkeypatch.setattr(
@@ -2669,12 +2703,15 @@ class TestAnalyzeJobParsesRepoRef:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
         monkeypatch.setattr(
@@ -2766,12 +2803,15 @@ class TestAnalyzeJobParsesRepoRef:
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer.check_ai_cli_available",
-            AsyncMock(return_value=(True, "")),
+            AsyncMock(return_value=AIResult(success=True, text="")),
         )
         monkeypatch.setattr(
             "jenkins_job_insight.analyzer._call_ai_cli_with_retry",
             AsyncMock(
-                return_value=(True, '{"classification": "CODE ISSUE", "details": "d"}')
+                return_value=AIResult(
+                    success=True,
+                    text='{"classification": "CODE ISSUE", "details": "d"}',
+                )
             ),
         )
         monkeypatch.setattr(

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Coroutine, NoReturn
 
 from ai_cli_runner import (
+    AIResult,
     call_ai_cli,
     check_ai_cli_available,
     run_parallel_with_limit,
@@ -44,6 +45,7 @@ from jenkins_job_insight.repository import (
     derive_test_repo_name,
 )
 from jenkins_job_insight.storage import update_progress_phase
+from jenkins_job_insight.token_tracking import record_ai_usage
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
@@ -177,7 +179,7 @@ async def _call_ai_cli_with_retry(
     ai_cli_timeout: int | None = None,
     cli_flags: list[str] | None = None,
     max_retries: int = 3,
-) -> tuple[bool, str]:
+) -> AIResult:
     """Call AI CLI with retry on known transient errors.
 
     Wraps :func:`call_ai_cli` with a simple retry loop that re-attempts the
@@ -193,31 +195,32 @@ async def _call_ai_cli_with_retry(
         max_retries: Maximum number of retry attempts after the initial call.
 
     Returns:
-        Tuple of ``(success, output)`` from the final attempt.
+        AIResult from the final attempt.
     """
-    success, output = False, ""
+    result = AIResult(success=False, text="")
     for attempt in range(max_retries + 1):
-        success, output = await call_ai_cli(
+        result = await call_ai_cli(
             prompt,
             cwd=cwd,
             ai_provider=ai_provider,
             ai_model=ai_model,
             ai_cli_timeout=ai_cli_timeout,
             cli_flags=cli_flags,
+            output_format="json",
         )
-        if success:
-            return success, output
+        if result.success:
+            return result
         # Check if the error matches a known retryable pattern
         if attempt < max_retries and any(
-            pattern in output for pattern in RETRYABLE_AI_CLI_PATTERNS
+            pattern in result.text for pattern in RETRYABLE_AI_CLI_PATTERNS
         ):
             logger.warning(
-                f"AI CLI transient error (attempt {attempt + 1}/{max_retries + 1}), retrying: {output}"
+                f"AI CLI transient error (attempt {attempt + 1}/{max_retries + 1}), retrying: {result.text}"
             )
             await asyncio.sleep(2**attempt)  # Exponential backoff: 1s, 2s, 4s
             continue
-        return success, output
-    return success, output  # Should not reach here, but satisfy type checker
+        return result
+    return result  # Should not reach here, but satisfy type checker
 
 
 _JSON_RESPONSE_SCHEMA = """CRITICAL: Your response must be ONLY a valid JSON object. No text before or after. No markdown code blocks. No explanation.
@@ -1061,7 +1064,7 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
         f"Calling {ai_provider.upper()} CLI for failure group ({len(failures)} tests with same error)"
     )
     logger.info(f"Calling AI CLI with {_format_timeout_log(ai_cli_timeout)}")
-    success, analysis_output = await _call_ai_cli_with_retry(
+    result = await _call_ai_cli_with_retry(
         prompt,
         cwd=repo_path,
         ai_provider=ai_provider,
@@ -1070,10 +1073,19 @@ Note: Multiple tests failed with the same error. Provide ONE analysis that appli
         cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
     )
 
-    if success:
-        parsed = _parse_json_response(analysis_output)
+    await record_ai_usage(
+        job_id=job_id,
+        result=result,
+        call_type="primary",
+        prompt_chars=len(prompt),
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+    )
+
+    if result.success:
+        parsed = _parse_json_response(result.text)
     else:
-        parsed = AnalysisDetail(details=analysis_output)
+        parsed = AnalysisDetail(details=result.text)
 
     return parsed, error_signature
 
@@ -1444,7 +1456,7 @@ You have access to the repository if one was cloned. Explore to understand the f
 """
     logger.debug(f"AI prompt length: {len(prompt)} chars")
     logger.info(f"Calling AI CLI with {_format_timeout_log(ai_cli_timeout)}")
-    success, analysis_output = await _call_ai_cli_with_retry(
+    result = await _call_ai_cli_with_retry(
         prompt,
         cwd=repo_path,
         ai_provider=ai_provider,
@@ -1453,10 +1465,19 @@ You have access to the repository if one was cloned. Explore to understand the f
         cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
     )
 
-    if success:
-        parsed_analysis = _parse_json_response(analysis_output)
+    await record_ai_usage(
+        job_id=job_id,
+        result=result,
+        call_type="child_console",
+        prompt_chars=len(prompt),
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+    )
+
+    if result.success:
+        parsed_analysis = _parse_json_response(result.text)
     else:
-        parsed_analysis = AnalysisDetail(details=analysis_output)
+        parsed_analysis = AnalysisDetail(details=result.text)
 
     return ChildJobAnalysis(
         job_name=job_name,
@@ -1632,10 +1653,10 @@ async def analyze_job(
                 cloned_repos.update(additional_repos_cloned)
 
             # Pre-flight: verify AI CLI is reachable before spawning parallel tasks
-            ok, err = await check_ai_cli_available(
+            preflight_result = await check_ai_cli_available(
                 ai_provider, ai_model, cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, [])
             )
-            if not ok:
+            if not preflight_result.success:
                 logger.error(
                     "AI CLI sanity check failed for job %s (%s/%s)",
                     job_id,
@@ -1648,7 +1669,7 @@ async def analyze_job(
                     build_number=request.build_number,
                     jenkins_url=HttpUrl(jenkins_build_url),
                     status="failed",
-                    summary=err,
+                    summary=preflight_result.text,
                     ai_provider=ai_provider,
                     ai_model=ai_model,
                     failures=[],
@@ -1833,7 +1854,7 @@ You have access to the repository if one was cloned. Explore to understand the f
                 logger.info(
                     f"Calling AI CLI with {_format_timeout_log(settings.ai_cli_timeout)}"
                 )
-                success, analysis_output = await _call_ai_cli_with_retry(
+                result = await _call_ai_cli_with_retry(
                     prompt,
                     cwd=repo_path,
                     ai_provider=ai_provider,
@@ -1842,14 +1863,23 @@ You have access to the repository if one was cloned. Explore to understand the f
                     cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
                 )
 
-                if not success:
+                await record_ai_usage(
+                    job_id=job_id,
+                    result=result,
+                    call_type="main_console",
+                    prompt_chars=len(prompt),
+                    ai_provider=ai_provider,
+                    ai_model=ai_model,
+                )
+
+                if not result.success:
                     return AnalysisResult(
                         job_id=job_id,
                         job_name=request.job_name,
                         build_number=request.build_number,
                         jenkins_url=HttpUrl(jenkins_build_url),
                         status="failed",
-                        summary=analysis_output,
+                        summary=result.text,
                         ai_provider=ai_provider,
                         ai_model=ai_model,
                         failures=[],
@@ -1860,7 +1890,7 @@ You have access to the repository if one was cloned. Explore to understand the f
                     FailureAnalysis(
                         test_name=f"{job_name}#{build_number}",
                         error="Console-only analysis",
-                        analysis=_parse_json_response(analysis_output),
+                        analysis=_parse_json_response(result.text),
                     )
                 ]
 

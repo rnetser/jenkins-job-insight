@@ -6,6 +6,7 @@ import json
 import os
 import re
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections.abc import Callable
@@ -382,6 +383,36 @@ async def init_db() -> None:
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_jm_tier ON job_metadata (tier)"
+        )
+
+        # AI token usage tracking table
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ai_token_usage (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ai_provider TEXT NOT NULL DEFAULT '',
+                ai_model TEXT NOT NULL DEFAULT '',
+                call_type TEXT NOT NULL DEFAULT '',
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens INTEGER NOT NULL DEFAULT 0,
+                cost_usd REAL,
+                duration_ms INTEGER,
+                prompt_chars INTEGER NOT NULL DEFAULT 0,
+                response_chars INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_token_usage_job_id ON ai_token_usage (job_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON ai_token_usage (created_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_token_usage_provider ON ai_token_usage (ai_provider)"
         )
 
         await db.commit()
@@ -2894,3 +2925,190 @@ async def bulk_set_metadata(items: list[dict]) -> dict:
             await _upsert_job_metadata_row(db, item)
         await db.commit()
     return {"updated": len(items)}
+
+
+async def record_token_usage(
+    job_id: str,
+    ai_provider: str,
+    ai_model: str,
+    call_type: str,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cost_usd: float | None = None,
+    duration_ms: int | None = None,
+    prompt_chars: int = 0,
+    response_chars: int = 0,
+) -> str:
+    """Record a single AI CLI call's token usage. Returns the record ID."""
+    record_id = str(uuid.uuid4())
+    total_tokens = input_tokens + output_tokens
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO ai_token_usage "
+            "(id, job_id, ai_provider, ai_model, call_type, input_tokens, output_tokens, "
+            "cache_read_tokens, cache_write_tokens, total_tokens, cost_usd, duration_ms, "
+            "prompt_chars, response_chars) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                record_id,
+                job_id,
+                ai_provider,
+                ai_model,
+                call_type,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                total_tokens,
+                cost_usd,
+                duration_ms,
+                prompt_chars,
+                response_chars,
+            ),
+        )
+        await db.commit()
+    return record_id
+
+
+async def get_token_usage_for_job(job_id: str) -> list[dict]:
+    """Get all token usage records for a specific job."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM ai_token_usage WHERE job_id = ? ORDER BY created_at ASC",
+            (job_id,),
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+
+
+async def get_token_usage_summary(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    ai_provider: str | None = None,
+    ai_model: str | None = None,
+    call_type: str | None = None,
+    group_by: str | None = None,
+) -> dict:
+    """Get aggregated token usage with optional filters and grouping.
+
+    group_by can be: provider, model, call_type, day, week, month, job
+    """
+    conditions: list[str] = []
+    params: list = []
+
+    if start_date:
+        conditions.append("created_at >= ?")
+        params.append(start_date)
+    if end_date:
+        conditions.append("created_at <= ?")
+        params.append(end_date)
+    if ai_provider:
+        conditions.append("ai_provider = ?")
+        params.append(ai_provider)
+    if ai_model:
+        conditions.append("ai_model = ?")
+        params.append(ai_model)
+    if call_type:
+        conditions.append("call_type = ?")
+        params.append(call_type)
+
+    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Totals
+        totals_query = (
+            "SELECT "
+            "COALESCE(SUM(input_tokens), 0) as total_input_tokens, "
+            "COALESCE(SUM(output_tokens), 0) as total_output_tokens, "
+            "COALESCE(SUM(cache_read_tokens), 0) as total_cache_read_tokens, "
+            "COALESCE(SUM(cache_write_tokens), 0) as total_cache_write_tokens, "
+            "COALESCE(SUM(cost_usd), 0) as total_cost_usd, "
+            "COUNT(*) as total_calls, "
+            "COALESCE(SUM(duration_ms), 0) as total_duration_ms "
+            f"FROM ai_token_usage{where_clause}"
+        )
+        cursor = await db.execute(totals_query, params)
+        totals = dict(await cursor.fetchone())
+
+        # Breakdown by group
+        breakdown: list[dict] = []
+        if group_by:
+            group_column = {
+                "provider": "ai_provider",
+                "model": "ai_provider || ' / ' || ai_model",
+                "call_type": "call_type",
+                "day": "date(created_at)",
+                "week": "strftime('%Y-W%W', created_at)",
+                "month": "strftime('%Y-%m', created_at)",
+                "job": "job_id",
+            }.get(group_by)
+
+            if group_column:
+                breakdown_query = (
+                    f"SELECT {group_column} as group_key, "
+                    "COALESCE(SUM(input_tokens), 0) as input_tokens, "
+                    "COALESCE(SUM(output_tokens), 0) as output_tokens, "
+                    "COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens, "
+                    "COALESCE(SUM(cache_write_tokens), 0) as cache_write_tokens, "
+                    "COALESCE(SUM(cost_usd), 0) as cost_usd, "
+                    "COUNT(*) as call_count, "
+                    "CASE WHEN COUNT(*) > 0 THEN COALESCE(SUM(duration_ms), 0) / COUNT(*) ELSE 0 END as avg_duration_ms "
+                    f"FROM ai_token_usage{where_clause} "
+                    f"GROUP BY {group_column} "
+                    "ORDER BY COALESCE(SUM(cost_usd), 0) DESC"
+                )
+                cursor = await db.execute(breakdown_query, params)
+                breakdown = [dict(row) for row in await cursor.fetchall()]
+
+        return {
+            **totals,
+            "breakdown": breakdown,
+        }
+
+
+async def get_token_usage_dashboard_summary() -> dict:
+    """Get high-level summary for dashboard cards (today, this week, this month, top models, top jobs)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        periods = {
+            "today": "date(created_at) = date('now')",
+            "this_week": "created_at >= datetime('now', '-7 days')",
+            "this_month": "created_at >= datetime('now', '-30 days')",
+        }
+
+        result: dict = {}
+        for period_name, condition in periods.items():
+            cursor = await db.execute(
+                f"SELECT COUNT(*) as calls, "
+                f"COALESCE(SUM(total_tokens), 0) as tokens, "
+                f"COALESCE(SUM(cost_usd), 0) as cost_usd "
+                f"FROM ai_token_usage WHERE {condition}"
+            )
+            result[period_name] = dict(await cursor.fetchone())
+
+        # Top models by cost
+        cursor = await db.execute(
+            "SELECT ai_model as model, COUNT(*) as calls, "
+            "COALESCE(SUM(cost_usd), 0) as cost_usd "
+            "FROM ai_token_usage "
+            "WHERE created_at >= datetime('now', '-30 days') "
+            "GROUP BY ai_model ORDER BY cost_usd DESC LIMIT 5"
+        )
+        result["top_models"] = [dict(row) for row in await cursor.fetchall()]
+
+        # Top jobs by cost
+        cursor = await db.execute(
+            "SELECT job_id, COUNT(*) as calls, "
+            "COALESCE(SUM(cost_usd), 0) as cost_usd "
+            "FROM ai_token_usage "
+            "WHERE created_at >= datetime('now', '-30 days') "
+            "GROUP BY job_id ORDER BY cost_usd DESC LIMIT 5"
+        )
+        result["top_jobs"] = [dict(row) for row in await cursor.fetchall()]
+
+        return result
