@@ -2630,7 +2630,8 @@ async def renew_session(token: str) -> bool:
     expires_str = new_expires.strftime("%Y-%m-%d %H:%M:%S")
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "UPDATE sessions SET expires_at = ? WHERE token = ?",
+            "UPDATE sessions SET expires_at = ? "
+            "WHERE token = ? AND expires_at > datetime('now')",
             (expires_str, token_hash),
         )
         await db.commit()
