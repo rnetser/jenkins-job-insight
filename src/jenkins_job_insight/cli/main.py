@@ -1845,9 +1845,16 @@ def admin_users_change_role(
 
 
 def _date_offset(days: int = 0) -> str:
-    from datetime import date, timedelta
+    from datetime import datetime, timedelta, timezone
 
-    return (date.today() - timedelta(days=days)).isoformat()
+    return (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+
+
+def _format_cost(value: float | None, precision: int = 2) -> str:
+    """Format a USD cost value, returning 'N/A' when absent."""
+    if value is None:
+        return "N/A"
+    return f"${value:.{precision}f}"
 
 
 def _print_token_summary(data: dict) -> None:
@@ -1858,16 +1865,14 @@ def _print_token_summary(data: dict) -> None:
         typer.echo(f"\n{label}:")
         typer.echo(f"  Calls: {period.get('calls', 0)}")
         typer.echo(f"  Tokens: {period.get('tokens', 0):,}")
-        _cost = period.get("cost_usd")
-        typer.echo(f"  Cost: {f'${_cost:.2f}' if _cost is not None else 'N/A'}")
+        typer.echo(f"  Cost: {_format_cost(period.get('cost_usd'))}")
 
     top_models = data.get("top_models", [])
     if top_models:
         typer.echo("\nTop Models (30 days):")
         for m in top_models:
-            _mcost = m.get("cost_usd")
             typer.echo(
-                f"  {m.get('model', 'unknown')}: {m.get('calls', 0)} calls, {f'${_mcost:.2f}' if _mcost is not None else 'N/A'}"
+                f"  {m.get('model', 'unknown')}: {m.get('calls', 0)} calls, {_format_cost(m.get('cost_usd'))}"
             )
 
 
@@ -1878,8 +1883,7 @@ def _print_token_usage_table(data: dict) -> None:
     typer.echo(f"Output tokens: {data.get('total_output_tokens', 0):,}")
     typer.echo(f"Cache read: {data.get('total_cache_read_tokens', 0):,}")
     typer.echo(f"Cache write: {data.get('total_cache_write_tokens', 0):,}")
-    _tcost = data.get("total_cost_usd")
-    typer.echo(f"Cost: {f'${_tcost:.2f}' if _tcost is not None else 'N/A'}")
+    typer.echo(f"Cost: {_format_cost(data.get('total_cost_usd'))}")
     typer.echo(f"Duration: {data.get('total_duration_ms', 0):,}ms")
 
     breakdown = data.get("breakdown", [])
@@ -1889,7 +1893,7 @@ def _print_token_usage_table(data: dict) -> None:
             typer.echo(
                 f"  {row.get('group_key', 'N/A')}: "
                 f"{row.get('call_count', 0)} calls, "
-                f"{f'${row["cost_usd"]:.2f}' if row.get('cost_usd') is not None else 'N/A'}, "
+                f"{_format_cost(row.get('cost_usd'))}, "
                 f"avg {row.get('avg_duration_ms', 0)}ms"
             )
 
@@ -1907,9 +1911,9 @@ def _print_job_token_usage(data: dict) -> None:
             f"    Input: {rec.get('input_tokens', 0):,}  "
             f"Output: {rec.get('output_tokens', 0):,}"
         )
-        cost = rec.get("cost_usd")
-        cost_str = f"${cost:.4f}" if cost is not None else "N/A"
-        typer.echo(f"    Cost: {cost_str}  Duration: {rec.get('duration_ms', 0)}ms")
+        typer.echo(
+            f"    Cost: {_format_cost(rec.get('cost_usd'), precision=4)}  Duration: {rec.get('duration_ms', 0)}ms"
+        )
 
 
 def _print_token_usage_csv(rows: list[dict]) -> None:

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { formatCompactNumber } from '@/pages/report/TokenUsageBadge'
 import { Input } from '@/components/ui/input'
@@ -94,7 +94,7 @@ function SummaryCard({ title, icon, calls, tokens, cost }: {
           <div className="flex items-center justify-between">
             <span className="text-xs text-text-tertiary">Cost</span>
             <span className="font-mono text-sm font-medium text-signal-green">
-              {cost > 0 ? formatCost(cost) : '—'}
+              {formatCostCell(cost)}
             </span>
           </div>
         </div>
@@ -131,7 +131,8 @@ export function TokenUsagePage() {
   const [groupBy, setGroupBy] = useState<GroupByValue>('model')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
-  const [providerFilter, setProviderFilter] = useState('')
+  const [providerInput, setProviderInput] = useState('')
+  const debouncedProvider = useDeferredValue(providerInput)
 
   const { sortKey, sortDir, handleSort } = useTableSort('token-usage', 'cost_usd', 'desc', ['cost_usd', 'calls', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'avg_duration_ms'])
 
@@ -159,7 +160,7 @@ export function TokenUsagePage() {
       params.set('group_by', groupBy)
       if (dateFrom) params.set('start_date', dateFrom)
       if (dateTo) params.set('end_date', dateTo)
-      if (providerFilter.trim()) params.set('ai_provider', providerFilter.trim())
+      if (debouncedProvider.trim()) params.set('ai_provider', debouncedProvider.trim())
       const data = await api.get<TokenUsageBreakdownResponse>(`/api/admin/token-usage?${params.toString()}`)
       // Discard stale responses from earlier requests
       if (requestId !== latestRequestIdRef.current) return
@@ -184,7 +185,7 @@ export function TokenUsagePage() {
         setBreakdownLoading(false)
       }
     }
-  }, [groupBy, dateFrom, dateTo, providerFilter])
+  }, [groupBy, dateFrom, dateTo, debouncedProvider])
 
   useEffect(() => { fetchBreakdown() }, [fetchBreakdown])
 
@@ -322,8 +323,8 @@ export function TokenUsagePage() {
         </div>
         <DateRangeFilter from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} onClear={clearDates} />
         <Input
-          value={providerFilter}
-          onChange={(e) => setProviderFilter(e.target.value)}
+          value={providerInput}
+          onChange={(e) => setProviderInput(e.target.value)}
           placeholder="Filter by provider..."
           className="h-9 w-full sm:w-44 text-xs"
           aria-label="Filter by provider"
