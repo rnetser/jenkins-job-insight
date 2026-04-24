@@ -455,6 +455,10 @@ class TestDispatchAlert:
                 "jenkins_job_insight.monitoring.send_slack_alert",
                 new_callable=AsyncMock,
             ) as mock_slack,
+            patch(
+                "jenkins_job_insight.monitoring.send_email_alert_async",
+                new_callable=AsyncMock,
+            ),
         ):
             await dispatch_alert("test_event", "first")
             await dispatch_alert("test_event", "second")
