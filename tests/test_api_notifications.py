@@ -16,6 +16,8 @@ def _init_db(temp_db_path):
     """Initialize database with test path."""
     with patch.object(storage, "DB_PATH", temp_db_path):
         asyncio.run(storage.init_db())
+        asyncio.run(storage.track_user("alice"))
+        asyncio.run(storage.track_user("bob"))
         yield
 
 
@@ -98,6 +100,21 @@ class TestSubscribeNotifications:
         )
         assert resp.status_code == 401
         assert "username" in resp.json()["detail"].lower()
+
+    def test_subscribe_400_unregistered_username(self, client_with_push):
+        # Patch track_user so the middleware doesn't auto-register the user
+        with patch.object(storage, "track_user", new_callable=AsyncMock):
+            resp = client_with_push.post(
+                "/api/notifications/subscribe",
+                json={
+                    "endpoint": "https://push.example.com/sub/test-1",
+                    "p256dh_key": "p256dh-test",  # pragma: allowlist secret  # gitleaks:allow
+                    "auth_key": "auth-test",  # pragma: allowlist secret  # gitleaks:allow
+                },
+                cookies={"jji_username": "unknown_user"},
+            )
+        assert resp.status_code == 400
+        assert "not registered" in resp.json()["detail"].lower()
 
     def test_subscribe_404_when_push_not_configured(self, client_no_push):
         resp = client_no_push.post(

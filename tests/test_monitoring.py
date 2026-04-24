@@ -469,6 +469,7 @@ class TestDispatchAlert:
             monitoring.alert_throttler.cooldown_seconds = original_cooldown
             monitoring.send_slack_alert = original_slack
             monitoring.send_email_alert_async = original_email
+            monitoring.alert_throttler.reset()
 
 
 # ---------------------------------------------------------------------------

@@ -4405,6 +4405,9 @@ async def subscribe_notifications(body: PushSubscriptionRequest, request: Reques
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
     _check_allow_list(request)
+    user = await storage.get_user_by_username(username)
+    if not user:
+        raise HTTPException(status_code=400, detail="Username not registered")
     await storage.save_push_subscription(
         username=username,
         endpoint=body.endpoint,
