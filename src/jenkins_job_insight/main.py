@@ -666,8 +666,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         if remaining < timedelta(hours=storage.SESSION_TTL_HOURS / 2):
                             # Await renewal so cookie refresh is only set after confirmed DB update
                             try:
-                                await storage.renew_session(session_token)
-                                request.state.renew_session_token = session_token
+                                renewed = await storage.renew_session(session_token)
+                                if renewed:
+                                    request.state.renew_session_token = session_token
                             except Exception:
                                 pass  # Renewal failed — don't refresh cookie
                     except (ValueError, TypeError):

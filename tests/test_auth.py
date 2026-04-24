@@ -649,7 +649,8 @@ class TestSessionRenewalStorage:
                 original_expires = row[0]
 
             # Renew — this uses SESSION_TTL_HOURS (8h) from now
-            await storage.renew_session(token)
+            result = await storage.renew_session(token)
+            assert result is True
 
             # Read new expiry
             async with aiosqlite.connect(temp_db_path) as db:
@@ -662,6 +663,16 @@ class TestSessionRenewalStorage:
 
             # The renewed expiry should be later than the original (1h vs 8h)
             assert renewed_expires > original_expires
+
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            asyncio.run(run())
+
+    def test_renew_session_returns_false_for_nonexistent(self, _init_db, temp_db_path):
+        """renew_session() should return False when token doesn't exist."""
+
+        async def run():
+            result = await storage.renew_session("nonexistent-token-abc123")
+            assert result is False
 
         with patch.object(storage, "DB_PATH", temp_db_path):
             asyncio.run(run())

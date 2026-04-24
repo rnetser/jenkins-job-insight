@@ -2618,20 +2618,23 @@ async def get_session(token: str) -> dict | None:
         return dict(row) if row else None
 
 
-async def renew_session(token: str) -> None:
+async def renew_session(token: str) -> bool:
     """Extend a session's expiry by SESSION_TTL_HOURS (sliding window).
 
     Called on each authenticated request to keep active sessions alive.
+
+    Returns True if the session was found and renewed, False otherwise.
     """
     token_hash = _hash_session_token(token)
     new_expires = datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
     expires_str = new_expires.strftime("%Y-%m-%d %H:%M:%S")
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
+        cursor = await db.execute(
             "UPDATE sessions SET expires_at = ? WHERE token = ?",
             (expires_str, token_hash),
         )
         await db.commit()
+        return cursor.rowcount > 0
 
 
 async def delete_session(token: str) -> None:
