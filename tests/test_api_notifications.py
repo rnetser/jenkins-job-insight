@@ -24,12 +24,15 @@ def _init_db(temp_db_path):
 def _make_client(temp_db_path, vapid_env: dict | None = None):
     """Create a test client with optional VAPID config."""
     env = {
+        "AI_PROVIDER": "claude",
+        "AI_MODEL": "test",
         "SECURE_COOKIES": "false",
         "DB_PATH": str(temp_db_path),
+        "ALLOWED_USERS": "",
     }
     if vapid_env:
         env.update(vapid_env)
-    with patch.dict(os.environ, env, clear=False):
+    with patch.dict(os.environ, env, clear=True):
         get_settings.cache_clear()
         with patch.object(storage, "DB_PATH", temp_db_path):
             from jenkins_job_insight.main import app
@@ -268,11 +271,14 @@ class TestCommentMentionNotification:
             patch.dict(
                 os.environ,
                 {
+                    "AI_PROVIDER": "claude",
+                    "AI_MODEL": "test",
                     "SECURE_COOKIES": "false",
                     "DB_PATH": str(temp_db_path),
+                    "ALLOWED_USERS": "",
                     **_VAPID_ENV,
                 },
-                clear=False,
+                clear=True,
             ),
             patch.object(storage, "DB_PATH", temp_db_path),
         ):
@@ -312,11 +318,14 @@ class TestCommentMentionNotification:
             patch.dict(
                 os.environ,
                 {
+                    "AI_PROVIDER": "claude",
+                    "AI_MODEL": "test",
                     "SECURE_COOKIES": "false",
                     "DB_PATH": str(temp_db_path),
+                    "ALLOWED_USERS": "",
                     **_VAPID_ENV,
                 },
-                clear=False,
+                clear=True,
             ),
             patch.object(storage, "DB_PATH", temp_db_path),
         ):

@@ -1341,8 +1341,10 @@ def ai_configs(
 
 
 # -- Users ----------------------------------------------------------------
-# NOTE: Push subscribe/unsubscribe are web-only (browser-specific push
-# subscriptions) and intentionally not exposed via CLI.
+# Note: /api/notifications/subscribe, /api/notifications/unsubscribe, and
+# /api/notifications/vapid-public-key are intentionally browser-only (Web Push
+# subscriptions require a browser service worker). No CLI equivalent needed.
+# See AGENTS.md CLI Parity exceptions.
 
 
 @app.command("mentionable-users")
