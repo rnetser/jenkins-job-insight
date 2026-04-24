@@ -1858,14 +1858,16 @@ def _print_token_summary(data: dict) -> None:
         typer.echo(f"\n{label}:")
         typer.echo(f"  Calls: {period.get('calls', 0)}")
         typer.echo(f"  Tokens: {period.get('tokens', 0):,}")
-        typer.echo(f"  Cost: ${period.get('cost_usd', 0):.2f}")
+        _cost = period.get("cost_usd")
+        typer.echo(f"  Cost: {f'${_cost:.2f}' if _cost is not None else 'N/A'}")
 
     top_models = data.get("top_models", [])
     if top_models:
         typer.echo("\nTop Models (30 days):")
         for m in top_models:
+            _mcost = m.get("cost_usd")
             typer.echo(
-                f"  {m.get('model', 'unknown')}: {m.get('calls', 0)} calls, ${m.get('cost_usd', 0):.2f}"
+                f"  {m.get('model', 'unknown')}: {m.get('calls', 0)} calls, {f'${_mcost:.2f}' if _mcost is not None else 'N/A'}"
             )
 
 
@@ -1876,7 +1878,8 @@ def _print_token_usage_table(data: dict) -> None:
     typer.echo(f"Output tokens: {data.get('total_output_tokens', 0):,}")
     typer.echo(f"Cache read: {data.get('total_cache_read_tokens', 0):,}")
     typer.echo(f"Cache write: {data.get('total_cache_write_tokens', 0):,}")
-    typer.echo(f"Cost: ${data.get('total_cost_usd', 0):.2f}")
+    _tcost = data.get("total_cost_usd")
+    typer.echo(f"Cost: {f'${_tcost:.2f}' if _tcost is not None else 'N/A'}")
     typer.echo(f"Duration: {data.get('total_duration_ms', 0):,}ms")
 
     breakdown = data.get("breakdown", [])
@@ -1886,7 +1889,7 @@ def _print_token_usage_table(data: dict) -> None:
             typer.echo(
                 f"  {row.get('group_key', 'N/A')}: "
                 f"{row.get('call_count', 0)} calls, "
-                f"${row.get('cost_usd', 0):.2f}, "
+                f"{f'${row["cost_usd"]:.2f}' if row.get('cost_usd') is not None else 'N/A'}, "
                 f"avg {row.get('avg_duration_ms', 0)}ms"
             )
 
@@ -1954,12 +1957,14 @@ def token_usage_cmd(
     valid_formats = {"table", "json", "csv"}
     if period and period not in valid_periods:
         typer.echo(
-            f"Invalid --period: {period}. Valid: {', '.join(sorted(valid_periods))}"
+            f"Invalid --period: {period}. Valid: {', '.join(sorted(valid_periods))}",
+            err=True,
         )
         raise typer.Exit(1)
     if effective_format not in valid_formats:
         typer.echo(
-            f"Invalid --format: {effective_format}. Valid: {', '.join(sorted(valid_formats))}"
+            f"Invalid --format: {effective_format}. Valid: {', '.join(sorted(valid_formats))}",
+            err=True,
         )
         raise typer.Exit(1)
 

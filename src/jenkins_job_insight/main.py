@@ -150,7 +150,7 @@ async def _attach_token_usage(job_id: str, result_data: dict) -> None:
         token_summary = await build_token_usage_summary(job_id)
         if token_summary:
             result_data["token_usage"] = token_summary.model_dump(mode="json")
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort token tracking must never fail the job
         logger.debug("Failed to attach token usage for job %s", job_id, exc_info=True)
 
 

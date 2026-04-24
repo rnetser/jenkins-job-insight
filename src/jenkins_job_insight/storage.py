@@ -3066,7 +3066,7 @@ async def get_token_usage_summary(
                     "COALESCE(SUM(cache_write_tokens), 0) as cache_write_tokens, "
                     "COALESCE(SUM(cost_usd), 0) as cost_usd, "
                     "COUNT(*) as call_count, "
-                    "CASE WHEN COUNT(*) > 0 THEN COALESCE(SUM(duration_ms), 0) / COUNT(*) ELSE 0 END as avg_duration_ms "
+                    "CASE WHEN COUNT(duration_ms) > 0 THEN COALESCE(SUM(duration_ms), 0) / COUNT(duration_ms) ELSE 0 END as avg_duration_ms "
                     f"FROM ai_token_usage{where_clause} "  # noqa: S608
                     f"GROUP BY {group_column} "
                     "ORDER BY COALESCE(SUM(cost_usd), 0) DESC"

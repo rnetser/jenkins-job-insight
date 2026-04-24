@@ -94,13 +94,19 @@ function SummaryCard({ title, icon, calls, tokens, cost }: {
           <div className="flex items-center justify-between">
             <span className="text-xs text-text-tertiary">Cost</span>
             <span className="font-mono text-sm font-medium text-signal-green">
-              {cost > 0 ? `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}` : '—'}
+              {cost > 0 ? formatCost(cost) : '—'}
             </span>
           </div>
         </div>
       </CardContent>
     </Card>
   )
+}
+
+function formatCost(value: number | null | undefined): string {
+  if (value == null || value === 0) return '$0.00'
+  if (value < 0.01) return `$${value.toFixed(4)}`
+  return `$${value.toFixed(2)}`
 }
 
 function formatDurationMs(ms: number): string {
@@ -111,7 +117,7 @@ function formatDurationMs(ms: number): string {
 
 function formatCostCell(cost: number): string {
   if (cost <= 0) return '—'
-  return `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`
+  return formatCost(cost)
 }
 
 export function TokenUsagePage() {
