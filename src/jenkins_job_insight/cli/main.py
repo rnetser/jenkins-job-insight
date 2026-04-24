@@ -1994,6 +1994,14 @@ def token_usage_cmd(
             data = client.get_token_usage_summary()
             if effective_format == "json":
                 print_output(data, columns=[], as_json=True)
+            elif effective_format == "csv":
+                # Flatten period rows for CSV output
+                rows = []
+                for period_name in ["today", "this_week", "this_month"]:
+                    period = data.get(period_name, {})
+                    if isinstance(period, dict):
+                        rows.append({"period": period_name, **period})
+                _print_token_usage_csv(rows)
             else:
                 _print_token_summary(data)
             return
@@ -2009,7 +2017,13 @@ def token_usage_cmd(
         if effective_format == "json":
             print_output(data, columns=[], as_json=True)
         elif effective_format == "csv":
-            _print_token_usage_csv(data.get("breakdown", []))
+            breakdown = data.get("breakdown", [])
+            if breakdown:
+                _print_token_usage_csv(breakdown)
+            else:
+                # No group_by — output the totals row as CSV
+                totals = {k: v for k, v in data.items() if k != "breakdown"}
+                _print_token_usage_csv([totals] if totals else [])
         else:
             _print_token_usage_table(data)
     except JJIError as err:

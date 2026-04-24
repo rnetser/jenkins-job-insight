@@ -2004,6 +2004,7 @@ async def _delete_job_rows(db: aiosqlite.Connection, job_id: str) -> bool:
     await db.execute("DELETE FROM failure_reviews WHERE job_id = ?", (job_id,))
     await db.execute("DELETE FROM failure_history WHERE job_id = ?", (job_id,))
     await db.execute("DELETE FROM test_classifications WHERE job_id = ?", (job_id,))
+    await db.execute("DELETE FROM ai_token_usage WHERE job_id = ?", (job_id,))
     cursor = await db.execute("DELETE FROM results WHERE job_id = ?", (job_id,))
     return cursor.rowcount > 0
 

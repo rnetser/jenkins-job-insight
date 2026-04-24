@@ -93,7 +93,7 @@ async def build_token_usage_summary(job_id: str) -> TokenUsageSummary | None:
                     total_cost += rec["cost_usd"]
             else:
                 total_cost = None  # If any call lacks cost, total is None
-            if rec["duration_ms"]:
+            if rec["duration_ms"] is not None:
                 total_duration += rec["duration_ms"]
 
         return TokenUsageSummary(

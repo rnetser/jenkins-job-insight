@@ -61,6 +61,7 @@ const GROUP_BY_OPTIONS = [
   { value: 'day', label: 'Day' },
   { value: 'week', label: 'Week' },
   { value: 'month', label: 'Month' },
+  { value: 'job', label: 'Job' },
 ] as const
 
 type GroupByValue = typeof GROUP_BY_OPTIONS[number]['value']
@@ -116,7 +117,8 @@ export function TokenUsagePage() {
   const [breakdown, setBreakdown] = useState<BreakdownRow[]>([])
   const [summaryLoading, setSummaryLoading] = useState(true)
   const [breakdownLoading, setBreakdownLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
+  const [breakdownError, setBreakdownError] = useState<string | null>(null)
 
   const [groupBy, setGroupBy] = useState<GroupByValue>('model')
   const [dateFrom, setDateFrom] = useState('')
@@ -131,9 +133,9 @@ export function TokenUsagePage() {
     api.get<TokenUsageDashboard>('/api/admin/token-usage/summary')
       .then((data) => {
         setSummary(data)
-        setError(null)
+        setSummaryError(null)
       })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load summary'))
+      .catch((err) => setSummaryError(err instanceof Error ? err.message : 'Failed to load summary'))
       .finally(() => setSummaryLoading(false))
   }, [])
 
@@ -158,9 +160,9 @@ export function TokenUsagePage() {
           avg_duration_ms: row.avg_duration_ms,
         }))
       )
-      setError(null)
+      setBreakdownError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load breakdown')
+      setBreakdownError(err instanceof Error ? err.message : 'Failed to load breakdown')
     } finally {
       setBreakdownLoading(false)
     }
@@ -201,9 +203,12 @@ export function TokenUsagePage() {
         <p className="mt-0.5 text-sm text-text-tertiary">AI provider token consumption and costs</p>
       </div>
 
-      {/* Error */}
-      {error && (
-        <p role="alert" className="text-center text-signal-red py-4">{error}</p>
+      {/* Errors */}
+      {summaryError && (
+        <p role="alert" className="text-center text-signal-red py-4">{summaryError}</p>
+      )}
+      {breakdownError && (
+        <p role="alert" className="text-center text-signal-red py-4">{breakdownError}</p>
       )}
 
       {/* Summary cards */}

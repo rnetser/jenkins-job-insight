@@ -144,6 +144,16 @@ def _install_job_id_filter() -> None:
 _install_job_id_filter()
 
 
+async def _attach_token_usage(job_id: str, result_data: dict) -> None:
+    """Attach token usage summary to result data. Best-effort \u2014 never raises."""
+    try:
+        token_summary = await build_token_usage_summary(job_id)
+        if token_summary:
+            result_data["token_usage"] = token_summary.model_dump(mode="json")
+    except Exception:
+        logger.debug("Failed to attach token usage for job %s", job_id, exc_info=True)
+
+
 async def _bind_job_id(job_id: str) -> None:
     """FastAPI dependency that binds job_id to the logging context."""
     job_id_var.set(job_id)
@@ -154,6 +164,10 @@ IN_PROGRESS_STATUSES = ("pending", "running", "waiting")
 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "").lower()
 AI_MODEL = os.getenv("AI_MODEL", "")
+
+_VALID_GROUP_BY = frozenset(
+    {"provider", "model", "call_type", "day", "week", "month", "job"}
+)
 
 
 def _read_app_port() -> int:
@@ -1266,9 +1280,7 @@ async def process_analysis_with_id(
         await _preserve_request_params(job_id, result_data)
 
         # Attach token usage summary before persisting
-        token_summary = await build_token_usage_summary(job_id)
-        if token_summary:
-            result_data["token_usage"] = token_summary.model_dump(mode="json")
+        await _attach_token_usage(job_id, result_data)
 
         # Save to storage — do NOT persist base_url / result_url as they are
         # request-derived and re-generated on every GET to avoid host-header
@@ -1304,12 +1316,7 @@ async def process_analysis_with_id(
         await _preserve_request_params(job_id, error_data)
 
         # Attach token usage even on failure — partial AI calls may have been recorded
-        try:
-            token_summary = await build_token_usage_summary(job_id)
-            if token_summary:
-                error_data["token_usage"] = token_summary.model_dump(mode="json")
-        except Exception:
-            pass
+        await _attach_token_usage(job_id, error_data)
 
         await update_status(job_id, "failed", error_data)
 
@@ -1696,9 +1703,7 @@ async def analyze_failures(
         await _preserve_request_params(job_id, result_data)
 
         # Attach token usage summary before persisting
-        token_summary = await build_token_usage_summary(job_id)
-        if token_summary:
-            result_data["token_usage"] = token_summary.model_dump(mode="json")
+        await _attach_token_usage(job_id, result_data)
 
         await update_status(job_id, "completed", result_data)
 
@@ -3988,11 +3993,10 @@ async def get_token_usage(
 ) -> dict:
     """Get aggregated token usage with optional filters and grouping. Admin only."""
     _require_admin(request)
-    _valid_group_by = {"provider", "model", "call_type", "day", "week", "month", "job"}
-    if group_by and group_by not in _valid_group_by:
+    if group_by and group_by not in _VALID_GROUP_BY:
         raise HTTPException(
             status_code=422,
-            detail=f"Invalid group_by value. Valid: {', '.join(sorted(_valid_group_by))}",
+            detail=f"Invalid group_by value. Valid: {', '.join(sorted(_VALID_GROUP_BY))}",
         )
     return await storage.get_token_usage_summary(
         start_date=start_date,
