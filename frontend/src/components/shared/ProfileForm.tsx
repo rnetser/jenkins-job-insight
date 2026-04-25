@@ -12,6 +12,7 @@ import {
 } from '@/lib/cookies'
 import {
   getPushSubscriptionState,
+  hasActivePushSubscription,
   subscribeToPush,
   unsubscribeFromPush,
 } from '@/lib/notifications'
@@ -96,17 +97,7 @@ function NotificationToggle() {
   const refreshState = useCallback(async () => {
     const state = await getPushSubscriptionState()
     setPushState(state)
-    if (state === 'granted' && 'serviceWorker' in navigator) {
-      try {
-        const reg = await navigator.serviceWorker.ready
-        const sub = await reg.pushManager.getSubscription()
-        setHasSubscription(sub !== null)
-      } catch {
-        setHasSubscription(false)
-      }
-    } else {
-      setHasSubscription(false)
-    }
+    setHasSubscription(await hasActivePushSubscription())
   }, [])
 
   useEffect(() => { refreshState() }, [refreshState])

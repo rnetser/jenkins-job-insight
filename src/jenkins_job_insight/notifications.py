@@ -34,7 +34,11 @@ async def _send_one(
             },
             data=payload_str,
             vapid_private_key=vapid_private_key,
-            vapid_claims={"sub": f"mailto:{vapid_claim_email}"},
+            vapid_claims={
+                "sub": vapid_claim_email
+                if vapid_claim_email.startswith("mailto:")
+                else f"mailto:{vapid_claim_email}"
+            },
         )
         logger.debug(
             "send_mention_notifications: sent to %s at %s",
