@@ -160,7 +160,7 @@ describe('CommentsSection – @mention highlighting', () => {
 
   it('does not highlight @domain in email addresses as a mention', () => {
     renderWithComments([makeComment({ comment: 'Contact user@domain.com for info' })])
-    const mentionSpans = document.querySelectorAll('.text-signal-blue')
+    const mentionSpans = document.querySelectorAll('.text-signal-blue.font-semibold')
     mentionSpans.forEach((el) => {
       expect(el.textContent).not.toBe('@domain')
     })

@@ -163,13 +163,7 @@ export function TokenUsagePage() {
 
   useEffect(() => {
     fetchSummary()
-  }, [fetchSummary])
-
-  // Auto-refresh summary every 30s
-  useEffect(() => {
-    const interval = setInterval(() => {
-      fetchSummary()
-    }, 30000)
+    const interval = setInterval(fetchSummary, 30000)
     return () => clearInterval(interval)
   }, [fetchSummary])
 
@@ -214,13 +208,7 @@ export function TokenUsagePage() {
 
   useEffect(() => {
     fetchBreakdown()
-  }, [fetchBreakdown])
-
-  // Auto-refresh breakdown every 30s
-  useEffect(() => {
-    const interval = setInterval(() => {
-      fetchBreakdown()
-    }, 30000)
+    const interval = setInterval(fetchBreakdown, 30000)
     return () => clearInterval(interval)
   }, [fetchBreakdown])
 

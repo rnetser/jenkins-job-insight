@@ -82,15 +82,23 @@ class TestGetOrCreateVapidKeys:
         assert keys["public_key"]
         assert keys["private_key"]
 
-    def test_handles_race_condition(self, tmp_path):
+    def test_handles_race_condition(self, tmp_path, monkeypatch):
         """When another process wins the O_EXCL race, falls back to reading their file."""
         jji_dir = tmp_path / "jji"
         jji_dir.mkdir()
-        # Pre-create the file to simulate a race
         key_file = jji_dir / ".vapid_keys.json"
         existing_keys = _generate_vapid_keys()
         key_file.write_text(json.dumps(existing_keys))
         key_file.chmod(0o600)
+
+        from pathlib import Path as _Path
+
+        real_exists = _Path.exists
+        monkeypatch.setattr(
+            _Path,
+            "exists",
+            lambda self: False if self == key_file else real_exists(self),
+        )
         with patch.dict(os.environ, {"XDG_DATA_HOME": str(tmp_path)}, clear=False):
             keys = _get_or_create_vapid_keys()
         assert keys == existing_keys

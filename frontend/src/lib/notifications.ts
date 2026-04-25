@@ -116,7 +116,12 @@ export async function hasActivePushSubscription(): Promise<boolean> {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
   if (Notification.permission !== 'granted') return false;
   try {
-    const reg = await navigator.serviceWorker.ready;
+    const reg = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('SW registration timeout')), 10_000),
+      ),
+    ]);
     const sub = await reg.pushManager.getSubscription();
     return sub !== null;
   } catch {

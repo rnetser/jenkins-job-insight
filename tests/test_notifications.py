@@ -29,6 +29,27 @@ class TestSendMentionNotifications:
             mock_get.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_self_filtered_from_mixed_list(self) -> None:
+        """Author is removed from a mixed mentioned list before subscription lookup."""
+        with (
+            patch(
+                "jenkins_job_insight.notifications.get_push_subscriptions_for_users",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as mock_get,
+            patch("jenkins_job_insight.notifications.webpush"),
+        ):
+            await send_mention_notifications(
+                mentioned_usernames=["alice", "bob"],
+                comment_author="alice",
+                job_id="job-1",
+                test_name="test_foo",
+                vapid_private_key="fake-key",  # pragma: allowlist secret
+                vapid_claim_email="admin@example.com",
+            )
+            mock_get.assert_called_once_with(["bob"])
+
+    @pytest.mark.asyncio
     async def test_empty_mentioned_list(self) -> None:
         """Empty mentioned list should return early without fetching subscriptions."""
         with patch(

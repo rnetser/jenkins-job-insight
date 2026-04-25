@@ -109,6 +109,7 @@ function NotificationToggle() {
       if (hasSubscription) {
         const ok = await unsubscribeFromPush()
         if (ok) setHasSubscription(false)
+        else setToggleError('Failed to disable notifications')
       } else {
         const result = await subscribeToPush()
         if (result.ok) {
@@ -193,7 +194,6 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
   const [githubValidation, setGithubValidation] = useState<TokenValidationResult | null>(null)
   const [jiraValidation, setJiraValidation] = useState<TokenValidationResult | null>(null)
 
-  const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
   const [usernameError, setUsernameError] = useState<string | null>(null)
   const [tokensLoaded, setTokensLoaded] = useState(false)
@@ -272,7 +272,6 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
         await onAdminLogin(trimmed, apiKey.trim())
         // Admin login succeeded — also save the username cookie
         await commitProfile(trimmed)
-        setSaved(true)
         setSaving(false)
         // Re-fetch tokens from server before navigating away (onSaved unmounts the component)
         await refreshTokensFromServer()
@@ -304,7 +303,6 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
     }
 
     await commitProfile(trimmed)
-    setSaved(true)
     setSaving(false)
     // Re-fetch tokens from server before navigating away (onSaved unmounts the component)
     await refreshTokensFromServer()
