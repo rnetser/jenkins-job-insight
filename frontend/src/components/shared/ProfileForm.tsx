@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type FormEvent, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useRef, type FormEvent, type ReactNode } from 'react'
 import { api, ApiError } from '@/lib/api'
 import {
   setUsername,
@@ -206,6 +206,13 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
   const [usernameError, setUsernameError] = useState<string | null>(null)
   const [tokensLoaded, setTokensLoaded] = useState(false)
 
+  const githubTokenRef = useRef(githubToken)
+  githubTokenRef.current = githubToken
+  const jiraEmailRef = useRef(jiraEmail)
+  jiraEmailRef.current = jiraEmail
+  const jiraTokenRef = useRef(jiraToken)
+  jiraTokenRef.current = jiraToken
+
   useEffect(() => {
     if (!initialUsername) {
       setTokensLoaded(true) // no user yet, nothing to load
@@ -214,15 +221,15 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
     async function loadTokens() {
       try {
         const tokens = await api.get<{ github_token: string; jira_email: string; jira_token: string }>('/api/user/tokens')
-        if (tokens.github_token) {
+        if (tokens.github_token && !githubTokenRef.current.trim()) {
           setGithubTokenValue(tokens.github_token)
           setGithubToken(tokens.github_token)
         }
-        if (tokens.jira_email) {
+        if (tokens.jira_email && !jiraEmailRef.current.trim()) {
           setJiraEmailValue(tokens.jira_email)
           setJiraEmail(tokens.jira_email)
         }
-        if (tokens.jira_token) {
+        if (tokens.jira_token && !jiraTokenRef.current.trim()) {
           setJiraTokenValue(tokens.jira_token)
           setJiraToken(tokens.jira_token)
         }
