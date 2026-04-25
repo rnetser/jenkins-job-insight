@@ -18,7 +18,8 @@ import {
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Eye, EyeOff, Bell, BellOff } from 'lucide-react'
+import { Eye, EyeOff, Bell, BellOff, ShieldCheck } from 'lucide-react'
+import { useAuth } from '@/lib/auth'
 
 interface ProfileFormProps {
   onSaved: () => void | Promise<void>
@@ -84,6 +85,7 @@ function NotificationToggle() {
   const [pushState, setPushState] = useState<PushState>('default')
   const [hasSubscription, setHasSubscription] = useState(false)
   const [toggling, setToggling] = useState(false)
+  const [toggleError, setToggleError] = useState<string | null>(null)
 
   const refreshState = useCallback(async () => {
     const state = await getPushSubscriptionState()
@@ -105,13 +107,18 @@ function NotificationToggle() {
 
   async function handleToggle() {
     setToggling(true)
+    setToggleError(null)
     try {
       if (hasSubscription) {
         const ok = await unsubscribeFromPush()
         if (ok) setHasSubscription(false)
       } else {
-        const ok = await subscribeToPush()
-        if (ok) setHasSubscription(true)
+        const result = await subscribeToPush()
+        if (result.ok) {
+          setHasSubscription(true)
+        } else {
+          setToggleError(result.error || 'Failed to enable notifications')
+        }
       }
       await refreshState()
     } finally {
@@ -164,12 +171,16 @@ function NotificationToggle() {
           {toggling ? 'Updating...' : hasSubscription ? 'Disable' : 'Enable'}
         </Button>
       </div>
+      {toggleError && (
+        <p className="text-xs text-signal-red">{toggleError}</p>
+      )}
       <p className="text-xs text-text-tertiary">Receive browser notifications when someone mentions you in a comment.</p>
     </div>
   )
 }
 
 export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
+  const { isAdmin } = useAuth()
   const [initialUsername] = useState(getUsername)
   const [username, setUsernameValue] = useState(initialUsername)
   const [apiKey, setApiKey] = useState('')
@@ -185,12 +196,20 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
   const [githubValidation, setGithubValidation] = useState<TokenValidationResult | null>(null)
   const [jiraValidation, setJiraValidation] = useState<TokenValidationResult | null>(null)
 
+  const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [usernameError, setUsernameError] = useState<string | null>(null)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     const trimmed = username.trim()
     if (!trimmed) return
+
+    if (trimmed.toLowerCase() === 'admin') {
+      setUsernameError("The username 'admin' is reserved")
+      return
+    }
+    setUsernameError(null)
 
     setSaving(true)
     setApiKeyError(null)
@@ -209,6 +228,7 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
         await onAdminLogin(trimmed, apiKey.trim())
         // Admin login succeeded — also save the username cookie
         await commitProfile(trimmed)
+        setSaved(true)
         setSaving(false)
         await onSaved()
         return
@@ -238,6 +258,7 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
     }
 
     await commitProfile(trimmed)
+    setSaved(true)
     setSaving(false)
     await onSaved()
   }
@@ -290,12 +311,15 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
             <Input
               id="username"
               value={username}
-              onChange={(e) => setUsernameValue(e.target.value)}
+              onChange={(e) => { setUsernameValue(e.target.value); setUsernameError(null) }}
               placeholder="e.g. jdoe"
               autoFocus
               autoComplete="username"
               className="h-10 font-mono"
             />
+            {usernameError && (
+              <p className="text-xs text-signal-red">{usernameError}</p>
+            )}
           </div>
 
           {onAdminLogin && (
@@ -322,8 +346,12 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
                 onToggleShow={() => setShowApiKey(!showApiKey)}
                 validation={null}
                 error={apiKeyError}
-                placeholder="Enter API key..."
-                helpContent={<>Admin API key provided by your server administrator.</>}
+                placeholder={isAdmin ? 'Authenticated ✓' : 'Enter API key...'}
+                helpContent={
+                  isAdmin && !apiKey.trim()
+                    ? <span className="inline-flex items-center gap-1 text-signal-green"><ShieldCheck className="h-3 w-3" />Authenticated as admin</span>
+                    : <>Admin API key provided by your server administrator.</>
+                }
               />
             </>
           )}
@@ -401,8 +429,8 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
           </Button>
           </fieldset>
 
-          {/* Push Notifications — only show when user already has a saved profile */}
-          {initialUsername && <NotificationToggle />}
+          {/* Push Notifications */}
+          <NotificationToggle />
 
         </form>
       </CardContent>

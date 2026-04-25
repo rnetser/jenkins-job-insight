@@ -76,7 +76,6 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
   const [text, setText] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const [succeededTestNames, setSucceededTestNames] = useState<Set<string>>(new Set())
   const draftActiveRef = useRef(false)
   const username = getUsername()
 
@@ -106,11 +105,6 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
     }
   }, [dispatch])
 
-  // Reset retry tracking when scope or draft content changes
-  useEffect(() => {
-    setSucceededTestNames(new Set())
-  }, [jobId, testNames.join(','), scopedChildJobName, scopedChildBuildNumber, text]) // eslint-disable-line react-hooks/exhaustive-deps -- join produces a stable string key
-
   const testComments = comments.filter((c) => isCommentInScope(c, testNames, scopedChildJobName, scopedChildBuildNumber))
 
   async function handleSubmit() {
@@ -118,60 +112,35 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
     const submittedDraft = text
     const submittedText = submittedDraft.trim()
     if (!submittedText) return
-    let pendingTestNames = testNames.filter((t) => !succeededTestNames.has(t))
-    if (pendingTestNames.length === 0) {
-      setSucceededTestNames(new Set())
-      pendingTestNames = testNames
-    }
     setSubmitting(true)
     setSubmitError(null)
     try {
-      const results = await Promise.allSettled(
-        pendingTestNames.map((testName) =>
-          api.post<{ id: number }>(`/results/${jobId}/comments`, {
-            test_name: testName,
-            comment: submittedText,
-            child_job_name: scopedChildJobName,
-            child_build_number: scopedChildBuildNumber,
-          }).then((res) => ({ testName, id: res.id }))
-        )
-      )
-      const errors: string[] = []
-      let successCount = 0
-      results.forEach((result, i) => {
-        if (result.status === 'fulfilled') {
-          successCount++
-          const { testName, id } = result.value
-          setSucceededTestNames((prev) => new Set(prev).add(testName))
-          const fresh: Comment = {
-            id,
-            job_id: jobId,
-            test_name: testName,
-            child_job_name: scopedChildJobName,
-            child_build_number: scopedChildBuildNumber,
-            comment: submittedText,
-            username,
-            created_at: new Date().toISOString(),
-          }
-          dispatch({ type: 'ADD_COMMENT', payload: fresh })
-        } else {
-          const msg = result.reason instanceof Error ? result.reason.message : 'Failed to post comment'
-          errors.push(`${pendingTestNames[i]}: ${msg}`)
-        }
+      // Post comment once using the first test name —
+      // the backend associates it with all tests via error_signature
+      const firstTestName = testNames[0]
+      const res = await api.post<{ id: number }>(`/results/${jobId}/comments`, {
+        test_name: firstTestName,
+        comment: submittedText,
+        child_job_name: scopedChildJobName,
+        child_build_number: scopedChildBuildNumber,
       })
-      // Refresh enrichments once to pick up any tracker links in new comments
-      if (successCount > 0) refreshEnrichments(jobId)
-      if (errors.length > 0) {
-        const total = pendingTestNames.length
-        setSubmitError(`Posted ${successCount}/${total}. Failed: ${errors.join('; ')}`)
+      const fresh: Comment = {
+        id: res.id,
+        job_id: jobId,
+        test_name: firstTestName,
+        child_job_name: scopedChildJobName,
+        child_build_number: scopedChildBuildNumber,
+        comment: submittedText,
+        username,
+        created_at: new Date().toISOString(),
       }
-      // Clear text only if ALL posts succeeded and the user hasn't changed it during submission
-      if (errors.length === 0) {
-        setSucceededTestNames(new Set())
-        setText((current) => (current === submittedDraft ? '' : current))
-      }
+      dispatch({ type: 'ADD_COMMENT', payload: fresh })
+      refreshEnrichments(jobId)
+      // Clear text
+      setText('')
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : 'Failed to post comment')
+      const msg = err instanceof Error ? err.message : 'Failed to post comment'
+      setSubmitError(msg)
     } finally {
       setSubmitting(false)
     }

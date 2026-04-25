@@ -642,6 +642,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             "/api/health",
             "/metrics",
             "/favicon.ico",
+            "/sw.js",
         }
     )
 
@@ -717,7 +718,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # 3. Fall back to jji_username cookie (regular users)
         if not username:
-            username = request.cookies.get("jji_username", "")
+            cookie_username = request.cookies.get("jji_username", "")
+            if cookie_username.lower() == "admin":
+                # Reserved username — only valid via session/bearer auth
+                cookie_username = ""
+            username = cookie_username
 
         request.state.username = username
         request.state.is_admin = is_admin
@@ -3852,6 +3857,22 @@ async def favicon() -> Response:
         content=FAVICON_SVG,
         media_type="image/svg+xml",
         headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@app.get("/sw.js", include_in_schema=False)
+async def service_worker() -> Response:
+    """Serve the service worker for push notifications."""
+    sw_file = _FRONTEND_DIR / "sw.js"
+    if not sw_file.is_file():
+        # Fallback to public/ during development
+        sw_file = _FRONTEND_DIR.parent / "public" / "sw.js"
+    if not sw_file.is_file():
+        raise HTTPException(status_code=404, detail="Service worker not found")
+    return Response(
+        content=sw_file.read_text(encoding="utf-8"),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
     )
 
 

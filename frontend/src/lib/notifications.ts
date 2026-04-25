@@ -9,16 +9,22 @@ export async function getVapidPublicKey(): Promise<string | null> {
   }
 }
 
-export async function subscribeToPush(): Promise<boolean> {
+export async function subscribeToPush(): Promise<{ ok: boolean; error?: string }> {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    return { ok: false, error: 'Push notifications not supported in this browser' };
+  }
+
+  const vapidKey = await getVapidPublicKey();
+  if (!vapidKey) {
+    return { ok: false, error: 'Push notifications not configured on server' };
+  }
+
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') {
+    return { ok: false, error: 'Notification permission denied' };
+  }
+
   try {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
-
-    const vapidKey = await getVapidPublicKey();
-    if (!vapidKey) return false;
-
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') return false;
-
     const registration = await Promise.race([
       navigator.serviceWorker.ready,
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('SW registration timeout')), 10_000)),
@@ -34,9 +40,11 @@ export async function subscribeToPush(): Promise<boolean> {
       p256dh_key: sub.keys?.p256dh,
       auth_key: sub.keys?.auth,
     });
-    return true;
-  } catch {
-    return false;
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    console.error('Push subscription failed:', msg);
+    return { ok: false, error: msg };
   }
 }
 
