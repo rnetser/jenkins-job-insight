@@ -360,7 +360,6 @@ class Settings(BaseSettings):
 
         pub = self.vapid_public_key.strip()
         priv = self.vapid_private_key.strip()
-        email = self.vapid_claim_email.strip()
 
         # Detect partial env config
         if bool(pub) != bool(priv):
@@ -369,7 +368,7 @@ class Settings(BaseSettings):
                 "Both must be provided, or neither (auto-generation will be used)."
             )
 
-        if pub and priv and email:
+        if pub and priv:
             object.__setattr__(self, "_vapid_config_cache", True)
             return True
 

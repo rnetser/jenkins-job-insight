@@ -68,6 +68,8 @@ function TokenField({ id, label, value, onChange, show, onToggleShow, validation
 }
 
 async function persistTokensToServer(gh: string, je: string, jt: string) {
+  // Don't overwrite server tokens with empty values
+  if (!gh && !je && !jt) return
   try {
     await api.put('/api/user/tokens', {
       github_token: gh,
@@ -75,7 +77,11 @@ async function persistTokensToServer(gh: string, je: string, jt: string) {
       jira_token: jt,
     })
   } catch (err) {
-    console.error('Failed to sync tokens to server:', err)
+    // May fail with 404 on first registration (user not yet in DB)
+    // or 401 if cookie not set yet — both are expected, not errors
+    if (!(err instanceof ApiError && (err.status === 404 || err.status === 401))) {
+      console.error('Failed to sync tokens to server:', err)
+    }
   }
 }
 
@@ -199,6 +205,47 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
   const [usernameError, setUsernameError] = useState<string | null>(null)
+  const [tokensLoaded, setTokensLoaded] = useState(false)
+
+  useEffect(() => {
+    if (!initialUsername) {
+      setTokensLoaded(true) // no user yet, nothing to load
+      return
+    }
+    async function loadTokens() {
+      try {
+        const tokens = await api.get<{ github_token: string; jira_email: string; jira_token: string }>('/api/user/tokens')
+        if (tokens.github_token) {
+          setGithubTokenValue(tokens.github_token)
+          setGithubToken(tokens.github_token)
+        }
+        if (tokens.jira_email) {
+          setJiraEmailValue(tokens.jira_email)
+          setJiraEmail(tokens.jira_email)
+        }
+        if (tokens.jira_token) {
+          setJiraTokenValue(tokens.jira_token)
+          setJiraToken(tokens.jira_token)
+        }
+      } catch {
+        // Server tokens not available — keep localStorage values
+      } finally {
+        setTokensLoaded(true)
+      }
+    }
+    loadTokens()
+  }, [])
+
+  async function refreshTokensFromServer() {
+    try {
+      const freshTokens = await api.get<{ github_token: string; jira_email: string; jira_token: string }>('/api/user/tokens')
+      if (freshTokens.github_token && !githubToken.trim()) setGithubTokenValue(freshTokens.github_token)
+      if (freshTokens.jira_email && !jiraEmail.trim()) setJiraEmailValue(freshTokens.jira_email)
+      if (freshTokens.jira_token && !jiraToken.trim()) setJiraTokenValue(freshTokens.jira_token)
+    } catch {
+      // ignore — tokens may not be available yet
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -216,10 +263,16 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
 
     async function commitProfile(trimmedUsername: string) {
       setUsername(trimmedUsername)
-      setGithubToken(githubToken.trim())
-      setJiraEmail(jiraEmail.trim())
-      setJiraToken(jiraToken.trim())
-      await persistTokensToServer(githubToken.trim(), jiraEmail.trim(), jiraToken.trim())
+      // Only persist tokens if user actually entered values
+      const gh = githubToken.trim()
+      const je = jiraEmail.trim()
+      const jt = jiraToken.trim()
+      if (gh || je || jt) {
+        setGithubToken(gh)
+        setJiraEmail(je)
+        setJiraToken(jt)
+        await persistTokensToServer(gh, je, jt)
+      }
     }
 
     // Try admin login if API key is provided
@@ -230,6 +283,8 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
         await commitProfile(trimmed)
         setSaved(true)
         setSaving(false)
+        // Re-fetch tokens from server before navigating away (onSaved unmounts the component)
+        await refreshTokensFromServer()
         await onSaved()
         return
       } catch (err) {
@@ -260,6 +315,8 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
     await commitProfile(trimmed)
     setSaved(true)
     setSaving(false)
+    // Re-fetch tokens from server before navigating away (onSaved unmounts the component)
+    await refreshTokensFromServer()
     await onSaved()
   }
 
@@ -424,13 +481,13 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
             helpContent={<>Jira Cloud: API token from{' '}<a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="text-text-link hover:underline">Atlassian account →</a>{' '}· Jira Server/DC: Personal Access Token</>}
           />
 
-          <Button type="submit" className="w-full" disabled={!username.trim() || saving || validatingGithub || validatingJira}>
+          <Button type="submit" className="w-full" disabled={!username.trim() || saving || validatingGithub || validatingJira || !tokensLoaded}>
             {saving ? 'Saving...' : 'Save'}
           </Button>
           </fieldset>
 
           {/* Push Notifications */}
-          <NotificationToggle />
+          {initialUsername && <NotificationToggle />}
 
         </form>
       </CardContent>

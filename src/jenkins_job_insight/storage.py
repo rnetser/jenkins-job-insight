@@ -3137,6 +3137,8 @@ async def get_token_usage_dashboard_summary() -> dict:
             cursor = await db.execute(
                 f"SELECT COUNT(*) as calls, "  # noqa: S608
                 f"COALESCE(SUM(total_tokens), 0) as tokens, "
+                f"COALESCE(SUM(input_tokens), 0) as input_tokens, "
+                f"COALESCE(SUM(output_tokens), 0) as output_tokens, "
                 f"COALESCE(SUM(cost_usd), 0) as cost_usd "
                 f"FROM ai_token_usage WHERE {condition}"
             )

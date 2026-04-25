@@ -485,8 +485,8 @@ class AlertThrottler:
     def should_alert(self, event_type: str) -> bool:
         now = time.monotonic()
         with self._lock:
-            last = self._last_sent.get(event_type, 0.0)
-            if now - last >= self.cooldown_seconds:
+            last = self._last_sent.get(event_type)
+            if last is None or now - last >= self.cooldown_seconds:
                 self._last_sent[event_type] = now
                 return True
         return False

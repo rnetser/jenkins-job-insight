@@ -338,10 +338,18 @@ export interface TokenUsageSummary {
   calls: TokenUsageEntry[]
 }
 
+export interface TokenUsagePeriod {
+  calls: number
+  tokens: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
 export interface TokenUsageDashboard {
-  today: { calls: number; tokens: number; cost_usd: number }
-  this_week: { calls: number; tokens: number; cost_usd: number }
-  this_month: { calls: number; tokens: number; cost_usd: number }
+  today: TokenUsagePeriod
+  this_week: TokenUsagePeriod
+  this_month: TokenUsagePeriod
   top_models: { model: string; calls: number; cost_usd: number }[]
   top_jobs: { job_id: string; calls: number; cost_usd: number }[]
 }

@@ -95,6 +95,13 @@ class TestVapidPublicKey:
         assert resp.status_code == 404
         assert "not configured" in resp.json()["detail"].lower()
 
+    def test_returns_503_when_keys_unavailable(self, client_with_push):
+        """Returns 503 when web_push_enabled is True but VAPID keys become unavailable."""
+        with patch("jenkins_job_insight.main.get_vapid_config", return_value={}):
+            resp = client_with_push.get("/api/notifications/vapid-public-key")
+            assert resp.status_code == 503
+            assert "unavailable" in resp.json()["detail"].lower()
+
 
 class TestSubscribeNotifications:
     """Tests for POST /api/notifications/subscribe."""

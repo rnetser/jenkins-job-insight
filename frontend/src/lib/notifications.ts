@@ -29,6 +29,12 @@ export async function subscribeToPush(): Promise<{ ok: boolean; error?: string }
       navigator.serviceWorker.ready,
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('SW registration timeout')), 10_000)),
     ]);
+    // Clear any stale subscription from a previous VAPID key
+    const existing = await registration.pushManager.getSubscription();
+    if (existing) {
+      await existing.unsubscribe();
+    }
+
     const subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(vapidKey),
@@ -44,6 +50,12 @@ export async function subscribeToPush(): Promise<{ ok: boolean; error?: string }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     console.error('Push subscription failed:', msg);
+    if (msg.includes('push service') || msg.includes('Registration failed')) {
+      return {
+        ok: false,
+        error: 'Push service unavailable. If using Brave, go to Settings → Privacy → enable "Use Google services for push messaging".',
+      };
+    }
     return { ok: false, error: msg };
   }
 }

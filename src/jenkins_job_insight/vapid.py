@@ -2,8 +2,9 @@
 
 VAPID keys are read from environment variables (VAPID_PUBLIC_KEY,
 VAPID_PRIVATE_KEY). When not set, a key pair is auto-generated on
-first use and persisted to $XDG_DATA_HOME/jji/.vapid_keys.json
-(defaults to ~/.local/share/jji/.vapid_keys.json).
+first use and persisted alongside the database (parent of DB_PATH).
+Falls back to $XDG_DATA_HOME/jji/ or ~/.local/share/jji/ when
+DB_PATH is not set.
 
 The claim email defaults to 'mailto:noreply@jji.local' if
 VAPID_CLAIM_EMAIL is not set.
@@ -25,7 +26,15 @@ DEFAULT_CLAIM_EMAIL = "mailto:noreply@jji.local"
 
 
 def _get_data_dir() -> Path:
-    """Return the JJI data directory (same as encryption.py)."""
+    """Return the data directory for persistent files.
+
+    Uses the parent directory of DB_PATH (same volume as the database).
+    Falls back to $XDG_DATA_HOME/jji/ or ~/.local/share/jji/.
+    """
+    db_path = os.getenv("DB_PATH", "")
+    if db_path:
+        return Path(db_path).parent
+
     return (
         Path(os.environ.get("XDG_DATA_HOME", ""))
         if os.environ.get("XDG_DATA_HOME")

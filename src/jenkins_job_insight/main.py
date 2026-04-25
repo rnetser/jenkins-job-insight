@@ -2091,7 +2091,7 @@ async def add_comment(
         mentioned = detect_mentions(body.comment)
         if mentioned:
             vapid_cfg = get_vapid_config()
-            if vapid_cfg:
+            if vapid_cfg and "private_key" in vapid_cfg and "claim_email" in vapid_cfg:
                 task = asyncio.create_task(
                     send_mention_notifications(
                         mentioned_usernames=mentioned,
@@ -4055,16 +4055,21 @@ async def save_user_tokens_endpoint(request: Request) -> JSONResponse:
         raise HTTPException(status_code=404, detail="User not found. Register first.")
     body = await _read_json_object(request)
 
-    kwargs: dict[str, str | None] = {}
-    if "github_token" in body:
-        kwargs["github_token"] = body["github_token"]
-    if "jira_email" in body:
-        kwargs["jira_email"] = body["jira_email"]
-    if "jira_token" in body:
-        kwargs["jira_token"] = body["jira_token"]
+    gh = str(body.get("github_token", "")).strip()
+    je = str(body.get("jira_email", "")).strip()
+    jt = str(body.get("jira_token", "")).strip()
 
-    if not kwargs:
+    # If all empty, skip save — don't overwrite existing tokens
+    if not gh and not je and not jt:
         return JSONResponse(content={"ok": True})
+
+    # Merge with existing: only overwrite fields that have new values
+    existing = await storage.get_user_tokens(username)
+    kwargs: dict[str, str | None] = {
+        "github_token": gh if gh else existing.get("github_token", ""),
+        "jira_email": je if je else existing.get("jira_email", ""),
+        "jira_token": jt if jt else existing.get("jira_token", ""),
+    }
 
     await storage.save_user_tokens(username, **kwargs)
     logger.debug(f"Saved tokens for user '{username}'")
@@ -4415,6 +4420,8 @@ async def get_vapid_public_key():
             status_code=404, detail="Web Push notifications not configured"
         )
     vapid_cfg = get_vapid_config()
+    if not vapid_cfg or "public_key" not in vapid_cfg:
+        raise HTTPException(status_code=503, detail="VAPID keys unavailable")
     return {"vapid_public_key": vapid_cfg["public_key"]}
 
 
