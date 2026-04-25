@@ -3182,23 +3182,27 @@ async def save_push_subscription(
     logger.debug(f"save_push_subscription: username={username}")
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("BEGIN IMMEDIATE")
-        await db.execute(
-            "INSERT INTO push_subscriptions (username, endpoint, p256dh_key, auth_key) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(endpoint) DO UPDATE SET "
-            "username = excluded.username, "
-            "p256dh_key = excluded.p256dh_key, "
-            "auth_key = excluded.auth_key, "
-            "created_at = CURRENT_TIMESTAMP",
-            (username, endpoint, p256dh_key, auth_key),
-        )
-        # Enforce per-user subscription limit: delete oldest beyond the cap
-        await db.execute(
-            "DELETE FROM push_subscriptions WHERE username = ? AND id NOT IN "
-            "(SELECT id FROM push_subscriptions WHERE username = ? ORDER BY created_at DESC, id DESC LIMIT ?)",
-            (username, username, MAX_PUSH_SUBSCRIPTIONS_PER_USER),
-        )
-        await db.commit()
+        try:
+            await db.execute(
+                "INSERT INTO push_subscriptions (username, endpoint, p256dh_key, auth_key) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(endpoint) DO UPDATE SET "
+                "username = excluded.username, "
+                "p256dh_key = excluded.p256dh_key, "
+                "auth_key = excluded.auth_key, "
+                "created_at = CURRENT_TIMESTAMP",
+                (username, endpoint, p256dh_key, auth_key),
+            )
+            # Enforce per-user subscription limit: delete oldest beyond the cap
+            await db.execute(
+                "DELETE FROM push_subscriptions WHERE username = ? AND id NOT IN "
+                "(SELECT id FROM push_subscriptions WHERE username = ? ORDER BY created_at DESC, id DESC LIMIT ?)",
+                (username, username, MAX_PUSH_SUBSCRIPTIONS_PER_USER),
+            )
+            await db.commit()
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
 
 
 async def delete_push_subscription(endpoint: str, username: str) -> bool:

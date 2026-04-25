@@ -119,6 +119,8 @@ function NotificationToggle() {
         }
       }
       await refreshState()
+    } catch (err) {
+      setToggleError(err instanceof Error ? err.message : 'Unexpected error')
     } finally {
       setToggling(false)
     }
@@ -225,14 +227,24 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
       }
     }
     loadTokens()
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- initialUsername and cookie setters are stable refs
   }, [])
 
   async function refreshTokensFromServer() {
     try {
       const freshTokens = await api.get<{ github_token: string; jira_email: string; jira_token: string }>('/api/user/tokens')
-      if (freshTokens.github_token && !githubToken.trim()) setGithubTokenValue(freshTokens.github_token)
-      if (freshTokens.jira_email && !jiraEmail.trim()) setJiraEmailValue(freshTokens.jira_email)
-      if (freshTokens.jira_token && !jiraToken.trim()) setJiraTokenValue(freshTokens.jira_token)
+      if (freshTokens.github_token && !githubToken.trim()) {
+        setGithubTokenValue(freshTokens.github_token)
+        setGithubToken(freshTokens.github_token)
+      }
+      if (freshTokens.jira_email && !jiraEmail.trim()) {
+        setJiraEmailValue(freshTokens.jira_email)
+        setJiraEmail(freshTokens.jira_email)
+      }
+      if (freshTokens.jira_token && !jiraToken.trim()) {
+        setJiraTokenValue(freshTokens.jira_token)
+        setJiraToken(freshTokens.jira_token)
+      }
     } catch {
       // ignore — tokens may not be available yet
     }
