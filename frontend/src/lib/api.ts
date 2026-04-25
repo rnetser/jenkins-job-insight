@@ -68,4 +68,9 @@ export const api = {
 }
 
 
+/** 404: user not yet in DB; 401: cookie not set yet — both expected during first registration */
+export function isExpectedTokenSyncError(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 404 || err.status === 401)
+}
+
 export { ApiError }

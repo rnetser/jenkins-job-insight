@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, type FormEvent, type ReactNode } from 'react'
-import { api, ApiError } from '@/lib/api'
+import { api, ApiError, isExpectedTokenSyncError } from '@/lib/api'
 import {
   setUsername,
   setGithubToken,
@@ -81,7 +81,7 @@ async function persistTokensToServer(gh: string, je: string, jt: string) {
   } catch (err) {
     // May fail with 404 on first registration (user not yet in DB)
     // or 401 if cookie not set yet — both are expected, not errors
-    if (!(err instanceof ApiError && (err.status === 404 || err.status === 401))) {
+    if (!isExpectedTokenSyncError(err)) {
       console.error('Failed to sync tokens to server:', err)
     }
   }
@@ -220,7 +220,7 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
         }
       } catch (err) {
         // 401 (no cookie yet) and 404 (user not registered) are expected; log anything else.
-        if (!(err instanceof ApiError && (err.status === 404 || err.status === 401))) {
+        if (!isExpectedTokenSyncError(err)) {
           console.error('Failed to hydrate tokens from server:', err)
         }
       }
@@ -234,7 +234,7 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
       return
     }
     hydrateTokensFromServer({ gh: githubTokenRef.current, je: jiraEmailRef.current, jt: jiraTokenRef.current }).finally(() => setTokensLoaded(true))
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- initialUsername and cookie setters are stable refs
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- initialUsername (lazy useState) and hydrateTokensFromServer (useCallback) are stable; run once on mount
   }, [])
 
   async function refreshTokensFromServer() {
