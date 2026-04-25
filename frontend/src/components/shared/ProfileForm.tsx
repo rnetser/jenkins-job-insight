@@ -87,7 +87,7 @@ async function persistTokensToServer(gh: string, je: string, jt: string) {
   }
 }
 
-type PushState = 'granted' | 'denied' | 'default' | 'unsupported'
+type PushState = Awaited<ReturnType<typeof getPushSubscriptionState>>
 
 function NotificationToggle() {
   const [pushState, setPushState] = useState<PushState>('default')
@@ -261,12 +261,10 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
       const gh = githubToken.trim()
       const je = jiraEmail.trim()
       const jt = jiraToken.trim()
-      if (gh || je || jt) {
-        setGithubToken(gh)
-        setJiraEmail(je)
-        setJiraToken(jt)
-        await persistTokensToServer(gh, je, jt)
-      }
+      setGithubToken(gh)
+      setJiraEmail(je)
+      setJiraToken(jt)
+      await persistTokensToServer(gh, je, jt)
     }
 
     // Try admin login if API key is provided
