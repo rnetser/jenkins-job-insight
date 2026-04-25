@@ -8,6 +8,7 @@ from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import httpx
+from ai_cli_runner import AIResult
 import pytest
 
 from jenkins_job_insight.cli.client import JJIClient
@@ -191,8 +192,8 @@ def mock_jenkins_client() -> MagicMock:
 def mock_ai_cli() -> Generator[MagicMock, None, None]:
     """Mock the call_ai_cli function."""
     with patch("jenkins_job_insight.analyzer.call_ai_cli") as mock:
-        mock.return_value = (
-            True,
-            '{"classification": "CODE ISSUE", "affected_tests": ["test_example"], "details": "The test failed due to a missing configuration.", "code_fix": {"file": "tests/test_example.py", "line": "42", "change": "Add the missing import statement"}}',
+        mock.return_value = AIResult(
+            success=True,
+            text='{"classification": "CODE ISSUE", "affected_tests": ["test_example"], "details": "The test failed due to a missing configuration.", "code_fix": {"file": "tests/test_example.py", "line": "42", "change": "Add the missing import statement"}}',
         )
         yield mock

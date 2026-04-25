@@ -22,6 +22,7 @@ from jenkins_job_insight.models import (
     JiraMatch,
     ProductBugReport,
 )
+from jenkins_job_insight.token_tracking import record_ai_usage
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
@@ -318,6 +319,7 @@ async def _filter_matches_with_ai(
     ai_provider: str,
     ai_model: str,
     ai_cli_timeout: int | None = None,
+    job_id: str = "",
 ) -> list[JiraMatch]:
     """Use AI to determine which Jira candidates are relevant to the bug.
 
@@ -332,6 +334,7 @@ async def _filter_matches_with_ai(
         ai_provider: AI provider name.
         ai_model: AI model identifier.
         ai_cli_timeout: Timeout in minutes (overrides AI_CLI_TIMEOUT env var).
+        job_id: Job identifier for token usage tracking.
 
     Returns:
         List of JiraMatch objects for relevant candidates only.
@@ -372,21 +375,32 @@ Example: [{{"key": "PROJ-123", "relevant": true, "score": 0.9}}, {{"key": "PROJ-
 
 Respond with ONLY the JSON array, no other text."""
 
-    success, output = await call_ai_cli(
+    result = await call_ai_cli(
         prompt,
         ai_provider=ai_provider,
         ai_model=ai_model,
         ai_cli_timeout=ai_cli_timeout,
         cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
+        output_format="json",
     )
 
-    if not success:
-        logger.warning("AI relevance filtering failed: %s", output)
+    if job_id:
+        await record_ai_usage(
+            job_id=job_id,
+            result=result,
+            call_type="jira_filter",
+            prompt_chars=len(prompt),
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+        )
+
+    if not result.success:
+        logger.warning("AI relevance filtering failed: %s", result.text)
         return []
 
     # Parse AI response
     try:
-        text = output.strip()
+        text = result.text.strip()
         # Strip markdown code block if present
         if "```json" in text:
             start = text.index("```json") + len("```json")
@@ -462,6 +476,7 @@ async def enrich_with_jira_matches(
     settings: Settings,
     ai_provider: str = "",
     ai_model: str = "",
+    job_id: str = "",
 ) -> None:
     """Search Jira for matching issues and attach results in-place.
 
@@ -477,6 +492,7 @@ async def enrich_with_jira_matches(
         settings: Application settings with Jira configuration.
         ai_provider: AI provider for relevance filtering.
         ai_model: AI model for relevance filtering.
+        job_id: Job identifier for token usage tracking.
     """
     if not settings.jira_enabled:
         return
@@ -535,6 +551,7 @@ async def enrich_with_jira_matches(
                         ai_provider=ai_provider,
                         ai_model=ai_model,
                         ai_cli_timeout=settings.ai_cli_timeout,
+                        job_id=job_id,
                     )
                 else:
                     # No AI config — fall back to returning all candidates as matches

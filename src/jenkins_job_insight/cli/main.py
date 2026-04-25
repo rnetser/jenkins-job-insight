@@ -1841,6 +1841,207 @@ def admin_users_change_role(
             )
 
 
+# -- Token Usage (Admin) ------------------------------------------------------
+
+
+def _date_offset(days: int = 0) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    return (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+
+
+def _format_cost(value: float | None, precision: int = 2) -> str:
+    """Format a USD cost value, returning 'N/A' when absent."""
+    if value is None:
+        return "N/A"
+    return f"${value:.{precision}f}"
+
+
+def _print_token_summary(data: dict) -> None:
+    """Print dashboard summary."""
+    for period_name in ["today", "this_week", "this_month"]:
+        period = data.get(period_name, {})
+        label = period_name.replace("_", " ").title()
+        typer.echo(f"\n{label}:")
+        typer.echo(f"  Calls: {period.get('calls', 0)}")
+        typer.echo(f"  Tokens: {period.get('tokens', 0):,}")
+        typer.echo(f"  Cost: {_format_cost(period.get('cost_usd'))}")
+
+    top_models = data.get("top_models", [])
+    if top_models:
+        typer.echo("\nTop Models (30 days):")
+        for m in top_models:
+            typer.echo(
+                f"  {m.get('model', 'unknown')}: {m.get('calls', 0)} calls, {_format_cost(m.get('cost_usd'))}"
+            )
+
+
+def _print_token_usage_table(data: dict) -> None:
+    """Print aggregated token usage."""
+    typer.echo(f"Total calls: {data.get('total_calls', 0)}")
+    typer.echo(f"Input tokens: {data.get('total_input_tokens', 0):,}")
+    typer.echo(f"Output tokens: {data.get('total_output_tokens', 0):,}")
+    typer.echo(f"Cache read: {data.get('total_cache_read_tokens', 0):,}")
+    typer.echo(f"Cache write: {data.get('total_cache_write_tokens', 0):,}")
+    typer.echo(f"Cost: {_format_cost(data.get('total_cost_usd'))}")
+    typer.echo(f"Duration: {data.get('total_duration_ms', 0):,}ms")
+
+    breakdown = data.get("breakdown", [])
+    if breakdown:
+        typer.echo("\nBreakdown:")
+        for row in breakdown:
+            typer.echo(
+                f"  {row.get('group_key', 'N/A')}: "
+                f"{row.get('call_count', 0)} calls, "
+                f"{_format_cost(row.get('cost_usd'))}, "
+                f"avg {row.get('avg_duration_ms', 0)}ms"
+            )
+
+
+def _print_job_token_usage(data: dict) -> None:
+    """Print per-job token usage."""
+    typer.echo(f"Job: {data.get('job_id', 'N/A')}")
+    records = data.get("records", [])
+    for rec in records:
+        typer.echo(
+            f"\n  [{rec.get('call_type', '')}] "
+            f"{rec.get('ai_provider', '')}/{rec.get('ai_model', '')}"
+        )
+        typer.echo(
+            f"    Input: {rec.get('input_tokens', 0):,}  "
+            f"Output: {rec.get('output_tokens', 0):,}"
+        )
+        typer.echo(
+            f"    Cost: {_format_cost(rec.get('cost_usd'), precision=4)}  Duration: {rec.get('duration_ms', 0)}ms"
+        )
+
+
+def _print_token_usage_csv(rows: list[dict]) -> None:
+    """Print token usage as CSV."""
+    import csv
+    import sys
+
+    if not rows:
+        typer.echo("No data", err=True)
+        return
+    writer = csv.DictWriter(sys.stdout, fieldnames=rows[0].keys())
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({k: row.get(k, "") for k in rows[0].keys()})
+
+
+@admin_app.command("token-usage")
+def token_usage_cmd(
+    period: str | None = typer.Option(None, help="Period: today, week, month, all"),
+    start_date: str | None = typer.Option(
+        None, "--start-date", help="Start date (YYYY-MM-DD)"
+    ),
+    end_date: str | None = typer.Option(
+        None, "--end-date", help="End date (YYYY-MM-DD)"
+    ),
+    provider: str | None = typer.Option(None, help="Filter by AI provider"),
+    model: str | None = typer.Option(None, help="Filter by AI model"),
+    call_type: str | None = typer.Option(None, help="Filter by call type"),
+    group_by: str | None = typer.Option(
+        None,
+        help="Group by: provider, model, call_type, day, week, month, job",
+    ),
+    job_id: str | None = typer.Option(None, help="Get usage for specific job"),
+    output_format: str = typer.Option(
+        "table", "--format", help="Output format: table, json, csv"
+    ),
+    json_output: bool = _JSON_OPTION,
+):
+    """View AI token usage and costs. Admin only."""
+    _set_json(json_output)
+    # --json flag overrides --format
+    effective_format = "json" if _state.get("json", False) else output_format
+
+    valid_periods = {"today", "week", "month", "all"}
+    valid_formats = {"table", "json", "csv"}
+    if period and period not in valid_periods:
+        typer.echo(
+            f"Invalid --period: {period}. Valid: {', '.join(sorted(valid_periods))}",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if effective_format not in valid_formats:
+        typer.echo(
+            f"Invalid --format: {effective_format}. Valid: {', '.join(sorted(valid_formats))}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    try:
+        client = _get_client()
+
+        if job_id:
+            data = client.get_token_usage_for_job(job_id)
+            if effective_format == "json":
+                print_output(data, columns=[], as_json=True)
+            elif effective_format == "csv":
+                _print_token_usage_csv(data.get("records", []))
+            else:
+                _print_job_token_usage(data)
+            return
+
+        if period == "today":
+            start_date = start_date or _date_offset(0)
+        elif period == "week":
+            start_date = start_date or _date_offset(7)
+        elif period == "month":
+            start_date = start_date or _date_offset(30)
+        # period == "all" — no date filter, falls through to main query
+
+        if (
+            period is None
+            and not start_date
+            and not end_date
+            and not provider
+            and not model
+            and not call_type
+            and not group_by
+        ):
+            # Summary dashboard mode — only when no period or filters specified
+            data = client.get_token_usage_summary()
+            if effective_format == "json":
+                print_output(data, columns=[], as_json=True)
+            elif effective_format == "csv":
+                # Flatten period rows for CSV output
+                rows = []
+                for period_name in ["today", "this_week", "this_month"]:
+                    period_data = data.get(period_name, {})
+                    if isinstance(period_data, dict):
+                        rows.append({"period": period_name, **period_data})
+                _print_token_usage_csv(rows)
+            else:
+                _print_token_summary(data)
+            return
+
+        data = client.get_token_usage(
+            start_date=start_date,
+            end_date=end_date,
+            ai_provider=provider,
+            ai_model=model,
+            call_type=call_type,
+            group_by=group_by,
+        )
+        if effective_format == "json":
+            print_output(data, columns=[], as_json=True)
+        elif effective_format == "csv":
+            breakdown = data.get("breakdown", [])
+            if breakdown:
+                _print_token_usage_csv(breakdown)
+            else:
+                # No group_by — output the totals row as CSV
+                totals = {k: v for k, v in data.items() if k != "breakdown"}
+                _print_token_usage_csv([totals] if totals else [])
+        else:
+            _print_token_usage_table(data)
+    except JJIError as err:
+        _handle_error(err)
+
+
 # -- Metadata -----------------------------------------------------------------
 
 

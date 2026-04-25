@@ -1,0 +1,19 @@
+/** Format a number with K/M suffixes (e.g. 15000 → "15K", 1500000 → "1.5M"). */
+export function formatCompactNumber(n: number): string {
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000
+    return m % 1 === 0 ? `${m}M` : `${m.toFixed(1)}M`
+  }
+  if (n >= 1_000) {
+    const k = n / 1_000
+    return k % 1 === 0 ? `${k}K` : `${k.toFixed(1)}K`
+  }
+  return String(n)
+}
+
+/** Format USD cost for display. Returns '$0.00' for null/zero/undefined. */
+export function formatCost(value: number | null | undefined): string {
+  if (value == null || value === 0) return '$0.00'
+  if (value < 0.01) return `$${value.toFixed(4)}`
+  return `$${value.toFixed(2)}`
+}

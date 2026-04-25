@@ -130,6 +130,7 @@ export interface AnalysisResult {
   ai_model: string
   failures: FailureAnalysis[]
   child_job_analyses: ChildJobAnalysis[]
+  token_usage?: TokenUsageSummary
   error?: string
   progress_log?: Array<{ phase: string; timestamp: number }>
   progress_phase?: string
@@ -308,6 +309,59 @@ export interface CommentEnrichment {
   type: 'github_pr' | 'github_issue' | 'jira'
   key: string
   status: string
+}
+
+// -- Token Usage ----------------------------------------------------
+
+export interface TokenUsageEntry {
+  provider: string
+  model: string
+  call_type: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  total_tokens: number
+  cost_usd: number | null
+  duration_ms: number | null
+}
+
+export interface TokenUsageSummary {
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cache_read_tokens: number
+  total_cache_write_tokens: number
+  total_tokens: number
+  total_cost_usd: number | null
+  total_duration_ms: number
+  total_calls: number
+  calls: TokenUsageEntry[]
+}
+
+export interface TokenUsageDashboard {
+  today: { calls: number; tokens: number; cost_usd: number }
+  this_week: { calls: number; tokens: number; cost_usd: number }
+  this_month: { calls: number; tokens: number; cost_usd: number }
+  top_models: { model: string; calls: number; cost_usd: number }[]
+  top_jobs: { job_id: string; calls: number; cost_usd: number }[]
+}
+
+export interface TokenUsageRecord {
+  id: string
+  job_id: string
+  created_at: string
+  ai_provider: string
+  ai_model: string
+  call_type: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  total_tokens: number
+  cost_usd: number | null
+  duration_ms: number | null
+  prompt_chars: number
+  response_chars: number
 }
 
 // -- Job Metadata ---------------------------------------------------

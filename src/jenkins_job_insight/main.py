@@ -47,6 +47,7 @@ from jenkins_job_insight.encryption import (
     encrypt_sensitive_fields,
 )
 from jenkins_job_insight.jira import enrich_with_jira_matches
+from jenkins_job_insight.token_tracking import build_token_usage_summary
 from jenkins_job_insight.monitoring import (
     build_health_response,
     dispatch_alert,
@@ -144,6 +145,16 @@ def _install_job_id_filter() -> None:
 _install_job_id_filter()
 
 
+async def _attach_token_usage(job_id: str, result_data: dict) -> None:
+    """Attach token usage summary to result data. Best-effort \u2014 never raises."""
+    try:
+        token_summary = await build_token_usage_summary(job_id)
+        if token_summary:
+            result_data["token_usage"] = token_summary.model_dump(mode="json")
+    except Exception:  # noqa: BLE001 — best-effort token tracking must never fail the job
+        logger.debug("Failed to attach token usage for job %s", job_id, exc_info=True)
+
+
 async def _bind_job_id(job_id: str) -> None:
     """FastAPI dependency that binds job_id to the logging context."""
     job_id_var.set(job_id)
@@ -154,6 +165,10 @@ IN_PROGRESS_STATUSES = ("pending", "running", "waiting")
 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "").lower()
 AI_MODEL = os.getenv("AI_MODEL", "")
+
+_VALID_GROUP_BY = frozenset(
+    {"provider", "model", "call_type", "day", "week", "month", "job"}
+)
 
 
 def _read_app_port() -> int:
@@ -1026,6 +1041,7 @@ async def _enrich_result_with_jira(
     settings: Settings,
     ai_provider: str = "",
     ai_model: str = "",
+    job_id: str = "",
 ) -> None:
     """Enrich PRODUCT BUG failures with Jira matches.
 
@@ -1038,6 +1054,7 @@ async def _enrich_result_with_jira(
         settings: Application settings with Jira configuration.
         ai_provider: AI provider for Jira relevance filtering.
         ai_model: AI model for Jira relevance filtering.
+        job_id: Job identifier for token usage tracking.
     """
     if not settings.jira_enabled:
         return
@@ -1054,7 +1071,9 @@ async def _enrich_result_with_jira(
 
     _collect(failures)
 
-    await enrich_with_jira_matches(all_failures, settings, ai_provider, ai_model)
+    await enrich_with_jira_matches(
+        all_failures, settings, ai_provider, ai_model, job_id=job_id
+    )
 
 
 async def _wait_for_jenkins_completion(
@@ -1291,6 +1310,7 @@ async def process_analysis_with_id(
                 settings,
                 ai_provider,
                 ai_model,
+                job_id=job_id,
             )
 
         await _safe_update_progress_phase("saving")
@@ -1299,6 +1319,9 @@ async def process_analysis_with_id(
         )
         result_data = result.model_dump(mode="json")
         await _preserve_request_params(job_id, result_data)
+
+        # Attach token usage summary before persisting
+        await _attach_token_usage(job_id, result_data)
 
         # Save to storage — do NOT persist base_url / result_url as they are
         # request-derived and re-generated on every GET to avoid host-header
@@ -1332,6 +1355,10 @@ async def process_analysis_with_id(
             "error": error_detail,
         }
         await _preserve_request_params(job_id, error_data)
+
+        # Attach token usage even on failure — partial AI calls may have been recorded
+        await _attach_token_usage(job_id, error_data)
+
         await update_status(job_id, "failed", error_data)
 
 
@@ -1692,7 +1719,9 @@ async def analyze_failures(
 
         # Enrich PRODUCT BUG failures with Jira matches
         if _resolve_enable_jira(body, merged):
-            await enrich_with_jira_matches(all_analyses, merged, ai_provider, ai_model)
+            await enrich_with_jira_matches(
+                all_analyses, merged, ai_provider, ai_model, job_id=job_id
+            )
 
         # If raw_xml was provided, produce enriched XML
         enriched_xml = None
@@ -1713,6 +1742,10 @@ async def analyze_failures(
 
         result_data = analysis_result.model_dump(mode="json")
         await _preserve_request_params(job_id, result_data)
+
+        # Attach token usage summary before persisting
+        await _attach_token_usage(job_id, result_data)
+
         await update_status(job_id, "completed", result_data)
 
         # Populate failure history
@@ -1742,6 +1775,10 @@ async def analyze_failures(
         )
         fail_data = analysis_result.model_dump(mode="json")
         await _preserve_request_params(job_id, fail_data)
+
+        # Attach token usage even on failure — partial AI calls may have been recorded
+        await _attach_token_usage(job_id, fail_data)
+
         await update_status(job_id, "failed", fail_data)
         return JSONResponse(content=_attach_result_links(fail_data, base_url, job_id))
 
@@ -2339,6 +2376,7 @@ async def preview_github_issue(
         ai_model=ai_model,
         jenkins_url=jenkins_url,
         include_links=effective_include_links,
+        job_id=job_id,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
@@ -2414,6 +2452,7 @@ async def preview_jira_bug(
         ai_model=ai_model,
         jenkins_url=jenkins_url,
         include_links=effective_include_links,
+        job_id=job_id,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
@@ -3985,6 +4024,52 @@ async def save_user_tokens_endpoint(request: Request) -> JSONResponse:
 
 
 # --- Admin endpoints ---
+
+
+@app.get("/api/admin/token-usage")
+async def get_token_usage(
+    request: Request,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    ai_provider: str | None = None,
+    ai_model: str | None = None,
+    call_type: str | None = None,
+    group_by: str | None = None,
+) -> dict:
+    """Get aggregated token usage with optional filters and grouping. Admin only."""
+    _require_admin(request)
+    if group_by and group_by not in _VALID_GROUP_BY:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid group_by value. Valid: {', '.join(sorted(_VALID_GROUP_BY))}",
+        )
+    return await storage.get_token_usage_summary(
+        start_date=start_date,
+        end_date=end_date,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        call_type=call_type,
+        group_by=group_by,
+    )
+
+
+@app.get("/api/admin/token-usage/summary")
+async def get_token_usage_dashboard(request: Request) -> dict:
+    """Get high-level token usage summary for dashboard. Admin only."""
+    _require_admin(request)
+    return await storage.get_token_usage_dashboard_summary()
+
+
+@app.get("/api/admin/token-usage/{job_id}")
+async def get_token_usage_for_job(request: Request, job_id: str) -> dict:
+    """Get token usage breakdown for a specific job. Admin only."""
+    _require_admin(request)
+    records = await storage.get_token_usage_for_job(job_id)
+    if not records:
+        raise HTTPException(
+            status_code=404, detail="No token usage records found for this job"
+        )
+    return {"job_id": job_id, "records": records}
 
 
 @app.post("/api/admin/users")

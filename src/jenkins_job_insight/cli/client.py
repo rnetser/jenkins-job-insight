@@ -668,6 +668,41 @@ class JJIClient:
         body = self._with_jira_auth_fields(body, jira_token, jira_email)
         return self._request("POST", "/api/jira-security-levels", json=body)
 
+    # -- Token Usage ----------------------------------------------------------
+
+    def get_token_usage(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        ai_provider: str | None = None,
+        ai_model: str | None = None,
+        call_type: str | None = None,
+        group_by: str | None = None,
+    ) -> dict:
+        """Get aggregated token usage with filters. GET /api/admin/token-usage"""
+        params: dict = {}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+        if ai_provider:
+            params["ai_provider"] = ai_provider
+        if ai_model:
+            params["ai_model"] = ai_model
+        if call_type:
+            params["call_type"] = call_type
+        if group_by:
+            params["group_by"] = group_by
+        return self._request("GET", "/api/admin/token-usage", params=params)
+
+    def get_token_usage_summary(self) -> dict:
+        """Get token usage dashboard summary. GET /api/admin/token-usage/summary"""
+        return self._request("GET", "/api/admin/token-usage/summary")
+
+    def get_token_usage_for_job(self, job_id: str) -> dict:
+        """Get token usage for a specific job. GET /api/admin/token-usage/{job_id}"""
+        return self._request("GET", f"/api/admin/token-usage/{job_id}")
+
     # -- AI Configs -----------------------------------------------------------
 
     def get_ai_configs(self) -> list[dict]:

@@ -21,6 +21,11 @@ docker run -d -p 8000:8000 -v ./data:/data \
   ghcr.io/myk-org/jenkins-job-insight:latest
 ```
 
+## Features
+
+- **AI-Powered Failure Analysis** — Classifies test failures as code issues or product bugs
+- **AI Token Usage Tracking** — Track token consumption, costs, and duration for all AI CLI calls. Admin dashboard shows usage by provider/model/time period with CSV export.
+
 ## CLI
 
 ```bash
@@ -30,9 +35,23 @@ export JJI_SERVER=http://localhost:8000
 jji health
 jji analyze --job-name my-job --build-number 42
 jji results list
+jji admin token-usage              # Summary dashboard
+jji admin token-usage --group-by model  # Grouped breakdown
+jji admin token-usage --job-id <uuid>   # Per-job usage
+jji admin token-usage --period month --format csv  # CSV export
 ```
 
 Run `jji --help` for all commands.
+
+## API
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/admin/token-usage` | Aggregated token usage with filters and grouping (admin only) |
+| `GET /api/admin/token-usage/summary` | Dashboard summary: today/week/month stats (admin only) |
+| `GET /api/admin/token-usage/{job_id}` | Per-job token usage breakdown (admin only) |
+
+See the [API reference](https://myk-org.github.io/jenkins-job-insight/) for all endpoints.
 
 ## Development
 

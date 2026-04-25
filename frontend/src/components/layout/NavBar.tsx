@@ -27,7 +27,7 @@ export function NavBar() {
   const { isAdmin } = useAuth()
 
   const navLinks = isAdmin
-    ? [...BASE_NAV_LINKS, { to: '/admin/users', label: 'Users' }]
+    ? [...BASE_NAV_LINKS, { to: '/admin/users', label: 'Users' }, { to: '/admin/token-usage', label: 'Token Usage' }]
     : BASE_NAV_LINKS
 
   return (

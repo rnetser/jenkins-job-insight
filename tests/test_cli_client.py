@@ -1346,6 +1346,80 @@ class TestJJIClientAdminUsers:
         assert exc_info.value.status_code == 403
 
 
+class TestTokenUsage:
+    def test_get_token_usage_no_params(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert request.url.path == "/api/admin/token-usage"
+            return httpx.Response(
+                200,
+                json={"total_calls": 5, "total_cost_usd": 0.12, "breakdown": []},
+            )
+
+        client = _make_client(handler)
+        result = client.get_token_usage()
+        assert result["total_calls"] == 5
+
+    def test_get_token_usage_with_filters(self):
+        def handler(request):
+            assert request.url.params["start_date"] == "2026-01-01"
+            assert request.url.params["ai_provider"] == "claude"
+            assert request.url.params["group_by"] == "model"
+            # Params not provided should be stripped (None-filtering)
+            assert "end_date" not in request.url.params
+            return httpx.Response(
+                200,
+                json={"total_calls": 3, "breakdown": [{"group_key": "claude-sonnet"}]},
+            )
+
+        client = _make_client(handler)
+        result = client.get_token_usage(
+            start_date="2026-01-01", ai_provider="claude", group_by="model"
+        )
+        assert result["total_calls"] == 3
+        assert len(result["breakdown"]) == 1
+
+    def test_get_token_usage_summary(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert request.url.path == "/api/admin/token-usage/summary"
+            return httpx.Response(
+                200,
+                json={"today": {"calls": 10}, "this_week": {"calls": 50}},
+            )
+
+        client = _make_client(handler)
+        result = client.get_token_usage_summary()
+        assert result["today"]["calls"] == 10
+
+    def test_get_token_usage_for_job(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert "/api/admin/token-usage/job-123" in str(request.url)
+            return httpx.Response(
+                200,
+                json={
+                    "job_id": "job-123",
+                    "records": [{"call_type": "analysis", "input_tokens": 100}],
+                },
+            )
+
+        client = _make_client(handler)
+        result = client.get_token_usage_for_job("job-123")
+        assert result["job_id"] == "job-123"
+        assert len(result["records"]) == 1
+
+    def test_get_token_usage_forbidden(self):
+        client = _make_client(
+            lambda request: httpx.Response(
+                403, json={"detail": "Admin access required"}
+            )
+        )
+        with pytest.raises(JJIError) as exc_info:
+            client.get_token_usage()
+        assert exc_info.value.status_code == 403
+
+
 class TestJJIClientApiKeyHeader:
     def test_api_key_sent_as_bearer_header(self):
         def check_header(request):

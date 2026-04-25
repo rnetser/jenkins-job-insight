@@ -19,6 +19,7 @@ from jenkins_job_insight.models import (
     FailureAnalysis,
     ProductBugReport,
 )
+from jenkins_job_insight.token_tracking import record_ai_usage
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
@@ -232,6 +233,7 @@ async def generate_github_issue_content(
     jenkins_url: str = "",
     ai_cli_timeout: int | None = None,
     include_links: bool = False,
+    job_id: str = "",
 ) -> dict:
     """Generate GitHub issue title and body from a failure analysis using AI.
 
@@ -246,6 +248,7 @@ async def generate_github_issue_content(
         ai_cli_timeout: AI CLI timeout in minutes.
         include_links: When True, include full URLs as clickable links.
             When False, include plain-text references only.
+        job_id: Job identifier for token usage tracking.
 
     Returns dict with "title" and "body" keys.
     """
@@ -323,24 +326,35 @@ Then a blank line, followed by the body in well-formatted markdown with sections
 
 Do not wrap in code blocks or JSON. Just the title on the first line, then the body."""
 
-    success, output = await call_ai_cli(
+    result = await call_ai_cli(
         prompt,
         ai_provider=ai_provider,
         ai_model=ai_model,
         ai_cli_timeout=ai_cli_timeout,
         cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
+        output_format="json",
     )
 
-    if success:
-        parsed = _parse_ai_issue_response(output)
+    if job_id:
+        await record_ai_usage(
+            job_id=job_id,
+            result=result,
+            call_type="github_preview",
+            prompt_chars=len(prompt),
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+        )
+
+    if result.success:
+        parsed = _parse_ai_issue_response(result.text)
         if parsed:
             return parsed
         logger.debug(
             "AI returned output but JSON parsing failed for GitHub issue, output=%s",
-            output,
+            result.text,
         )
     else:
-        logger.debug("AI CLI call failed for GitHub issue: %s", output)
+        logger.debug("AI CLI call failed for GitHub issue: %s", result.text)
 
     logger.warning(
         "AI content generation failed for GitHub issue, using fallback template"
@@ -356,6 +370,7 @@ async def generate_jira_bug_content(
     jenkins_url: str = "",
     ai_cli_timeout: int | None = None,
     include_links: bool = False,
+    job_id: str = "",
 ) -> dict:
     """Generate Jira bug summary and description from a failure analysis using AI.
 
@@ -370,6 +385,7 @@ async def generate_jira_bug_content(
         ai_cli_timeout: AI CLI timeout in minutes.
         include_links: When True, include full URLs as clickable links.
             When False, include plain-text references only.
+        job_id: Job identifier for token usage tracking.
 
     Returns dict with "title" and "body" keys.
     """
@@ -439,24 +455,35 @@ Then a blank line, followed by the description with sections:
 
 Do not wrap in code blocks or JSON. Just the summary on the first line, then the description."""
 
-    success, output = await call_ai_cli(
+    result = await call_ai_cli(
         prompt,
         ai_provider=ai_provider,
         ai_model=ai_model,
         ai_cli_timeout=ai_cli_timeout,
         cli_flags=PROVIDER_CLI_FLAGS.get(ai_provider, []),
+        output_format="json",
     )
 
-    if success:
-        parsed = _parse_ai_issue_response(output)
+    if job_id:
+        await record_ai_usage(
+            job_id=job_id,
+            result=result,
+            call_type="jira_preview",
+            prompt_chars=len(prompt),
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+        )
+
+    if result.success:
+        parsed = _parse_ai_issue_response(result.text)
         if parsed:
             return parsed
         logger.debug(
             "AI returned output but JSON parsing failed for Jira bug, output=%s",
-            output,
+            result.text,
         )
     else:
-        logger.debug("AI CLI call failed for Jira bug: %s", output)
+        logger.debug("AI CLI call failed for Jira bug: %s", result.text)
 
     logger.warning("AI content generation failed for Jira bug, using fallback template")
     return _build_fallback_jira_content(ctx, jenkins_url, report_url, include_links)

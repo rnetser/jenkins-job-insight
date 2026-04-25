@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { ExternalLink, CheckCircle2, Clock, Calendar, Cpu, Timer, FolderGit2, RotateCw, Copy, Check } from 'lucide-react'
 import { ReAnalyzeDialog } from './report/ReAnalyzeDialog'
 import { ReportPortalButton } from './report/ReportPortalButton'
+import { TokenUsageBadge } from './report/TokenUsageBadge'
 import { reviewKey } from './report/ReportContext'
 import type { ChildJobAnalysis } from '@/types'
 
@@ -416,6 +417,9 @@ function ReportContent() {
             <Badge variant="outline" className="text-[10px]">
               {formatAiLabel(result.ai_provider, result.ai_model)}
             </Badge>
+          )}
+          {result.token_usage && (
+            <TokenUsageBadge usage={result.token_usage} />
           )}
           <div className="ml-auto flex items-center gap-3">
             {state.reportportalAvailable && (result.child_job_analyses ?? []).length === 0 && (

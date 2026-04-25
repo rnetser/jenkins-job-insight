@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Any, Coroutine, TypedDict
 
-from ai_cli_runner import run_parallel_with_limit
+from ai_cli_runner import AIResult, run_parallel_with_limit
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.analyzer import (
@@ -29,6 +29,7 @@ from jenkins_job_insight.models import (
     TestFailure,
 )
 from jenkins_job_insight.storage import update_progress_phase
+from jenkins_job_insight.token_tracking import record_ai_usage
 
 logger = get_logger(name=__name__, level=os.environ.get("LOG_LEVEL", "INFO"))
 
@@ -468,9 +469,9 @@ async def analyze_failure_group_with_peers(
         async def _call_peer(
             idx: int,
             config: AiConfigEntry,
-        ) -> tuple[AiConfigEntry, bool, str]:
+        ) -> tuple[AiConfigEntry, AIResult]:
             prompt = peer_prompts[idx]
-            ok, output = await _call_ai_cli_with_retry(
+            ai_result = await _call_ai_cli_with_retry(
                 prompt,
                 cwd=repo_path,
                 ai_provider=config.ai_provider,
@@ -478,7 +479,15 @@ async def analyze_failure_group_with_peers(
                 ai_cli_timeout=ai_cli_timeout,
                 cli_flags=PROVIDER_CLI_FLAGS.get(config.ai_provider, []),
             )
-            return config, ok, output
+            await record_ai_usage(
+                job_id=job_id,
+                result=ai_result,
+                call_type="peer",
+                prompt_chars=len(prompt),
+                ai_provider=config.ai_provider,
+                ai_model=config.ai_model,
+            )
+            return config, ai_result
 
         peer_tasks: list[Coroutine[Any, Any, Any]] = [
             _call_peer(idx, cfg) for idx, cfg in enumerate(peer_ai_configs)
@@ -506,11 +515,11 @@ async def analyze_failure_group_with_peers(
                 round_peer_entries.append(entry)
                 all_rounds.append(entry)
                 continue
-            config, ok, output = result
-            if not ok:
+            config, ai_result = result
+            if not ai_result.success:
                 logger.warning(
                     f"Peer {config.ai_provider}/{config.ai_model} CLI failed: "
-                    f"{output if output else 'no output'}"
+                    f"{ai_result.text if ai_result.text else 'no output'}"
                 )
                 entry = PeerRound(
                     round=round_num,
@@ -518,11 +527,11 @@ async def analyze_failure_group_with_peers(
                     ai_model=config.ai_model,
                     role="peer",
                     classification="",
-                    details=output,
+                    details=ai_result.text,
                     agrees_with_orchestrator=None,
                 )
             else:
-                peer_data = _parse_peer_response(output)
+                peer_data = _parse_peer_response(ai_result.text)
                 if peer_data.get("_failed"):
                     logger.warning(
                         f"Peer {config.ai_provider}/{config.ai_model} returned "
@@ -534,7 +543,7 @@ async def analyze_failure_group_with_peers(
                         ai_model=config.ai_model,
                         role="peer",
                         classification="",
-                        details=output,
+                        details=ai_result.text,
                         agrees_with_orchestrator=None,
                     )
                 else:
@@ -631,13 +640,21 @@ async def analyze_failure_group_with_peers(
 
             previous_analysis = parsed_analysis
             try:
-                rev_success, rev_output = await _call_ai_cli_with_retry(
+                rev_result = await _call_ai_cli_with_retry(
                     revision_prompt,
                     cwd=repo_path,
                     ai_provider=main_ai_provider,
                     ai_model=main_ai_model,
                     ai_cli_timeout=ai_cli_timeout,
                     cli_flags=PROVIDER_CLI_FLAGS.get(main_ai_provider, []),
+                )
+                await record_ai_usage(
+                    job_id=job_id,
+                    result=rev_result,
+                    call_type="revision",
+                    prompt_chars=len(revision_prompt),
+                    ai_provider=main_ai_provider,
+                    ai_model=main_ai_model,
                 )
             except Exception as exc:
                 logger.warning(
@@ -646,8 +663,8 @@ async def analyze_failure_group_with_peers(
                 parsed_analysis = previous_analysis
                 continue
 
-            if rev_success:
-                revised = _parse_json_response(rev_output)
+            if rev_result.success:
+                revised = _parse_json_response(rev_result.text)
                 normalized_revised = _coerce_supported_classification(
                     revised.classification
                 )

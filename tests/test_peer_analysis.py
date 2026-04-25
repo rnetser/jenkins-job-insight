@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from ai_cli_runner import AIResult
 from jenkins_job_insight.models import AiConfigEntry, TestFailure
 
 
@@ -669,7 +670,7 @@ class TestAnalyzeWithPeers:
             cli_flags=None,
             max_retries=3,
         ):
-            return (True, peer_response)
+            return AIResult(success=True, text=peer_response)
 
         with (
             patch(
@@ -744,12 +745,12 @@ class TestAnalyzeWithPeers:
             call_count += 1
             # Calls 1-2: round 1 peers (disagree)
             if call_count <= 2:
-                return (True, peer_disagree)
+                return AIResult(success=True, text=peer_disagree)
             # Call 3: main AI revision
             if call_count == 3:
-                return (True, main_response_r2)
+                return AIResult(success=True, text=main_response_r2)
             # Calls 4-5: round 2 peers (agree)
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -820,12 +821,12 @@ class TestAnalyzeWithPeers:
             call_count += 1
             # Calls 1-2: round 1 peers disagree
             if call_count <= 2:
-                return (True, peer_disagree)
+                return AIResult(success=True, text=peer_disagree)
             # Call 3: orchestrator revision FAILS
             if call_count == 3:
-                return (False, "CLI error: connection refused")
+                return AIResult(success=False, text="CLI error: connection refused")
             # Calls 4-5: round 2 peers agree (should see CODE ISSUE, preserved)
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -898,12 +899,12 @@ class TestAnalyzeWithPeers:
             call_count += 1
             # Calls 1-2: round 1 peers disagree
             if call_count <= 2:
-                return (True, peer_disagree)
+                return AIResult(success=True, text=peer_disagree)
             # Call 3: orchestrator revision RAISES an exception
             if call_count == 3:
                 raise RuntimeError("CLI process crashed")
             # Calls 4-5: round 2 peers agree with preserved CODE ISSUE
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -998,12 +999,12 @@ class TestAnalyzeWithPeers:
             call_count += 1
             # Calls 1-2: round 1 peers disagree
             if call_count <= 2:
-                return (True, peer_disagree)
+                return AIResult(success=True, text=peer_disagree)
             # Call 3: revision returns same classification but drops structured fields
             if call_count == 3:
-                return (True, revision_response)
+                return AIResult(success=True, text=revision_response)
             # Calls 4-5: round 2 peers agree
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -1100,10 +1101,10 @@ class TestAnalyzeWithPeers:
             nonlocal call_count
             call_count += 1
             if call_count <= 2:
-                return (True, peer_disagree)
+                return AIResult(success=True, text=peer_disagree)
             if call_count == 3:
-                return (True, revision_response)
-            return (True, peer_agree)
+                return AIResult(success=True, text=revision_response)
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -1197,10 +1198,10 @@ class TestAnalyzeWithPeers:
             nonlocal call_count
             call_count += 1
             if call_count <= 2:
-                return (True, peer_disagree)
+                return AIResult(success=True, text=peer_disagree)
             if call_count == 3:
-                return (True, revision_response)
-            return (True, peer_agree)
+                return AIResult(success=True, text=revision_response)
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -1269,9 +1270,9 @@ class TestAnalyzeWithPeers:
         ):
             # Revision calls: main AI always returns same classification
             if "revision" in prompt.lower() or "revise" in prompt.lower():
-                return (True, main_response)
+                return AIResult(success=True, text=main_response)
             # Peer calls: always disagree
-            return (True, peer_disagree)
+            return AIResult(success=True, text=peer_disagree)
 
         with (
             patch(
@@ -1309,8 +1310,8 @@ class TestAnalyzeWithPeers:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return (True, orchestrator_json)
-            return (False, "CLI error: connection refused")
+                return AIResult(success=True, text=orchestrator_json)
+            return AIResult(success=False, text="CLI error: connection refused")
 
         results = await _run_peer_analysis(
             monkeypatch,
@@ -1357,7 +1358,7 @@ class TestAnalyzeWithPeers:
             cli_flags=None,
             max_retries=3,
         ):
-            return (True, peer_response)
+            return AIResult(success=True, text=peer_response)
 
         with (
             patch(
@@ -1422,8 +1423,8 @@ class TestAnalyzeWithPeers:
             call_count += 1
             # First peer fails, second agrees
             if call_count == 1:
-                return (False, "CLI crashed")
-            return (True, peer_agree)
+                return AIResult(success=False, text="CLI crashed")
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -1495,12 +1496,12 @@ class TestAnalyzeWithPeers:
             call_count += 1
             # Calls 1-2: round 1 peers (disagree)
             if call_count <= 2:
-                return (True, peer_disagree)
+                return AIResult(success=True, text=peer_disagree)
             # Call 3: main AI revision
             if call_count == 3:
-                return (True, main_response)
+                return AIResult(success=True, text=main_response)
             # Calls 4-5: round 2 peers (agree)
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         phases: list[str] = []
 
@@ -1576,10 +1577,10 @@ class TestAnalyzeWithPeers:
             nonlocal call_count
             call_count += 1
             if call_count <= 2:
-                return (True, peer_disagree)
+                return AIResult(success=True, text=peer_disagree)
             if call_count == 3:
-                return (True, main_response)
-            return (True, peer_agree)
+                return AIResult(success=True, text=main_response)
+            return AIResult(success=True, text=peer_agree)
 
         phases: list[str] = []
 
@@ -1643,7 +1644,7 @@ class TestAnalyzeWithPeers:
             cli_flags=None,
             max_retries=3,
         ):
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         phases: list[str] = []
 
@@ -1711,18 +1712,18 @@ class TestAnalyzeWithPeers:
             call_count += 1
             if call_count == 1:
                 # Invalid classification
-                return (
-                    True,
-                    _make_peer_json_response(
+                return AIResult(
+                    success=True,
+                    text=_make_peer_json_response(
                         agrees=True,
                         classification="UNKNOWN TYPE",
                         reasoning="not a valid classification",
                     ),
                 )
             # Valid and agrees
-            return (
-                True,
-                _make_peer_json_response(
+            return AIResult(
+                success=True,
+                text=_make_peer_json_response(
                     agrees=True,
                     classification="CODE ISSUE",
                 ),
@@ -1778,8 +1779,8 @@ class TestAnalyzeWithPeers:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return (True, orchestrator_json)
-            return (True, null_classification_response)
+                return AIResult(success=True, text=orchestrator_json)
+            return AIResult(success=True, text=null_classification_response)
 
         results = await _run_peer_analysis(
             monkeypatch,
@@ -1813,8 +1814,8 @@ class TestAnalyzeWithPeers:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return (True, orchestrator_json)
-            return (True, peer_response)
+                return AIResult(success=True, text=orchestrator_json)
+            return AIResult(success=True, text=peer_response)
 
         results = await _run_peer_analysis(
             monkeypatch,
@@ -1861,7 +1862,7 @@ class TestAnalyzeWithPeers:
             cli_flags=None,
             max_retries=3,
         ):
-            return (True, peer_response)
+            return AIResult(success=True, text=peer_response)
 
         with (
             patch(
@@ -1908,8 +1909,8 @@ class TestAnalyzeWithPeers:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return (True, orchestrator_json)
-            return (True, peer_response)
+                return AIResult(success=True, text=orchestrator_json)
+            return AIResult(success=True, text=peer_response)
 
         results = await _run_peer_analysis(
             monkeypatch,
@@ -1941,8 +1942,8 @@ class TestAnalyzeWithPeers:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return (True, orchestrator_json)
-            return (True, peer_response)
+                return AIResult(success=True, text=orchestrator_json)
+            return AIResult(success=True, text=peer_response)
 
         results = await _run_peer_analysis(
             monkeypatch,
@@ -1974,8 +1975,8 @@ class TestAnalyzeWithPeers:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return (True, orchestrator_json)
-            return (True, peer_response)
+                return AIResult(success=True, text=orchestrator_json)
+            return AIResult(success=True, text=peer_response)
 
         results = await _run_peer_analysis(
             monkeypatch,
@@ -2089,16 +2090,16 @@ class TestAnalyzeWithPeers:
             # Calls 1-2: round 1 peers
             if call_count == 1:
                 captured_prompts.append((ai_provider, prompt))
-                return (True, peer1_r1)
+                return AIResult(success=True, text=peer1_r1)
             if call_count == 2:
                 captured_prompts.append((ai_provider, prompt))
-                return (True, peer2_r1)
+                return AIResult(success=True, text=peer2_r1)
             # Call 3: revision
             if call_count == 3:
-                return (True, main_response_r2)
+                return AIResult(success=True, text=main_response_r2)
             # Calls 4-5: round 2 peers
             captured_prompts.append((ai_provider, prompt))
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -2179,14 +2180,14 @@ class TestAnalyzeWithPeers:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return (True, peer1_r1)
+                return AIResult(success=True, text=peer1_r1)
             if call_count == 2:
-                return (True, peer2_r1)
+                return AIResult(success=True, text=peer2_r1)
             if call_count == 3:
-                return (True, main_response_r2)
+                return AIResult(success=True, text=main_response_r2)
             # Round 2 peers
             captured_round2.append((ai_provider, ai_model, prompt))
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -2273,15 +2274,15 @@ class TestAnalyzeWithPeers:
             call_count += 1
             # Round 1: peer1 succeeds, peer2 CLI fails
             if call_count == 1:
-                return (True, peer1_r1)
+                return AIResult(success=True, text=peer1_r1)
             if call_count == 2:
-                return (False, cli_error_output)
+                return AIResult(success=False, text=cli_error_output)
             # Revision call
             if call_count == 3:
-                return (True, main_response_r2)
+                return AIResult(success=True, text=main_response_r2)
             # Round 2 peers
             captured_round2.append((ai_provider, ai_model, prompt))
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -2367,12 +2368,12 @@ class TestAnalyzeWithPeers:
             call_count += 1
             # Round 1 peer calls (2 peers)
             if call_count <= 2:
-                return (True, peer_disagree)
+                return AIResult(success=True, text=peer_disagree)
             # Revision call after round 1
             if call_count == 3:
-                return (True, revision_response)
+                return AIResult(success=True, text=revision_response)
             # Round 2 peer calls
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -2431,7 +2432,7 @@ class TestAnalyzeWithPeers:
         ):
             nonlocal peer_call_count
             peer_call_count += 1
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         # 3 identical peer configs -- all should be called
         duplicate_peers = [
@@ -2535,17 +2536,17 @@ class TestAnalyzeWithPeers:
             call_count += 1
             # Round 1: peer0 succeeds, peer1 fails, peer2 succeeds
             if call_count == 1:
-                return (True, peer0_r1)
+                return AIResult(success=True, text=peer0_r1)
             if call_count == 2:
-                return (False, "CLI_FAILURE_OUTPUT")
+                return AIResult(success=False, text="CLI_FAILURE_OUTPUT")
             if call_count == 3:
-                return (True, peer2_r1)
+                return AIResult(success=True, text=peer2_r1)
             # Call 4: revision
             if call_count == 4:
-                return (True, main_response_r2)
+                return AIResult(success=True, text=main_response_r2)
             # Calls 5-7: round 2 peers
             captured_round2.append((ai_provider, ai_model, prompt))
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         with (
             patch(
@@ -2649,13 +2650,13 @@ class TestAnalyzeWithPeers:
             call_count += 1
             # Calls 1-3: round 1 peers
             if call_count <= 3:
-                return (True, peer_r1_responses[call_count - 1])
+                return AIResult(success=True, text=peer_r1_responses[call_count - 1])
             # Call 4: revision
             if call_count == 4:
-                return (True, main_response_r2)
+                return AIResult(success=True, text=main_response_r2)
             # Calls 5-7: round 2 peers
             captured_round2.append((call_count - 5, prompt))
-            return (True, peer_agree)
+            return AIResult(success=True, text=peer_agree)
 
         duplicate_peers = [
             AiConfigEntry(ai_provider="gemini", ai_model="gemini-2.5-pro"),

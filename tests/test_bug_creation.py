@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from ai_cli_runner import AIResult
 
 from jenkins_job_insight.models import (
     AnalysisDetail,
@@ -63,9 +64,9 @@ class TestGenerateGithubIssueContent:
         from jenkins_job_insight.bug_creation import generate_github_issue_content
 
         with patch("jenkins_job_insight.bug_creation.call_ai_cli") as mock_ai:
-            mock_ai.return_value = (
-                True,
-                "Fix: login handler missing ValueError catch\n\n"
+            mock_ai.return_value = AIResult(
+                success=True,
+                text="Fix: login handler missing ValueError catch\n\n"
                 "## Test Failure\n\n"
                 "**Test:** `tests.auth.test_login.TestLogin.test_valid_credentials`\n\n"
                 "## Error\n\n"
@@ -91,7 +92,7 @@ class TestGenerateGithubIssueContent:
         from jenkins_job_insight.bug_creation import generate_github_issue_content
 
         with patch("jenkins_job_insight.bug_creation.call_ai_cli") as mock_ai:
-            mock_ai.return_value = (False, "AI CLI timed out")
+            mock_ai.return_value = AIResult(success=False, text="AI CLI timed out")
 
             result = await generate_github_issue_content(
                 failure=code_issue_failure,
@@ -108,7 +109,7 @@ class TestGenerateGithubIssueContent:
         from jenkins_job_insight.bug_creation import generate_github_issue_content
 
         with patch("jenkins_job_insight.bug_creation.call_ai_cli") as mock_ai:
-            mock_ai.return_value = (False, "AI CLI timed out")
+            mock_ai.return_value = AIResult(success=False, text="AI CLI timed out")
 
             result = await generate_github_issue_content(
                 failure=code_issue_failure,
@@ -125,9 +126,9 @@ class TestGenerateJiraBugContent:
         from jenkins_job_insight.bug_creation import generate_jira_bug_content
 
         with patch("jenkins_job_insight.bug_creation.call_ai_cli") as mock_ai:
-            mock_ai.return_value = (
-                True,
-                "DNS resolution timeout on internal resolver\n\n"
+            mock_ai.return_value = AIResult(
+                success=True,
+                text="DNS resolution timeout on internal resolver\n\n"
                 "h2. Summary\n\n"
                 "DNS resolution is failing intermittently.\n\n"
                 "h2. Evidence\n\n"
@@ -147,7 +148,7 @@ class TestGenerateJiraBugContent:
         from jenkins_job_insight.bug_creation import generate_jira_bug_content
 
         with patch("jenkins_job_insight.bug_creation.call_ai_cli") as mock_ai:
-            mock_ai.return_value = (False, "error")
+            mock_ai.return_value = AIResult(success=False, text="error")
 
             result = await generate_jira_bug_content(
                 failure=product_bug_failure,

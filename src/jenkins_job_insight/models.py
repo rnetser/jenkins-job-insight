@@ -399,6 +399,35 @@ class ChildJobAnalysis(BaseModel):
     )
 
 
+class TokenUsageEntry(BaseModel):
+    """Token usage for a single AI CLI call."""
+
+    provider: str = ""
+    model: str = ""
+    call_type: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    total_tokens: int = 0
+    cost_usd: float | None = None
+    duration_ms: int | None = None
+
+
+class TokenUsageSummary(BaseModel):
+    """Aggregated token usage for an entire analysis job."""
+
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_write_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float | None = None
+    total_duration_ms: int = 0
+    total_calls: int = 0
+    calls: list[TokenUsageEntry] = Field(default_factory=list)
+
+
 class AnalysisResult(BaseModel):
     """Complete analysis result for a Jenkins job."""
 
@@ -421,6 +450,10 @@ class AnalysisResult(BaseModel):
     child_job_analyses: list[ChildJobAnalysis] = Field(
         default_factory=list,
         description="Analyses of failed child jobs in pipeline",
+    )
+    token_usage: TokenUsageSummary | None = Field(
+        default=None,
+        description="Aggregated token usage across all AI calls in this analysis",
     )
 
 
@@ -468,6 +501,9 @@ class FailureAnalysisResult(BaseModel):
     enriched_xml: str | None = Field(
         default=None,
         description="Enriched JUnit XML with analysis results (only when raw_xml was provided in request)",
+    )
+    token_usage: TokenUsageSummary | None = Field(
+        default=None, description="Token usage summary for this analysis"
     )
 
 

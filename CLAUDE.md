@@ -88,6 +88,7 @@ This project uses AI CLI tools (Claude CLI, Gemini CLI, Cursor Agent CLI) instea
 | `JiraClient` | Searches Jira for matching bugs (Cloud + Server/DC) |
 | `enrich_with_jira_matches()` | Post-processing: attaches Jira matches to PRODUCT BUG failures |
 | `_filter_matches_with_ai()` | AI-powered relevance filtering of Jira candidates |
+| `token_tracking` | Records AI CLI token usage and builds per-job summaries |
 
 ### Frontend (React + TypeScript)
 
@@ -102,6 +103,7 @@ The frontend is in `/frontend/` — a Vite + React 19 + TypeScript + Tailwind CS
 | `frontend/src/components/layout/` | Layout shell (NavBar, UserBadge) |
 | `frontend/src/lib/` | Utilities (api.ts, cookies.ts, grouping.ts) |
 | `frontend/src/types/` | TypeScript types mirroring Python models |
+| `frontend/src/pages/TokenUsagePage.tsx` | Admin token usage dashboard |
 
 Key patterns:
 - **State**: Report page uses `useReducer` via `ReportContext` (page-scoped, not global)
