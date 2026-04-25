@@ -73,9 +73,11 @@ def _read_key_file_when_ready(
             if keys.get("public_key") and keys.get("private_key"):
                 return keys
             raise RuntimeError("missing keys")
-        except (json.JSONDecodeError, RuntimeError, OSError):
+        except (json.JSONDecodeError, RuntimeError, OSError) as err:
             if attempt == retries - 1:
-                raise RuntimeError(f"VAPID key file {key_file} is empty or corrupt")
+                raise RuntimeError(
+                    f"VAPID key file {key_file} is empty or corrupt"
+                ) from err
             time.sleep(delay_seconds)
     raise RuntimeError(
         f"VAPID key file {key_file} is empty or corrupt"
@@ -154,6 +156,6 @@ def get_vapid_config() -> dict:
             "private_key": keys["private_key"],
             "claim_email": email or DEFAULT_CLAIM_EMAIL,
         }
-    except Exception:
+    except Exception:  # noqa: BLE001 — VAPID resolution must never raise; callers gate on truthy dict
         logger.warning("Failed to resolve VAPID keys", exc_info=True)
         return {}

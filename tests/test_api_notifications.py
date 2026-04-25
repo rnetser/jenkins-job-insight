@@ -56,8 +56,10 @@ def _make_client(
                 from jenkins_job_insight.main import app
 
                 with TestClient(app) as c:
-                    yield c
-        get_settings.cache_clear()
+                    try:
+                        yield c
+                    finally:
+                        get_settings.cache_clear()
 
 
 _VAPID_ENV = {
@@ -317,10 +319,13 @@ class TestCommentMentionNotification:
                         cookies={"jji_username": "alice"},
                     )
                     assert resp.status_code == 201
-                    # Give the fire-and-forget task time to run
                     import time
 
-                    time.sleep(0.2)
+                    deadline = time.monotonic() + 2.0
+                    while time.monotonic() < deadline:
+                        if mock_send.call_count > 0:
+                            break
+                        time.sleep(0.05)
 
                 mock_send.assert_called_once()
                 call_kwargs = mock_send.call_args.kwargs
@@ -366,7 +371,7 @@ class TestCommentMentionNotification:
                     assert resp.status_code == 201
                     import time
 
-                    time.sleep(0.2)
+                    time.sleep(0.3)  # Brief wait — then assert not called
 
                 mock_send.assert_not_called()
             get_settings.cache_clear()
