@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Eye, EyeOff, Bell, BellOff, ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
+import { SectionDivider } from '@/components/shared/SectionDivider'
 
 interface ProfileFormProps {
   onSaved: () => void | Promise<void>
@@ -135,11 +136,7 @@ function NotificationToggle() {
   if (pushState === 'unsupported') {
     return (
       <div className="space-y-1.5 pt-2">
-        <div className="flex items-center gap-3 py-1">
-          <div className="h-px flex-1 bg-border-muted" />
-          <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">Push Notifications</span>
-          <div className="h-px flex-1 bg-border-muted" />
-        </div>
+        <SectionDivider title="Push Notifications" />
         <p className="text-xs text-text-tertiary">Push notifications are not supported in this browser.</p>
       </div>
     )
@@ -148,11 +145,7 @@ function NotificationToggle() {
   if (pushState === 'denied') {
     return (
       <div className="space-y-1.5 pt-2">
-        <div className="flex items-center gap-3 py-1">
-          <div className="h-px flex-1 bg-border-muted" />
-          <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">Push Notifications</span>
-          <div className="h-px flex-1 bg-border-muted" />
-        </div>
+        <SectionDivider title="Push Notifications" />
         <div className="flex items-center gap-2 text-xs text-signal-amber">
           <BellOff className="h-4 w-4 shrink-0" />
           <span>Notifications blocked. To re-enable, update this site&apos;s notification permission in your browser settings.</span>
@@ -163,11 +156,7 @@ function NotificationToggle() {
 
   return (
     <div className="space-y-1.5 pt-2">
-      <div className="flex items-center gap-3 py-1">
-        <div className="h-px flex-1 bg-border-muted" />
-        <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">Push Notifications</span>
-        <div className="h-px flex-1 bg-border-muted" />
-      </div>
+      <SectionDivider title="Push Notifications" />
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-xs text-text-secondary">
           {hasSubscription ? <Bell className="h-4 w-4 text-signal-green" /> : <BellOff className="h-4 w-4" />}
@@ -213,54 +202,40 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
   const jiraTokenRef = useRef(jiraToken)
   jiraTokenRef.current = jiraToken
 
+  const hydrateTokensFromServer = useCallback(
+    async (current: { gh: string; je: string; jt: string }) => {
+      try {
+        const tokens = await api.get<{ github_token: string; jira_email: string; jira_token: string }>('/api/user/tokens')
+        if (tokens.github_token && !current.gh.trim()) {
+          setGithubTokenValue(tokens.github_token)
+          setGithubToken(tokens.github_token)
+        }
+        if (tokens.jira_email && !current.je.trim()) {
+          setJiraEmailValue(tokens.jira_email)
+          setJiraEmail(tokens.jira_email)
+        }
+        if (tokens.jira_token && !current.jt.trim()) {
+          setJiraTokenValue(tokens.jira_token)
+          setJiraToken(tokens.jira_token)
+        }
+      } catch {
+        // Server tokens not available — keep local values
+      }
+    },
+    [],
+  )
+
   useEffect(() => {
     if (!initialUsername) {
       setTokensLoaded(true) // no user yet, nothing to load
       return
     }
-    async function loadTokens() {
-      try {
-        const tokens = await api.get<{ github_token: string; jira_email: string; jira_token: string }>('/api/user/tokens')
-        if (tokens.github_token && !githubTokenRef.current.trim()) {
-          setGithubTokenValue(tokens.github_token)
-          setGithubToken(tokens.github_token)
-        }
-        if (tokens.jira_email && !jiraEmailRef.current.trim()) {
-          setJiraEmailValue(tokens.jira_email)
-          setJiraEmail(tokens.jira_email)
-        }
-        if (tokens.jira_token && !jiraTokenRef.current.trim()) {
-          setJiraTokenValue(tokens.jira_token)
-          setJiraToken(tokens.jira_token)
-        }
-      } catch {
-        // Server tokens not available — keep localStorage values
-      } finally {
-        setTokensLoaded(true)
-      }
-    }
-    loadTokens()
+    hydrateTokensFromServer({ gh: githubTokenRef.current, je: jiraEmailRef.current, jt: jiraTokenRef.current }).finally(() => setTokensLoaded(true))
   // eslint-disable-next-line react-hooks/exhaustive-deps -- initialUsername and cookie setters are stable refs
   }, [])
 
   async function refreshTokensFromServer() {
-    try {
-      const freshTokens = await api.get<{ github_token: string; jira_email: string; jira_token: string }>('/api/user/tokens')
-      if (freshTokens.github_token && !githubToken.trim()) {
-        setGithubTokenValue(freshTokens.github_token)
-        setGithubToken(freshTokens.github_token)
-      }
-      if (freshTokens.jira_email && !jiraEmail.trim()) {
-        setJiraEmailValue(freshTokens.jira_email)
-        setJiraEmail(freshTokens.jira_email)
-      }
-      if (freshTokens.jira_token && !jiraToken.trim()) {
-        setJiraTokenValue(freshTokens.jira_token)
-        setJiraToken(freshTokens.jira_token)
-      }
-    } catch {
-      // ignore — tokens may not be available yet
-    }
+    await hydrateTokensFromServer({ gh: githubToken, je: jiraEmail, jt: jiraToken })
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -396,13 +371,7 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
           {onAdminLogin && (
             <>
               {/* Admin Authentication Divider */}
-              <div className="flex items-center gap-3 py-1">
-                <div className="h-px flex-1 bg-border-muted" />
-                <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">
-                  Admin Authentication
-                </span>
-                <div className="h-px flex-1 bg-border-muted" />
-              </div>
+              <SectionDivider title="Admin Authentication" />
               <p className="text-xs text-text-tertiary">
                 Provide your API key for admin access. Leave empty for regular user access.
               </p>
@@ -428,13 +397,7 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
           )}
 
           {/* Tracker Tokens Divider */}
-          <div className="flex items-center gap-3 py-1">
-            <div className="h-px flex-1 bg-border-muted" />
-            <span className="font-display text-[10px] uppercase tracking-widest text-text-tertiary">
-              Tracker Tokens
-            </span>
-            <div className="h-px flex-1 bg-border-muted" />
-          </div>
+          <SectionDivider title="Tracker Tokens" />
           <p className="text-xs text-text-tertiary">
             Provide your personal tokens to create issues and bugs directly
             under your name. Without tokens, you can still preview generated
