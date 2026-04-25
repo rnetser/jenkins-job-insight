@@ -67,6 +67,7 @@ from jenkins_job_insight.bug_creation import (
 )
 from jenkins_job_insight.comment_enrichment import detect_mentions
 from jenkins_job_insight.notifications import send_mention_notifications
+from jenkins_job_insight.vapid import get_vapid_config
 from jenkins_job_insight.models import (
     AddCommentRequest,
     AnalyzeFailuresRequest,
@@ -2084,19 +2085,21 @@ async def add_comment(
     if settings.web_push_enabled and username:
         mentioned = detect_mentions(body.comment)
         if mentioned:
-            task = asyncio.create_task(
-                send_mention_notifications(
-                    mentioned_usernames=mentioned,
-                    comment_author=username,
-                    job_id=job_id,
-                    test_name=body.test_name,
-                    vapid_private_key=settings.vapid_private_key,
-                    vapid_claim_email=settings.vapid_claim_email,
-                    public_base_url=settings.public_base_url,
+            vapid_cfg = get_vapid_config()
+            if vapid_cfg:
+                task = asyncio.create_task(
+                    send_mention_notifications(
+                        mentioned_usernames=mentioned,
+                        comment_author=username,
+                        job_id=job_id,
+                        test_name=body.test_name,
+                        vapid_private_key=vapid_cfg["private_key"],
+                        vapid_claim_email=vapid_cfg["claim_email"],
+                        public_base_url=settings.public_base_url,
+                    )
                 )
-            )
-            _background_tasks.add(task)
-            task.add_done_callback(_background_tasks.discard)
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
 
     return {"id": comment_id}
 
@@ -4390,7 +4393,8 @@ async def get_vapid_public_key():
         raise HTTPException(
             status_code=404, detail="Web Push notifications not configured"
         )
-    return {"vapid_public_key": settings.vapid_public_key}
+    vapid_cfg = get_vapid_config()
+    return {"vapid_public_key": vapid_cfg["public_key"]}
 
 
 @app.post("/api/notifications/subscribe")

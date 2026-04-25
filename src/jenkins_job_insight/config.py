@@ -354,12 +354,17 @@ class Settings(BaseSettings):
 
     @property
     def web_push_enabled(self) -> bool:
-        """Check if Web Push is enabled (all three VAPID settings are non-empty)."""
-        return bool(
+        """Check if Web Push is enabled (env vars or auto-generated keys)."""
+        if (
             self.vapid_public_key.strip()
             and self.vapid_private_key.strip()
             and self.vapid_claim_email.strip()
-        )
+        ):
+            return True
+        # Check auto-generated keys
+        from jenkins_job_insight.vapid import get_vapid_config
+
+        return bool(get_vapid_config())
 
     @property
     def reportportal_enabled(self) -> bool:

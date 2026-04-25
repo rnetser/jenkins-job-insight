@@ -4,11 +4,17 @@ import asyncio
 import os
 from unittest.mock import AsyncMock, patch
 
+import contextlib
+
 import pytest
 from fastapi.testclient import TestClient
 
 from jenkins_job_insight import storage
 from jenkins_job_insight.config import get_settings
+
+
+def _nullcontext():
+    return contextlib.nullcontext()
 
 
 @pytest.fixture
@@ -21,8 +27,14 @@ def _init_db(temp_db_path):
         yield
 
 
-def _make_client(temp_db_path, vapid_env: dict | None = None):
-    """Create a test client with optional VAPID config."""
+def _make_client(
+    temp_db_path, vapid_env: dict | None = None, disable_vapid_auto: bool = False
+):
+    """Create a test client with optional VAPID config.
+
+    When *disable_vapid_auto* is True, patches ``get_vapid_config`` to
+    return ``{}`` so that auto-generation does not kick in.
+    """
     env = {
         "AI_PROVIDER": "claude",
         "AI_MODEL": "test",
@@ -35,10 +47,16 @@ def _make_client(temp_db_path, vapid_env: dict | None = None):
     with patch.dict(os.environ, env, clear=True):
         get_settings.cache_clear()
         with patch.object(storage, "DB_PATH", temp_db_path):
-            from jenkins_job_insight.main import app
+            ctx = (
+                patch("jenkins_job_insight.vapid.get_vapid_config", return_value={})
+                if disable_vapid_auto
+                else _nullcontext()
+            )
+            with ctx:
+                from jenkins_job_insight.main import app
 
-            with TestClient(app) as c:
-                yield c
+                with TestClient(app) as c:
+                    yield c
         get_settings.cache_clear()
 
 
@@ -57,8 +75,8 @@ def client_with_push(_init_db, temp_db_path):
 
 @pytest.fixture
 def client_no_push(_init_db, temp_db_path):
-    """Client without VAPID/push configured."""
-    yield from _make_client(temp_db_path)
+    """Client without VAPID/push configured (auto-generation disabled)."""
+    yield from _make_client(temp_db_path, disable_vapid_auto=True)
 
 
 class TestVapidPublicKey:
