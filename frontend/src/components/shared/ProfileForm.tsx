@@ -95,12 +95,18 @@ function NotificationToggle() {
   const [toggleError, setToggleError] = useState<string | null>(null)
 
   const refreshState = useCallback(async () => {
-    const state = await getPushSubscriptionState()
-    setPushState(state)
-    setHasSubscription(await hasActivePushSubscription())
+    try {
+      const state = await getPushSubscriptionState()
+      setPushState(state)
+      setHasSubscription(await hasActivePushSubscription())
+    } catch (err) {
+      setToggleError(err instanceof Error ? err.message : 'Unable to read notification state')
+    }
   }, [])
 
-  useEffect(() => { refreshState() }, [refreshState])
+  useEffect(() => {
+    void refreshState()
+  }, [refreshState])
 
   async function handleToggle() {
     setToggling(true)
