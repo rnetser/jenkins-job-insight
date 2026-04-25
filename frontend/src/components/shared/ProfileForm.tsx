@@ -218,8 +218,11 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
           setJiraTokenValue(tokens.jira_token)
           setJiraToken(tokens.jira_token)
         }
-      } catch {
-        // Server tokens not available — keep local values
+      } catch (err) {
+        // 401 (no cookie yet) and 404 (user not registered) are expected; log anything else.
+        if (!(err instanceof ApiError && (err.status === 404 || err.status === 401))) {
+          console.error('Failed to hydrate tokens from server:', err)
+        }
       }
     },
     [],
