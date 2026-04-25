@@ -102,6 +102,7 @@ function NotificationToggle() {
       setHasSubscription(await hasActivePushSubscription())
     } catch (err) {
       setToggleError(err instanceof Error ? err.message : 'Unable to read notification state')
+      setPushState((prev) => (prev === 'loading' ? 'default' : prev))
     }
   }, [])
 
