@@ -87,10 +87,10 @@ async function persistTokensToServer(gh: string, je: string, jt: string) {
   }
 }
 
-type PushState = Awaited<ReturnType<typeof getPushSubscriptionState>>
+type PushState = Awaited<ReturnType<typeof getPushSubscriptionState>> | 'loading'
 
 function NotificationToggle() {
-  const [pushState, setPushState] = useState<PushState>('default')
+  const [pushState, setPushState] = useState<PushState>('loading')
   const [hasSubscription, setHasSubscription] = useState(false)
   const [toggling, setToggling] = useState(false)
   const [toggleError, setToggleError] = useState<string | null>(null)
@@ -132,6 +132,8 @@ function NotificationToggle() {
       setToggling(false)
     }
   }
+
+  if (pushState === 'loading') return null
 
   if (pushState === 'unsupported') {
     return (
@@ -273,9 +275,9 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
         await onAdminLogin(trimmed, apiKey.trim())
         // Admin login succeeded — also save the username cookie
         await commitProfile(trimmed)
-        setSaving(false)
         // Re-fetch tokens from server before navigating away (onSaved unmounts the component)
         await refreshTokensFromServer()
+        setSaving(false)
         await onSaved()
         return
       } catch (err) {
@@ -304,9 +306,9 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
     }
 
     await commitProfile(trimmed)
-    setSaving(false)
     // Re-fetch tokens from server before navigating away (onSaved unmounts the component)
     await refreshTokensFromServer()
+    setSaving(false)
     await onSaved()
   }
 
