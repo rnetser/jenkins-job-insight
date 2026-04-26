@@ -1424,10 +1424,7 @@ def mentions_mark_read_cmd(
         try:
             cid = int(part)
         except ValueError:
-            typer.echo(
-                f"Error: invalid ID '{part}' — must be a positive integer.", err=True
-            )
-            raise typer.Exit(1)
+            cid = -1
         if cid <= 0:
             typer.echo(
                 f"Error: invalid ID '{part}' — must be a positive integer.", err=True
