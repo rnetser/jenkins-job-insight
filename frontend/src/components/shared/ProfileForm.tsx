@@ -249,7 +249,7 @@ export function ProfileForm({ onSaved, onAdminLogin }: ProfileFormProps) {
     const trimmed = username.trim()
     if (!trimmed) return
 
-    if (trimmed.toLowerCase() === 'admin') {
+    if (trimmed.toLowerCase() === 'admin' && !apiKey.trim()) {
       setUsernameError("The username 'admin' is reserved")
       return
     }
