@@ -3354,11 +3354,13 @@ async def get_mentions_for_user(
 ) -> dict:
     """Get comments that mention @username.
 
-    Returns dict with 'mentions' list, 'total' count, and 'unread_count'
-    for pagination. Each mention includes: id, job_id, test_name,
-    child_job_name, child_build_number, comment, username (author),
-    created_at, is_read.
+    Returns dict with 'mentions' list, 'total' count, and 'unread_count'.
+    When unread_only=True, 'total' reflects the count of unread mentions only
+    (matching the filtered result set). 'unread_count' always reflects the
+    global unread count for the user (regardless of unread_only filter).
 
+    Each mention includes: id, job_id, test_name, child_job_name,
+    child_build_number, comment, username (author), created_at, is_read.
     """
     logger.debug(
         f"get_mentions_for_user: username={username}, offset={offset}, limit={limit}, unread_only={unread_only}"
@@ -3376,6 +3378,9 @@ async def get_mentions_for_user(
 
 async def mark_mentions_read(username: str, comment_ids: list[int]) -> None:
     """Mark specific mentions as read for a user."""
+    # Note: comment_ids are not validated against actual mentions for this user.
+    # Junk rows may accumulate but are harmless — _fetch_mention_candidates
+    # re-checks detect_mentions, so non-mentioned comments never surface.
     if not comment_ids:
         return
     logger.debug(
@@ -3400,6 +3405,9 @@ async def get_unread_mention_count(username: str) -> int:
 
 async def mark_all_mentions_read(username: str) -> int:
     """Mark all unread mentions as read for a user. Returns count marked."""
+    # Note: small race window between fetch and insert (separate connections).
+    # New mentions arriving between steps won't be marked, but the next poll
+    # or mark-all call will catch them. This is standard "mark all as of now" semantics.
     logger.debug(f"mark_all_mentions_read: username={username}")
     candidates = await _fetch_mention_candidates(username, unread_only=True)
     if not candidates:

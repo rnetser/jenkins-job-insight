@@ -145,6 +145,22 @@ class TestGetMentionsForUser:
         assert result["total"] == 1
         assert "@al" in result["mentions"][0]["comment"]
 
+    async def test_get_mentions_unread_only_filters_read(
+        self, setup_test_db: Path
+    ) -> None:
+        """unread_only=True excludes already-read mentions."""
+        db = setup_test_db
+        cid_read = await _add_comment(db, "Hey @alice read", username="bob")
+        await _add_comment(db, "Hey @alice unread", username="charlie")
+
+        with patch.object(storage, "DB_PATH", db):
+            await storage.mark_mentions_read("alice", [cid_read])
+            result = await storage.get_mentions_for_user("alice", unread_only=True)
+
+        assert result["total"] == 1
+        assert result["mentions"][0]["comment"] == "Hey @alice unread"
+        assert result["mentions"][0]["is_read"] is False
+
 
 class TestMarkMentionsRead:
     """Tests for storage.mark_mentions_read."""
@@ -480,7 +496,7 @@ class TestMentionRegexParity:
     """
 
     # Pattern: (?<![a-zA-Z0-9.])@([a-zA-Z0-9_-]+)
-    PARITY_CASES = [
+    PARITY_CASES = (
         ("hello @alice", ["alice"]),
         ("@bob test", ["bob"]),
         ("cc @alice @bob", ["alice", "bob"]),
@@ -495,7 +511,7 @@ class TestMentionRegexParity:
         ("(@alice)", ["alice"]),  # parens ok
         ("@alice.", ["alice"]),  # trailing dot ok
         ("@alice ping @alice", ["alice"]),  # deduplication — same user only once
-    ]
+    )
 
     @pytest.mark.parametrize("text,expected", PARITY_CASES)
     def test_detect_mentions_parity(self, text, expected):

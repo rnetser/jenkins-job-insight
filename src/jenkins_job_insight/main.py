@@ -4474,8 +4474,10 @@ async def get_user_mentions(request: Request):
     try:
         offset = max(0, int(request.query_params.get("offset", "0")))
         limit = min(200, max(1, int(request.query_params.get("limit", "50"))))
-    except ValueError:
-        raise HTTPException(status_code=400, detail="offset and limit must be integers")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="offset and limit must be integers"
+        ) from exc
     unread_only = request.query_params.get("unread_only", "false").lower() in (
         "true",
         "1",
