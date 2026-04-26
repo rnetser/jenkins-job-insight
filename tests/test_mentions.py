@@ -329,6 +329,29 @@ class TestMarkReadEndpoint:
         )
         assert response.status_code == 401
 
+    async def test_mark_read_non_mentioned_comment_no_effect(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """Marking a comment that doesn't mention the user has no visible effect."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            # Comment mentions @other, NOT @testuser
+            cid = await _add_comment(temp_db_path, "Hey @other look", username="bob")
+
+        test_client.cookies.set("jji_username", "testuser")
+        # Marking succeeds (INSERT OR IGNORE) but creates a junk row
+        response = test_client.post(
+            "/api/users/mentions/read",
+            json={"comment_ids": [cid]},
+        )
+        assert response.status_code == 200
+
+        # But the comment never appears in testuser's mentions
+        response = test_client.get("/api/users/mentions")
+        assert response.status_code == 200
+        assert response.json()["total"] == 0
+        test_client.cookies.clear()
+
 
 class TestMarkAllMentionsRead:
     """Tests for storage.mark_all_mentions_read."""
@@ -439,8 +462,7 @@ class TestGetMentionsEndpointValidation:
             response = test_client.get("/api/users/mentions?offset=-5")
             assert response.status_code == 200
             mock_get.assert_called_once()
-            call_kwargs = mock_get.call_args
-            assert call_kwargs.kwargs.get("offset", call_kwargs[1].get("offset")) == 0
+            assert mock_get.call_args.kwargs["offset"] == 0
         test_client.cookies.clear()
 
     async def test_limit_clamped_to_max(self, test_client, temp_db_path: Path) -> None:
@@ -457,8 +479,7 @@ class TestGetMentionsEndpointValidation:
             response = test_client.get("/api/users/mentions?limit=9999")
             assert response.status_code == 200
             mock_get.assert_called_once()
-            call_kwargs = mock_get.call_args
-            assert call_kwargs.kwargs.get("limit", call_kwargs[1].get("limit")) == 200
+            assert mock_get.call_args.kwargs["limit"] == 200
         test_client.cookies.clear()
 
 
