@@ -182,10 +182,14 @@ describe('CommentsSection – @mention highlighting', () => {
 /** Extract mention usernames from text using MENTION_RE (same as backend). */
 function extractMentions(text: string): string[] {
   MENTION_RE.lastIndex = 0
+  const seen = new Set<string>()
   const mentions: string[] = []
   let m: RegExpExecArray | null
   while ((m = MENTION_RE.exec(text)) !== null) {
-    mentions.push(m[1])
+    if (!seen.has(m[1])) {
+      seen.add(m[1])
+      mentions.push(m[1])
+    }
   }
   return mentions
 }
@@ -206,6 +210,7 @@ const MENTION_TEST_CASES = [
   { input: '1@alice', expected: [] },                          // preceded by digit — no match
   { input: '(@alice)', expected: ['alice'] },                  // parens ok
   { input: '@alice.', expected: ['alice'] },                   // trailing dot ok
+  { input: '@alice ping @alice', expected: ['alice'] },        // deduplication — same user only once
 ]
 
 describe('MENTION_RE – parity with Python _MENTION_PATTERN', () => {

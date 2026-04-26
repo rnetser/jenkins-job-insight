@@ -1153,6 +1153,11 @@ class TestMentionsMarkReadCommand:
         assert result.exit_code == 0
         mock_client.mark_mentions_read.assert_called_once_with([1, 2, 3])
 
+    def test_mentions_mark_read_invalid_ids(self, mock_client):
+        result = runner.invoke(app, ["mentions-mark-read", "--ids", "1,foo"])
+        assert result.exit_code == 1
+        assert "invalid ID" in result.output
+
     def test_mentions_mark_read_json(self, mock_client):
         mock_client.mark_mentions_read.return_value = {"ok": True}
         result = runner.invoke(app, ["--json", "mentions-mark-read", "--ids", "5"])

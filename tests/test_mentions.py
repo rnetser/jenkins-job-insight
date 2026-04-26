@@ -464,6 +464,7 @@ class TestMentionRegexParity:
         ("1@alice", []),  # preceded by digit — no match
         ("(@alice)", ["alice"]),  # parens ok
         ("@alice.", ["alice"]),  # trailing dot ok
+        ("@alice ping @alice", ["alice"]),  # deduplication — same user only once
     ]
 
     @pytest.mark.parametrize("text,expected", PARITY_CASES)
