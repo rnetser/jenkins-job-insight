@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { useClipboard } from '@/lib/useClipboard'
 import { parseApiTimestamp, isAnalysisTimeout, formatDuration, formatTimestamp } from '@/lib/utils'
@@ -105,6 +105,7 @@ function CliCommand({ jobId }: { jobId: string }) {
 function ReportContent() {
   const { jobId } = useParams<{ jobId: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const state = useReportState()
   const dispatch = useReportDispatch()
   const refreshEnrichments = useRefreshEnrichments()
@@ -285,6 +286,24 @@ function ReportContent() {
       cancelAnimationFrame(raf2)
     }
   }, [state.loading, state.error, scrollKey])
+
+  // Scroll to comment when ?comment=ID is present in query params
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const commentId = params.get('comment')
+    if (commentId && !state.loading && !state.error) {
+      // Delay to let FailureCard auto-expand and comments render
+      const timeout = setTimeout(() => {
+        const el = document.getElementById(`comment-${commentId}`)
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          el.classList.add('ring-2', 'ring-accent-blue', 'ring-offset-2')
+          setTimeout(() => el.classList.remove('ring-2', 'ring-accent-blue', 'ring-offset-2'), 3000)
+        }
+      }, 1000)
+      return () => clearTimeout(timeout)
+    }
+  }, [location.search, state.loading, state.error])
 
   // Save scroll position on scroll (debounced)
   useEffect(() => {

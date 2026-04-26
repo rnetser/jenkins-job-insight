@@ -183,7 +183,8 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
             return (
               <div
                 key={c.id}
-                className="group flex items-start gap-3 rounded-md bg-surface-elevated/50 px-3 py-2 text-sm animate-slide-up"
+                id={`comment-${c.id}`}
+                className="group flex items-start gap-3 rounded-md bg-surface-elevated/50 px-3 py-2 text-sm animate-slide-up transition-all duration-300"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">

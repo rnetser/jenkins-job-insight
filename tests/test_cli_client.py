@@ -453,6 +453,50 @@ class TestJJIClientMentionableUsers:
         assert result["usernames"] == []
 
 
+class TestJJIClientMentions:
+    def test_get_mentions(self):
+        payload = {
+            "mentions": [{"id": 1, "comment": "@alice hi", "username": "bob"}],
+            "total": 1,
+            "unread_count": 1,
+        }
+
+        def handler(request):
+            assert request.method == "GET"
+            assert request.url.path == "/api/users/mentions"
+            assert request.url.params["limit"] == "50"
+            return httpx.Response(200, json=payload)
+
+        client = _make_client(handler, username="alice")
+        result = client.get_mentions(limit=50)
+        assert result["total"] == 1
+        assert result["mentions"][0]["comment"] == "@alice hi"
+
+    def test_get_mentions_unread_only(self):
+        def handler(request):
+            assert request.url.params.get("unread_only") == "true"
+            return httpx.Response(
+                200, json={"mentions": [], "total": 0, "unread_count": 0}
+            )
+
+        client = _make_client(handler, username="alice")
+        client.get_mentions(unread_only=True)
+
+    def test_mark_mentions_read(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert request.url.path == "/api/users/mentions/read"
+            import json
+
+            body = json.loads(request.content)
+            assert body["comment_ids"] == [10, 20]
+            return httpx.Response(200, json={"ok": True})
+
+        client = _make_client(handler, username="alice")
+        result = client.mark_mentions_read([10, 20])
+        assert result["ok"] is True
+
+
 class TestJJIClientAiConfigs:
     def test_get_ai_configs(self):
         sample = [

@@ -1366,6 +1366,46 @@ def mentionable_users_cmd(
             typer.echo("No mentionable users found.")
 
 
+@app.command("mentions")
+def mentions_cmd(
+    limit: int = typer.Option(50, "--limit", "-l", help="Max mentions to return."),
+    unread: bool = typer.Option(False, "--unread", help="Show only unread mentions."),
+    json_output: bool = _JSON_OPTION,
+):
+    """List your @mentions across all reports."""
+    _set_json(json_output)
+    try:
+        client = _get_client()
+        data = client.get_mentions(limit=limit, unread_only=unread)
+    except JJIError as err:
+        _handle_error(err)
+
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        mentions = data.get("mentions", [])
+        total = data.get("total", 0)
+        unread_count = data.get("unread_count", 0)
+        typer.echo(f"Total: {total} mention(s), {unread_count} unread")
+        if mentions:
+            print_output(
+                mentions,
+                columns=[
+                    "id",
+                    "job_id",
+                    "test_name",
+                    "comment",
+                    "username",
+                    "is_read",
+                    "created_at",
+                ],
+                labels={"username": "BY", "is_read": "READ", "created_at": "DATE"},
+                as_json=False,
+            )
+        else:
+            typer.echo("No mentions found.")
+
+
 # -- Bug Creation -------------------------------------------------------------
 
 

@@ -4464,6 +4464,64 @@ async def unsubscribe_notifications(body: UnsubscribeRequest, request: Request):
     return {"status": "unsubscribed"}
 
 
+@app.get("/api/users/mentions")
+async def get_user_mentions(request: Request):
+    """Get comments that mention the current user."""
+    username = request.state.username
+    if not username:
+        raise HTTPException(status_code=401, detail="Username required")
+    _check_allow_list(request)
+    offset = int(request.query_params.get("offset", "0"))
+    limit = int(request.query_params.get("limit", "50"))
+    unread_only = request.query_params.get("unread_only", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    result = await storage.get_mentions_for_user(
+        username=username, offset=offset, limit=limit, unread_only=unread_only
+    )
+    unread_count = await storage.get_unread_mention_count(username)
+    return {
+        "mentions": result["mentions"],
+        "total": result["total"],
+        "unread_count": unread_count,
+    }
+
+
+@app.post("/api/users/mentions/read")
+async def mark_mentions_as_read(request: Request):
+    """Mark specific mentions as read."""
+    username = request.state.username
+    if not username:
+        raise HTTPException(status_code=401, detail="Username required")
+    _check_allow_list(request)
+    body = await _read_json_object(request)
+    comment_ids = body.get("comment_ids", [])
+    if (
+        not isinstance(comment_ids, list)
+        or not comment_ids
+        or not all(isinstance(cid, int) for cid in comment_ids)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="comment_ids must be a non-empty list of integers",
+        )
+    await storage.mark_mentions_read(username, comment_ids)
+    return {"ok": True}
+
+
+@app.get("/api/users/mentions/unread-count")
+async def get_unread_mentions_count(request: Request):
+    """Get count of unread mentions for navbar badge."""
+    username = request.state.username
+    if not username:
+        raise HTTPException(status_code=401, detail="Username required")
+    _check_allow_list(request)
+    count = await storage.get_unread_mention_count(username)
+    return {"count": count}
+
+
 @app.get("/api/users/mentionable")
 async def get_mentionable_users(request: Request):
     """Return list of usernames that can be mentioned in comments."""

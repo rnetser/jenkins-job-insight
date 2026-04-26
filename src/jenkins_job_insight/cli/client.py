@@ -709,6 +709,21 @@ class JJIClient:
         """Get list of mentionable usernames. GET /api/users/mentionable"""
         return self._request("GET", "/api/users/mentionable")
 
+    def get_mentions(
+        self, limit: int = 50, offset: int = 0, unread_only: bool = False
+    ) -> dict:
+        """Get comments that mention the current user. GET /api/users/mentions"""
+        params: dict = {"limit": limit, "offset": offset}
+        if unread_only:
+            params["unread_only"] = "true"
+        return self._request("GET", "/api/users/mentions", params=params)
+
+    def mark_mentions_read(self, comment_ids: list[int]) -> dict:
+        """Mark specific mentions as read. POST /api/users/mentions/read"""
+        return self._request(
+            "POST", "/api/users/mentions/read", json={"comment_ids": comment_ids}
+        )
+
     # -- AI Configs -----------------------------------------------------------
 
     def get_ai_configs(self) -> list[dict]:
