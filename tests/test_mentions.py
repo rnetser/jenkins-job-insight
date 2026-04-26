@@ -252,6 +252,24 @@ class TestGetMentionsEndpoint:
         response = test_client.get("/api/users/mentions")
         assert response.status_code == 401
 
+    async def test_get_mentions_unread_only_forwarded(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """unread_only query flag is forwarded to storage as True."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+        test_client.cookies.set("jji_username", "testuser")
+        with patch.object(
+            storage,
+            "get_mentions_for_user",
+            new_callable=AsyncMock,
+            return_value={"mentions": [], "total": 0, "unread_count": 0},
+        ) as mock_get:
+            response = test_client.get("/api/users/mentions?unread_only=true")
+            assert response.status_code == 200
+            assert mock_get.call_args.kwargs["unread_only"] is True
+        test_client.cookies.clear()
+
 
 class TestMarkReadEndpoint:
     """Tests for POST /api/users/mentions/read."""
