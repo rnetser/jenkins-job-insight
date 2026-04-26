@@ -1422,12 +1422,18 @@ def mentions_mark_read_cmd(
     comment_ids = []
     for part in raw_parts:
         try:
-            comment_ids.append(int(part))
+            cid = int(part)
         except ValueError:
             typer.echo(
                 f"Error: invalid ID '{part}' — must be a positive integer.", err=True
             )
             raise typer.Exit(1)
+        if cid <= 0:
+            typer.echo(
+                f"Error: invalid ID '{part}' — must be a positive integer.", err=True
+            )
+            raise typer.Exit(1)
+        comment_ids.append(cid)
     _run_client_command(
         json_output,
         lambda c: c.mark_mentions_read(comment_ids),
