@@ -13,6 +13,7 @@ import { ReportPage } from '@/pages/ReportPage'
 import { TestHistoryPage } from '@/pages/TestHistoryPage'
 import { UsersPage } from '@/pages/UsersPage'
 import { TokenUsagePage } from '@/pages/TokenUsagePage'
+import { MentionsPage } from '@/pages/MentionsPage'
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
             <Route path="/dashboard" element={<Navigate to="/" replace />} />
             <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />
             <Route path="/history/test/:testName" element={<ProtectedRoute><TestHistoryPage /></ProtectedRoute>} />
+            <Route path="/mentions" element={<ProtectedRoute><MentionsPage /></ProtectedRoute>} />
             <Route path="/results/:jobId" element={<ProtectedRoute><ReportPage /></ProtectedRoute>} />
             <Route path="/status/:jobId" element={<ProtectedRoute><StatusPage /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />

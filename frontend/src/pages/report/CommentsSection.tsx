@@ -27,7 +27,7 @@ function enrichmentBadgeVariant(status: string): 'success' | 'destructive' | 'de
 /*  @mention highlighting in rendered text                             */
 /* ------------------------------------------------------------------ */
 
-const MENTION_RE = /(?<![a-zA-Z0-9.])@([a-zA-Z0-9_-]+)/g
+export const MENTION_RE = /(?<![a-zA-Z0-9.])@([a-zA-Z0-9_-]+)/g
 
 /** Render a plain-text segment with @mentions highlighted. */
 function renderTextWithMentions(text: string, segIndex: number): ReactNode {
@@ -183,7 +183,8 @@ export function CommentsSection({ jobId, testNames, childJobName, childBuildNumb
             return (
               <div
                 key={c.id}
-                className="group flex items-start gap-3 rounded-md bg-surface-elevated/50 px-3 py-2 text-sm animate-slide-up"
+                id={`comment-${c.id}`}
+                className="group flex items-start gap-3 rounded-md bg-surface-elevated/50 px-3 py-2 text-sm animate-slide-up transition-all duration-300"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">

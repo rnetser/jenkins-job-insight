@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { useEffect } from 'react'
-import { CommentsSection } from '../CommentsSection'
+import { CommentsSection, MENTION_RE } from '../CommentsSection'
 import { ReportProvider, useReportDispatch } from '../ReportContext'
 import type { Comment } from '@/types'
 
@@ -171,4 +171,53 @@ describe('CommentsSection – @mention highlighting', () => {
     expect(screen.getByText('No mentions here')).toBeDefined()
     expect(screen.queryByText(/@/)).toBeNull()
   })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Mention regex parity with Python backend                           */
+/* ------------------------------------------------------------------ */
+// These test cases are shared with Python tests/test_mentions.py::TestMentionRegexParity
+// If you change these, update the Python side too.
+
+/** Extract mention usernames from text using MENTION_RE (same as backend). */
+function extractMentions(text: string): string[] {
+  MENTION_RE.lastIndex = 0
+  const seen = new Set<string>()
+  const mentions: string[] = []
+  let m: RegExpExecArray | null
+  while ((m = MENTION_RE.exec(text)) !== null) {
+    if (!seen.has(m[1])) {
+      seen.add(m[1])
+      mentions.push(m[1])
+    }
+  }
+  return mentions
+}
+
+// Shared mention regex test cases — MUST match Python's _MENTION_PATTERN in comment_enrichment.py
+// Pattern: (?<![a-zA-Z0-9.])@([a-zA-Z0-9_-]+)
+const MENTION_TEST_CASES = [
+  { input: 'hello @alice', expected: ['alice'] },
+  { input: '@bob test', expected: ['bob'] },
+  { input: 'cc @alice @bob', expected: ['alice', 'bob'] },
+  { input: 'email user@domain.com', expected: [] },          // email — no match
+  { input: 'no mentions here', expected: [] },
+  { input: '@alice-bob', expected: ['alice-bob'] },           // hyphens allowed
+  { input: '@alice_bob', expected: ['alice_bob'] },           // underscores allowed
+  { input: '@alice123', expected: ['alice123'] },             // digits allowed
+  { input: '.@alice', expected: [] },                          // preceded by dot — no match
+  { input: 'x@alice', expected: [] },                          // preceded by letter — no match
+  { input: '1@alice', expected: [] },                          // preceded by digit — no match
+  { input: '(@alice)', expected: ['alice'] },                  // parens ok
+  { input: '@alice.', expected: ['alice'] },                   // trailing dot ok
+  { input: '@alice ping @alice', expected: ['alice'] },        // deduplication — same user only once
+]
+
+describe('MENTION_RE – parity with Python _MENTION_PATTERN', () => {
+  it.each(MENTION_TEST_CASES)(
+    'extracts $expected from "$input"',
+    ({ input, expected }) => {
+      expect(extractMentions(input)).toEqual(expected)
+    },
+  )
 })

@@ -1,7 +1,9 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { BookOpen, Bug, type LucideIcon } from 'lucide-react'
 import { UserBadge } from './UserBadge'
 import { useAuth } from '@/lib/auth'
+import { api } from '@/lib/api'
 import { GITHUB_REPO_URL } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 
@@ -22,13 +24,64 @@ const BASE_NAV_LINKS = [
   { to: '/history', label: 'History' },
 ]
 
+const UNREAD_POLL_INTERVAL = 30_000
+
 export function NavBar() {
   const location = useLocation()
-  const { isAdmin } = useAuth()
+  const { isAdmin, username } = useAuth()
+  const [unreadCount, setUnreadCount] = useState(0)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const fetchUnread = useCallback(async () => {
+    try {
+      const res = await api.get<{ count: number }>('/api/users/mentions/unread-count')
+      setUnreadCount(res.count)
+    } catch {
+      // best-effort
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!username) return
+    fetchUnread()
+    intervalRef.current = setInterval(fetchUnread, UNREAD_POLL_INTERVAL)
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [username, fetchUnread])
+
+  useEffect(() => {
+    if (!username) return
+    function handleMentionsUpdated() {
+      fetchUnread()
+    }
+    window.addEventListener('mentions-updated', handleMentionsUpdated)
+    return () => window.removeEventListener('mentions-updated', handleMentionsUpdated)
+  }, [username, fetchUnread])
+
+  useEffect(() => {
+    if (!username) return
+    function handleVisibility() {
+      if (document.visibilityState === 'visible') {
+        fetchUnread()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [username, fetchUnread])
+
+  // Clear stale unread count when user is logged out
+  useEffect(() => {
+    if (!username) setUnreadCount(0)
+  }, [username])
+
+  const baseNavLinks = username
+    ? [...BASE_NAV_LINKS, { to: '/mentions', label: 'Mentions' }]
+    : BASE_NAV_LINKS
 
   const navLinks = isAdmin
-    ? [...BASE_NAV_LINKS, { to: '/admin/users', label: 'Users' }, { to: '/admin/token-usage', label: 'Token Usage' }]
-    : BASE_NAV_LINKS
+    ? [...baseNavLinks, { to: '/admin/users', label: 'Users' }, { to: '/admin/token-usage', label: 'Token Usage' }]
+    : baseNavLinks
 
   return (
     <header className="sticky top-0 z-50 border-b border-border-default bg-surface-card/95 backdrop-blur-sm">
@@ -46,13 +99,18 @@ export function NavBar() {
                 key={to}
                 to={to}
                 className={cn(
-                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors duration-150',
+                  'relative rounded-md px-3 py-1.5 text-sm font-medium transition-colors duration-150',
                   (location.pathname === to || (to !== '/' && location.pathname.startsWith(to)))
                     ? 'bg-surface-elevated text-text-primary'
                     : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
                 )}
               >
                 {label}
+                {to === '/mentions' && unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-signal-blue px-1 text-[10px] font-bold text-white">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
               </Link>
             ))}
           </nav>

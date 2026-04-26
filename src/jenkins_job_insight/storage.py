@@ -15,6 +15,7 @@ from typing import get_args
 import aiosqlite
 from simple_logger.logger import get_logger
 
+from jenkins_job_insight.comment_enrichment import detect_mentions
 from jenkins_job_insight.encryption import (
     get_hmac_secret,
     strip_sensitive_from_response,
@@ -436,6 +437,20 @@ async def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_push_subscriptions_username ON push_subscriptions (username)"
         )
 
+        # Mention read tracking
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS mention_reads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                comment_id INTEGER NOT NULL,
+                read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(username, comment_id)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mention_reads_username ON mention_reads (username)"
+        )
+
         await db.commit()
 
     # Backfill failure_history from existing results (runs once when table is empty).
@@ -526,6 +541,10 @@ async def delete_comment(comment_id: int, username: str, job_id: str = "") -> bo
             query += " AND job_id = ?"
             params.append(job_id)
         cursor = await db.execute(query, params)
+        if cursor.rowcount > 0:
+            await db.execute(
+                "DELETE FROM mention_reads WHERE comment_id = ?", (comment_id,)
+            )
         await db.commit()
         deleted = cursor.rowcount > 0
         logger.debug(f"delete_comment: comment_id={comment_id}, deleted={deleted}")
@@ -2015,6 +2034,11 @@ async def get_all_failures(
 
 async def _delete_job_rows(db: aiosqlite.Connection, job_id: str) -> bool:
     """Delete all rows for a job across related tables. Returns True if the job existed."""
+    await db.execute(
+        "DELETE FROM mention_reads WHERE comment_id IN "
+        "(SELECT id FROM comments WHERE job_id = ?)",
+        (job_id,),
+    )
     await db.execute("DELETE FROM comments WHERE job_id = ?", (job_id,))
     await db.execute("DELETE FROM failure_reviews WHERE job_id = ?", (job_id,))
     await db.execute("DELETE FROM failure_history WHERE job_id = ?", (job_id,))
@@ -3256,3 +3280,148 @@ async def delete_stale_push_subscriptions(endpoints: list[str]) -> None:
             endpoints,
         )
         await db.commit()
+
+
+async def _fetch_mention_candidates(
+    username: str,
+    unread_only: bool = False,
+) -> list[dict]:
+    """Fetch and filter mention candidates for a user.
+
+    Uses SQL LIKE for initial candidate filtering, then refines
+    with Python-side regex (detect_mentions) to enforce word-boundary
+    semantics. SQLite lacks native regex/word-boundary support.
+
+    Performance note: LIKE '%@user%' is a full table scan (leading wildcard
+    precludes index use). For current scale (hundreds to low-thousands of
+    comments) this is acceptable. If the comments table grows significantly,
+    consider: (1) caching unread counts with TTL invalidated on add_comment,
+    (2) pushing LIMIT into SQL for paginated queries, or (3) a denormalized
+    mentions table populated on comment creation.
+    """
+    like_pattern = f"%@{username}%"
+
+    base_where = "c.comment LIKE ?"
+    base_params: list = [like_pattern]
+
+    if unread_only:
+        base_where += " AND mr.id IS NULL"
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        cursor = await db.execute(
+            f"SELECT c.id, c.job_id, c.test_name, c.child_job_name, "
+            f"c.child_build_number, c.comment, c.username, c.created_at, "
+            f"CASE WHEN mr.id IS NOT NULL THEN 1 ELSE 0 END AS is_read "
+            f"FROM comments c "
+            f"LEFT JOIN mention_reads mr ON mr.comment_id = c.id AND mr.username = ? "
+            f"WHERE {base_where} "
+            f"ORDER BY c.created_at DESC",
+            [username, *base_params],
+        )
+        rows = await cursor.fetchall()
+
+    # Python-side word-boundary filtering using detect_mentions.
+    # SQL LIKE '%@user%' over-matches (e.g. '@username_extra'), so we
+    # verify each candidate with regex-based detect_mentions().
+    filtered: list[dict] = []
+    for row in rows:
+        mentioned_users = detect_mentions(row["comment"])
+        if username in mentioned_users:
+            filtered.append(
+                {
+                    "id": row["id"],
+                    "job_id": row["job_id"],
+                    "test_name": row["test_name"],
+                    "child_job_name": row["child_job_name"],
+                    "child_build_number": row["child_build_number"],
+                    "comment": row["comment"],
+                    "username": row["username"],
+                    "created_at": row["created_at"],
+                    "is_read": bool(row["is_read"]),
+                }
+            )
+
+    return filtered
+
+
+async def get_mentions_for_user(
+    username: str,
+    offset: int = 0,
+    limit: int = 50,
+    unread_only: bool = False,
+) -> dict:
+    """Get comments that mention @username.
+
+    Returns dict with 'mentions' list, 'total' count, and 'unread_count'.
+    When unread_only=True, 'total' reflects the count of unread mentions only
+    (matching the filtered result set). 'unread_count' always reflects the
+    global unread count for the user (regardless of unread_only filter).
+
+    Each mention includes: id, job_id, test_name, child_job_name,
+    child_build_number, comment, username (author), created_at, is_read.
+    """
+    logger.debug(
+        f"get_mentions_for_user: username={username}, offset={offset}, limit={limit}, unread_only={unread_only}"
+    )
+    filtered = await _fetch_mention_candidates(username, unread_only=unread_only)
+
+    total = len(filtered)
+    unread_count = sum(1 for m in filtered if not m["is_read"])
+    mentions = filtered[offset : offset + limit]
+    logger.debug(
+        f"get_mentions_for_user: username={username}, total={total}, returned={len(mentions)}"
+    )
+    return {"mentions": mentions, "total": total, "unread_count": unread_count}
+
+
+async def mark_mentions_read(username: str, comment_ids: list[int]) -> None:
+    """Mark specific mentions as read for a user."""
+    # Note: comment_ids are not validated against actual mentions for this user.
+    # Junk rows may accumulate but are harmless — _fetch_mention_candidates
+    # re-checks detect_mentions, so non-mentioned comments never surface.
+    if not comment_ids:
+        return
+    logger.debug(
+        f"mark_mentions_read: username={username}, comment_ids_count={len(comment_ids)}"
+    )
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            "INSERT OR IGNORE INTO mention_reads (username, comment_id) VALUES (?, ?)",
+            [(username, cid) for cid in comment_ids],
+        )
+        await db.commit()
+
+
+async def get_unread_mention_count(username: str) -> int:
+    """Get count of unread mentions for a user."""
+    logger.debug(f"get_unread_mention_count: username={username}")
+    candidates = await _fetch_mention_candidates(username, unread_only=True)
+    count = len(candidates)
+    logger.debug(f"get_unread_mention_count: username={username}, count={count}")
+    return count
+
+
+async def mark_all_mentions_read(username: str) -> int:
+    """Mark all unread mentions as read for a user. Returns count marked."""
+    # Note: small race window between fetch and insert (separate connections).
+    # New mentions arriving between steps won't be marked, but the next poll
+    # or mark-all call will catch them. This is standard "mark all as of now" semantics.
+    logger.debug(f"mark_all_mentions_read: username={username}")
+    candidates = await _fetch_mention_candidates(username, unread_only=True)
+    if not candidates:
+        return 0
+
+    comment_ids = [c["id"] for c in candidates]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            "INSERT OR IGNORE INTO mention_reads (username, comment_id) VALUES (?, ?)",
+            [(username, cid) for cid in comment_ids],
+        )
+        await db.commit()
+
+    logger.info(
+        f"mark_all_mentions_read: username={username}, marked={len(comment_ids)}"
+    )
+    return len(comment_ids)

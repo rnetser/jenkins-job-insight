@@ -1,4 +1,5 @@
-import { useState, useMemo, type ReactNode } from 'react'
+import { useState, useEffect, useMemo, type ReactNode } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useClipboard } from '@/lib/useClipboard'
 import type { GroupedFailure } from '@/types'
 import { buildFileUrl, buildRepoUrls, isSafeHref, matchRepo, type RepoUrl } from '@/lib/autoLink'
@@ -136,7 +137,22 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
 
   // Comment count for ALL tests in the group
   const groupTestNames = group.tests.map((t) => t.test_name)
-  const commentCount = comments.filter((c) => isCommentInScope(c, groupTestNames, scopedChildJobName, scopedChildBuildNumber)).length
+  const commentsInScope = useMemo(
+    () => comments.filter((c) => isCommentInScope(c, groupTestNames, scopedChildJobName, scopedChildBuildNumber)),
+    [comments, groupTestNames, scopedChildJobName, scopedChildBuildNumber],
+  )
+  const commentCount = commentsInScope.length
+
+  // Auto-expand card when navigating to a specific comment (e.g. from Mentions page)
+  const location = useLocation()
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const targetCommentId = params.get('comment')
+    if (!targetCommentId || expanded) return
+    if (commentsInScope.some((c) => String(c.id) === targetCommentId)) {
+      setExpanded(true)
+    }
+  }, [location.search])
 
   // Review-all: check how many tests in group are reviewed
   const reviewedCount = group.tests.filter((t) => {

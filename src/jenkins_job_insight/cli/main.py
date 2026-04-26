@@ -1366,6 +1366,88 @@ def mentionable_users_cmd(
             typer.echo("No mentionable users found.")
 
 
+@app.command("mentions")
+def mentions_cmd(
+    limit: int = typer.Option(50, "--limit", "-l", help="Max mentions to return."),
+    offset: int = typer.Option(0, "--offset", "-o", help="Offset for pagination."),
+    unread: bool = typer.Option(False, "--unread", help="Show only unread mentions."),
+    json_output: bool = _JSON_OPTION,
+):
+    """List your @mentions across all reports."""
+    _set_json(json_output)
+    try:
+        client = _get_client()
+        data = client.get_mentions(limit=limit, offset=offset, unread_only=unread)
+    except JJIError as err:
+        _handle_error(err)
+
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        mentions = data.get("mentions", [])
+        total = data.get("total", 0)
+        unread_count = data.get("unread_count", 0)
+        typer.echo(f"Total: {total} mention(s), {unread_count} unread")
+        if mentions:
+            print_output(
+                mentions,
+                columns=[
+                    "id",
+                    "job_id",
+                    "test_name",
+                    "comment",
+                    "username",
+                    "is_read",
+                    "created_at",
+                ],
+                labels={"username": "BY", "is_read": "READ", "created_at": "DATE"},
+                as_json=False,
+            )
+        else:
+            typer.echo("No mentions found.")
+
+
+@app.command("mentions-mark-read")
+def mentions_mark_read_cmd(
+    ids: str = typer.Option(
+        ..., "--ids", help="Comma-separated comment IDs to mark as read."
+    ),
+    json_output: bool = _JSON_OPTION,
+):
+    """Mark specific mentions as read."""
+    raw_parts = [x.strip() for x in ids.split(",") if x.strip()]
+    if not raw_parts:
+        typer.echo("Error: --ids must contain at least one integer ID.", err=True)
+        raise typer.Exit(1)
+    comment_ids = []
+    for part in raw_parts:
+        try:
+            cid = int(part)
+        except ValueError:
+            cid = -1
+        if cid <= 0:
+            typer.echo(
+                f"Error: invalid ID '{part}' — must be a positive integer.", err=True
+            )
+            raise typer.Exit(1)
+        comment_ids.append(cid)
+    _run_client_command(
+        json_output,
+        lambda c: c.mark_mentions_read(comment_ids),
+    )
+
+
+@app.command("mentions-mark-all-read")
+def mentions_mark_all_read_cmd(
+    json_output: bool = _JSON_OPTION,
+):
+    """Mark all mentions as read."""
+    _run_client_command(
+        json_output,
+        lambda c: c.mark_all_mentions_read(),
+    )
+
+
 # -- Bug Creation -------------------------------------------------------------
 
 
