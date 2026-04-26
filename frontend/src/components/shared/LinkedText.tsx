@@ -6,9 +6,11 @@ interface LinkedTextProps {
   repoUrls: RepoUrl[]
   /** Custom renderer for link segments. */
   renderLink?: (seg: LinkSegment, index: number) => ReactNode
+  /** Custom renderer for plain-text segments (e.g. @mention highlighting). */
+  renderText?: (text: string, index: number) => ReactNode
 }
 
-export function LinkedText({ text, repoUrls, renderLink }: LinkedTextProps) {
+export function LinkedText({ text, repoUrls, renderLink, renderText }: LinkedTextProps) {
   const segments = useMemo<LinkSegment[]>(() => autoLinkAnalysis(text, repoUrls), [text, repoUrls])
 
   return (
@@ -21,7 +23,7 @@ export function LinkedText({ text, repoUrls, renderLink }: LinkedTextProps) {
             </a>
           )
         ) : (
-          <span key={i}>{seg.text}</span>
+          renderText ? <Fragment key={i}>{renderText(seg.text, i)}</Fragment> : <span key={i}>{seg.text}</span>
         )
       )}
     </>

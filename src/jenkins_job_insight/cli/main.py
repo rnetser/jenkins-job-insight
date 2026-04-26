@@ -1340,6 +1340,32 @@ def ai_configs(
         )
 
 
+# -- Users ----------------------------------------------------------------
+# Note: /api/notifications/subscribe, /api/notifications/unsubscribe, and
+# /api/notifications/vapid-public-key are intentionally browser-only (Web Push
+# subscriptions require a browser service worker). No CLI equivalent needed.
+# See AGENTS.md CLI Parity exceptions.
+
+
+@app.command("mentionable-users")
+def mentionable_users_cmd(
+    json_output: bool = _JSON_OPTION,
+):
+    """List users that can be mentioned in comments."""
+    data = _run_client_command(
+        json_output,
+        lambda c: c.get_mentionable_users(),
+        emit_output=False,
+    )
+    if not _state.get("json", False):
+        usernames = data.get("usernames", [])
+        if usernames:
+            for name in usernames:
+                typer.echo(name)
+        else:
+            typer.echo("No mentionable users found.")
+
+
 # -- Bug Creation -------------------------------------------------------------
 
 

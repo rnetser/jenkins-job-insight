@@ -14,6 +14,8 @@ _GITHUB_ISSUE_PATTERN = re.compile(r"https?://github\.com/([^/]+)/([^/]+)/issues
 
 _JIRA_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
 
+_MENTION_PATTERN = re.compile(r"(?<![a-zA-Z0-9.])@([a-zA-Z0-9_-]+)")
+
 
 def _detect_github_links(text: str, pattern: re.Pattern, label: str) -> list[dict]:
     """Detect GitHub links matching a pattern.
@@ -54,6 +56,29 @@ def detect_jira_keys(text: str) -> list[str]:
     keys = _JIRA_KEY_PATTERN.findall(text)
     logger.debug(f"detect_jira_keys: found={len(keys)}")
     return keys
+
+
+def detect_mentions(text: str) -> list[str]:
+    """Detect @username mentions in text.
+
+    Returns a deduplicated list of mentioned usernames (without the @ prefix).
+    Email addresses (e.g. user@domain.com) are excluded.
+
+    Args:
+        text: The comment text to scan.
+
+    Returns:
+        List of unique usernames in order of first occurrence.
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+    for match in _MENTION_PATTERN.finditer(text):
+        username = match.group(1)
+        if username not in seen:
+            seen.add(username)
+            result.append(username)
+    logger.debug(f"detect_mentions: found={len(result)}")
+    return result
 
 
 async def fetch_github_pr_status(

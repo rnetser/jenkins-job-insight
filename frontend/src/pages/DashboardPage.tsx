@@ -39,6 +39,7 @@ import { Trash2, MessageSquare, CheckCircle2, GitFork, AlertTriangle, Github } f
 import { useAuth } from '@/lib/auth'
 import { MetadataFilterBar } from '@/components/shared/MetadataFilterBar'
 import { MetadataBadges } from '@/components/shared/MetadataBadges'
+import { NotificationPrompt } from '@/components/shared/NotificationPrompt'
 
 const STATUS_FILTER_ALL = 'ALL'
 const STATUS_FILTER_OPTIONS = [STATUS_FILTER_ALL, 'completed', 'running', 'waiting', 'pending', 'failed', 'timeout'] as const
@@ -710,6 +711,8 @@ export function DashboardPage() {
           onConfirm={handleBulkDelete}
           loading={bulkDeleting}
         />
+
+        <NotificationPrompt />
       </div>
     </TooltipProvider>
   )

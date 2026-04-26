@@ -1048,6 +1048,32 @@ class TestAiConfigsCommand:
         assert "No AI configurations found" in result.output
 
 
+class TestMentionableUsersCommand:
+    def test_mentionable_users(self, mock_client):
+        mock_client.get_mentionable_users.return_value = {
+            "usernames": ["alice", "bob", "charlie"]
+        }
+        result = runner.invoke(app, ["mentionable-users"])
+        assert result.exit_code == 0
+        assert "alice" in result.output
+        assert "bob" in result.output
+        assert "charlie" in result.output
+        mock_client.get_mentionable_users.assert_called_once()
+
+    def test_mentionable_users_json(self, mock_client):
+        mock_client.get_mentionable_users.return_value = {"usernames": ["alice", "bob"]}
+        result = runner.invoke(app, ["--json", "mentionable-users"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["usernames"] == ["alice", "bob"]
+
+    def test_mentionable_users_empty(self, mock_client):
+        mock_client.get_mentionable_users.return_value = {"usernames": []}
+        result = runner.invoke(app, ["mentionable-users"])
+        assert result.exit_code == 0
+        assert "No mentionable users found" in result.output
+
+
 class TestPreviewIssueCommand:
     def test_preview_github(self, mock_client):
         mock_client.preview_github_issue.return_value = {

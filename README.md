@@ -53,6 +53,22 @@ Run `jji --help` for all commands.
 
 See the [API reference](https://myk-org.github.io/jenkins-job-insight/) for all endpoints.
 
+## Web Push Notifications
+
+Users can receive browser push notifications when @mentioned in comments. The server uses [VAPID](https://datatracker.ietf.org/doc/html/rfc8292) for Web Push authentication.
+
+| Variable | Description |
+|----------|-------------|
+| `VAPID_PUBLIC_KEY` | VAPID public key (auto-generated with private key if not set) |
+| `VAPID_PRIVATE_KEY` | VAPID private key |
+| `VAPID_CLAIM_EMAIL` | Contact email included in VAPID claims |
+
+Subscribe/unsubscribe is browser-only (managed via the web UI). To list users available for @mentions:
+
+```bash
+jji mentionable-users
+```
+
 ## Development
 
 ```bash

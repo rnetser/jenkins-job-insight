@@ -421,6 +421,21 @@ async def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_token_usage_call_type ON ai_token_usage (call_type)"
         )
 
+        # Push notification subscriptions
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                endpoint TEXT NOT NULL UNIQUE,
+                p256dh_key TEXT NOT NULL,
+                auth_key TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_push_subscriptions_username ON push_subscriptions (username)"
+        )
+
         await db.commit()
 
     # Backfill failure_history from existing results (runs once when table is empty).
@@ -3122,6 +3137,8 @@ async def get_token_usage_dashboard_summary() -> dict:
             cursor = await db.execute(
                 f"SELECT COUNT(*) as calls, "  # noqa: S608
                 f"COALESCE(SUM(total_tokens), 0) as tokens, "
+                f"COALESCE(SUM(input_tokens), 0) as input_tokens, "
+                f"COALESCE(SUM(output_tokens), 0) as output_tokens, "
                 f"COALESCE(SUM(cost_usd), 0) as cost_usd "
                 f"FROM ai_token_usage WHERE {condition}"
             )
@@ -3148,3 +3165,94 @@ async def get_token_usage_dashboard_summary() -> dict:
         result["top_jobs"] = [dict(row) for row in await cursor.fetchall()]
 
         return result
+
+
+# --- Push Subscriptions ---
+
+MAX_PUSH_SUBSCRIPTIONS_PER_USER = 10
+
+
+async def save_push_subscription(
+    username: str, endpoint: str, p256dh_key: str, auth_key: str
+) -> None:
+    """Save or update a push subscription for a user.
+
+    Upserts by endpoint — a user can have multiple subscriptions (multiple browsers/devices).
+    """
+    logger.debug(f"save_push_subscription: username={username}")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await db.execute(
+                "INSERT INTO push_subscriptions (username, endpoint, p256dh_key, auth_key) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(endpoint) DO UPDATE SET "
+                "username = excluded.username, "
+                "p256dh_key = excluded.p256dh_key, "
+                "auth_key = excluded.auth_key, "
+                "created_at = CURRENT_TIMESTAMP",
+                (username, endpoint, p256dh_key, auth_key),
+            )
+            # Enforce per-user subscription limit: delete oldest beyond the cap
+            await db.execute(
+                "DELETE FROM push_subscriptions WHERE username = ? AND id NOT IN "
+                "(SELECT id FROM push_subscriptions WHERE username = ? ORDER BY created_at DESC, id DESC LIMIT ?)",
+                (username, username, MAX_PUSH_SUBSCRIPTIONS_PER_USER),
+            )
+            await db.commit()
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
+async def delete_push_subscription(endpoint: str, username: str) -> bool:
+    """Remove a push subscription by endpoint, scoped to the owning user.
+
+    Returns True if deleted, False if not found or not owned by username.
+    """
+    logger.debug(f"delete_push_subscription: username={username}")
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "DELETE FROM push_subscriptions WHERE endpoint = ? AND username = ?",
+            (endpoint, username),
+        )
+        await db.commit()
+        deleted = cursor.rowcount > 0
+        logger.debug(f"delete_push_subscription: deleted={deleted}")
+        return deleted
+
+
+async def get_push_subscriptions_for_users(usernames: list[str]) -> list[dict]:
+    """Get all push subscriptions for a list of usernames.
+
+    Returns list of dicts with: username, endpoint, p256dh_key, auth_key.
+    """
+    if not usernames:
+        return []
+    logger.debug(f"get_push_subscriptions_for_users: usernames_count={len(usernames)}")
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        placeholders = ",".join("?" for _ in usernames)
+        cursor = await db.execute(
+            f"SELECT username, endpoint, p256dh_key, auth_key "  # noqa: S608
+            f"FROM push_subscriptions WHERE username IN ({placeholders})",  # noqa: S608
+            usernames,
+        )
+        rows = await cursor.fetchall()
+        result = [dict(row) for row in rows]
+        logger.debug(f"get_push_subscriptions_for_users: count={len(result)}")
+        return result
+
+
+async def delete_stale_push_subscriptions(endpoints: list[str]) -> None:
+    """Remove expired/invalid push subscriptions by endpoint."""
+    if not endpoints:
+        return
+    logger.debug(f"delete_stale_push_subscriptions: endpoints_count={len(endpoints)}")
+    async with aiosqlite.connect(DB_PATH) as db:
+        placeholders = ",".join("?" for _ in endpoints)
+        await db.execute(
+            f"DELETE FROM push_subscriptions WHERE endpoint IN ({placeholders})",  # noqa: S608
+            endpoints,
+        )
+        await db.commit()

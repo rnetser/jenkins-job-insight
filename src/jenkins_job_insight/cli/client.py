@@ -703,6 +703,12 @@ class JJIClient:
         """Get token usage for a specific job. GET /api/admin/token-usage/{job_id}"""
         return self._request("GET", f"/api/admin/token-usage/{job_id}")
 
+    # -- Users ----------------------------------------------------------------
+
+    def get_mentionable_users(self) -> dict:
+        """Get list of mentionable usernames. GET /api/users/mentionable"""
+        return self._request("GET", "/api/users/mentionable")
+
     # -- AI Configs -----------------------------------------------------------
 
     def get_ai_configs(self) -> list[dict]:

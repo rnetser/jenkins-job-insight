@@ -431,6 +431,28 @@ class TestJJIClientCapabilities:
         assert result["jira_issues_enabled"] is False
 
 
+class TestJJIClientMentionableUsers:
+    def test_get_mentionable_users(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert request.url.path == "/api/users/mentionable"
+            return httpx.Response(200, json={"usernames": ["alice", "bob", "charlie"]})
+
+        client = _make_client(handler)
+        result = client.get_mentionable_users()
+        assert result["usernames"] == ["alice", "bob", "charlie"]
+
+    def test_get_mentionable_users_empty(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert request.url.path == "/api/users/mentionable"
+            return httpx.Response(200, json={"usernames": []})
+
+        client = _make_client(handler)
+        result = client.get_mentionable_users()
+        assert result["usernames"] == []
+
+
 class TestJJIClientAiConfigs:
     def test_get_ai_configs(self):
         sample = [

@@ -255,6 +255,11 @@ class Settings(BaseSettings):
         description="Enable Report Portal integration. When None, enabled if REPORTPORTAL_URL, REPORTPORTAL_API_TOKEN, and REPORTPORTAL_PROJECT are configured.",
     )
 
+    # Web Push (VAPID) configuration (optional, server-only)
+    vapid_public_key: str = ""
+    vapid_private_key: str = Field(default="", repr=False)
+    vapid_claim_email: str = ""
+
     @model_validator(mode="after")
     def _normalize_optional_strings(self) -> "Settings":
         """Strip whitespace from optional string fields; blank becomes None."""
@@ -346,6 +351,32 @@ class Settings(BaseSettings):
                     "enable_github_issues is True but GITHUB_TOKEN is not configured"
                 )
         return bool(tests_repo_url and github_token)
+
+    @property
+    def web_push_enabled(self) -> bool:
+        """Check if Web Push is enabled (env vars or auto-generated keys)."""
+        if hasattr(self, "_vapid_config_cache"):
+            return bool(self._vapid_config_cache)
+
+        pub = self.vapid_public_key.strip()
+        priv = self.vapid_private_key.strip()
+
+        # Detect partial env config
+        if bool(pub) != bool(priv):
+            logger.warning(
+                "Partial VAPID configuration: only one of VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY is set. "
+                "Both must be provided, or neither (auto-generation will be used)."
+            )
+
+        if pub and priv:
+            object.__setattr__(self, "_vapid_config_cache", True)
+            return True
+
+        from jenkins_job_insight.vapid import get_vapid_config
+
+        result = bool(get_vapid_config())
+        object.__setattr__(self, "_vapid_config_cache", result)
+        return result
 
     @property
     def reportportal_enabled(self) -> bool:

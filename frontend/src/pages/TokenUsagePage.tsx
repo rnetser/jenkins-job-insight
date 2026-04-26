@@ -68,11 +68,13 @@ const GROUP_BY_OPTIONS = [
 
 type GroupByValue = typeof GROUP_BY_OPTIONS[number]['value']
 
-function SummaryCard({ title, icon, calls, tokens, cost }: {
+function SummaryCard({ title, icon, calls, tokens, inputTokens, outputTokens, cost }: {
   title: string
   icon: React.ReactNode
   calls: number
   tokens: number
+  inputTokens: number
+  outputTokens: number
   cost: number
 }) {
   return (
@@ -90,6 +92,14 @@ function SummaryCard({ title, icon, calls, tokens, cost }: {
           <div className="flex items-center justify-between">
             <span className="text-xs text-text-tertiary">Tokens</span>
             <span className="font-mono text-sm font-medium text-text-primary">{formatCompactNumber(tokens)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-tertiary">Input</span>
+            <span className="font-mono text-xs text-text-secondary">{formatCompactNumber(inputTokens)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-tertiary">Output</span>
+            <span className="font-mono text-xs text-text-secondary">{formatCompactNumber(outputTokens)}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-xs text-text-tertiary">Cost</span>
@@ -140,7 +150,7 @@ export function TokenUsagePage() {
   const latestRequestIdRef = useRef(0)
 
   // Fetch summary cards
-  useEffect(() => {
+  const fetchSummary = useCallback(() => {
     setSummaryLoading(true)
     api.get<TokenUsageDashboard>('/api/admin/token-usage/summary')
       .then((data) => {
@@ -151,9 +161,14 @@ export function TokenUsagePage() {
       .finally(() => setSummaryLoading(false))
   }, [])
 
-  // Fetch breakdown table
   useEffect(() => {
-    let cancelled = false
+    fetchSummary()
+    const interval = setInterval(fetchSummary, 30000)
+    return () => clearInterval(interval)
+  }, [fetchSummary])
+
+  // Fetch breakdown table
+  const fetchBreakdown = useCallback(() => {
     const requestId = ++latestRequestIdRef.current
     setBreakdownLoading(true)
 
@@ -165,7 +180,7 @@ export function TokenUsagePage() {
 
     api.get<TokenUsageBreakdownResponse>(`/api/admin/token-usage?${params.toString()}`)
       .then((data) => {
-        if (cancelled || requestId !== latestRequestIdRef.current) return
+        if (requestId !== latestRequestIdRef.current) return
         setBreakdown(
           data.breakdown.map((row) => ({
             group: row.group_key,
@@ -181,17 +196,21 @@ export function TokenUsagePage() {
         setBreakdownError(null)
       })
       .catch((err) => {
-        if (cancelled || requestId !== latestRequestIdRef.current) return
+        if (requestId !== latestRequestIdRef.current) return
         setBreakdownError(err instanceof Error ? err.message : 'Failed to load breakdown')
       })
       .finally(() => {
-        if (!cancelled && requestId === latestRequestIdRef.current) {
+        if (requestId === latestRequestIdRef.current) {
           setBreakdownLoading(false)
         }
       })
-
-    return () => { cancelled = true }
   }, [groupBy, dateFrom, dateTo, debouncedProvider])
+
+  useEffect(() => {
+    fetchBreakdown()
+    const interval = setInterval(fetchBreakdown, 30000)
+    return () => clearInterval(interval)
+  }, [fetchBreakdown])
 
   const sorted = useMemo(() => {
     const copy = [...breakdown]
@@ -249,6 +268,8 @@ export function TokenUsagePage() {
             icon={<Zap className="h-4 w-4 text-signal-blue" />}
             calls={summary.today.calls}
             tokens={summary.today.tokens}
+            inputTokens={summary.today.input_tokens}
+            outputTokens={summary.today.output_tokens}
             cost={summary.today.cost_usd}
           />
           <SummaryCard
@@ -256,6 +277,8 @@ export function TokenUsagePage() {
             icon={<TrendingUp className="h-4 w-4 text-signal-green" />}
             calls={summary.this_week.calls}
             tokens={summary.this_week.tokens}
+            inputTokens={summary.this_week.input_tokens}
+            outputTokens={summary.this_week.output_tokens}
             cost={summary.this_week.cost_usd}
           />
           <SummaryCard
@@ -263,6 +286,8 @@ export function TokenUsagePage() {
             icon={<Calendar className="h-4 w-4 text-signal-orange" />}
             calls={summary.this_month.calls}
             tokens={summary.this_month.tokens}
+            inputTokens={summary.this_month.input_tokens}
+            outputTokens={summary.this_month.output_tokens}
             cost={summary.this_month.cost_usd}
           />
         </div>
