@@ -53,6 +53,15 @@ export function NavBar() {
 
   useEffect(() => {
     if (!username) return
+    function handleMentionsUpdated() {
+      fetchUnread()
+    }
+    window.addEventListener('mentions-updated', handleMentionsUpdated)
+    return () => window.removeEventListener('mentions-updated', handleMentionsUpdated)
+  }, [username, fetchUnread])
+
+  useEffect(() => {
+    if (!username) return
     function handleVisibility() {
       if (document.visibilityState === 'visible') {
         fetchUnread()

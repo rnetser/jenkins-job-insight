@@ -496,6 +496,16 @@ class TestJJIClientMentions:
         result = client.mark_mentions_read([10, 20])
         assert result["ok"] is True
 
+    def test_mark_all_mentions_read(self):
+        def handler(request):
+            assert request.method == "POST"
+            assert request.url.path == "/api/users/mentions/read-all"
+            return httpx.Response(200, json={"marked_read": 5})
+
+        client = _make_client(handler, username="alice")
+        result = client.mark_all_mentions_read()
+        assert result["marked_read"] == 5
+
 
 class TestJJIClientAiConfigs:
     def test_get_ai_configs(self):

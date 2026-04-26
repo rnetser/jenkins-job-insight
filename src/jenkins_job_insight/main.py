@@ -4471,8 +4471,11 @@ async def get_user_mentions(request: Request):
     if not username:
         raise HTTPException(status_code=401, detail="Username required")
     _check_allow_list(request)
-    offset = int(request.query_params.get("offset", "0"))
-    limit = int(request.query_params.get("limit", "50"))
+    try:
+        offset = max(0, int(request.query_params.get("offset", "0")))
+        limit = min(200, max(1, int(request.query_params.get("limit", "50"))))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="offset and limit must be integers")
     unread_only = request.query_params.get("unread_only", "false").lower() in (
         "true",
         "1",
@@ -4481,12 +4484,22 @@ async def get_user_mentions(request: Request):
     result = await storage.get_mentions_for_user(
         username=username, offset=offset, limit=limit, unread_only=unread_only
     )
-    unread_count = await storage.get_unread_mention_count(username)
     return {
         "mentions": result["mentions"],
         "total": result["total"],
-        "unread_count": unread_count,
+        "unread_count": result["unread_count"],
     }
+
+
+@app.post("/api/users/mentions/read-all")
+async def mark_all_mentions_read_endpoint(request: Request):
+    """Mark ALL mentions as read for the current user."""
+    username = request.state.username
+    if not username:
+        raise HTTPException(status_code=401, detail="Username required")
+    _check_allow_list(request)
+    count = await storage.mark_all_mentions_read(username)
+    return {"marked_read": count}
 
 
 @app.post("/api/users/mentions/read")

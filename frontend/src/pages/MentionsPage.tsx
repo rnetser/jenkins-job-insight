@@ -52,6 +52,8 @@ function timeAgo(dateStr: string): string {
   return `${months}mo ago`
 }
 
+/** Truncate text for list preview. Full text is available via expand-on-click.
+ *  This is intentional UI summarization, not lossy data — the API always returns full text. */
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text
   return text.slice(0, max).trimEnd() + '…'
@@ -118,15 +120,13 @@ export function MentionsPage() {
   }
 
   async function markAllRead() {
-    const unreadIds = mentions.filter((m) => !m.is_read).map((m) => m.id)
-    if (unreadIds.length === 0) return
     setMarkingAll(true)
     try {
-      await api.post('/api/users/mentions/read', { comment_ids: unreadIds })
-      setMentions((prev) =>
-        prev.map((m) => (unreadIds.includes(m.id) ? { ...m, is_read: true } : m)),
-      )
-      setUnreadCount((prev) => Math.max(0, prev - unreadIds.length))
+      await api.post('/api/users/mentions/read-all', {})
+      // Refresh the current page to reflect the changes
+      setMentions((prev) => prev.map((m) => ({ ...m, is_read: true })))
+      setUnreadCount(0)
+      window.dispatchEvent(new Event('mentions-updated'))
     } catch {
       // best-effort
     } finally {
@@ -143,6 +143,7 @@ export function MentionsPage() {
         prev.map((m) => (m.id === id ? { ...m, is_read: true } : m)),
       )
       setUnreadCount((prev) => Math.max(0, prev - 1))
+      window.dispatchEvent(new Event('mentions-updated'))
     } catch {
       // best-effort
     }
@@ -253,7 +254,12 @@ export function MentionsPage() {
                         'text-sm text-text-secondary whitespace-pre-wrap',
                         needsTruncation && 'cursor-pointer',
                       )}
-                      onClick={() => needsTruncation && toggleExpand(m.id)}
+                      onClick={(e) => {
+                        if (needsTruncation) {
+                          e.stopPropagation()
+                          toggleExpand(m.id)
+                        }
+                      }}
                     >
                       {commentText}
                     </p>

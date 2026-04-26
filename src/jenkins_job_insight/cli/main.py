@@ -1369,6 +1369,7 @@ def mentionable_users_cmd(
 @app.command("mentions")
 def mentions_cmd(
     limit: int = typer.Option(50, "--limit", "-l", help="Max mentions to return."),
+    offset: int = typer.Option(0, "--offset", "-o", help="Offset for pagination."),
     unread: bool = typer.Option(False, "--unread", help="Show only unread mentions."),
     json_output: bool = _JSON_OPTION,
 ):
@@ -1376,7 +1377,7 @@ def mentions_cmd(
     _set_json(json_output)
     try:
         client = _get_client()
-        data = client.get_mentions(limit=limit, unread_only=unread)
+        data = client.get_mentions(limit=limit, offset=offset, unread_only=unread)
     except JJIError as err:
         _handle_error(err)
 
@@ -1404,6 +1405,32 @@ def mentions_cmd(
             )
         else:
             typer.echo("No mentions found.")
+
+
+@app.command("mentions-mark-read")
+def mentions_mark_read_cmd(
+    ids: str = typer.Option(
+        ..., "--ids", help="Comma-separated comment IDs to mark as read."
+    ),
+    json_output: bool = _JSON_OPTION,
+):
+    """Mark specific mentions as read."""
+    comment_ids = [int(x.strip()) for x in ids.split(",") if x.strip()]
+    _run_client_command(
+        json_output,
+        lambda c: c.mark_mentions_read(comment_ids),
+    )
+
+
+@app.command("mentions-mark-all-read")
+def mentions_mark_all_read_cmd(
+    json_output: bool = _JSON_OPTION,
+):
+    """Mark all mentions as read."""
+    _run_client_command(
+        json_output,
+        lambda c: c.mark_all_mentions_read(),
+    )
 
 
 # -- Bug Creation -------------------------------------------------------------

@@ -3273,38 +3273,26 @@ async def delete_stale_push_subscriptions(endpoints: list[str]) -> None:
         await db.commit()
 
 
-async def get_mentions_for_user(
+async def _fetch_mention_candidates(
     username: str,
-    offset: int = 0,
-    limit: int = 50,
     unread_only: bool = False,
-) -> dict:
-    """Get comments that mention @username.
+) -> list[dict]:
+    """Fetch and filter mention candidates for a user.
 
-    Returns dict with 'mentions' list and 'total' count for pagination.
-    Each mention includes: id, job_id, test_name, child_job_name,
-    child_build_number, comment, username (author), created_at, is_read.
-
+    Uses SQL LIKE for initial candidate filtering, then refines
+    with Python-side regex (detect_mentions) to enforce word-boundary
+    semantics. SQLite lacks native regex/word-boundary support.
     """
-    logger.debug(
-        f"get_mentions_for_user: username={username}, offset={offset}, limit={limit}, unread_only={unread_only}"
-    )
+    like_pattern = f"%@{username}%"
+
+    base_where = "c.comment LIKE ?"
+    base_params: list = [like_pattern]
+
+    if unread_only:
+        base_where += " AND mr.id IS NULL"
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-
-        # NOTE: We use SQL LIKE for initial candidate filtering, then refine
-        # with Python-side regex (detect_mentions) to enforce word-boundary
-        # semantics (e.g. "@alice" but not "@alicexyz"). SQLite lacks native
-        # regex/word-boundary support, so we must fetch all LIKE candidates to
-        # compute an accurate total count before applying offset/limit.
-        like_pattern = f"%@{username}%"
-
-        # Base query with LEFT JOIN to mention_reads for is_read status
-        base_where = "c.comment LIKE ?"
-        base_params: list = [like_pattern]
-
-        if unread_only:
-            base_where += " AND mr.id IS NULL"
 
         cursor = await db.execute(
             f"SELECT c.id, c.job_id, c.test_name, c.child_job_name, "
@@ -3339,12 +3327,35 @@ async def get_mentions_for_user(
                 }
             )
 
+    return filtered
+
+
+async def get_mentions_for_user(
+    username: str,
+    offset: int = 0,
+    limit: int = 50,
+    unread_only: bool = False,
+) -> dict:
+    """Get comments that mention @username.
+
+    Returns dict with 'mentions' list, 'total' count, and 'unread_count'
+    for pagination. Each mention includes: id, job_id, test_name,
+    child_job_name, child_build_number, comment, username (author),
+    created_at, is_read.
+
+    """
+    logger.debug(
+        f"get_mentions_for_user: username={username}, offset={offset}, limit={limit}, unread_only={unread_only}"
+    )
+    filtered = await _fetch_mention_candidates(username, unread_only=unread_only)
+
     total = len(filtered)
+    unread_count = sum(1 for m in filtered if not m["is_read"])
     mentions = filtered[offset : offset + limit]
     logger.debug(
         f"get_mentions_for_user: username={username}, total={total}, returned={len(mentions)}"
     )
-    return {"mentions": mentions, "total": total}
+    return {"mentions": mentions, "total": total, "unread_count": unread_count}
 
 
 async def mark_mentions_read(username: str, comment_ids: list[int]) -> None:
@@ -3365,28 +3376,28 @@ async def mark_mentions_read(username: str, comment_ids: list[int]) -> None:
 async def get_unread_mention_count(username: str) -> int:
     """Get count of unread mentions for a user."""
     logger.debug(f"get_unread_mention_count: username={username}")
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-
-        # NOTE: Same two-phase filtering as get_mentions_for_user — SQL LIKE
-        # for fast candidate selection, then Python regex for word-boundary
-        # accuracy. SQLite cannot enforce word boundaries natively.
-        like_pattern = f"%@{username}%"
-        cursor = await db.execute(
-            "SELECT c.id, c.comment "
-            "FROM comments c "
-            "LEFT JOIN mention_reads mr ON mr.comment_id = c.id AND mr.username = ? "
-            "WHERE c.comment LIKE ? AND mr.id IS NULL",
-            (username, like_pattern),
-        )
-        rows = await cursor.fetchall()
-
-    # Python-side word-boundary filtering — verify LIKE candidates with regex
-    count = 0
-    for row in rows:
-        mentioned_users = detect_mentions(row["comment"])
-        if username in mentioned_users:
-            count += 1
-
+    candidates = await _fetch_mention_candidates(username, unread_only=True)
+    count = len(candidates)
     logger.debug(f"get_unread_mention_count: username={username}, count={count}")
     return count
+
+
+async def mark_all_mentions_read(username: str) -> int:
+    """Mark all unread mentions as read for a user. Returns count marked."""
+    logger.debug(f"mark_all_mentions_read: username={username}")
+    candidates = await _fetch_mention_candidates(username, unread_only=True)
+    if not candidates:
+        return 0
+
+    comment_ids = [c["id"] for c in candidates]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            "INSERT OR IGNORE INTO mention_reads (username, comment_id) VALUES (?, ?)",
+            [(username, cid) for cid in comment_ids],
+        )
+        await db.commit()
+
+    logger.info(
+        f"mark_all_mentions_read: username={username}, marked={len(comment_ids)}"
+    )
+    return len(comment_ids)

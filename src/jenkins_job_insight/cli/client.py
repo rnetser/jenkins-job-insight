@@ -724,6 +724,10 @@ class JJIClient:
             "POST", "/api/users/mentions/read", json={"comment_ids": comment_ids}
         )
 
+    def mark_all_mentions_read(self) -> dict:
+        """Mark all mentions as read. POST /api/users/mentions/read-all"""
+        return self._request("POST", "/api/users/mentions/read-all")
+
     # -- AI Configs -----------------------------------------------------------
 
     def get_ai_configs(self) -> list[dict]:

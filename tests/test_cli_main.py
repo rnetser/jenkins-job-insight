@@ -1095,7 +1095,9 @@ class TestMentionsCommand:
         assert result.exit_code == 0
         assert "1 mention(s)" in result.output
         assert "1 unread" in result.output
-        mock_client.get_mentions.assert_called_once_with(limit=50, unread_only=False)
+        mock_client.get_mentions.assert_called_once_with(
+            limit=50, offset=0, unread_only=False
+        )
 
     def test_mentions_unread_flag(self, mock_client):
         mock_client.get_mentions.return_value = {
@@ -1105,7 +1107,9 @@ class TestMentionsCommand:
         }
         result = runner.invoke(app, ["mentions", "--unread"])
         assert result.exit_code == 0
-        mock_client.get_mentions.assert_called_once_with(limit=50, unread_only=True)
+        mock_client.get_mentions.assert_called_once_with(
+            limit=50, offset=0, unread_only=True
+        )
 
     def test_mentions_empty(self, mock_client):
         mock_client.get_mentions.return_value = {
@@ -1128,6 +1132,47 @@ class TestMentionsCommand:
         assert result.exit_code == 0
         parsed = json.loads(result.output)
         assert parsed["total"] == 1
+
+    def test_mentions_with_offset(self, mock_client):
+        mock_client.get_mentions.return_value = {
+            "mentions": [],
+            "total": 0,
+            "unread_count": 0,
+        }
+        result = runner.invoke(app, ["mentions", "--offset", "10"])
+        assert result.exit_code == 0
+        mock_client.get_mentions.assert_called_once_with(
+            limit=50, offset=10, unread_only=False
+        )
+
+
+class TestMentionsMarkReadCommand:
+    def test_mentions_mark_read_command(self, mock_client):
+        mock_client.mark_mentions_read.return_value = {"ok": True}
+        result = runner.invoke(app, ["mentions-mark-read", "--ids", "1,2,3"])
+        assert result.exit_code == 0
+        mock_client.mark_mentions_read.assert_called_once_with([1, 2, 3])
+
+    def test_mentions_mark_read_json(self, mock_client):
+        mock_client.mark_mentions_read.return_value = {"ok": True}
+        result = runner.invoke(app, ["--json", "mentions-mark-read", "--ids", "5"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["ok"] is True
+
+
+class TestMentionsMarkAllReadCommand:
+    def test_mentions_mark_all_read_command(self, mock_client):
+        mock_client.mark_all_mentions_read.return_value = {"marked_read": 3}
+        result = runner.invoke(app, ["mentions-mark-all-read"])
+        assert result.exit_code == 0
+
+    def test_mentions_mark_all_read_json(self, mock_client):
+        mock_client.mark_all_mentions_read.return_value = {"marked_read": 3}
+        result = runner.invoke(app, ["--json", "mentions-mark-all-read"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["marked_read"] == 3
 
 
 class TestPreviewIssueCommand:

@@ -1,4 +1,8 @@
-"""Tests for the @mentions feature (storage, API endpoints)."""
+"""Tests for the @mentions feature (storage, API endpoints).
+
+Cross-stack parity tests at the bottom must stay in sync with:
+  frontend/src/pages/report/__tests__/CommentsSection.test.tsx
+"""
 
 import os
 from pathlib import Path
@@ -280,6 +284,138 @@ class TestMarkReadEndpoint:
         assert response.status_code == 401
 
 
+class TestMarkAllMentionsRead:
+    """Tests for storage.mark_all_mentions_read."""
+
+    async def test_mark_all_mentions_read(self, setup_test_db: Path) -> None:
+        """All unread mentions are marked as read, returns count."""
+        db = setup_test_db
+        await _add_comment(db, "Hey @alice first", username="bob")
+        await _add_comment(db, "Hey @alice second", username="charlie")
+        await _add_comment(db, "No mention here", username="dave")
+
+        with patch.object(storage, "DB_PATH", db):
+            assert await storage.get_unread_mention_count("alice") == 2
+
+            count = await storage.mark_all_mentions_read("alice")
+            assert count == 2
+
+            assert await storage.get_unread_mention_count("alice") == 0
+
+    async def test_mark_all_read_idempotent(self, setup_test_db: Path) -> None:
+        """Calling mark_all again returns 0 when already read."""
+        db = setup_test_db
+        await _add_comment(db, "Hey @alice", username="bob")
+
+        with patch.object(storage, "DB_PATH", db):
+            first = await storage.mark_all_mentions_read("alice")
+            assert first == 1
+            second = await storage.mark_all_mentions_read("alice")
+            assert second == 0
+
+    async def test_mark_all_read_no_mentions(self, setup_test_db: Path) -> None:
+        """Returns 0 when user has no mentions."""
+        db = setup_test_db
+        with patch.object(storage, "DB_PATH", db):
+            count = await storage.mark_all_mentions_read("nobody")
+            assert count == 0
+
+    async def test_mark_all_read_partial(self, setup_test_db: Path) -> None:
+        """Only marks unread mentions; already-read ones are unaffected."""
+        db = setup_test_db
+        cid1 = await _add_comment(db, "Hey @alice one", username="bob")
+        await _add_comment(db, "Hey @alice two", username="charlie")
+
+        with patch.object(storage, "DB_PATH", db):
+            await storage.mark_mentions_read("alice", [cid1])
+            assert await storage.get_unread_mention_count("alice") == 1
+
+            count = await storage.mark_all_mentions_read("alice")
+            assert count == 1
+            assert await storage.get_unread_mention_count("alice") == 0
+
+
+class TestMarkAllReadEndpoint:
+    """Tests for POST /api/users/mentions/read-all."""
+
+    async def test_mark_all_read_endpoint(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """POST returns marked_read count."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+            await _add_comment(temp_db_path, "Hey @testuser one", username="bob")
+            await _add_comment(temp_db_path, "Hey @testuser two", username="charlie")
+
+        test_client.cookies.set("jji_username", "testuser")
+        response = test_client.post("/api/users/mentions/read-all")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["marked_read"] == 2
+        test_client.cookies.clear()
+
+    async def test_mark_all_read_requires_username(self, test_client) -> None:
+        """POST without auth returns 401."""
+        response = test_client.post("/api/users/mentions/read-all")
+        assert response.status_code == 401
+
+
+class TestGetMentionsEndpointValidation:
+    """Tests for input validation on GET /api/users/mentions."""
+
+    async def test_invalid_offset(self, test_client) -> None:
+        """Non-numeric offset returns 400."""
+        test_client.cookies.set("jji_username", "testuser")
+        response = test_client.get("/api/users/mentions?offset=abc")
+        assert response.status_code == 400
+        test_client.cookies.clear()
+
+    async def test_invalid_limit(self, test_client) -> None:
+        """Non-numeric limit returns 400."""
+        test_client.cookies.set("jji_username", "testuser")
+        response = test_client.get("/api/users/mentions?limit=xyz")
+        assert response.status_code == 400
+        test_client.cookies.clear()
+
+    async def test_negative_offset_clamped(
+        self, test_client, temp_db_path: Path
+    ) -> None:
+        """Negative offset is clamped to 0."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+        test_client.cookies.set("jji_username", "testuser")
+        response = test_client.get("/api/users/mentions?offset=-5")
+        assert response.status_code == 200
+        test_client.cookies.clear()
+
+    async def test_limit_clamped_to_max(self, test_client, temp_db_path: Path) -> None:
+        """Limit > 200 is clamped to 200."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+        test_client.cookies.set("jji_username", "testuser")
+        response = test_client.get("/api/users/mentions?limit=500")
+        assert response.status_code == 200
+        test_client.cookies.clear()
+
+
+class TestGetMentionsUnreadCount:
+    """Tests that get_mentions_for_user returns unread_count directly."""
+
+    async def test_unread_count_in_result(self, setup_test_db: Path) -> None:
+        """get_mentions_for_user returns unread_count in result dict."""
+        db = setup_test_db
+        cid = await _add_comment(db, "Hey @alice first", username="bob")
+        await _add_comment(db, "Hey @alice second", username="charlie")
+
+        with patch.object(storage, "DB_PATH", db):
+            result = await storage.get_mentions_for_user("alice")
+            assert result["unread_count"] == 2
+
+            await storage.mark_mentions_read("alice", [cid])
+            result = await storage.get_mentions_for_user("alice")
+            assert result["unread_count"] == 1
+
+
 class TestUnreadCountEndpoint:
     """Tests for GET /api/users/mentions/unread-count."""
 
@@ -299,3 +435,41 @@ class TestUnreadCountEndpoint:
         """Request without auth returns 401."""
         response = test_client.get("/api/users/mentions/unread-count")
         assert response.status_code == 401
+
+
+# ===========================================================================
+# Cross-stack parity tests (Python ↔ Frontend)
+# ===========================================================================
+
+
+class TestMentionRegexParity:
+    """Shared mention regex test cases — MUST match frontend CommentsSection.test.tsx.
+
+    These test cases are shared with frontend/src/pages/report/__tests__/CommentsSection.test.tsx
+    If you change these, update the frontend side too.
+    """
+
+    # Pattern: (?<![a-zA-Z0-9.])@([a-zA-Z0-9_-]+)
+    PARITY_CASES = [
+        ("hello @alice", ["alice"]),
+        ("@bob test", ["bob"]),
+        ("cc @alice @bob", ["alice", "bob"]),
+        ("email user@domain.com", []),  # email — no match
+        ("no mentions here", []),
+        ("@alice-bob", ["alice-bob"]),  # hyphens allowed
+        ("@alice_bob", ["alice_bob"]),  # underscores allowed
+        ("@alice123", ["alice123"]),  # digits allowed
+        (".@alice", []),  # preceded by dot — no match
+        ("x@alice", []),  # preceded by letter — no match
+        ("1@alice", []),  # preceded by digit — no match
+        ("(@alice)", ["alice"]),  # parens ok
+        ("@alice.", ["alice"]),  # trailing dot ok
+    ]
+
+    @pytest.mark.parametrize("text,expected", PARITY_CASES)
+    def test_detect_mentions_parity(self, text, expected):
+        """Verify Python detect_mentions matches shared test cases."""
+        from jenkins_job_insight.comment_enrichment import detect_mentions
+
+        result = detect_mentions(text)
+        assert result == expected, f"Input: {text!r}, expected {expected}, got {result}"

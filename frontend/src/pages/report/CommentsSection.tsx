@@ -27,7 +27,7 @@ function enrichmentBadgeVariant(status: string): 'success' | 'destructive' | 'de
 /*  @mention highlighting in rendered text                             */
 /* ------------------------------------------------------------------ */
 
-const MENTION_RE = /(?<![a-zA-Z0-9.])@([a-zA-Z0-9_-]+)/g
+export const MENTION_RE = /(?<![a-zA-Z0-9.])@([a-zA-Z0-9_-]+)/g
 
 /** Render a plain-text segment with @mentions highlighted. */
 function renderTextWithMentions(text: string, segIndex: number): ReactNode {
