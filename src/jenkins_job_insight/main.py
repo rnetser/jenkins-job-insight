@@ -4514,7 +4514,9 @@ async def mark_mentions_as_read(request: Request):
     if (
         not isinstance(comment_ids, list)
         or not comment_ids
-        or not all(isinstance(cid, int) for cid in comment_ids)
+        or not all(
+            isinstance(cid, int) and not isinstance(cid, bool) for cid in comment_ids
+        )
     ):
         raise HTTPException(
             status_code=400,

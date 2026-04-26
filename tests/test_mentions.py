@@ -6,7 +6,7 @@ Cross-stack parity tests at the bottom must stay in sync with:
 
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -275,6 +275,18 @@ class TestMarkReadEndpoint:
         assert response.status_code == 400
         test_client.cookies.clear()
 
+    async def test_mark_read_rejects_booleans(self, test_client, temp_db_path) -> None:
+        """POST with boolean comment_ids returns 400."""
+        with patch.object(storage, "DB_PATH", temp_db_path):
+            await storage.init_db()
+        test_client.cookies.set("jji_username", "testuser")
+        response = test_client.post(
+            "/api/users/mentions/read",
+            json={"comment_ids": [True, 2]},
+        )
+        assert response.status_code == 400
+        test_client.cookies.clear()
+
     async def test_mark_read_requires_username(self, test_client) -> None:
         """POST without auth returns 401."""
         response = test_client.post(
@@ -384,8 +396,17 @@ class TestGetMentionsEndpointValidation:
         with patch.object(storage, "DB_PATH", temp_db_path):
             await storage.init_db()
         test_client.cookies.set("jji_username", "testuser")
-        response = test_client.get("/api/users/mentions?offset=-5")
-        assert response.status_code == 200
+        with patch.object(
+            storage,
+            "get_mentions_for_user",
+            new_callable=AsyncMock,
+            return_value={"mentions": [], "total": 0, "unread_count": 0},
+        ) as mock_get:
+            response = test_client.get("/api/users/mentions?offset=-5")
+            assert response.status_code == 200
+            mock_get.assert_called_once()
+            call_kwargs = mock_get.call_args
+            assert call_kwargs.kwargs.get("offset", call_kwargs[1].get("offset")) == 0
         test_client.cookies.clear()
 
     async def test_limit_clamped_to_max(self, test_client, temp_db_path: Path) -> None:
@@ -393,8 +414,17 @@ class TestGetMentionsEndpointValidation:
         with patch.object(storage, "DB_PATH", temp_db_path):
             await storage.init_db()
         test_client.cookies.set("jji_username", "testuser")
-        response = test_client.get("/api/users/mentions?limit=500")
-        assert response.status_code == 200
+        with patch.object(
+            storage,
+            "get_mentions_for_user",
+            new_callable=AsyncMock,
+            return_value={"mentions": [], "total": 0, "unread_count": 0},
+        ) as mock_get:
+            response = test_client.get("/api/users/mentions?limit=9999")
+            assert response.status_code == 200
+            mock_get.assert_called_once()
+            call_kwargs = mock_get.call_args
+            assert call_kwargs.kwargs.get("limit", call_kwargs[1].get("limit")) == 200
         test_client.cookies.clear()
 
 

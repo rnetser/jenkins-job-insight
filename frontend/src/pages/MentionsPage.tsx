@@ -152,6 +152,18 @@ export function MentionsPage() {
   const navigate = useNavigate()
   const totalPages = Math.max(1, Math.ceil(total / LIMIT))
 
+  function buildMentionUrl(m: Mention): string {
+    const params = new URLSearchParams({ comment: String(m.id) })
+    if (m.child_job_name) params.set('child_job_name', m.child_job_name)
+    if (m.child_build_number) params.set('child_build_number', String(m.child_build_number))
+    return `/results/${m.job_id}?${params}`
+  }
+
+  function openMention(m: Mention) {
+    markRead(m.id)
+    navigate(buildMentionUrl(m))
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -210,15 +222,20 @@ export function MentionsPage() {
             return (
               <div
                 key={m.id}
+                tabIndex={0}
+                role="button"
                 className={cn(
                   'group rounded-lg border px-4 py-3 transition-colors duration-150 animate-slide-up cursor-pointer',
                   m.is_read
                     ? 'border-border-muted bg-surface-card opacity-60'
                     : 'border-border-muted border-l-2 border-l-signal-blue bg-signal-blue/10',
                 )}
-                onClick={() => {
-                  markRead(m.id)
-                  navigate(`/results/${m.job_id}?comment=${m.id}`)
+                onClick={() => openMention(m)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    openMention(m)
+                  }
                 }}
                 style={{
                   animationDelay: `${i * 30}ms`,

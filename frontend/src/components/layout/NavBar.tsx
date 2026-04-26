@@ -22,7 +22,6 @@ const EXTERNAL_NAV_LINKS: ExternalNavLink[] = [
 const BASE_NAV_LINKS = [
   { to: '/', label: 'Dashboard' },
   { to: '/history', label: 'History' },
-  { to: '/mentions', label: 'Mentions' },
 ]
 
 const UNREAD_POLL_INTERVAL = 30_000
@@ -71,9 +70,18 @@ export function NavBar() {
     return () => document.removeEventListener('visibilitychange', handleVisibility)
   }, [username, fetchUnread])
 
-  const navLinks = isAdmin
-    ? [...BASE_NAV_LINKS, { to: '/admin/users', label: 'Users' }, { to: '/admin/token-usage', label: 'Token Usage' }]
+  // Clear stale unread count when user is logged out
+  useEffect(() => {
+    if (!username) setUnreadCount(0)
+  }, [username])
+
+  const baseNavLinks = username
+    ? [...BASE_NAV_LINKS, { to: '/mentions', label: 'Mentions' }]
     : BASE_NAV_LINKS
+
+  const navLinks = isAdmin
+    ? [...baseNavLinks, { to: '/admin/users', label: 'Users' }, { to: '/admin/token-usage', label: 'Token Usage' }]
+    : baseNavLinks
 
   return (
     <header className="sticky top-0 z-50 border-b border-border-default bg-surface-card/95 backdrop-blur-sm">

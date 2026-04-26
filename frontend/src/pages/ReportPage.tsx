@@ -291,18 +291,31 @@ function ReportContent() {
   useEffect(() => {
     const params = new URLSearchParams(location.search)
     const commentId = params.get('comment')
-    if (commentId && !state.loading && !state.error) {
-      // Delay to let FailureCard auto-expand and comments render
-      const timeout = setTimeout(() => {
-        const el = document.getElementById(`comment-${commentId}`)
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          el.classList.add('ring-2', 'ring-accent-blue', 'ring-offset-2')
-          setTimeout(() => el.classList.remove('ring-2', 'ring-accent-blue', 'ring-offset-2'), 3000)
-        }
-      }, 1000)
-      return () => clearTimeout(timeout)
+    if (!commentId || state.loading || state.error) return
+
+    let cancelled = false
+    let attempts = 0
+    const maxAttempts = 20 // 20 × 200ms = 4s max wait
+
+    const tryScroll = () => {
+      if (cancelled) return
+      const el = document.getElementById(`comment-${commentId}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.classList.add('ring-2', 'ring-accent-blue', 'ring-offset-2')
+        setTimeout(() => {
+          if (!cancelled) el.classList.remove('ring-2', 'ring-accent-blue', 'ring-offset-2')
+        }, 3000)
+        return
+      }
+      attempts++
+      if (attempts < maxAttempts) {
+        setTimeout(tryScroll, 200)
+      }
     }
+
+    tryScroll()
+    return () => { cancelled = true }
   }, [location.search, state.loading, state.error])
 
   // Save scroll position on scroll (debounced)

@@ -541,6 +541,10 @@ async def delete_comment(comment_id: int, username: str, job_id: str = "") -> bo
             query += " AND job_id = ?"
             params.append(job_id)
         cursor = await db.execute(query, params)
+        if cursor.rowcount > 0:
+            await db.execute(
+                "DELETE FROM mention_reads WHERE comment_id = ?", (comment_id,)
+            )
         await db.commit()
         deleted = cursor.rowcount > 0
         logger.debug(f"delete_comment: comment_id={comment_id}, deleted={deleted}")
@@ -2030,6 +2034,11 @@ async def get_all_failures(
 
 async def _delete_job_rows(db: aiosqlite.Connection, job_id: str) -> bool:
     """Delete all rows for a job across related tables. Returns True if the job existed."""
+    await db.execute(
+        "DELETE FROM mention_reads WHERE comment_id IN "
+        "(SELECT id FROM comments WHERE job_id = ?)",
+        (job_id,),
+    )
     await db.execute("DELETE FROM comments WHERE job_id = ?", (job_id,))
     await db.execute("DELETE FROM failure_reviews WHERE job_id = ?", (job_id,))
     await db.execute("DELETE FROM failure_history WHERE job_id = ?", (job_id,))
@@ -3282,6 +3291,13 @@ async def _fetch_mention_candidates(
     Uses SQL LIKE for initial candidate filtering, then refines
     with Python-side regex (detect_mentions) to enforce word-boundary
     semantics. SQLite lacks native regex/word-boundary support.
+
+    Performance note: LIKE '%@user%' is a full table scan (leading wildcard
+    precludes index use). For current scale (hundreds to low-thousands of
+    comments) this is acceptable. If the comments table grows significantly,
+    consider: (1) caching unread counts with TTL invalidated on add_comment,
+    (2) pushing LIMIT into SQL for paginated queries, or (3) a denormalized
+    mentions table populated on comment creation.
     """
     like_pattern = f"%@{username}%"
 
