@@ -21,6 +21,7 @@ from fastapi import HTTPException
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.config import Settings, parse_additional_repos, parse_repo_ref
+from jenkins_job_insight.request_resolution import resolve_tests_repo_token
 from jenkins_job_insight.jenkins_artifacts import (
     cleanup_extract_dir,
     process_build_artifacts,
@@ -1643,15 +1644,7 @@ async def analyze_job(
         # Clone repo for context BEFORE child job analysis so it's available for all jobs
         # Use request value if provided, otherwise fall back to settings
         tests_repo_url = request.tests_repo_url or settings.tests_repo_url
-        # Resolve token (mirrors _resolve_tests_repo_token in main.py;
-        # duplicated here to avoid circular import)
-        tests_repo_token = (
-            request.tests_repo_token
-            if request.tests_repo_token is not None
-            else settings.tests_repo_token.get_secret_value()
-            if settings.tests_repo_token
-            else ""
-        )
+        tests_repo_token = resolve_tests_repo_token(request, settings)
         repo_context = ""
         custom_prompt = ""
 

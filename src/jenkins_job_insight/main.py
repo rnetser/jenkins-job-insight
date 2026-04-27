@@ -97,6 +97,7 @@ from jenkins_job_insight.xml_enrichment import (
     extract_test_failures,
 )
 from jenkins_job_insight.repository import RepositoryManager, derive_test_repo_name
+from jenkins_job_insight.request_resolution import resolve_tests_repo_token
 from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
     get_ai_configs,
@@ -353,7 +354,9 @@ def _reconstruct_from_params(
         additional_repos=(
             params["additional_repos"] if "additional_repos" in params else None
         ),
-        tests_repo_token=params.get("tests_repo_token") or None,
+        tests_repo_token=(
+            params["tests_repo_token"] if "tests_repo_token" in params else None
+        ),
         **({"force": params["force"]} if "force" in params else {}),
     )
     # Build Settings from env defaults, then layer stored overrides
@@ -402,7 +405,7 @@ def _reconstruct_from_params(
         overrides["jira_pat"] = SecretStr(params["jira_pat"])
     if params.get("github_token"):
         overrides["github_token"] = SecretStr(params["github_token"])
-    if params.get("tests_repo_token"):
+    if "tests_repo_token" in params and params["tests_repo_token"]:
         overrides["tests_repo_token"] = SecretStr(params["tests_repo_token"])
 
     # Enable jira
@@ -982,15 +985,6 @@ def _resolve_peer_ai_configs(
     return None
 
 
-def _resolve_tests_repo_token(body: BaseAnalysisRequest, merged: Settings) -> str:
-    """Resolve the effective tests repo token from request body or settings."""
-    if body.tests_repo_token is not None:
-        return body.tests_repo_token
-    if merged.tests_repo_token:
-        return merged.tests_repo_token.get_secret_value()
-    return ""
-
-
 def _validate_peer_configs(
     body: BaseAnalysisRequest, settings: Settings
 ) -> list | None:
@@ -1527,7 +1521,7 @@ def _build_request_params(
         else ""
     )
     resolved_tests_repo, tests_repo_ref = parse_repo_ref(resolved_tests_repo)
-    resolved_tests_repo_token = _resolve_tests_repo_token(body, merged)
+    resolved_tests_repo_token = resolve_tests_repo_token(body, merged)
     resolved_additional = resolve_additional_repos(body, merged)
     params = _build_base_request_params(
         ai_provider,
@@ -1709,7 +1703,7 @@ async def analyze_failures(
     # (including env-var / config-file defaults, not just request-body values).
     tests_repo_url_raw = str(body.tests_repo_url or merged.tests_repo_url or "")
     tests_repo_url, tests_repo_ref = parse_repo_ref(tests_repo_url_raw)
-    resolved_tests_repo_token = _resolve_tests_repo_token(body, merged)
+    resolved_tests_repo_token = resolve_tests_repo_token(body, merged)
     additional_repos_list = resolve_additional_repos(body, merged)
 
     job_id = str(uuid.uuid4())
@@ -1770,7 +1764,7 @@ async def analyze_failures(
                     token=resolved_tests_repo_token or None,
                 )
                 cloned_repos[repo_name] = repo_path / repo_name
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — non-fatal tests repo clone failure
                 logger.warning(
                     "Failed to clone test repository (%s)",
                     type(e).__name__,
