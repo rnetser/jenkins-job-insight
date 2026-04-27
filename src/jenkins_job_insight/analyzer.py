@@ -1643,6 +1643,13 @@ async def analyze_job(
         # Clone repo for context BEFORE child job analysis so it's available for all jobs
         # Use request value if provided, otherwise fall back to settings
         tests_repo_url = request.tests_repo_url or settings.tests_repo_url
+        tests_repo_token = (
+            request.tests_repo_token
+            if request.tests_repo_token is not None
+            else settings.tests_repo_token.get_secret_value()
+            if settings.tests_repo_token
+            else ""
+        )
         repo_context = ""
         custom_prompt = ""
 
@@ -1669,6 +1676,7 @@ async def analyze_job(
                         repo_path / repo_name,
                         depth=50,
                         branch=tests_ref,
+                        token=tests_repo_token or None,
                     )
                     cloned_repos[repo_name] = repo_path / repo_name
                     repo_context = f"\nTest repository cloned from: {clean_tests_url} (at {repo_name}/)"

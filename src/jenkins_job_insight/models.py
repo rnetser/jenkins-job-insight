@@ -78,6 +78,11 @@ class BaseAnalysisRequest(BaseModel):
         default=None,
         description="URL of the tests repository (overrides env var default)",
     )
+    tests_repo_token: str | None = Field(
+        default=None,
+        description="Authentication token for cloning private tests repo (overrides TESTS_REPO_TOKEN env var)",
+        json_schema_extra={"format": "password"},
+    )
     ai_provider: Literal["claude", "gemini", "cursor"] | None = Field(
         default=None,
         description="AI provider to use: claude, gemini, or cursor (overrides env var default)",

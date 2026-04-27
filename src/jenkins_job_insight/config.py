@@ -169,6 +169,7 @@ class Settings(BaseSettings):
 
     # Optional defaults (can be overridden per-request in webhook)
     tests_repo_url: str | None = None
+    tests_repo_token: SecretStr | None = None  # NEW
     # Jira integration (optional)
     jira_url: str | None = None
     jira_email: str | None = None
@@ -298,6 +299,7 @@ class Settings(BaseSettings):
         # Strip whitespace from secret fields; blank becomes None
         for field_name in (
             "github_token",
+            "tests_repo_token",
             "jira_api_token",
             "jira_pat",
             "reportportal_api_token",
