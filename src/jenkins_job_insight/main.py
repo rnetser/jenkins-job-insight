@@ -1721,14 +1721,16 @@ async def analyze_failures(
     # Save initial pending state with request_params so GET /results/{job_id}
     # works immediately and _preserve_request_params can find them later.
     initial_result: dict = {
-        "request_params": _build_base_request_params(
-            ai_provider,
-            ai_model,
-            peer_ai_configs,
-            tests_repo_url=tests_repo_url,
-            tests_repo_token=resolved_tests_repo_token,
-            tests_repo_ref=tests_repo_ref,
-            additional_repos=additional_repos_list or None,
+        "request_params": encrypt_sensitive_fields(
+            _build_base_request_params(
+                ai_provider,
+                ai_model,
+                peer_ai_configs,
+                tests_repo_url=tests_repo_url,
+                tests_repo_token=resolved_tests_repo_token,
+                tests_repo_ref=tests_repo_ref,
+                additional_repos=additional_repos_list or None,
+            )
         ),
     }
     await save_result(job_id, "", "pending", initial_result)
@@ -1769,7 +1771,10 @@ async def analyze_failures(
                 )
                 cloned_repos[repo_name] = repo_path / repo_name
             except Exception as e:
-                logger.warning(f"Failed to clone test repository: {e}")
+                logger.warning(
+                    "Failed to clone test repository (%s)",
+                    type(e).__name__,
+                )
 
         # Clone additional repositories for AI context
         if additional_repos_list:

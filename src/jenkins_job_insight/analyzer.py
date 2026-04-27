@@ -1643,6 +1643,8 @@ async def analyze_job(
         # Clone repo for context BEFORE child job analysis so it's available for all jobs
         # Use request value if provided, otherwise fall back to settings
         tests_repo_url = request.tests_repo_url or settings.tests_repo_url
+        # Resolve token (mirrors _resolve_tests_repo_token in main.py;
+        # duplicated here to avoid circular import)
         tests_repo_token = (
             request.tests_repo_token
             if request.tests_repo_token is not None
@@ -1680,7 +1682,7 @@ async def analyze_job(
                     )
                     cloned_repos[repo_name] = repo_path / repo_name
                     repo_context = f"\nTest repository cloned from: {clean_tests_url} (at {repo_name}/)"
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — non-fatal tests repo clone failure
                     logger.warning(
                         "Failed to clone repository (%s)",
                         type(e).__name__,
