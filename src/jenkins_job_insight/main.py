@@ -632,6 +632,18 @@ class ErrorTrackingMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def _set_username_cookie(response: Response, username: str, *, secure: bool) -> None:
+    """Set the jji_username cookie with consistent attributes."""
+    response.set_cookie(
+        "jji_username",
+        username,
+        path="/",
+        max_age=365 * 24 * 60 * 60,
+        samesite="lax",
+        secure=secure,
+    )
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """Authenticate requests: admin via session/Bearer, regular users via cookie."""
 
@@ -655,14 +667,37 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.role = "user"
 
         # Public paths and static assets — pass through
-        if (
-            path in self._PUBLIC_PATHS
-            or path.startswith("/assets/")
-            or path.startswith("/register")
+        # (but /register may need SSO redirect, handled below;
+        #  it stays in _PUBLIC_PATHS for non-SSO users who need the page)
+        if path.startswith("/assets/") or (
+            path in self._PUBLIC_PATHS and path != "/register"
         ):
             return await call_next(request)
 
         settings = get_settings()
+
+        # SSO: when trust_proxy_headers is enabled and X-Forwarded-User is
+        # present, auto-identify the user and redirect /register → /
+        proxy_username = ""
+        if settings.trust_proxy_headers:
+            proxy_username = request.headers.get("x-forwarded-user", "").strip()
+
+        if path.startswith("/register"):
+            if proxy_username and proxy_username.lower() != "admin":
+                # Session auth takes precedence over X-Forwarded-User —
+                # only check when an SSO redirect would otherwise fire.
+                session_token = request.cookies.get("jji_session")
+                if session_token and await storage.get_session(session_token):
+                    return await call_next(request)
+                # SSO user hitting /register — redirect to dashboard
+                response = RedirectResponse(url="/", status_code=303)
+                if request.cookies.get("jji_username", "") != proxy_username:
+                    _set_username_cookie(
+                        response, proxy_username, secure=settings.secure_cookies
+                    )
+                return response
+            return await call_next(request)
+
         is_admin = False
         username = ""
         authenticated_admin = False
@@ -716,7 +751,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         username = str(user["username"])
                         authenticated_admin = True
 
-        # 3. Fall back to jji_username cookie (regular users)
+        # 3. Check X-Forwarded-User header (SSO via trusted proxy)
+        if not username and proxy_username:
+            if proxy_username.lower() != "admin":
+                username = proxy_username
+                # Flag that we need to set the jji_username cookie on the response
+                request.state.set_proxy_cookie = proxy_username
+
+        # 4. Fall back to jji_username cookie (regular users)
         if not username:
             cookie_username = request.cookies.get("jji_username", "")
             if cookie_username.lower() == "admin":
@@ -748,6 +790,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return RedirectResponse(url="/register", status_code=303)
 
         response = await call_next(request)
+
+        # Set jji_username cookie from X-Forwarded-User header (SSO)
+        if getattr(request.state, "set_proxy_cookie", None):
+            proxy_cookie_value = request.state.set_proxy_cookie
+            if request.cookies.get("jji_username", "") != proxy_cookie_value:
+                _set_username_cookie(
+                    response, proxy_cookie_value, secure=settings.secure_cookies
+                )
 
         # Refresh session cookie max_age if session was renewed
         if getattr(request.state, "renew_session_token", None):
