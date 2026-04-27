@@ -21,6 +21,26 @@ docker run -d -p 8000:8000 -v ./data:/data \
   ghcr.io/myk-org/jenkins-job-insight:latest
 ```
 
+### Analysis Tuning
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_CONCURRENT_AI_CALLS` | `3` | Maximum concurrent AI CLI processes. Prevents OOM with heavy models. |
+
+`MAX_CONCURRENT_AI_CALLS` can be set via any of the supported interfaces:
+- Environment variable: `MAX_CONCURRENT_AI_CALLS`
+- API request field: `max_concurrent_ai_calls`
+- CLI flag: `--max-concurrent`
+- Config file (`~/.config/jji/config.toml`): `max_concurrent_ai_calls`
+
+Example API override:
+
+```bash
+curl -X POST http://localhost:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"job_name": "my-job", "build_number": 42, "max_concurrent_ai_calls": 2}'
+```
+
 ## Features
 
 - **AI-Powered Failure Analysis** — Classifies test failures as code issues or product bugs

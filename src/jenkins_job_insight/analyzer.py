@@ -1139,11 +1139,13 @@ async def analyze_failure_group(
     peer_analysis_max_rounds: int = 3,
     group_label: str = "",
     additional_repos: dict[str, Path] | None = None,
+    max_concurrent_ai_calls: int = 3,
 ) -> list[FailureAnalysis]:
     """Analyze a group of failures with the same error signature.
 
-    Only calls Claude CLI once for the group, then applies the analysis
-    to all failures in the group.
+    Uses a single AI call for the group (or multi-AI peer consensus
+    when peers are configured), then applies the analysis to all
+    failures in the group.
 
     Args:
         failures: List of test failures with the same error signature.
@@ -1159,6 +1161,9 @@ async def analyze_failure_group(
         group_label: Human-readable label identifying which failure group is
             being analyzed (e.g. ``"2/3"``). Forwarded to peer analysis for
             progress phase disambiguation.
+        additional_repos: Extra cloned repositories for AI context.
+        max_concurrent_ai_calls: Maximum concurrent AI CLI processes for
+            peer analysis parallelism (default: 3).
 
     Returns:
         List of FailureAnalysis objects, one per failure in the group.
@@ -1189,6 +1194,7 @@ async def analyze_failure_group(
             job_id=job_id,
             group_label=group_label,
             additional_repos=additional_repos,
+            max_concurrent_ai_calls=max_concurrent_ai_calls,
         )
 
     parsed, error_signature = await _run_single_ai_analysis(
@@ -1237,6 +1243,7 @@ async def analyze_child_job(
     peer_ai_configs: list | None = None,
     peer_analysis_max_rounds: int = 3,
     additional_repos: dict[str, Path] | None = None,
+    max_concurrent_ai_calls: int = 3,
 ) -> ChildJobAnalysis:
     """Analyze a single child job, recursively analyzing its failed children.
 
@@ -1257,6 +1264,10 @@ async def analyze_child_job(
         artifacts_context: Jenkins artifacts context for AI analysis (optional).
         server_url: Base URL of this server for AI history API access.
         job_id: Current job ID to exclude from history queries.
+        peer_ai_configs: Peer AI configurations for multi-AI consensus analysis.
+        peer_analysis_max_rounds: Maximum debate rounds for peer analysis (default: 3).
+        additional_repos: Extra cloned repositories for AI context.
+        max_concurrent_ai_calls: Maximum concurrent AI CLI processes (default: 3).
 
     Returns:
         ChildJobAnalysis with analysis results or nested child analyses.
@@ -1328,10 +1339,13 @@ async def analyze_child_job(
                 peer_ai_configs=peer_ai_configs,
                 peer_analysis_max_rounds=peer_analysis_max_rounds,
                 additional_repos=additional_repos,
+                max_concurrent_ai_calls=max_concurrent_ai_calls,
             )
             for child_name, child_num in failed_children
         ]
-        child_results = await run_parallel_with_limit(child_tasks)
+        child_results = await run_parallel_with_limit(
+            child_tasks, max_concurrency=max_concurrent_ai_calls
+        )
 
         # Handle exceptions in results
         child_analyses = []
@@ -1413,9 +1427,12 @@ async def analyze_child_job(
                     if total_groups > 1
                     else "",
                     additional_repos=additional_repos,
+                    max_concurrent_ai_calls=max_concurrent_ai_calls,
                 )
             )
-        group_results = await run_parallel_with_limit(tasks)
+        group_results = await run_parallel_with_limit(
+            tasks, max_concurrency=max_concurrent_ai_calls
+        )
 
         # Flatten results and handle exceptions
         failures = []
@@ -1722,10 +1739,13 @@ async def analyze_job(
                         peer_ai_configs=peer_ai_configs,
                         peer_analysis_max_rounds=peer_analysis_max_rounds,
                         additional_repos=cloned_repos or None,
+                        max_concurrent_ai_calls=settings.max_concurrent_ai_calls,
                     )
                     for child_name, child_num in failed_child_jobs
                 ]
-                child_results = await run_parallel_with_limit(child_tasks)
+                child_results = await run_parallel_with_limit(
+                    child_tasks, max_concurrency=settings.max_concurrent_ai_calls
+                )
 
                 # Handle exceptions in results
                 for i, result in enumerate(child_results):
@@ -1817,9 +1837,12 @@ async def analyze_job(
                             if total_groups > 1
                             else "",
                             additional_repos=cloned_repos or None,
+                            max_concurrent_ai_calls=settings.max_concurrent_ai_calls,
                         )
                     )
-                group_results = await run_parallel_with_limit(failure_tasks)
+                group_results = await run_parallel_with_limit(
+                    failure_tasks, max_concurrency=settings.max_concurrent_ai_calls
+                )
 
                 # Flatten results and handle exceptions
                 failures = []

@@ -329,6 +329,7 @@ async def analyze_failure_group_with_peers(
     job_id: str = "",
     group_label: str = "",
     additional_repos: dict[str, Path] | None = None,
+    max_concurrent_ai_calls: int = 3,
 ) -> list[FailureAnalysis]:
     """Analyze a failure group using multi-AI peer consensus.
 
@@ -355,6 +356,9 @@ async def analyze_failure_group_with_peers(
         group_label: Human-readable label identifying which failure group is
             being analyzed (e.g. ``"2/3"`` for group 2 of 3). Used in progress
             phase names to disambiguate concurrent groups.
+        additional_repos: Extra cloned repositories for AI context.
+        max_concurrent_ai_calls: Maximum concurrent AI CLI processes for
+            peer analysis parallelism (default: 3).
 
     Returns:
         List of FailureAnalysis objects, one per failure in the group.
@@ -436,8 +440,8 @@ async def analyze_failure_group_with_peers(
         # Collect previous round peer data for cross-peer visibility.
         # Build a mapping from peer_ai_configs index to PeerResponseSummary
         # (None for peers that failed).  Peer entries in all_rounds appear in
-        # the same order as peer_ai_configs because asyncio.gather preserves
-        # input order, so we can zip them by position.
+        # the same order as peer_ai_configs because run_parallel_with_limit
+        # preserves input order, so we can zip them by position.
         prev_round_by_idx: dict[int, PeerResponseSummary] = {}
         if round_num > 1:
             prev_round_entries = [
@@ -492,7 +496,9 @@ async def analyze_failure_group_with_peers(
         peer_tasks: list[Coroutine[Any, Any, Any]] = [
             _call_peer(idx, cfg) for idx, cfg in enumerate(peer_ai_configs)
         ]
-        peer_results = await run_parallel_with_limit(peer_tasks)
+        peer_results = await run_parallel_with_limit(
+            peer_tasks, max_concurrency=max_concurrent_ai_calls
+        )
 
         # Process peer responses
         round_peer_entries: list[PeerRound] = []

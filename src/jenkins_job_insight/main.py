@@ -373,6 +373,7 @@ def _reconstruct_from_params(
         "jira_ssl_verify",
         "jira_max_results",
         "ai_cli_timeout",
+        "max_concurrent_ai_calls",
         "jenkins_artifacts_max_size_mb",
         "get_job_artifacts",
         "peer_analysis_max_rounds",
@@ -1036,6 +1037,7 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         "jira_ssl_verify",
         "jira_max_results",
         "ai_cli_timeout",
+        "max_concurrent_ai_calls",
         "enable_jira",
         "jenkins_artifacts_max_size_mb",
         "get_job_artifacts",
@@ -1542,6 +1544,7 @@ def _build_request_params(
             if merged.github_token
             else "",
             "ai_cli_timeout": merged.ai_cli_timeout,
+            "max_concurrent_ai_calls": merged.max_concurrent_ai_calls,
             "jenkins_artifacts_max_size_mb": merged.jenkins_artifacts_max_size_mb,
             "get_job_artifacts": merged.get_job_artifacts,
             "raw_prompt": body.raw_prompt or "",
@@ -1770,11 +1773,14 @@ async def analyze_failures(
                 peer_ai_configs=peer_ai_configs,
                 peer_analysis_max_rounds=merged.peer_analysis_max_rounds,
                 additional_repos=cloned_repos or None,
+                max_concurrent_ai_calls=merged.max_concurrent_ai_calls,
             )
             for group_failures in groups.values()
         ]
 
-        results = await run_parallel_with_limit(coroutines)
+        results = await run_parallel_with_limit(
+            coroutines, max_concurrency=merged.max_concurrent_ai_calls
+        )
 
         # Flatten results and filter out exceptions
         all_analyses = []

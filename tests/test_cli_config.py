@@ -36,6 +36,7 @@ tests_repo_url = "https://github.com/org/tests"
 ai_provider = "claude"
 ai_model = "opus-4"
 ai_cli_timeout = 15
+max_concurrent_ai_calls = 7
 jira_url = "https://jira.dev.local"
 jira_email = "dev@example.com"
 jira_api_token = "jira-tok-dev"
@@ -243,6 +244,7 @@ class TestGetServerConfig:
         assert cfg.ai_provider == "claude"
         assert cfg.ai_model == "opus-4"
         assert cfg.ai_cli_timeout == 15
+        assert cfg.max_concurrent_ai_calls == 7
         assert cfg.jira_url == "https://jira.dev.local"
         assert cfg.jira_email == "dev@example.com"
         assert cfg.jira_api_token == "jira-tok-dev"  # noqa: S105
@@ -267,6 +269,7 @@ class TestGetServerConfig:
         assert cfg.jenkins_ssl_verify is None
         assert cfg.ai_provider == ""
         assert cfg.ai_cli_timeout == 0
+        assert cfg.max_concurrent_ai_calls == 0
         assert cfg.jira_ssl_verify is None
         assert cfg.jira_max_results == 0
         assert cfg.enable_jira is None
@@ -779,3 +782,27 @@ class TestServerConfigFromDictTypeValidation:
         data = {"url": "http://test", "peer_analysis_max_rounds": 5}
         cfg = _server_config_from_dict(data)
         assert cfg.peer_analysis_max_rounds == 5
+
+    def test_max_concurrent_ai_calls_negative_raises(self) -> None:
+        """Negative 'max_concurrent_ai_calls' raises ValueError."""
+        data = {"url": "http://test", "max_concurrent_ai_calls": -1}
+        with pytest.raises(
+            ValueError, match=r"max_concurrent_ai_calls.*non-negative integer"
+        ):
+            _server_config_from_dict(data)
+
+    def test_max_concurrent_ai_calls_bool_raises(self) -> None:
+        """Boolean 'max_concurrent_ai_calls' raises ValueError (bool is subclass of int)."""
+        data = {"url": "http://test", "max_concurrent_ai_calls": True}
+        with pytest.raises(
+            ValueError, match=r"max_concurrent_ai_calls.*must be an integer"
+        ):
+            _server_config_from_dict(data)
+
+    def test_max_concurrent_ai_calls_string_raises(self) -> None:
+        """String 'max_concurrent_ai_calls' raises ValueError."""
+        data = {"url": "http://test", "max_concurrent_ai_calls": "five"}
+        with pytest.raises(
+            ValueError, match=r"max_concurrent_ai_calls.*must be an integer"
+        ):
+            _server_config_from_dict(data)
