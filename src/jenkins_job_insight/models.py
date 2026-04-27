@@ -163,6 +163,14 @@ class BaseAnalysisRequest(BaseModel):
         ),
     )
 
+    @field_validator("tests_repo_token")
+    @classmethod
+    def _normalize_tests_repo_token(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped or None
+
     @field_validator("additional_repos")
     @classmethod
     def _unique_additional_repo_names(

@@ -353,6 +353,7 @@ def _reconstruct_from_params(
         additional_repos=(
             params["additional_repos"] if "additional_repos" in params else None
         ),
+        tests_repo_token=params.get("tests_repo_token") or None,
         **({"force": params["force"]} if "force" in params else {}),
     )
     # Build Settings from env defaults, then layer stored overrides
@@ -401,6 +402,8 @@ def _reconstruct_from_params(
         overrides["jira_pat"] = SecretStr(params["jira_pat"])
     if params.get("github_token"):
         overrides["github_token"] = SecretStr(params["github_token"])
+    if params.get("tests_repo_token"):
+        overrides["tests_repo_token"] = SecretStr(params["tests_repo_token"])
 
     # Enable jira
     if params.get("enable_jira") is not None:
@@ -1469,6 +1472,8 @@ def _build_base_request_params(
         peer_ai_configs_resolved: Resolved peer AI configs (already validated).
         tests_repo_url: Effective tests repo URL (already resolved from
             request body / env / config).
+        tests_repo_token: Authentication token for cloning private tests repo.
+        tests_repo_ref: Git ref (branch/tag) for tests repo checkout.
         additional_repos: Effective additional repos list (already resolved).
 
     Returns:
@@ -1753,7 +1758,6 @@ async def analyze_failures(
                     str(tests_repo_url), additional_repos_list
                 )
                 logger.info(f"Cloning test repository: {tests_repo_url}")
-                tests_repo_token = _resolve_tests_repo_token(body, merged)
 
                 await asyncio.to_thread(
                     repo_manager.clone_into,
@@ -1761,7 +1765,7 @@ async def analyze_failures(
                     repo_path / repo_name,
                     depth=50,
                     branch=tests_repo_ref,
-                    token=tests_repo_token or None,
+                    token=resolved_tests_repo_token or None,
                 )
                 cloned_repos[repo_name] = repo_path / repo_name
             except Exception as e:

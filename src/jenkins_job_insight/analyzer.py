@@ -1681,8 +1681,11 @@ async def analyze_job(
                     cloned_repos[repo_name] = repo_path / repo_name
                     repo_context = f"\nTest repository cloned from: {clean_tests_url} (at {repo_name}/)"
                 except Exception as e:
-                    logger.warning(f"Failed to clone repository: {e}")
-                    repo_context = f"\nFailed to clone repo: {e}"
+                    logger.warning(
+                        "Failed to clone repository (%s)",
+                        type(e).__name__,
+                    )
+                    repo_context = "\nFailed to clone repository (details redacted)"
 
             custom_prompt = (request.raw_prompt or "").strip()
 
