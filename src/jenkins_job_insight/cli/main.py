@@ -607,6 +607,12 @@ def analyze(
     tests_repo_url: str = typer.Option(
         "", "--tests-repo-url", envvar="TESTS_REPO_URL", help="Tests repository URL."
     ),
+    tests_repo_token: str = typer.Option(
+        "",
+        "--tests-repo-token",
+        envvar="TESTS_REPO_TOKEN",
+        help="Token for cloning private tests repository.",
+    ),
     jira_url: str = typer.Option(
         "", "--jira-url", envvar="JIRA_URL", help="Jira instance URL."
     ),
@@ -715,6 +721,7 @@ def analyze(
             "jenkins_user": cfg.jenkins_user,
             "jenkins_password": cfg.jenkins_password,
             "tests_repo_url": cfg.tests_repo_url,
+            "tests_repo_token": cfg.tests_repo_token,
             "jira_url": cfg.jira_url,
             "jira_email": cfg.jira_email,
             "jira_api_token": cfg.jira_api_token,
@@ -786,6 +793,7 @@ def analyze(
         "jenkins_user": jenkins_user,
         "jenkins_password": jenkins_password,
         "tests_repo_url": tests_repo_url,
+        "tests_repo_token": tests_repo_token,
         "jira_url": jira_url,
         "jira_email": jira_email,
         "jira_api_token": jira_api_token,

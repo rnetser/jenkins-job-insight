@@ -96,7 +96,12 @@ from jenkins_job_insight.xml_enrichment import (
     build_enriched_xml,
     extract_test_failures,
 )
-from jenkins_job_insight.repository import RepositoryManager, derive_test_repo_name
+from jenkins_job_insight.repository import (
+    RepositoryManager,
+    _redact_url,
+    derive_test_repo_name,
+)
+from jenkins_job_insight.request_resolution import resolve_tests_repo_token
 from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
     get_ai_configs,
@@ -353,6 +358,9 @@ def _reconstruct_from_params(
         additional_repos=(
             params["additional_repos"] if "additional_repos" in params else None
         ),
+        tests_repo_token=(
+            params["tests_repo_token"] if "tests_repo_token" in params else None
+        ),
         **({"force": params["force"]} if "force" in params else {}),
     )
     # Build Settings from env defaults, then layer stored overrides
@@ -401,6 +409,11 @@ def _reconstruct_from_params(
         overrides["jira_pat"] = SecretStr(params["jira_pat"])
     if params.get("github_token"):
         overrides["github_token"] = SecretStr(params["github_token"])
+    if "tests_repo_token" in params:
+        token_value = params["tests_repo_token"]
+        overrides["tests_repo_token"] = (
+            SecretStr(token_value) if token_value is not None else None
+        )
 
     # Enable jira
     if params.get("enable_jira") is not None:
@@ -1059,6 +1072,8 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
         overrides["jira_pat"] = SecretStr(body.jira_pat)
     if body.github_token is not None:
         overrides["github_token"] = SecretStr(body.github_token)
+    if body.tests_repo_token is not None:
+        overrides["tests_repo_token"] = SecretStr(body.tests_repo_token)
 
     # AnalyzeRequest-specific fields (Jenkins overrides + monitoring)
     if isinstance(body, AnalyzeRequest):
@@ -1442,6 +1457,7 @@ def _build_base_request_params(
     peer_ai_configs_resolved: list | None = None,
     *,
     tests_repo_url: str = "",
+    tests_repo_token: str = "",
     tests_repo_ref: str = "",
     additional_repos: list | None = None,
 ) -> dict:
@@ -1457,6 +1473,8 @@ def _build_base_request_params(
         peer_ai_configs_resolved: Resolved peer AI configs (already validated).
         tests_repo_url: Effective tests repo URL (already resolved from
             request body / env / config).
+        tests_repo_token: Authentication token for cloning private tests repo.
+        tests_repo_ref: Git ref (branch/tag) for tests repo checkout.
         additional_repos: Effective additional repos list (already resolved).
 
     Returns:
@@ -1476,6 +1494,7 @@ def _build_base_request_params(
         if additional_repos is not None
         else None,
         "tests_repo_url": tests_repo_url,
+        "tests_repo_token": tests_repo_token,
         "tests_repo_ref": tests_repo_ref,
     }
 
@@ -1509,12 +1528,14 @@ def _build_request_params(
         else ""
     )
     resolved_tests_repo, tests_repo_ref = parse_repo_ref(resolved_tests_repo)
+    resolved_tests_repo_token = resolve_tests_repo_token(body, merged)
     resolved_additional = resolve_additional_repos(body, merged)
     params = _build_base_request_params(
         ai_provider,
         ai_model,
         peer_ai_configs_resolved,
         tests_repo_url=resolved_tests_repo,
+        tests_repo_token=resolved_tests_repo_token,
         tests_repo_ref=tests_repo_ref,
         additional_repos=resolved_additional,
     )
@@ -1689,6 +1710,7 @@ async def analyze_failures(
     # (including env-var / config-file defaults, not just request-body values).
     tests_repo_url_raw = str(body.tests_repo_url or merged.tests_repo_url or "")
     tests_repo_url, tests_repo_ref = parse_repo_ref(tests_repo_url_raw)
+    resolved_tests_repo_token = resolve_tests_repo_token(body, merged)
     additional_repos_list = resolve_additional_repos(body, merged)
 
     job_id = str(uuid.uuid4())
@@ -1700,13 +1722,16 @@ async def analyze_failures(
     # Save initial pending state with request_params so GET /results/{job_id}
     # works immediately and _preserve_request_params can find them later.
     initial_result: dict = {
-        "request_params": _build_base_request_params(
-            ai_provider,
-            ai_model,
-            peer_ai_configs,
-            tests_repo_url=tests_repo_url,
-            tests_repo_ref=tests_repo_ref,
-            additional_repos=additional_repos_list or None,
+        "request_params": encrypt_sensitive_fields(
+            _build_base_request_params(
+                ai_provider,
+                ai_model,
+                peer_ai_configs,
+                tests_repo_url=tests_repo_url,
+                tests_repo_token=resolved_tests_repo_token,
+                tests_repo_ref=tests_repo_ref,
+                additional_repos=additional_repos_list or None,
+            )
         ),
     }
     await save_result(job_id, "", "pending", initial_result)
@@ -1735,17 +1760,26 @@ async def analyze_failures(
                 repo_name = derive_test_repo_name(
                     str(tests_repo_url), additional_repos_list
                 )
-                logger.info(f"Cloning test repository: {tests_repo_url}")
+                logger.info(
+                    f"Cloning test repository: {_redact_url(str(tests_repo_url))}"
+                    + (f" (ref={tests_repo_ref})" if tests_repo_ref else "")
+                )
+
                 await asyncio.to_thread(
                     repo_manager.clone_into,
                     str(tests_repo_url),
                     repo_path / repo_name,
                     depth=50,
                     branch=tests_repo_ref,
+                    token=resolved_tests_repo_token or None,
                 )
                 cloned_repos[repo_name] = repo_path / repo_name
-            except Exception as e:
-                logger.warning(f"Failed to clone test repository: {e}")
+                logger.info(f"Successfully cloned test repository into {repo_name}/")
+            except Exception as e:  # noqa: BLE001 — non-fatal tests repo clone failure
+                logger.warning(
+                    "Failed to clone test repository (%s)",
+                    type(e).__name__,
+                )
 
         # Clone additional repositories for AI context
         if additional_repos_list:

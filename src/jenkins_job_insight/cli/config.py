@@ -30,6 +30,7 @@ class ServerConfig:
     jenkins_timeout: int = 0  # 0 means use server default
     # Tests
     tests_repo_url: str = ""
+    tests_repo_token: str = ""
     # AI
     ai_provider: str = ""
     ai_model: str = ""
@@ -219,6 +220,7 @@ def _server_config_from_dict(data: dict) -> ServerConfig:
         jenkins_timeout=_validated_non_negative_int(data, "jenkins_timeout"),
         # Tests
         tests_repo_url=data.get("tests_repo_url", ""),
+        tests_repo_token=data.get("tests_repo_token", ""),
         # AI
         ai_provider=data.get("ai_provider", ""),
         ai_model=data.get("ai_model", ""),

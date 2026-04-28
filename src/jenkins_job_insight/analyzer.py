@@ -21,6 +21,7 @@ from fastapi import HTTPException
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.config import Settings, parse_additional_repos, parse_repo_ref
+from jenkins_job_insight.request_resolution import resolve_tests_repo_token
 from jenkins_job_insight.jenkins_artifacts import (
     cleanup_extract_dir,
     process_build_artifacts,
@@ -42,6 +43,7 @@ from jenkins_job_insight.models import (
 )
 from jenkins_job_insight.repository import (
     RepositoryManager,
+    _redact_url,
     derive_test_repo_name,
 )
 from jenkins_job_insight.storage import update_progress_phase
@@ -1643,6 +1645,7 @@ async def analyze_job(
         # Clone repo for context BEFORE child job analysis so it's available for all jobs
         # Use request value if provided, otherwise fall back to settings
         tests_repo_url = request.tests_repo_url or settings.tests_repo_url
+        tests_repo_token = resolve_tests_repo_token(request, settings)
         repo_context = ""
         custom_prompt = ""
 
@@ -1662,19 +1665,29 @@ async def analyze_job(
                     repo_name = derive_test_repo_name(
                         clean_tests_url, additional_repos_list
                     )
-                    logger.info(f"Cloning test repository: {clean_tests_url}")
+                    logger.info(
+                        f"Cloning test repository: {_redact_url(clean_tests_url)}"
+                        + (f" (ref={tests_ref})" if tests_ref else "")
+                    )
                     await asyncio.to_thread(
                         repo_manager.clone_into,
                         clean_tests_url,
                         repo_path / repo_name,
                         depth=50,
                         branch=tests_ref,
+                        token=tests_repo_token or None,
                     )
                     cloned_repos[repo_name] = repo_path / repo_name
+                    logger.info(
+                        f"Successfully cloned test repository into {repo_name}/"
+                    )
                     repo_context = f"\nTest repository cloned from: {clean_tests_url} (at {repo_name}/)"
-                except Exception as e:
-                    logger.warning(f"Failed to clone repository: {e}")
-                    repo_context = f"\nFailed to clone repo: {e}"
+                except Exception as e:  # noqa: BLE001 — non-fatal tests repo clone failure
+                    logger.warning(
+                        "Failed to clone repository (%s)",
+                        type(e).__name__,
+                    )
+                    repo_context = "\nFailed to clone repository (details redacted)"
 
             custom_prompt = (request.raw_prompt or "").strip()
 

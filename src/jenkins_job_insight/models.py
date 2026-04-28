@@ -78,6 +78,11 @@ class BaseAnalysisRequest(BaseModel):
         default=None,
         description="URL of the tests repository (overrides env var default)",
     )
+    tests_repo_token: str | None = Field(
+        default=None,
+        description="Authentication token for cloning private tests repo (overrides TESTS_REPO_TOKEN env var)",
+        json_schema_extra={"format": "password"},
+    )
     ai_provider: Literal["claude", "gemini", "cursor"] | None = Field(
         default=None,
         description="AI provider to use: claude, gemini, or cursor (overrides env var default)",
@@ -157,6 +162,14 @@ class BaseAnalysisRequest(BaseModel):
             "Omit to inherit the server default; send [] to disable."
         ),
     )
+
+    @field_validator("tests_repo_token")
+    @classmethod
+    def _normalize_tests_repo_token(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped or None
 
     @field_validator("additional_repos")
     @classmethod

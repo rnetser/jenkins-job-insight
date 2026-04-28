@@ -211,6 +211,6 @@ Sensitive data (passwords, API tokens, credentials) must be:
 2. **Stripped from responses** — use `strip_sensitive_from_response()` before returning to API consumers
 3. **Never logged** — do not log passwords, tokens, or credentials at any log level
 
-Sensitive fields: `jenkins_password`, `jenkins_user`, `jira_api_token`, `jira_pat`, `jira_email`, `github_token`, `reportportal_api_token`, `vapid_private_key`
+Sensitive fields: `jenkins_password`, `jenkins_user`, `jira_api_token`, `jira_pat`, `jira_email`, `github_token`, `tests_repo_token`, `reportportal_api_token`, `vapid_private_key`
 
 Encryption uses Fernet (AES-128-CBC + HMAC-SHA256). Set `JJI_ENCRYPTION_KEY` env var for production; falls back to an auto-generated file-based key under `$XDG_DATA_HOME/jji/.encryption_key` (default: `~/.local/share/jji/.encryption_key`) for development.
