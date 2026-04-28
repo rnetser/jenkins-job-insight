@@ -1665,7 +1665,8 @@ async def analyze_job(
                         clean_tests_url, additional_repos_list
                     )
                     logger.info(
-                        f"Cloning test repository: {clean_tests_url} (ref={tests_ref or 'default'})"
+                        f"Cloning test repository: {clean_tests_url}"
+                        + (f" (ref={tests_ref})" if tests_ref else "")
                     )
                     await asyncio.to_thread(
                         repo_manager.clone_into,

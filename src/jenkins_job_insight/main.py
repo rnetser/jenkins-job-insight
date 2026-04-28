@@ -1754,7 +1754,8 @@ async def analyze_failures(
                     str(tests_repo_url), additional_repos_list
                 )
                 logger.info(
-                    f"Cloning test repository: {tests_repo_url} (ref={tests_repo_ref or 'default'})"
+                    f"Cloning test repository: {tests_repo_url}"
+                    + (f" (ref={tests_repo_ref})" if tests_repo_ref else "")
                 )
 
                 await asyncio.to_thread(
