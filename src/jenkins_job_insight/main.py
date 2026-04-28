@@ -411,7 +411,9 @@ def _reconstruct_from_params(
         overrides["github_token"] = SecretStr(params["github_token"])
     if "tests_repo_token" in params:
         token_value = params["tests_repo_token"]
-        overrides["tests_repo_token"] = SecretStr(token_value) if token_value else None
+        overrides["tests_repo_token"] = (
+            SecretStr(token_value) if token_value is not None else None
+        )
 
     # Enable jira
     if params.get("enable_jira") is not None:
