@@ -43,6 +43,7 @@ from jenkins_job_insight.models import (
 )
 from jenkins_job_insight.repository import (
     RepositoryManager,
+    _redact_url,
     derive_test_repo_name,
 )
 from jenkins_job_insight.storage import update_progress_phase
@@ -1665,7 +1666,7 @@ async def analyze_job(
                         clean_tests_url, additional_repos_list
                     )
                     logger.info(
-                        f"Cloning test repository: {clean_tests_url}"
+                        f"Cloning test repository: {_redact_url(clean_tests_url)}"
                         + (f" (ref={tests_ref})" if tests_ref else "")
                     )
                     await asyncio.to_thread(

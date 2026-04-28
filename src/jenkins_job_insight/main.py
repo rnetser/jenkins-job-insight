@@ -96,7 +96,11 @@ from jenkins_job_insight.xml_enrichment import (
     build_enriched_xml,
     extract_test_failures,
 )
-from jenkins_job_insight.repository import RepositoryManager, derive_test_repo_name
+from jenkins_job_insight.repository import (
+    RepositoryManager,
+    _redact_url,
+    derive_test_repo_name,
+)
 from jenkins_job_insight.request_resolution import resolve_tests_repo_token
 from jenkins_job_insight import storage
 from jenkins_job_insight.storage import (
@@ -405,8 +409,9 @@ def _reconstruct_from_params(
         overrides["jira_pat"] = SecretStr(params["jira_pat"])
     if params.get("github_token"):
         overrides["github_token"] = SecretStr(params["github_token"])
-    if "tests_repo_token" in params and params["tests_repo_token"]:
-        overrides["tests_repo_token"] = SecretStr(params["tests_repo_token"])
+    if "tests_repo_token" in params:
+        token_value = params["tests_repo_token"]
+        overrides["tests_repo_token"] = SecretStr(token_value) if token_value else None
 
     # Enable jira
     if params.get("enable_jira") is not None:
@@ -1754,7 +1759,7 @@ async def analyze_failures(
                     str(tests_repo_url), additional_repos_list
                 )
                 logger.info(
-                    f"Cloning test repository: {tests_repo_url}"
+                    f"Cloning test repository: {_redact_url(str(tests_repo_url))}"
                     + (f" (ref={tests_repo_ref})" if tests_repo_ref else "")
                 )
 
