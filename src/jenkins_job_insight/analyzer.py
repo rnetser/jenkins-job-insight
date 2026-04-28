@@ -1664,7 +1664,9 @@ async def analyze_job(
                     repo_name = derive_test_repo_name(
                         clean_tests_url, additional_repos_list
                     )
-                    logger.info(f"Cloning test repository: {clean_tests_url}")
+                    logger.info(
+                        f"Cloning test repository: {clean_tests_url} (ref={tests_ref or 'default'})"
+                    )
                     await asyncio.to_thread(
                         repo_manager.clone_into,
                         clean_tests_url,
@@ -1674,6 +1676,9 @@ async def analyze_job(
                         token=tests_repo_token or None,
                     )
                     cloned_repos[repo_name] = repo_path / repo_name
+                    logger.info(
+                        f"Successfully cloned test repository into {repo_name}/"
+                    )
                     repo_context = f"\nTest repository cloned from: {clean_tests_url} (at {repo_name}/)"
                 except Exception as e:  # noqa: BLE001 — non-fatal tests repo clone failure
                     logger.warning(
