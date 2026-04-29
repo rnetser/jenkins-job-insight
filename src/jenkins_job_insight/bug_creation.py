@@ -642,6 +642,7 @@ async def create_jira_bug(
     priority: str = "",
     project_key: str = "",
     security_level: str = "",
+    issue_type: str = "Bug",
 ) -> dict:
     """Create a Jira Bug issue via the REST API.
 
@@ -674,12 +675,16 @@ async def create_jira_bug(
     else:
         api_path = "/rest/api/2"
 
+    effective_issue_type = issue_type.strip() if issue_type else "Bug"
+    if not effective_issue_type:
+        effective_issue_type = "Bug"
+
     payload: dict = {
         "fields": {
             "project": {"key": effective_project_key},
             "summary": title,
             "description": body,
-            "issuetype": {"name": "Bug"},
+            "issuetype": {"name": effective_issue_type},
         }
     }
     if priority:

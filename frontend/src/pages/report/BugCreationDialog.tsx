@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { CheckCircle2, ExternalLink, AlertTriangle } from 'lucide-react'
 import type { PreviewIssueResponse, CreateIssueResponse, SimilarIssue, CommentsAndReviews } from '@/types'
@@ -66,10 +67,14 @@ export function BugCreationDialog({
   const [showProjectDropdown, setShowProjectDropdown] = useState(false)
   const [showSecurityDropdown, setShowSecurityDropdown] = useState(false)
   const [securityLevels, setSecurityLevels] = useState<Array<{id: string; name: string; description: string}>>([])
+  const [jiraIssueType, setJiraIssueType] = useState('Bug')
+  const [customIssueType, setCustomIssueType] = useState('')
+
+  const JIRA_ISSUE_TYPES = ['Bug', 'Task', 'Story', 'Epic', 'Sub-task']
 
   const previewPath = target === 'github' ? 'preview-github-issue' : 'preview-jira-bug'
   const createPath = target === 'github' ? 'create-github-issue' : 'create-jira-bug'
-  const label = target === 'github' ? 'GitHub Issue' : 'Jira Bug'
+  const label = target === 'github' ? 'GitHub Issue' : 'Jira Ticket'
   const hasToken = target === 'github' ? !!getGithubToken() : !!getJiraToken()
 
   function getTrackerCredentials() {
@@ -80,6 +85,7 @@ export function BugCreationDialog({
       ...(target === 'github' && selectedRepo ? { github_repo_url: selectedRepo } : {}),
       ...(target === 'jira' && jiraProjectKey ? { jira_project_key: jiraProjectKey } : {}),
       ...(target === 'jira' && jiraSecurityLevel ? { jira_security_level: jiraSecurityLevel } : {}),
+      ...(target === 'jira' ? { jira_issue_type: jiraIssueType === '__custom__' ? customIssueType : jiraIssueType } : {}),
     }
   }
 
@@ -174,9 +180,9 @@ export function BugCreationDialog({
     }
   }
 
-  function handleClose(nextOpen: boolean) {
-    if (nextOpen) return
-    onOpenChange(false)
+  const isBusy = phase === 'loading' || phase === 'preview' || phase === 'creating'
+
+  function resetState() {
     setTimeout(() => {
       setPhase('idle')
       setTitle('')
@@ -192,12 +198,26 @@ export function BugCreationDialog({
       setSecurityLevels([])
       setShowProjectDropdown(false)
       setShowSecurityDropdown(false)
+      setJiraIssueType('Bug')
+      setCustomIssueType('')
     }, 200)
+  }
+
+  function handleCancel() {
+    onOpenChange(false)
+    resetState()
+  }
+
+  function handleClose(nextOpen: boolean) {
+    if (!nextOpen && isBusy) return
+    if (nextOpen) return
+    onOpenChange(false)
+    resetState()
   }
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent hideCloseButton={isBusy} className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{phase === 'success' ? `${label} Created` : `Create ${label}`}</DialogTitle>
           {phase === 'preview' && <DialogDescription>Review and edit before creating.</DialogDescription>}
@@ -269,6 +289,32 @@ export function BugCreationDialog({
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+            {target === 'jira' && (
+              <div className="space-y-2">
+                <label htmlFor="bug-jira-issue-type" className="text-xs font-display uppercase tracking-widest text-text-tertiary">Issue Type</label>
+                <Select value={jiraIssueType} onValueChange={setJiraIssueType}>
+                  <SelectTrigger id="bug-jira-issue-type" className="w-full">
+                    <SelectValue placeholder="Select issue type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {JIRA_ISSUE_TYPES.map((t) => (
+                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    ))}
+                    <SelectItem value="__custom__">Custom...</SelectItem>
+                  </SelectContent>
+                </Select>
+                {jiraIssueType === '__custom__' && (
+                  <input
+                    type="text"
+                    value={customIssueType}
+                    onChange={(e) => setCustomIssueType(e.target.value)}
+                    placeholder="Enter custom issue type..."
+                    autoComplete="off"
+                    className="w-full h-9 rounded-md border border-border-default bg-surface-elevated px-2 text-sm text-text-primary placeholder:text-text-tertiary mt-1"
+                  />
+                )}
               </div>
             )}
             {target === 'jira' && (
@@ -397,13 +443,13 @@ export function BugCreationDialog({
                 <p className="text-xs text-text-tertiary">Add a {target === 'github' ? 'GitHub' : 'Jira'} token in <a href="/settings" className="text-text-link hover:underline">settings</a> to create directly.</p>
               )}
               <div className="flex gap-2 sm:ml-auto">
-                <Button variant="ghost" onClick={() => handleClose(false)}>Cancel</Button>
-                <Button onClick={handleCreate} disabled={!title.trim() || !hasToken} title={!hasToken ? `Add a ${target === 'github' ? 'GitHub' : 'Jira'} token to create issues` : undefined}>Create {label}</Button>
+                <Button variant="outline" onClick={() => handleCancel()}>Cancel</Button>
+                <Button onClick={handleCreate} disabled={!title.trim() || !hasToken || (target === 'jira' && jiraIssueType === '__custom__' && !customIssueType.trim())} title={!hasToken ? `Add a ${target === 'github' ? 'GitHub' : 'Jira'} token to create issues` : undefined}>Create {label}</Button>
               </div>
             </>
           )}
           {(phase === 'success' || phase === 'error') && (
-            <Button variant="ghost" onClick={() => handleClose(false)} className="sm:ml-auto">Close</Button>
+            <Button variant="outline" onClick={() => handleCancel()} className="sm:ml-auto">Close</Button>
           )}
         </DialogFooter>
       </DialogContent>
