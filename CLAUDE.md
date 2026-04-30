@@ -66,76 +66,38 @@ uvx --with tox-uv tox -e frontend   # Frontend only
 - Explain data flow through the system, not just variable locations
 - Show how components connect and interact
 
-## Architecture
+## Architecture Rules
 
-### CLI-Based AI Integration
+### Tech Stack
 
-This project uses AI CLI tools (Claude CLI, Gemini CLI, Cursor Agent CLI) instead of direct SDK integrations:
+- **Backend**: Python + FastAPI + TinyDB
+- **Frontend**: Vite + React 19 + TypeScript + Tailwind CSS + shadcn/ui (in `/frontend/`)
+- **AI Integration**: CLI-based (Claude CLI, Gemini CLI, Cursor Agent CLI) — no SDK dependencies, provider-agnostic, `AI_PROVIDER` env var selects provider
+- **CLI**: `jji` CLI tool for querying the API — run `jji --help` for available commands
 
-- **No SDK dependencies**: AI providers are called via subprocess
-- **Provider-agnostic**: Easy to add new AI CLIs (see README)
-- **Auth handled externally**: CLIs manage their own authentication
-- **Environment-driven**: `AI_PROVIDER` env var selects the provider (`claude`, `gemini`, or `cursor`)
+### Frontend Patterns
 
-### Key Components
-
-| Component | Purpose |
-|-----------|---------|
-| `call_ai_cli()` | Single function for all AI CLI calls |
-| `get_failure_signature()` | Deduplicates identical test failures |
-| `analyze_failure_group()` | Analyzes unique failures, applies to all matches |
-| `run_parallel_with_limit()` | Bounded parallel execution |
-| `JiraClient` | Searches Jira for matching bugs (Cloud + Server/DC) |
-| `enrich_with_jira_matches()` | Post-processing: attaches Jira matches to PRODUCT BUG failures |
-| `_filter_matches_with_ai()` | AI-powered relevance filtering of Jira candidates |
-| `token_tracking` | Records AI CLI token usage and builds per-job summaries |
-
-### Frontend (React + TypeScript)
-
-The frontend is in `/frontend/` — a Vite + React 19 + TypeScript + Tailwind CSS + shadcn/ui application.
-
-| Directory | Purpose |
-|-----------|---------|
-| `frontend/src/pages/` | Page components (one per route) |
-| `frontend/src/pages/report/` | Report page subcomponents (FailureCard, CommentsSection, etc.) |
-| `frontend/src/components/ui/` | shadcn/ui primitives (Button, Card, Dialog, etc.) |
-| `frontend/src/components/shared/` | App-level shared components (ClassificationBadge, StatusChip, etc.) |
-| `frontend/src/components/layout/` | Layout shell (NavBar, UserBadge) |
-| `frontend/src/lib/` | Utilities (api.ts, cookies.ts, grouping.ts) |
-| `frontend/src/types/` | TypeScript types mirroring Python models |
-| `frontend/src/pages/TokenUsagePage.tsx` | Admin token usage dashboard |
-
-Key patterns:
-- **State**: Report page uses `useReducer` via `ReportContext` (page-scoped, not global)
-- **API**: Centralized `api.get/post/put/delete` wrapper in `lib/api.ts`
-- **User identification**: Cookie-based (`jji_username`), read/written client-side; display-only, not an authentication/authorization boundary
-- **Grouping**: `lib/grouping.ts` ports Python's `_grouping_key()` to TypeScript
+- **State**: Page-scoped `useReducer` (e.g., `ReportContext` for the report page) — each page owns its own context; do NOT introduce global state (Redux, Zustand, etc.)
+- **API**: Centralized `api.get/post/put/delete` wrapper in `lib/api.ts` — do NOT use raw `fetch` calls
+- **User identification**: Cookie-based (`jji_username`), display-only — NOT an authentication/authorization boundary
 
 ### Auto-Generated Documentation
 
-The `docs/` directory is **auto-generated** by [docsfy](https://github.com/myk-org/docsfy) and served via GitHub Pages. **NEVER edit files in `docs/` manually** — all changes will be overwritten on the next generation. To update documentation, either:
-- Update the source code and regenerate with docsfy
-- Update `AGENTS.md` or `README.md` for project-level documentation
+The `docs/` directory is **auto-generated** by [docsfy](https://github.com/myk-org/docsfy). **NEVER edit files in `docs/` manually** — all changes will be overwritten. To update documentation, modify source code and regenerate with docsfy, or edit `AGENTS.md` / `README.md` for project-level docs.
 
 ### AI Tool Access (IMPORTANT)
 
-Never pre-feed data to the AI in the prompt. Instead, give the AI tools (API endpoints, scripts, commands) and let it decide what data it needs and extract it itself.
+Never pre-feed data to the AI in the prompt. Give the AI tools (API endpoints, scripts, commands) and let it decide what data it needs.
 
 **DO:**
 - Expose API endpoints the AI can curl
-- Provide a skill file (e.g., FAILURE_HISTORY_ANALYSIS.md) documenting available tools
+- Provide skill files documenting available tools
 - Let the AI query, explore, and interpret data on its own
 
 **DON'T:**
 - Pre-query the database and stuff results into the prompt
 - Summarize or filter data before the AI sees it
 - Make decisions about what data the AI needs — let the AI decide
-
-This principle applies to all AI integrations: failure history, test analysis, and any future AI-powered features.
-
-### CLI Access
-
-A `jji` CLI tool is available for querying the jenkins-job-insight API. Run `jji --help` for available commands.
 
 ### CLI Parity
 
@@ -150,16 +112,23 @@ When multiple tests fail with the same error:
 1. Failures are grouped by error signature (SHA-256 hash of error + stack trace)
 2. Only one AI CLI call per unique error type
 3. Analysis is applied to all failures with matching signature
-4. Reduces redundant API calls and output
 
 ### Jira Integration (Optional)
 
 When configured, searches Jira for existing bugs matching PRODUCT BUG failures:
-1. AI generates specific search keywords during analysis
-2. After analysis, keywords are used to search Jira (Bug type, summary search)
-3. AI evaluates each Jira candidate's relevance by reading its summary and description
-4. Only genuinely relevant matches are attached to the result
+1. AI generates search keywords during analysis
+2. Keywords search Jira (configurable issue type, summary search)
+3. AI evaluates each candidate's relevance
+4. Only relevant matches are attached to the result
 5. Jira errors never crash the pipeline — all failures are swallowed gracefully
+
+### Report Portal Integration (Optional)
+
+When `ENABLE_REPORTPORTAL=true`, users can push test classifications back to Report Portal via the `push-reportportal` endpoint and CLI command.
+
+### Feedback System
+
+Users submit feedback (bugs, feature requests) via the FeedbackDialog component. Feedback is previewed with AI-generated issue content, then created as a GitHub issue. This replaces the old "Report Bug" flow.
 
 ### Logging
 
@@ -178,9 +147,7 @@ For request-tunable analysis settings, keep these interfaces in sync:
 3. CLI option (command-line flag)
 4. Config file (`~/.config/jji/config.toml` per-server setting)
 
-Client-only transport settings and server-only deployment settings stay scoped
-to their owning interface. CLI parity for new API endpoints is a separate rule
-(see "CLI Parity" above).
+Client-only transport settings and server-only deployment settings stay scoped to their owning interface.
 
 When adding a new analysis setting:
 1. Add the field to `Settings` in `config.py`
@@ -198,7 +165,9 @@ Exceptions (server-level only, no payload equivalent):
 - `JJI_ENCRYPTION_KEY` — server-only secret for at-rest encryption AND HMAC secret for delegated admin API key hashes; never expose via request payloads, CLI flags, or shared config files. **Rotating this key invalidates both encrypted data (tokens) and all stored delegated admin API key hashes** — operators must re-issue delegated admin API keys after rotation
 - `LOG_LEVEL` — server log verbosity
 - `PUBLIC_BASE_URL` — trusted server-only origin for building absolute links; never derive from request headers to prevent host-header injection
+- `METADATA_RULES_FILE` — server-only path to metadata classification rules file
 - `SECURE_COOKIES` — server-only deployment toggle for HTTPS cookie flags (default: True, set False for local HTTP dev)
+- `TRUST_PROXY_HEADERS` — server-only trust toggle for reverse-proxy user identification; only enable behind a trusted proxy
 - `VAPID_CLAIM_EMAIL` — server-only contact email for VAPID claims (Web Push notifications)
 - `VAPID_PRIVATE_KEY` — server-only VAPID private key for Web Push notifications; never expose via request payloads, CLI flags, or shared config files
 - `VAPID_PUBLIC_KEY` — server-only VAPID public key for Web Push notifications; auto-generated with `VAPID_PRIVATE_KEY` if not set
