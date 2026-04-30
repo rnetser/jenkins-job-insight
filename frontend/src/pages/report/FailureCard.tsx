@@ -19,6 +19,8 @@ import { ReviewToggle } from './ReviewToggle'
 import { CommentsSection } from './CommentsSection'
 import { ClassificationSelect } from './ClassificationSelect'
 import { BugCreationDialog } from './BugCreationDialog'
+import { useReviewSuggestion } from './useReviewSuggestion'
+import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { ChevronDown, ChevronRight, Bug, MessageSquare, CheckCircle2, Copy, Check, Clock } from 'lucide-react'
 
 function IssueButton({ disabled, tooltip, label, onClick }: {
@@ -105,6 +107,16 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
   const [includeLinks, setIncludeLinks] = useState(false)
   const { copiedKey: copiedSection, copy: copyToClipboard } = useClipboard()
 
+  const rep = group.tests[0]
+  const analysis = rep.analysis
+
+  const { showSuggestion: showBugReviewSuggestion, loading: bugReviewLoading, error: bugReviewError, maybeSuggest: maybeSuggestBugReview, dismissSuggestion: dismissBugReviewSuggestion, confirmSuggestion: confirmBugReviewSuggestion } = useReviewSuggestion({
+    jobId,
+    testName: rep.test_name,
+    childJobName,
+    childBuildNumber,
+  })
+
   const repoUrls = useMemo<RepoUrl[]>(
     () => buildRepoUrls(result?.request_params),
     [result?.request_params],
@@ -130,8 +142,6 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
   const scopedReviewKey = (testName: string) =>
     reviewKey(testName, scopedChildJobName, scopedChildBuildNumber)
 
-  const rep = group.tests[0]
-  const analysis = rep.analysis
   const repKey = scopedReviewKey(rep.test_name)
   const classification = classifications[repKey] ?? analysis.classification
   const borderColor = classification === 'PRODUCT BUG' ? 'border-l-signal-orange' : 'border-l-signal-blue'
@@ -512,7 +522,22 @@ export function FailureCard({ group, jobId, childJobName, childBuildNumber, inde
               ? repoUrls.map(({ name, url }) => ({ name, url }))
               : undefined
           }
+          onIssueCreated={(url) => void maybeSuggestBugReview(url)}
         />
+      )}
+
+      <ConfirmDialog
+        open={showBugReviewSuggestion}
+        onOpenChange={(open) => { if (!open) dismissBugReviewSuggestion() }}
+        title="Mark as reviewed?"
+        description="A bug issue was linked to this failure. Would you like to mark it as reviewed?"
+        confirmLabel="Yes"
+        cancelLabel="No"
+        onConfirm={confirmBugReviewSuggestion}
+        loading={bugReviewLoading}
+      />
+      {bugReviewError && (
+        <span className="text-sm text-destructive" role="alert">{bugReviewError}</span>
       )}
     </>
   )

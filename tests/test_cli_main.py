@@ -3129,6 +3129,64 @@ class TestTokenUsageCommand:
         assert "N/A" in result.output
 
 
+class TestAnalyzeCommentIntentCommand:
+    def test_analyze_comment_intent(self, mock_client):
+        mock_client.analyze_comment_intent.return_value = {
+            "suggests_reviewed": True,
+            "reason": "Bug filed with link",
+        }
+        result = runner.invoke(
+            app, ["analyze-comment-intent", "Filed JIRA-123 for this"]
+        )
+        assert result.exit_code == 0
+        assert "True" in result.output
+        assert "Bug filed with link" in result.output
+
+    def test_analyze_comment_intent_not_reviewed(self, mock_client):
+        mock_client.analyze_comment_intent.return_value = {
+            "suggests_reviewed": False,
+            "reason": "",
+        }
+        result = runner.invoke(
+            app, ["analyze-comment-intent", "Can someone check the logs?"]
+        )
+        assert result.exit_code == 0
+        assert "False" in result.output
+
+    def test_analyze_comment_intent_json(self, mock_client):
+        expected = {"suggests_reviewed": True, "reason": "Fix merged"}
+        mock_client.analyze_comment_intent.return_value = expected
+        result = runner.invoke(
+            app, ["--json", "analyze-comment-intent", "Fixed in commit abc123"]
+        )
+        assert result.exit_code == 0
+        assert json.loads(result.output) == expected
+
+    def test_analyze_comment_intent_with_ai_options(self, mock_client):
+        mock_client.analyze_comment_intent.return_value = {
+            "suggests_reviewed": True,
+            "reason": "Bug filed",
+        }
+        result = runner.invoke(
+            app,
+            [
+                "analyze-comment-intent",
+                "Filed JIRA-123",
+                "--ai-provider",
+                "claude",
+                "--ai-model",
+                "claude-sonnet-4-20250514",
+            ],
+        )
+        assert result.exit_code == 0
+        mock_client.analyze_comment_intent.assert_called_once_with(
+            comment="Filed JIRA-123",
+            job_id="",
+            ai_provider="claude",
+            ai_model="claude-sonnet-4-20250514",
+        )
+
+
 class TestApiKeyOption:
     def test_api_key_passed_to_client(self):
         """--api-key should cause _get_client to create client with api_key."""

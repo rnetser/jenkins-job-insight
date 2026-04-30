@@ -818,3 +818,21 @@ class JJIClient:
         return self._request(
             "POST", "/api/jobs/metadata/rules/preview", json={"job_name": job_name}
         )
+
+    def analyze_comment_intent(
+        self,
+        comment: str,
+        *,
+        job_id: str = "",
+        ai_provider: str = "",
+        ai_model: str = "",
+    ) -> dict:
+        """Analyze whether a comment suggests a failure is reviewed. POST /api/analyze-comment-intent"""
+        payload: dict = {"comment": comment}
+        if job_id:
+            payload["job_id"] = job_id
+        if ai_provider:
+            payload["ai_provider"] = ai_provider
+        if ai_model:
+            payload["ai_model"] = ai_model
+        return self._request("POST", "/api/analyze-comment-intent", json=payload)
