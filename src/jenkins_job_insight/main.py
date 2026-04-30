@@ -1193,6 +1193,7 @@ async def _enrich_result_with_tests_repo_matches(
     ai_provider: str = "",
     ai_model: str = "",
     job_id: str = "",
+    tests_repo_url: str = "",
 ) -> None:
     """Enrich CODE ISSUE failures with tests repo issue matches.
 
@@ -1206,9 +1207,21 @@ async def _enrich_result_with_tests_repo_matches(
         ai_provider: AI provider for relevance filtering.
         ai_model: AI model for relevance filtering.
         job_id: Job identifier for token usage tracking.
+        tests_repo_url: Per-request tests repo URL override.  When
+            non-empty and ``settings.tests_repo_url`` is unset, a
+            temporary settings copy is created so that
+            ``enrich_with_tests_repo_matches`` sees the URL.
     """
-    if not settings.tests_repo_url:
+    effective_url = str(settings.tests_repo_url or "") or tests_repo_url
+    if not effective_url:
         return
+
+    # When the URL came from the request (not env), inject it into a
+    # settings copy so downstream helpers see it.
+    if not settings.tests_repo_url and effective_url:
+        merged_data = settings.model_dump(mode="python")
+        merged_data["tests_repo_url"] = effective_url
+        settings = Settings.model_validate(merged_data)
 
     all_failures = _collect_all_failures(failures)
     await enrich_with_tests_repo_matches(
@@ -1454,7 +1467,8 @@ async def process_analysis_with_id(
             )
 
         # Enrich CODE ISSUE failures with tests repo issue matches
-        if settings.tests_repo_url:
+        request_tests_repo_url = str(body.tests_repo_url or "")
+        if settings.tests_repo_url or request_tests_repo_url:
             await _safe_update_progress_phase("enriching_tests_repo")
             logger.debug(
                 f"process_analysis_with_id: enriching with tests repo matches, job_id={job_id}"
@@ -1465,6 +1479,7 @@ async def process_analysis_with_id(
                 ai_provider,
                 ai_model,
                 job_id=job_id,
+                tests_repo_url=request_tests_repo_url,
             )
 
         await _safe_update_progress_phase("saving")
@@ -1913,9 +1928,14 @@ async def analyze_failures(
             )
 
         # Enrich CODE ISSUE failures with tests repo issue matches
-        if merged.tests_repo_url:
-            await enrich_with_tests_repo_matches(
-                all_analyses, merged, ai_provider, ai_model, job_id=job_id
+        if merged.tests_repo_url or tests_repo_url:
+            await _enrich_result_with_tests_repo_matches(
+                all_analyses,
+                merged,
+                ai_provider,
+                ai_model,
+                job_id=job_id,
+                tests_repo_url=tests_repo_url,
             )
 
         # If raw_xml was provided, produce enriched XML
