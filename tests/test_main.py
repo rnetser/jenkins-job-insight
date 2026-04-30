@@ -1373,6 +1373,138 @@ class TestChildScopeValidation:
         assert response.status_code == 422
 
 
+class TestGetIssuePrompt:
+    """Tests for GET /results/{job_id}/issue-prompt."""
+
+    @pytest.mark.asyncio
+    async def test_returns_prompt_when_file_exists(self, test_client):
+        """GET /results/{job_id}/issue-prompt returns prompt content when file exists."""
+        import tempfile
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [],
+            "request_params": {
+                "tests_repo_url": "https://github.com/org/repo",
+                "tests_repo_token": "",
+            },
+        }
+        await storage.save_result(
+            "job-ip-exists", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.RepositoryManager") as MockRepoMgr:
+            mock_mgr = MagicMock()
+            MockRepoMgr.return_value = mock_mgr
+            mock_mgr.base_path = Path(tempfile.mkdtemp())
+
+            def fake_clone_into(url, target, depth=1, token=None):
+                target.mkdir(parents=True, exist_ok=True)
+                (target / "JOB_INSIGHT_ISSUE_PROMPT.md").write_text(
+                    "Include product version info"
+                )
+                return target
+
+            mock_mgr.clone_into.side_effect = fake_clone_into
+
+            response = test_client.get("/results/job-ip-exists/issue-prompt")
+
+        assert response.status_code == 200
+        assert response.json()["prompt"] == "Include product version info"
+        mock_mgr.cleanup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_repo_configured(self, test_client):
+        """GET /results/{job_id}/issue-prompt returns empty when no repo configured."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [],
+            "request_params": {
+                "tests_repo_url": "",
+            },
+        }
+        await storage.save_result(
+            "job-ip-norepo", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main._resolve_tests_repo_url", return_value=""):
+            response = test_client.get("/results/job-ip-norepo/issue-prompt")
+
+        assert response.status_code == 200
+        assert response.json()["prompt"] == ""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_clone_failure(self, test_client):
+        """GET /results/{job_id}/issue-prompt returns empty on clone failure."""
+        import tempfile
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [],
+            "request_params": {
+                "tests_repo_url": "https://github.com/org/repo",
+                "tests_repo_token": "",
+            },
+        }
+        await storage.save_result(
+            "job-ip-cfail", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.RepositoryManager") as MockRepoMgr:
+            mock_mgr = MagicMock()
+            MockRepoMgr.return_value = mock_mgr
+            mock_mgr.base_path = Path(tempfile.mkdtemp())
+            mock_mgr.clone_into.side_effect = RuntimeError("clone failed")
+
+            response = test_client.get("/results/job-ip-cfail/issue-prompt")
+
+        assert response.status_code == 200
+        assert response.json()["prompt"] == ""
+        mock_mgr.cleanup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_file_not_found(self, test_client):
+        """GET /results/{job_id}/issue-prompt returns empty when prompt file is missing."""
+        import tempfile
+
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [],
+            "request_params": {
+                "tests_repo_url": "https://github.com/org/repo",
+                "tests_repo_token": "",
+            },
+        }
+        await storage.save_result(
+            "job-ip-nofile", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.RepositoryManager") as MockRepoMgr:
+            mock_mgr = MagicMock()
+            MockRepoMgr.return_value = mock_mgr
+            mock_mgr.base_path = Path(tempfile.mkdtemp())
+
+            def fake_clone_into(url, target, depth=1, token=None):
+                target.mkdir(parents=True, exist_ok=True)
+                # No JOB_INSIGHT_ISSUE_PROMPT.md file created
+                return target
+
+            mock_mgr.clone_into.side_effect = fake_clone_into
+
+            response = test_client.get("/results/job-ip-nofile/issue-prompt")
+
+        assert response.status_code == 200
+        assert response.json()["prompt"] == ""
+        mock_mgr.cleanup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_job_not_found(self, test_client):
+        """GET /results/{job_id}/issue-prompt returns empty for nonexistent job."""
+        response = test_client.get("/results/nonexistent-job/issue-prompt")
+        assert response.status_code == 200
+        assert response.json()["prompt"] == ""
+
+
 class TestPreviewGithubIssue:
     """Tests for POST /results/{job_id}/preview-github-issue."""
 
@@ -1493,6 +1625,43 @@ class TestPreviewGithubIssue:
             )
         assert response.status_code == 400
 
+    @pytest.mark.asyncio
+    async def test_issue_prompt_passed_to_generate(self, test_client):
+        """issue_prompt field is forwarded to generate_github_issue_content."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_login",
+                    "error": "AssertionError",
+                    "analysis": {"classification": "CODE ISSUE", "details": "x"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-prompt-gh", "http://jenkins", "completed", result_data
+        )
+        with _enable_feature("github_issues_enabled"):
+            with patch(
+                "jenkins_job_insight.main.generate_github_issue_content"
+            ) as mock_gen:
+                mock_gen.return_value = {"title": "T", "body": "B"}
+                with patch(
+                    "jenkins_job_insight.main.search_github_duplicates"
+                ) as mock_dup:
+                    mock_dup.return_value = []
+                    response = test_client.post(
+                        "/results/job-prompt-gh/preview-github-issue",
+                        json={
+                            "test_name": "test_login",
+                            "issue_prompt": "Include CNV version",
+                        },
+                    )
+        assert response.status_code == 200
+        _, kwargs = mock_gen.call_args
+        assert kwargs["issue_prompt"] == "Include CNV version"
+
 
 class TestPreviewJiraBug:
     """Tests for POST /results/{job_id}/preview-jira-bug."""
@@ -1570,6 +1739,43 @@ class TestPreviewJiraBug:
                 get_settings.cache_clear()
         assert response.status_code == 403
         assert "disabled" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_issue_prompt_passed_to_generate(self, test_client):
+        """issue_prompt field is forwarded to generate_jira_bug_content."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_dns",
+                    "error": "TimeoutError",
+                    "analysis": {"classification": "PRODUCT BUG", "details": "x"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-prompt-jira", "http://jenkins", "completed", result_data
+        )
+        with _enable_feature("jira_enabled"):
+            with patch(
+                "jenkins_job_insight.main.generate_jira_bug_content"
+            ) as mock_gen:
+                mock_gen.return_value = {"title": "T", "body": "B"}
+                with patch(
+                    "jenkins_job_insight.main.search_jira_duplicates"
+                ) as mock_dup:
+                    mock_dup.return_value = []
+                    response = test_client.post(
+                        "/results/job-prompt-jira/preview-jira-bug",
+                        json={
+                            "test_name": "test_dns",
+                            "issue_prompt": "Include OCP version",
+                        },
+                    )
+        assert response.status_code == 200
+        _, kwargs = mock_gen.call_args
+        assert kwargs["issue_prompt"] == "Include OCP version"
 
 
 class TestCreateGithubIssue:

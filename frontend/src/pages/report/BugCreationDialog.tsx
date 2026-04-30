@@ -20,7 +20,7 @@ import { getGithubToken, getJiraToken, getJiraEmail } from '@/lib/cookies'
 import { useReportDispatch, useRefreshEnrichments } from './ReportContext'
 
 type BugTarget = 'github' | 'jira'
-type Phase = 'idle' | 'loading' | 'preview' | 'creating' | 'success' | 'error'
+type Phase = 'idle' | 'prompt' | 'loading' | 'preview' | 'creating' | 'success' | 'error'
 
 interface BugCreationDialogProps {
   open: boolean
@@ -57,6 +57,7 @@ export function BugCreationDialog({
   const dispatch = useReportDispatch()
   const refreshEnrichments = useRefreshEnrichments()
   const [phase, setPhase] = useState<Phase>('idle')
+  const [issuePrompt, setIssuePrompt] = useState('')
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [similar, setSimilar] = useState<SimilarIssue[]>([])
@@ -130,9 +131,22 @@ export function BugCreationDialog({
     return () => { ignore = true }
   }, [open, target, confirmedProjectKey])
 
-  // Load preview when dialog opens
+  // Fetch default issue prompt when dialog opens
   useEffect(() => {
     if (!open || phase !== 'idle') return
+    api
+      .get<{ issue_prompt: string }>(`/results/${jobId}/issue-prompt`)
+      .then((res) => {
+        setIssuePrompt(res.issue_prompt ?? '')
+        setPhase('prompt')
+      })
+      .catch(() => {
+        setIssuePrompt('')
+        setPhase('prompt')
+      })
+  }, [open, phase, jobId])
+
+  function handleContinueFromPrompt() {
     setPhase('loading')
     api
       .post<PreviewIssueResponse>(`/results/${jobId}/${previewPath}`, {
@@ -142,6 +156,7 @@ export function BugCreationDialog({
         ai_model: aiModel ?? '',
         child_job_name: childJobName ?? '',
         child_build_number: childBuildNumber ?? 0,
+        issue_prompt: issuePrompt,
         ...getTrackerCredentials(),
       })
       .then((res) => {
@@ -154,7 +169,7 @@ export function BugCreationDialog({
         setErrorMsg(err instanceof Error ? err.message : 'Preview failed')
         setPhase('error')
       })
-  }, [open, phase, jobId, previewPath, testName, includeLinks, aiProvider, aiModel, childJobName, childBuildNumber])
+  }
 
   async function handleCreate() {
     setPhase('creating')
@@ -184,11 +199,12 @@ export function BugCreationDialog({
     }
   }
 
-  const isBusy = phase === 'loading' || phase === 'preview' || phase === 'creating'
+  const isBusy = phase === 'loading' || phase === 'prompt' || phase === 'preview' || phase === 'creating'
 
   function resetState() {
     setTimeout(() => {
       setPhase('idle')
+      setIssuePrompt('')
       setTitle('')
       setBody('')
       setSimilar([])
@@ -226,6 +242,24 @@ export function BugCreationDialog({
           <DialogTitle>{phase === 'success' ? `${label} Created` : `Create ${label}`}</DialogTitle>
           {phase === 'preview' && <DialogDescription>Review and edit before creating.</DialogDescription>}
         </DialogHeader>
+
+        {/* Prompt */}
+        {phase === 'prompt' && (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="bug-issue-prompt" className="text-xs font-display uppercase tracking-widest text-text-tertiary">Issue Prompt</label>
+              <p className="text-xs text-text-tertiary">Customize the prompt used to generate the issue title and body. Edit or leave as-is, then continue.</p>
+              <Textarea
+                id="bug-issue-prompt"
+                value={issuePrompt}
+                onChange={(e) => setIssuePrompt(e.target.value)}
+                rows={6}
+                placeholder="Enter a prompt to guide issue generation..."
+                className="font-mono text-xs"
+              />
+            </div>
+          </div>
+        )}
 
         {/* Loading */}
         {phase === 'loading' && (
@@ -451,6 +485,12 @@ export function BugCreationDialog({
                 <Button onClick={handleCreate} disabled={!title.trim() || !hasToken || (target === 'jira' && jiraIssueType === '__custom__' && !customIssueType.trim())} title={!hasToken ? `Add a ${target === 'github' ? 'GitHub' : 'Jira'} token to create issues` : undefined}>Create {label}</Button>
               </div>
             </>
+          )}
+          {phase === 'prompt' && (
+            <div className="flex gap-2 sm:ml-auto">
+              <Button variant="outline" onClick={() => handleCancel()}>Cancel</Button>
+              <Button onClick={handleContinueFromPrompt}>Continue</Button>
+            </div>
           )}
           {(phase === 'success' || phase === 'error') && (
             <Button variant="outline" onClick={() => handleCancel()} className="sm:ml-auto">Close</Button>

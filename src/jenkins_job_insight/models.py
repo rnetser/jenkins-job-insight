@@ -636,6 +636,10 @@ class PreviewIssueRequest(_ChildJobFieldsValidator, _TrackerCredentialsMixin):
         default="", description="AI provider for content generation"
     )
     ai_model: str = Field(default="", description="AI model for content generation")
+    issue_prompt: str = Field(
+        default="",
+        description="Additional AI instructions for issue generation",
+    )
 
 
 class CreateIssueRequest(_ChildJobFieldsValidator, _TrackerCredentialsMixin):

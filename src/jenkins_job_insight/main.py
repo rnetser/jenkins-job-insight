@@ -28,6 +28,7 @@ from jenkins_job_insight.logging_context import JobIdFilter, job_id_var
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
+    JOB_INSIGHT_ISSUE_PROMPT_FILENAME,
     clone_additional_repos,
     resolve_additional_repos,
     analyze_failure_group,
@@ -2485,6 +2486,64 @@ async def _load_effective_failure(
     return failure, result_data
 
 
+@app.get("/results/{job_id}/issue-prompt")
+async def get_issue_prompt(
+    job_id: str,
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(_bind_job_id),
+) -> dict:
+    """Read JOB_INSIGHT_ISSUE_PROMPT.md from the test repo associated with a job.
+
+    Clones the test repo (shallow, depth=1), reads the prompt file from the
+    repo root, and returns its content.  Returns ``{"prompt": ""}`` when no
+    repo is configured, the file does not exist, or any error occurs.
+    """
+    stored = await storage.get_result(job_id)
+    if not stored or not stored.get("result"):
+        return {"prompt": ""}
+
+    result_data = stored["result"]
+    request_params = result_data.get("request_params", {})
+
+    # Resolve tests_repo_url from settings or stored request_params
+    tests_repo_url = _resolve_tests_repo_url(settings, result_data)
+    if not tests_repo_url:
+        return {"prompt": ""}
+
+    # Resolve token: decrypt stored request_params first
+    tests_repo_token = ""
+    if request_params:
+        decrypted = decrypt_sensitive_fields(request_params)
+        tests_repo_token = decrypted.get("tests_repo_token", "")
+    if not tests_repo_token and settings.tests_repo_token:
+        tests_repo_token = settings.tests_repo_token.get_secret_value()
+
+    try:
+        repo_manager = RepositoryManager()
+        try:
+            clone_dir = await asyncio.to_thread(
+                repo_manager.clone_into,
+                tests_repo_url,
+                repo_manager.base_path / f"issue-prompt-{job_id[:8]}",
+                depth=1,
+                token=tests_repo_token or None,
+            )
+            prompt_file = clone_dir / JOB_INSIGHT_ISSUE_PROMPT_FILENAME
+            if prompt_file.is_file():
+                content = prompt_file.read_text(encoding="utf-8", errors="replace")
+                return {"prompt": content}
+            return {"prompt": ""}
+        finally:
+            repo_manager.cleanup()
+    except Exception:  # noqa: BLE001 — never crash; empty prompt is safe
+        logger.debug(
+            "Failed to read issue prompt from repo for job_id=%s",
+            job_id,
+            exc_info=True,
+        )
+        return {"prompt": ""}
+
+
 # NOTE: Preview/create bug endpoints intentionally bypass _merge_settings().
 # These are server-level operations (GITHUB_TOKEN, TESTS_REPO_URL, Jira config)
 # that act on behalf of the server, not per-request analysis overrides. The
@@ -2531,6 +2590,7 @@ async def preview_github_issue(
         jenkins_url=jenkins_url,
         include_links=effective_include_links,
         job_id=job_id,
+        issue_prompt=body.issue_prompt,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
@@ -2607,6 +2667,7 @@ async def preview_jira_bug(
         jenkins_url=jenkins_url,
         include_links=effective_include_links,
         job_id=job_id,
+        issue_prompt=body.issue_prompt,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
