@@ -25,6 +25,8 @@ from pydantic import BaseModel, Field, SecretStr, ValidationError
 from simple_logger.logger import get_logger
 
 from jenkins_job_insight.logging_context import JobIdFilter, job_id_var
+from jenkins_job_insight.ai_models import model_cache
+from jenkins_job_insight.llm_pricing import pricing_cache
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
@@ -562,6 +564,14 @@ async def _resume_waiting_jobs(waiting_jobs: list[dict]) -> None:
         )
 
 
+async def _safe_preload_cursor_models() -> None:
+    """Pre-populate cursor model cache in background. Best-effort."""
+    try:
+        await model_cache.list_models("cursor")
+    except Exception:
+        logger.debug("Failed to preload cursor models", exc_info=True)
+
+
 async def _deferred_resume_waiting_jobs(waiting_jobs: list[dict]) -> None:
     """Resume waiting jobs after startup is complete.
 
@@ -588,6 +598,18 @@ async def lifespan(app: FastAPI):
 
     await init_db()
     await storage.cleanup_expired_sessions()
+
+    # Load LLM pricing cache (best-effort)
+    await pricing_cache.load()
+    pricing_cache.start_background_refresh()
+
+    # Wire AI model cache to pricing data and pre-populate cursor models
+    model_cache.set_pricing_cache(pricing_cache)
+    # Pre-populate cursor models in background (don't block startup)
+    task = asyncio.create_task(_safe_preload_cursor_models())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
     waiting_jobs = await storage.mark_stale_results_failed()
     if waiting_jobs:
         # Schedule resumption as a background task so it runs after the
@@ -595,7 +617,10 @@ async def lifespan(app: FastAPI):
         task = asyncio.create_task(_deferred_resume_waiting_jobs(waiting_jobs))
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
-    yield
+    try:
+        yield
+    finally:
+        pricing_cache.stop_background_refresh()
 
 
 app = FastAPI(
@@ -3919,6 +3944,41 @@ async def get_ai_configs_endpoint() -> list[dict]:
     """Get distinct AI provider/model pairs from completed analyses."""
     logger.debug("GET /ai-configs")
     return await get_ai_configs()
+
+
+@app.get("/api/ai-models")
+async def list_ai_models(
+    provider: str = Query(
+        "", description="Filter by AI provider (e.g. cursor, claude, gemini)"
+    ),
+) -> dict:
+    """List available AI models for one or all configured providers."""
+    logger.debug("GET /api/ai-models provider=%s", provider)
+    try:
+        if provider:
+            provider = provider.lower().strip()
+            models = await model_cache.list_models(provider)
+            return {"provider": provider, "models": models}
+
+        # No provider specified — return models for all known providers
+        all_models: dict[str, list[dict]] = {}
+        for p in sorted(VALID_AI_PROVIDERS):
+            try:
+                models = await model_cache.list_models(p)
+                all_models[p] = models
+            except Exception:
+                logger.warning(
+                    "Failed to list models for provider=%s", p, exc_info=True
+                )
+                all_models[p] = []
+        return {"providers": all_models}
+    except Exception:
+        logger.warning(
+            "Failed to list AI models for provider=%s", provider, exc_info=True
+        )
+        if provider:
+            return {"provider": provider, "models": []}
+        return {"providers": {}}
 
 
 @app.get("/health")
