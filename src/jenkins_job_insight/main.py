@@ -47,6 +47,7 @@ from jenkins_job_insight.encryption import (
     encrypt_sensitive_fields,
 )
 from jenkins_job_insight.jira import enrich_with_jira_matches
+from jenkins_job_insight.llm_pricing import pricing_cache
 from jenkins_job_insight.token_tracking import build_token_usage_summary
 from jenkins_job_insight.monitoring import (
     build_health_response,
@@ -588,6 +589,11 @@ async def lifespan(app: FastAPI):
 
     await init_db()
     await storage.cleanup_expired_sessions()
+
+    # Load LLM pricing cache (best-effort)
+    await pricing_cache.load()
+    pricing_cache.start_background_refresh()
+
     waiting_jobs = await storage.mark_stale_results_failed()
     if waiting_jobs:
         # Schedule resumption as a background task so it runs after the
@@ -595,7 +601,10 @@ async def lifespan(app: FastAPI):
         task = asyncio.create_task(_deferred_resume_waiting_jobs(waiting_jobs))
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
-    yield
+    try:
+        yield
+    finally:
+        pricing_cache.stop_background_refresh()
 
 
 app = FastAPI(
