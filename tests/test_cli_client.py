@@ -1584,7 +1584,7 @@ class TestJJIClientAiModels:
             assert request.method == "GET"
             assert request.url.path == "/api/ai-models"
             # No provider param
-            assert "provider" not in str(request.url.params)
+            assert request.url.params.get("provider") is None
             return httpx.Response(
                 200,
                 json={
