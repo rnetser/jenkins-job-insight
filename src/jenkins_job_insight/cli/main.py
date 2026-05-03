@@ -1603,6 +1603,11 @@ def preview_issue(
         "--jira-security-level",
         help="Jira security level name for restricted issues.",
     ),
+    issue_prompt: str = typer.Option(
+        "",
+        "--issue-prompt",
+        help="Additional AI instructions for issue generation.",
+    ),
     json_output: bool = _JSON_OPTION,
 ):
     """Preview generated issue content (GitHub or Jira)."""
@@ -1636,6 +1641,7 @@ def preview_issue(
                 ai_model=ai_model,
                 github_token=_github_token,
                 github_repo_url=_github_repo_url,
+                issue_prompt=issue_prompt,
             )
         else:
             data = client.preview_jira_bug(
@@ -1650,6 +1656,7 @@ def preview_issue(
                 jira_email=_jira_email,
                 jira_project_key=_jira_project_key,
                 jira_security_level=_jira_security_level,
+                issue_prompt=issue_prompt,
             )
     except JJIError as err:
         _handle_error(err)
@@ -1665,6 +1672,29 @@ def preview_issue(
             for s in similar:
                 label = s.get("key") or f"#{s.get('number', '')}"
                 typer.echo(f"  {label}: {s.get('title', '')} ({s.get('url', '')})")
+
+
+@app.command("get-issue-prompt")
+def get_issue_prompt(
+    job_id: str = typer.Argument(help="Job ID."),
+    json_output: bool = _JSON_OPTION,
+):
+    """Get the issue prompt from the test repo associated with a job."""
+    _set_json(json_output)
+    try:
+        client = _get_client()
+        data = client.get_issue_prompt(job_id=job_id)
+    except JJIError as err:
+        _handle_error(err)
+
+    if _state.get("json", False):
+        print_output(data, columns=[], as_json=True)
+    else:
+        prompt = data.get("prompt", "")
+        if prompt:
+            typer.echo(prompt)
+        else:
+            typer.echo("No issue prompt found.")
 
 
 @app.command("create-issue")

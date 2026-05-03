@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
+import httpx
 import jenkins
 import pytest
 
@@ -444,37 +445,45 @@ class TestAnalyzeFailuresEndpoint:
 
     def test_analyze_failures_missing_ai_provider(self, test_client) -> None:
         """Test that missing AI provider (no env var, no body param) returns 400."""
-        response = test_client.post(
-            "/analyze-failures",
-            json={
-                "failures": [
-                    {
-                        "test_name": "test_foo",
-                        "error_message": "assert False",
-                    }
-                ],
-                "ai_model": "test-model",
-            },
-        )
-        assert response.status_code == 400
-        assert "AI provider" in response.json()["detail"]
+        with (
+            patch("jenkins_job_insight.main.AI_PROVIDER", ""),
+            patch("jenkins_job_insight.main.AI_MODEL", ""),
+        ):
+            response = test_client.post(
+                "/analyze-failures",
+                json={
+                    "failures": [
+                        {
+                            "test_name": "test_foo",
+                            "error_message": "assert False",
+                        }
+                    ],
+                    "ai_model": "test-model",
+                },
+            )
+            assert response.status_code == 400
+            assert "AI provider" in response.json()["detail"]
 
     def test_analyze_failures_missing_ai_model(self, test_client) -> None:
         """Test that missing AI model returns 400."""
-        response = test_client.post(
-            "/analyze-failures",
-            json={
-                "failures": [
-                    {
-                        "test_name": "test_foo",
-                        "error_message": "assert False",
-                    }
-                ],
-                "ai_provider": "claude",
-            },
-        )
-        assert response.status_code == 400
-        assert "AI model" in response.json()["detail"]
+        with (
+            patch("jenkins_job_insight.main.AI_PROVIDER", ""),
+            patch("jenkins_job_insight.main.AI_MODEL", ""),
+        ):
+            response = test_client.post(
+                "/analyze-failures",
+                json={
+                    "failures": [
+                        {
+                            "test_name": "test_foo",
+                            "error_message": "assert False",
+                        }
+                    ],
+                    "ai_provider": "claude",
+                },
+            )
+            assert response.status_code == 400
+            assert "AI model" in response.json()["detail"]
 
     def test_analyze_failures_handles_analysis_exception(self, test_client) -> None:
         """Test that when analyze_failure_group raises, endpoint returns status 'failed'."""
@@ -1373,6 +1382,183 @@ class TestChildScopeValidation:
         assert response.status_code == 422
 
 
+class TestGetIssuePrompt:
+    """Tests for GET /results/{job_id}/issue-prompt."""
+
+    @pytest.mark.asyncio
+    async def test_returns_prompt_when_file_exists(self, test_client):
+        """GET /results/{job_id}/issue-prompt returns prompt content via GitHub API."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [],
+            "request_params": encrypt_sensitive_fields(
+                {
+                    "tests_repo_url": "https://github.com/org/repo:release-4.19",
+                    "tests_repo_token": FAKE_GITHUB_TOKEN,
+                }
+            ),
+        }
+        await storage.save_result(
+            "job-ip-exists", "http://jenkins", "completed", result_data
+        )
+
+        mock_response = httpx.Response(
+            200,
+            text="Include product version info",
+            request=httpx.Request("GET", "https://api.github.com"),
+        )
+        with patch("jenkins_job_insight.main.httpx.AsyncClient") as MockClient:
+            mock_client_instance = AsyncMock()
+            MockClient.return_value.__aenter__ = AsyncMock(
+                return_value=mock_client_instance
+            )
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client_instance.get.return_value = mock_response
+
+            response = test_client.get("/results/job-ip-exists/issue-prompt")
+
+        assert response.status_code == 200
+        assert response.json()["prompt"] == "Include product version info"
+        mock_client_instance.get.assert_called_once()
+        call_args = mock_client_instance.get.call_args
+        assert "ref=release-4.19" in call_args.args[0]
+        assert (
+            call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {FAKE_GITHUB_TOKEN}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_repo_configured(self, test_client):
+        """GET /results/{job_id}/issue-prompt returns empty when no repo configured."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [],
+            "request_params": {
+                "tests_repo_url": "",
+            },
+        }
+        await storage.save_result(
+            "job-ip-norepo", "http://jenkins", "completed", result_data
+        )
+        response = test_client.get("/results/job-ip-norepo/issue-prompt")
+
+        assert response.status_code == 200
+        assert response.json()["prompt"] == ""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_network_error(self, test_client):
+        """GET /results/{job_id}/issue-prompt returns empty on network error with warning."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [],
+            "request_params": {
+                "tests_repo_url": "https://github.com/org/repo",
+                "tests_repo_token": "",
+            },
+        }
+        await storage.save_result(
+            "job-ip-neterr", "http://jenkins", "completed", result_data
+        )
+        with patch("jenkins_job_insight.main.httpx.AsyncClient") as MockClient:
+            mock_client_instance = AsyncMock()
+            MockClient.return_value.__aenter__ = AsyncMock(
+                return_value=mock_client_instance
+            )
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client_instance.get.side_effect = httpx.ConnectError(
+                "connection refused"
+            )
+
+            response = test_client.get("/results/job-ip-neterr/issue-prompt")
+
+        assert response.status_code == 200
+        assert response.json()["prompt"] == ""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_file_not_found(self, test_client):
+        """GET /results/{job_id}/issue-prompt returns empty when prompt file missing (404)."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [],
+            "request_params": {
+                "tests_repo_url": "https://github.com/org/repo",
+                "tests_repo_token": "",
+            },
+        }
+        await storage.save_result(
+            "job-ip-nofile", "http://jenkins", "completed", result_data
+        )
+
+        mock_response = httpx.Response(
+            404,
+            text="Not Found",
+            request=httpx.Request("GET", "https://api.github.com"),
+        )
+        with patch("jenkins_job_insight.main.httpx.AsyncClient") as MockClient:
+            mock_client_instance = AsyncMock()
+            MockClient.return_value.__aenter__ = AsyncMock(
+                return_value=mock_client_instance
+            )
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client_instance.get.return_value = mock_response
+
+            response = test_client.get("/results/job-ip-nofile/issue-prompt")
+
+        assert response.status_code == 200
+        assert response.json()["prompt"] == ""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_job_not_found(self, test_client):
+        """GET /results/{job_id}/issue-prompt returns empty for nonexistent job."""
+        response = test_client.get("/results/nonexistent-job/issue-prompt")
+        assert response.status_code == 200
+        assert response.json()["prompt"] == ""
+
+    @pytest.mark.asyncio
+    async def test_private_repo_with_token(self, test_client):
+        """GET /results/{job_id}/issue-prompt passes token in Authorization header."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [],
+            "request_params": encrypt_sensitive_fields(
+                {
+                    "tests_repo_url": "https://github.com/private-org/private-repo",
+                    "tests_repo_token": "ghp_secret123",
+                }
+            ),
+        }
+        await storage.save_result(
+            "job-ip-private", "http://jenkins", "completed", result_data
+        )
+
+        mock_response = httpx.Response(
+            200,
+            text="Private repo prompt",
+            request=httpx.Request("GET", "https://api.github.com"),
+        )
+        with patch("jenkins_job_insight.main.httpx.AsyncClient") as MockClient:
+            mock_client_instance = AsyncMock()
+            MockClient.return_value.__aenter__ = AsyncMock(
+                return_value=mock_client_instance
+            )
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client_instance.get.return_value = mock_response
+
+            response = test_client.get("/results/job-ip-private/issue-prompt")
+
+        assert response.status_code == 200
+        assert response.json()["prompt"] == "Private repo prompt"
+        call_args = mock_client_instance.get.call_args
+        assert call_args.kwargs["headers"]["Authorization"] == "Bearer ghp_secret123"
+        # URL should target the correct repo
+        assert "/private-org/private-repo/" in call_args.args[0]
+
+
 class TestPreviewGithubIssue:
     """Tests for POST /results/{job_id}/preview-github-issue."""
 
@@ -1493,6 +1679,43 @@ class TestPreviewGithubIssue:
             )
         assert response.status_code == 400
 
+    @pytest.mark.asyncio
+    async def test_issue_prompt_passed_to_generate(self, test_client):
+        """issue_prompt field is forwarded to generate_github_issue_content."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_login",
+                    "error": "AssertionError",
+                    "analysis": {"classification": "CODE ISSUE", "details": "x"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-prompt-gh", "http://jenkins", "completed", result_data
+        )
+        with _enable_feature("github_issues_enabled"):
+            with patch(
+                "jenkins_job_insight.main.generate_github_issue_content"
+            ) as mock_gen:
+                mock_gen.return_value = {"title": "T", "body": "B"}
+                with patch(
+                    "jenkins_job_insight.main.search_github_duplicates"
+                ) as mock_dup:
+                    mock_dup.return_value = []
+                    response = test_client.post(
+                        "/results/job-prompt-gh/preview-github-issue",
+                        json={
+                            "test_name": "test_login",
+                            "issue_prompt": "Include CNV version",
+                        },
+                    )
+        assert response.status_code == 200
+        _, kwargs = mock_gen.call_args
+        assert kwargs["issue_prompt"] == "Include CNV version"
+
 
 class TestPreviewJiraBug:
     """Tests for POST /results/{job_id}/preview-jira-bug."""
@@ -1570,6 +1793,43 @@ class TestPreviewJiraBug:
                 get_settings.cache_clear()
         assert response.status_code == 403
         assert "disabled" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_issue_prompt_passed_to_generate(self, test_client):
+        """issue_prompt field is forwarded to generate_jira_bug_content."""
+        result_data = {
+            "status": "completed",
+            "summary": "",
+            "failures": [
+                {
+                    "test_name": "test_dns",
+                    "error": "TimeoutError",
+                    "analysis": {"classification": "PRODUCT BUG", "details": "x"},
+                }
+            ],
+        }
+        await storage.save_result(
+            "job-prompt-jira", "http://jenkins", "completed", result_data
+        )
+        with _enable_feature("jira_enabled"):
+            with patch(
+                "jenkins_job_insight.main.generate_jira_bug_content"
+            ) as mock_gen:
+                mock_gen.return_value = {"title": "T", "body": "B"}
+                with patch(
+                    "jenkins_job_insight.main.search_jira_duplicates"
+                ) as mock_dup:
+                    mock_dup.return_value = []
+                    response = test_client.post(
+                        "/results/job-prompt-jira/preview-jira-bug",
+                        json={
+                            "test_name": "test_dns",
+                            "issue_prompt": "Include OCP version",
+                        },
+                    )
+        assert response.status_code == 200
+        _, kwargs = mock_gen.call_args
+        assert kwargs["issue_prompt"] == "Include OCP version"
 
 
 class TestCreateGithubIssue:

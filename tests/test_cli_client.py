@@ -690,6 +690,48 @@ class TestJJIClientIssueTokens:
         )
         assert result["key"] == "PROJ-1"
 
+    def test_get_issue_prompt(self):
+        def handler(request):
+            assert request.method == "GET"
+            assert "/results/job-1/issue-prompt" in str(request.url)
+            return httpx.Response(200, json={"prompt": "Include product version"})
+
+        client = _make_client(handler)
+        result = client.get_issue_prompt(job_id="job-1")
+        assert result["prompt"] == "Include product version"
+
+    def test_preview_github_issue_with_issue_prompt(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert body["issue_prompt"] == "Include CNV version"
+            return httpx.Response(
+                200, json={"title": "T", "body": "B", "similar_issues": []}
+            )
+
+        client = _make_client(handler)
+        result = client.preview_github_issue(
+            job_id="job-1",
+            test_name="test_one",
+            issue_prompt="Include CNV version",
+        )
+        assert result["title"] == "T"
+
+    def test_preview_jira_bug_with_issue_prompt(self):
+        def handler(request):
+            body = json.loads(request.content)
+            assert body["issue_prompt"] == "Include OCP version"
+            return httpx.Response(
+                200, json={"title": "T", "body": "B", "similar_issues": []}
+            )
+
+        client = _make_client(handler)
+        result = client.preview_jira_bug(
+            job_id="job-1",
+            test_name="test_one",
+            issue_prompt="Include OCP version",
+        )
+        assert result["title"] == "T"
+
     def test_preview_github_issue_without_tokens_omits_fields(self):
         def handler(request):
             assert request.method == "POST"

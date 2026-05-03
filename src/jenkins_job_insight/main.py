@@ -9,6 +9,7 @@ import time as _time
 import urllib.parse
 import uuid
 from collections import defaultdict
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Coroutine, Literal
@@ -30,6 +31,7 @@ from jenkins_job_insight.llm_pricing import pricing_cache
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
+    JOB_INSIGHT_ISSUE_PROMPT_FILENAME,
     clone_additional_repos,
     resolve_additional_repos,
     analyze_failure_group,
@@ -48,6 +50,7 @@ from jenkins_job_insight.encryption import (
     decrypt_sensitive_fields,
     encrypt_sensitive_fields,
 )
+from jenkins_job_insight.github_issues import enrich_with_tests_repo_matches
 from jenkins_job_insight.jira import enrich_with_jira_matches
 from jenkins_job_insight.token_tracking import build_token_usage_summary
 from jenkins_job_insight.monitoring import (
@@ -599,8 +602,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     await storage.cleanup_expired_sessions()
 
-    # Load LLM pricing cache (best-effort)
-    await pricing_cache.load()
+    # Load LLM pricing cache asynchronously (best-effort, non-blocking)
+    _warmup = asyncio.create_task(pricing_cache.load())
+    _background_tasks.add(_warmup)
+    _warmup.add_done_callback(_background_tasks.discard)
+
     try:
         pricing_cache.start_background_refresh()
 
@@ -796,10 +802,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     authenticated_admin = True
                 else:
                     user = await storage.get_user_by_key(token)
-                    if user and user.get("role") == "admin":
-                        is_admin = True
+                    if user:
                         username = str(user["username"])
-                        authenticated_admin = True
+                        if user.get("role") == "admin":
+                            is_admin = True
+                            authenticated_admin = True
 
         # 3. Check X-Forwarded-User header (SSO via trusted proxy)
         if not username and proxy_username:
@@ -1159,6 +1166,29 @@ def _merge_settings(body: BaseAnalysisRequest, settings: Settings) -> Settings:
     return settings
 
 
+def _collect_all_failures(
+    items: Sequence[FailureAnalysis | ChildJobAnalysis],
+) -> list[FailureAnalysis]:
+    """Recursively collect all FailureAnalysis objects from a mixed list.
+
+    Recurses into ChildJobAnalysis objects to find nested failures.
+
+    Args:
+        items: Mixed list of FailureAnalysis and ChildJobAnalysis objects.
+
+    Returns:
+        Flat list of all FailureAnalysis objects found.
+    """
+    result: list[FailureAnalysis] = []
+    for item in items:
+        if isinstance(item, FailureAnalysis):
+            result.append(item)
+        elif isinstance(item, ChildJobAnalysis):
+            result.extend(_collect_all_failures(item.failures))
+            result.extend(_collect_all_failures(item.failed_children))
+    return result
+
+
 async def _enrich_result_with_jira(
     failures: list[FailureAnalysis | ChildJobAnalysis],
     settings: Settings,
@@ -1182,19 +1212,51 @@ async def _enrich_result_with_jira(
     if not settings.jira_enabled:
         return
 
-    all_failures: list[FailureAnalysis] = []
-
-    def _collect(items: list) -> None:
-        for item in items:
-            if isinstance(item, FailureAnalysis):
-                all_failures.append(item)
-            elif isinstance(item, ChildJobAnalysis):
-                _collect(item.failures)
-                _collect(item.failed_children)
-
-    _collect(failures)
-
+    all_failures = _collect_all_failures(failures)
     await enrich_with_jira_matches(
+        all_failures, settings, ai_provider, ai_model, job_id=job_id
+    )
+
+
+async def _enrich_result_with_tests_repo_matches(
+    failures: list[FailureAnalysis | ChildJobAnalysis],
+    settings: Settings,
+    ai_provider: str = "",
+    ai_model: str = "",
+    job_id: str = "",
+    tests_repo_url: str = "",
+) -> None:
+    """Enrich CODE ISSUE failures with tests repo issue matches.
+
+    Collects all FailureAnalysis objects from the provided list,
+    recursing into ChildJobAnalysis objects, then searches GitHub
+    Issues for matching issues. Results are attached in-place.
+
+    Args:
+        failures: Mixed list of FailureAnalysis and ChildJobAnalysis objects.
+        settings: Application settings with tests repo configuration.
+        ai_provider: AI provider for relevance filtering.
+        ai_model: AI model for relevance filtering.
+        job_id: Job identifier for token usage tracking.
+        tests_repo_url: Per-request tests repo URL override.  When
+            non-empty and ``settings.tests_repo_url`` is unset, a
+            temporary settings copy is created so that
+            ``enrich_with_tests_repo_matches`` sees the URL.
+    """
+    effective_url = tests_repo_url or str(settings.tests_repo_url or "")
+    effective_url, _ = parse_repo_ref(effective_url)
+    if not effective_url:
+        return
+
+    # When the URL came from the request (not env), inject it into a
+    # settings copy so downstream helpers see it.
+    if effective_url != str(settings.tests_repo_url or ""):
+        merged_data = settings.model_dump(mode="python")
+        merged_data["tests_repo_url"] = effective_url
+        settings = Settings.model_validate(merged_data)
+
+    all_failures = _collect_all_failures(failures)
+    await enrich_with_tests_repo_matches(
         all_failures, settings, ai_provider, ai_model, job_id=job_id
     )
 
@@ -1434,6 +1496,22 @@ async def process_analysis_with_id(
                 ai_provider,
                 ai_model,
                 job_id=job_id,
+            )
+
+        # Enrich CODE ISSUE failures with tests repo issue matches
+        request_tests_repo_url = str(body.tests_repo_url or "")
+        if settings.tests_repo_url or request_tests_repo_url:
+            await _safe_update_progress_phase("enriching_tests_repo")
+            logger.debug(
+                f"process_analysis_with_id: enriching with tests repo matches, job_id={job_id}"
+            )
+            await _enrich_result_with_tests_repo_matches(
+                result.failures + list(result.child_job_analyses),
+                settings,
+                ai_provider,
+                ai_model,
+                job_id=job_id,
+                tests_repo_url=request_tests_repo_url,
             )
 
         await _safe_update_progress_phase("saving")
@@ -1879,6 +1957,17 @@ async def analyze_failures(
         if _resolve_enable_jira(body, merged):
             await enrich_with_jira_matches(
                 all_analyses, merged, ai_provider, ai_model, job_id=job_id
+            )
+
+        # Enrich CODE ISSUE failures with tests repo issue matches
+        if merged.tests_repo_url or tests_repo_url:
+            await _enrich_result_with_tests_repo_matches(
+                all_analyses,
+                merged,
+                ai_provider,
+                ai_model,
+                job_id=job_id,
+                tests_repo_url=tests_repo_url,
             )
 
         # If raw_xml was provided, produce enriched XML
@@ -2444,12 +2533,43 @@ async def enrich_comments(
     return {"enrichments": enrichments}
 
 
-def _resolve_tests_repo_url(settings: Settings, result_data: dict) -> str:
-    """Resolve tests repo URL from settings or job request params."""
-    url = str(settings.tests_repo_url or "")
-    if not url:
-        url = str(result_data.get("request_params", {}).get("tests_repo_url", ""))
-    return url
+def _resolve_analyzed_repo(
+    settings: Settings, result_data: dict
+) -> tuple[str, str, str]:
+    """Resolve tests repo URL, ref, and token from stored result and settings.
+
+    Resolution order for each component:
+      - **URL**: stored ``request_params.tests_repo_url`` → ``settings.tests_repo_url``
+      - **ref**: stored ``request_params.tests_repo_ref`` → ref parsed from URL suffix
+      - **token**: decrypted ``request_params.tests_repo_token`` → ``settings.tests_repo_token``
+
+    Returns:
+        Tuple of ``(url, ref, token)`` — any element may be an empty string.
+    """
+    request_params = result_data.get("request_params", {})
+
+    # URL: prefer stored, fall back to server default
+    repo_spec = str(request_params.get("tests_repo_url", ""))
+    if not repo_spec:
+        repo_spec = str(settings.tests_repo_url or "")
+    url, parsed_ref = parse_repo_ref(repo_spec)
+
+    # Ref: prefer explicit stored ref, then parsed from URL suffix
+    ref = str(request_params.get("tests_repo_ref", ""))
+    if not ref:
+        ref = parsed_ref
+
+    # Token: decrypt stored value, fall back to server token
+    token = ""
+    if request_params:
+        decrypted = decrypt_sensitive_fields(request_params)
+        stored_token = decrypted.get("tests_repo_token", "")
+        if not _is_encrypted_value(stored_token):
+            token = stored_token
+    if not token and settings.tests_repo_token:
+        token = settings.tests_repo_token.get_secret_value()
+
+    return url, ref, token
 
 
 def _resolve_github_repo_url(
@@ -2459,7 +2579,7 @@ def _resolve_github_repo_url(
 
     If *body_repo_url* is provided it is validated via ``_parse_github_repo_url``
     (which raises ``ValueError`` on bad input).  Otherwise falls back to
-    ``_resolve_tests_repo_url``.
+    ``_resolve_analyzed_repo``.
 
     Raises:
         HTTPException: 400 when *body_repo_url* is invalid.
@@ -2472,7 +2592,8 @@ def _resolve_github_repo_url(
                 status_code=400, detail=f"Invalid github_repo_url: {exc}"
             ) from exc
         return body_repo_url
-    return _resolve_tests_repo_url(settings, result_data)
+    url, _ref, _token = _resolve_analyzed_repo(settings, result_data)
+    return url
 
 
 async def _load_effective_failure(
@@ -2509,6 +2630,93 @@ async def _load_effective_failure(
         job_id, failure, child_job_name, child_build_number
     )
     return failure, result_data
+
+
+@app.get("/results/{job_id}/issue-prompt")
+async def get_issue_prompt(
+    job_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(_bind_job_id),
+) -> dict:
+    """Fetch JOB_INSIGHT_ISSUE_PROMPT.md from the test repo via the GitHub Contents API.
+
+    Makes a single HTTP call instead of cloning the repo.  Returns
+    ``{"prompt": ""}`` when no repo is configured, the file does not exist,
+    or any error occurs.
+    """
+    _check_allow_list(request)
+
+    stored = await storage.get_result(job_id, strip_sensitive=False)
+    if not stored or not stored.get("result"):
+        return {"prompt": ""}
+
+    result_data = stored["result"]
+
+    tests_repo_url, tests_repo_ref, tests_repo_token = _resolve_analyzed_repo(
+        settings, result_data
+    )
+    if not tests_repo_url:
+        return {"prompt": ""}
+
+    try:
+        owner, repo = _parse_github_repo_url(tests_repo_url)
+    except ValueError:
+        logger.warning(
+            "Cannot parse GitHub repo URL for issue prompt: %s",
+            _redact_url(tests_repo_url),
+        )
+        return {"prompt": ""}
+
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{JOB_INSIGHT_ISSUE_PROMPT_FILENAME}"
+    if tests_repo_ref:
+        api_url += f"?ref={tests_repo_ref}"
+
+    headers: dict[str, str] = {"Accept": "application/vnd.github.raw+json"}
+    if tests_repo_token:
+        headers["Authorization"] = f"Bearer {tests_repo_token}"
+
+    logger.debug(
+        "Fetching issue prompt from %s/%s ref=%s",
+        owner,
+        repo,
+        tests_repo_ref or "(default)",
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(api_url, headers=headers)
+
+        if resp.status_code == 200:
+            content = resp.text
+            logger.debug(
+                "Issue prompt found (%d chars) for job %s", len(content), job_id
+            )
+            return {"prompt": content}
+
+        if resp.status_code == 404:
+            logger.debug("No issue prompt file in %s/%s", owner, repo)
+            return {"prompt": ""}
+
+        logger.warning(
+            "Failed to fetch issue prompt from %s/%s: HTTP %d",
+            owner,
+            repo,
+            resp.status_code,
+        )
+        return {"prompt": ""}
+
+    except httpx.TimeoutException:
+        logger.warning("Timeout fetching issue prompt from %s/%s", owner, repo)
+        return {"prompt": ""}
+    except Exception:  # noqa: BLE001 — never crash; empty prompt is safe
+        logger.warning(
+            "Failed to fetch issue prompt from %s/%s",
+            owner,
+            repo,
+            exc_info=True,
+        )
+        return {"prompt": ""}
 
 
 # NOTE: Preview/create bug endpoints intentionally bypass _merge_settings().
@@ -2549,6 +2757,7 @@ async def preview_github_issue(
         result_data=result_data,
     )
 
+    issue_prompt = (body.issue_prompt or "").strip()
     content = await generate_github_issue_content(
         failure=failure,
         report_url=report_url,
@@ -2557,6 +2766,7 @@ async def preview_github_issue(
         jenkins_url=jenkins_url,
         include_links=effective_include_links,
         job_id=job_id,
+        issue_prompt=issue_prompt,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
@@ -2625,6 +2835,7 @@ async def preview_jira_bug(
         result_data=result_data,
     )
 
+    issue_prompt = (body.issue_prompt or "").strip()
     content = await generate_jira_bug_content(
         failure=failure,
         report_url=report_url,
@@ -2633,6 +2844,7 @@ async def preview_jira_bug(
         jenkins_url=jenkins_url,
         include_links=effective_include_links,
         job_id=job_id,
+        issue_prompt=issue_prompt,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
@@ -3590,6 +3802,21 @@ async def delete_job_endpoint(
     await storage.delete_job(job_id)
     logger.info(f"[AUDIT] Admin '{request.state.username}' deleted job {job_id}")
     return {"status": "deleted", "job_id": job_id}
+
+
+@app.get("/api/dashboard/active-count")
+async def get_active_analysis_count() -> dict:
+    """Get count of currently active analyses (running/pending/waiting)."""
+    logger.debug("GET /api/dashboard/active-count")
+    try:
+        count = await storage.count_active_analyses()
+    except Exception as exc:
+        logger.warning("Failed to get active analysis count", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to get active analysis count",
+        ) from exc
+    return {"count": count}
 
 
 @app.get("/api/dashboard")

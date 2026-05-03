@@ -302,6 +302,26 @@ class CodeFix(BaseModel):
         default=None,
         description="Complete replacement file content after applying the suggested fix (raw string, no markdown)",
     )
+    tests_repo_search_keywords: list[str] = Field(
+        default_factory=list,
+        description="AI-suggested keywords for searching related issues in the tests repository",
+    )
+    tests_repo_matches: list["SimilarIssue"] = Field(
+        default_factory=list,
+        description="Matched issues from the tests repository (populated in post-processing)",
+    )
+
+    @field_validator("tests_repo_search_keywords")
+    @classmethod
+    def _normalize_tests_repo_search_keywords(cls, v: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in v:
+            stripped = item.strip()
+            if stripped and stripped not in seen:
+                seen.add(stripped)
+                result.append(stripped)
+        return result
 
 
 class AnalysisDetail(BaseModel):
@@ -636,6 +656,10 @@ class PreviewIssueRequest(_ChildJobFieldsValidator, _TrackerCredentialsMixin):
         default="", description="AI provider for content generation"
     )
     ai_model: str = Field(default="", description="AI model for content generation")
+    issue_prompt: str = Field(
+        default="",
+        description="Additional AI instructions for issue generation",
+    )
 
 
 class CreateIssueRequest(_ChildJobFieldsValidator, _TrackerCredentialsMixin):
@@ -909,3 +933,7 @@ class FeedbackResponse(BaseModel):
     issue_url: str = Field(description="URL to the created GitHub issue")
     issue_number: int = Field(description="GitHub issue number")
     title: str = Field(description="Issue title as created")
+
+
+# Resolve forward references (CodeFix references SimilarIssue which is defined later)
+CodeFix.model_rebuild()

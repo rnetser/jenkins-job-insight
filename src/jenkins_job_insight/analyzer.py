@@ -144,6 +144,7 @@ FALLBACK_TAIL_LINES = 200
 _QUERY_MD_PATH = Path(__file__).parent / "ai-prompts" / "FAILURE_HISTORY_ANALYSIS.md"
 
 JOB_INSIGHT_PROMPT_FILENAME = "JOB_INSIGHT_PROMPT.md"
+JOB_INSIGHT_ISSUE_PROMPT_FILENAME = "JOB_INSIGHT_ISSUE_PROMPT.md"
 JOB_INSIGHT_FAILURE_HISTORY_PROMPT_FILENAME = (
     "JOB_INSIGHT_FAILURE_HISTORY_ANALYSIS_PROMPT.md"
 )
@@ -281,9 +282,18 @@ If CODE ISSUE:
     "line": "line number",
     "change": "specific code change that fixes all affected tests",
     "original_code": "optional complete current contents of exact/file/path.py for diff/editor display (raw code string, NO markdown formatting)",
-    "suggested_code": "complete replacement contents of exact/file/path.py after applying the fix (raw code string, NO markdown formatting)"
+    "suggested_code": "complete replacement contents of exact/file/path.py after applying the fix (raw code string, NO markdown formatting)",
+    "tests_repo_search_keywords": ["specific error symptom", "component + behavior", "error type"]
   }
 }
+
+tests_repo_search_keywords rules:
+- Generate 3-5 SHORT specific keywords for finding matching issues in the tests repository
+- Focus on the specific error symptom and broken behavior from the test code perspective
+- Combine component name with the specific failure (e.g. "fixture setup timeout", "API mock validation error")
+- AVOID generic/broad terms alone like "timeout", "failure", "error"
+- Each keyword should be specific enough to narrow GitHub issue search results to relevant issues
+- Think: "what would someone title a GitHub issue for this exact test code problem?"
 
 If PRODUCT BUG:
 {
@@ -410,6 +420,34 @@ def _decode_recovered_json_string(value: str) -> str:
         return value.replace("\\n", "\n")
 
 
+def _extract_string_array_field(details: str, field_name: str) -> list[str]:
+    """Extract a JSON string-array field from raw AI response text.
+
+    Searches for ``"field_name": [...]`` via regex, parses the array
+    content, strips whitespace, removes empty/whitespace-only entries,
+    and deduplicates while preserving order.
+
+    Args:
+        details: Raw AI response text.
+        field_name: JSON field name whose value is a string array.
+
+    Returns:
+        Deduplicated list of non-empty strings, or ``[]`` on failure.
+    """
+    match = re.search(rf'"{re.escape(field_name)}"\s*:\s*\[([^\]]*)\]', details)
+    if not match:
+        return []
+    raw = re.findall(r'"([^"]+)"', match.group(1))
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in raw:
+        stripped = item.strip()
+        if stripped and stripped not in seen:
+            seen.add(stripped)
+            result.append(stripped)
+    return result
+
+
 def _recover_from_details(result: AnalysisDetail) -> AnalysisDetail:
     """Attempt to recover structured fields from a fallback result.
 
@@ -468,6 +506,9 @@ def _recover_from_details(result: AnalysisDetail) -> AnalysisDetail:
         suggested_code_match = re.search(
             r'"suggested_code"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
         )
+        tests_repo_keywords = _extract_string_array_field(
+            details, "tests_repo_search_keywords"
+        )
         code_fix = CodeFix(
             file=file_match.group(1),
             line=line_match.group(1) if line_match else "",
@@ -482,6 +523,7 @@ def _recover_from_details(result: AnalysisDetail) -> AnalysisDetail:
                 if suggested_code_match
                 else None
             ),
+            tests_repo_search_keywords=tests_repo_keywords,
         )
 
     # Extract artifacts_evidence (top-level field)
@@ -501,12 +543,7 @@ def _recover_from_details(result: AnalysisDetail) -> AnalysisDetail:
         evidence_match = re.search(
             r'"evidence"\s*:\s*"((?:[^"\\]|\\.)*)"', details, re.DOTALL
         )
-        keywords_match = re.search(
-            r'"jira_search_keywords"\s*:\s*\[([^\]]*)\]', details
-        )
-        jira_keywords = (
-            re.findall(r'"([^"]+)"', keywords_match.group(1)) if keywords_match else []
-        )
+        jira_keywords = _extract_string_array_field(details, "jira_search_keywords")
 
         product_bug_report = ProductBugReport(
             title=title_match.group(1),
@@ -836,6 +873,30 @@ def extract_failed_child_jobs_from_console(
     return failed_jobs
 
 
+def _derive_error_details(error_details: str, stack_trace: str) -> str:
+    """Derive a usable error message from *error_details* and *stack_trace*.
+
+    1. Strip whitespace from *error_details*; if non-empty, return it.
+    2. Otherwise, collect all non-file:line lines from *stack_trace* and join
+       them with spaces to produce a synthetic error summary.
+    3. Return the result (may still be empty if both inputs are blank).
+    """
+    stripped = error_details.strip()
+    if stripped:
+        return stripped
+
+    if stack_trace:
+        parts: list[str] = []
+        for line in stack_trace.split("\n"):
+            line_stripped = line.strip()
+            if line_stripped and not re.match(r"^[\w/._-]+\.\w+:\d+$", line_stripped):
+                parts.append(line_stripped)
+        if parts:
+            return " ".join(parts)
+
+    return stripped
+
+
 def extract_failures_from_test_report(test_report: dict) -> list[TestFailure]:
     """Extract failed test cases from Jenkins test report.
 
@@ -867,11 +928,17 @@ def extract_failures_from_test_report(test_report: dict) -> list[TestFailure]:
                 test_name = case.get("name", "")
                 full_name = f"{class_name}.{test_name}" if class_name else test_name
 
+                error_details = _derive_error_details(
+                    case.get("errorDetails", "") or "",
+                    case.get("errorStackTrace", "") or "",
+                )
+                stack_trace = case.get("errorStackTrace", "") or ""
+
                 failures.append(
                     TestFailure(
                         test_name=full_name,
-                        error_message=case.get("errorDetails", "") or "",
-                        stack_trace=case.get("errorStackTrace", "") or "",
+                        error_message=error_details,
+                        stack_trace=stack_trace,
                         duration=case.get("duration", 0.0) or 0.0,
                         status=status,
                     )

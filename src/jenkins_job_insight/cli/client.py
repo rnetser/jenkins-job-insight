@@ -181,6 +181,10 @@ class JJIClient:
         """List analysis jobs with dashboard metadata. GET /api/dashboard"""
         return self._request("GET", "/api/dashboard")
 
+    def get_active_count(self) -> dict:
+        """Get count of currently active analyses. GET /api/dashboard/active-count"""
+        return self._request("GET", "/api/dashboard/active-count")
+
     def get_result(self, job_id: str) -> dict:
         """Get a stored result by job_id. GET /results/{job_id}"""
         return self._request("GET", f"/results/{job_id}")
@@ -432,6 +436,7 @@ class JJIClient:
         jira_security_level: str = "",
         include_github: bool = True,
         include_jira: bool = True,
+        issue_prompt: str = "",
     ) -> dict:
         """Build the common payload for tracker preview/create endpoints."""
         payload: dict = {"test_name": test_name}
@@ -445,6 +450,8 @@ class JJIClient:
             payload["ai_provider"] = ai_provider
         if ai_model:
             payload["ai_model"] = ai_model
+        if issue_prompt:
+            payload["issue_prompt"] = issue_prompt
         if include_github and github_token:
             payload["github_token"] = github_token
         if include_github and github_repo_url:
@@ -459,6 +466,10 @@ class JJIClient:
             payload["jira_security_level"] = jira_security_level
         return self._with_child_scope(payload, child_job_name, child_build_number)
 
+    def get_issue_prompt(self, job_id: str) -> dict:
+        """Get issue prompt from test repo. GET /results/{job_id}/issue-prompt"""
+        return self._request("GET", f"/results/{job_id}/issue-prompt")
+
     def preview_github_issue(
         self,
         job_id: str,
@@ -470,6 +481,7 @@ class JJIClient:
         ai_model: str = "",
         github_token: str = "",
         github_repo_url: str = "",
+        issue_prompt: str = "",
     ) -> dict:
         """Preview a GitHub issue. POST /results/{job_id}/preview-github-issue"""
         body = self._build_tracker_body(
@@ -482,6 +494,7 @@ class JJIClient:
             github_token=github_token,
             github_repo_url=github_repo_url,
             include_jira=False,
+            issue_prompt=issue_prompt,
         )
         return self._request(
             "POST", f"/results/{job_id}/preview-github-issue", json=body
@@ -500,6 +513,7 @@ class JJIClient:
         jira_email: str = "",
         jira_project_key: str = "",
         jira_security_level: str = "",
+        issue_prompt: str = "",
     ) -> dict:
         """Preview a Jira bug. POST /results/{job_id}/preview-jira-bug"""
         body = self._build_tracker_body(
@@ -514,6 +528,7 @@ class JJIClient:
             jira_project_key=jira_project_key,
             jira_security_level=jira_security_level,
             include_github=False,
+            issue_prompt=issue_prompt,
         )
         return self._request("POST", f"/results/{job_id}/preview-jira-bug", json=body)
 

@@ -244,6 +244,7 @@ async def generate_github_issue_content(
     ai_cli_timeout: int | None = None,
     include_links: bool = False,
     job_id: str = "",
+    issue_prompt: str = "",
 ) -> dict:
     """Generate GitHub issue title and body from a failure analysis using AI.
 
@@ -259,6 +260,7 @@ async def generate_github_issue_content(
         include_links: When True, include full URLs as clickable links.
             When False, include plain-text references only.
         job_id: Job identifier for token usage tracking.
+        issue_prompt: Additional AI instructions prepended to the prompt.
 
     Returns dict with "title" and "body" keys.
     """
@@ -314,7 +316,11 @@ async def generate_github_issue_content(
             "Describe the problem found during testing and what needs to be addressed."
         )
 
-    prompt = f"""{framing}
+    issue_prompt_section = (
+        f"Additional instructions:\n{issue_prompt}\n\n" if issue_prompt else ""
+    )
+
+    prompt = f"""{issue_prompt_section}{framing}
 
 Test: {ctx["test_name"]}
 Error: {ctx["error"]}
@@ -386,6 +392,7 @@ async def generate_jira_bug_content(
     ai_cli_timeout: int | None = None,
     include_links: bool = False,
     job_id: str = "",
+    issue_prompt: str = "",
 ) -> dict:
     """Generate Jira bug summary and description from a failure analysis using AI.
 
@@ -401,6 +408,7 @@ async def generate_jira_bug_content(
         include_links: When True, include full URLs as clickable links.
             When False, include plain-text references only.
         job_id: Job identifier for token usage tracking.
+        issue_prompt: Additional AI instructions prepended to the prompt.
 
     Returns dict with "title" and "body" keys.
     """
@@ -448,7 +456,11 @@ async def generate_jira_bug_content(
             "Describe the problem found during testing and what needs to be addressed."
         )
 
-    prompt = f"""{framing}
+    issue_prompt_section = (
+        f"Additional instructions:\n{issue_prompt}\n\n" if issue_prompt else ""
+    )
+
+    prompt = f"""{issue_prompt_section}{framing}
 
 Test: {ctx["test_name"]}
 Error: {ctx["error"]}
