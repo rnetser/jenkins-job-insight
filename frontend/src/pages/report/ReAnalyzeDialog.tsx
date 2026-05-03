@@ -22,6 +22,8 @@ import type { AnalysisResult, AiConfig } from '@/types'
 import { Section } from '@/components/shared/Section'
 import { Toggle } from '@/components/shared/Toggle'
 import { FieldLabel } from '@/components/shared/FieldLabel'
+import { ModelCombobox } from '@/components/shared/ModelCombobox'
+import type { ModelOption } from '@/components/shared/ModelCombobox'
 import { Plus, Trash2, RotateCw } from 'lucide-react'
 
 interface ReAnalyzeDialogProps {
@@ -85,8 +87,21 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
 
   const [force, setForce] = useState(init.force)
 
+  const [availableModels, setAvailableModels] = useState<ModelOption[]>([])
+
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+
+  // Fetch available models when provider changes
+  useEffect(() => {
+    if (!aiProvider) { setAvailableModels([]); return }
+    let ignore = false
+    setAvailableModels([])
+    api.get<{ models: ModelOption[] }>(`/api/ai-models?provider=${aiProvider}`)
+      .then(res => { if (!ignore) setAvailableModels(res.models ?? []) })
+      .catch(() => { if (!ignore) setAvailableModels([]) })
+    return () => { ignore = true }
+  }, [aiProvider])
 
   // Reset form state when dialog opens
   useEffect(() => {
@@ -208,10 +223,11 @@ export function ReAnalyzeDialog({ open, onOpenChange, result, jobId }: ReAnalyze
             </div>
             <div className="space-y-1.5">
               <FieldLabel>AI Model</FieldLabel>
-              <Input
-                placeholder="Default model"
+              <ModelCombobox
                 value={aiModel}
-                onChange={(e) => setAiModel(e.target.value)}
+                onChange={setAiModel}
+                options={availableModels}
+                placeholder="Default model"
               />
             </div>
             <div className="space-y-1.5">
