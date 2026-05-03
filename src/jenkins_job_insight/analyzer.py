@@ -836,6 +836,30 @@ def extract_failed_child_jobs_from_console(
     return failed_jobs
 
 
+def _derive_error_details(error_details: str, stack_trace: str) -> str:
+    """Derive a usable error message from *error_details* and *stack_trace*.
+
+    1. Strip whitespace from *error_details*; if non-empty, return it.
+    2. Otherwise, collect all non-file:line lines from *stack_trace* and join
+       them with spaces to produce a synthetic error summary.
+    3. Return the result (may still be empty if both inputs are blank).
+    """
+    stripped = error_details.strip()
+    if stripped:
+        return stripped
+
+    if stack_trace:
+        parts: list[str] = []
+        for line in stack_trace.split("\n"):
+            line_stripped = line.strip()
+            if line_stripped and not re.match(r"^[\w/._-]+\.\w+:\d+$", line_stripped):
+                parts.append(line_stripped)
+        if parts:
+            return " ".join(parts)
+
+    return stripped
+
+
 def extract_failures_from_test_report(test_report: dict) -> list[TestFailure]:
     """Extract failed test cases from Jenkins test report.
 
@@ -867,11 +891,17 @@ def extract_failures_from_test_report(test_report: dict) -> list[TestFailure]:
                 test_name = case.get("name", "")
                 full_name = f"{class_name}.{test_name}" if class_name else test_name
 
+                error_details = _derive_error_details(
+                    case.get("errorDetails", "") or "",
+                    case.get("errorStackTrace", "") or "",
+                )
+                stack_trace = case.get("errorStackTrace", "") or ""
+
                 failures.append(
                     TestFailure(
                         test_name=full_name,
-                        error_message=case.get("errorDetails", "") or "",
-                        stack_trace=case.get("errorStackTrace", "") or "",
+                        error_message=error_details,
+                        stack_trace=stack_trace,
                         duration=case.get("duration", 0.0) or 0.0,
                         status=status,
                     )
