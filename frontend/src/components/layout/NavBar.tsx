@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { BookOpen, MessageSquarePlus, Plus, type LucideIcon } from 'lucide-react'
 import { UserBadge } from './UserBadge'
 import { FeedbackDialog } from '@/components/shared/FeedbackDialog'
+import { NavBadge } from '@/components/shared/NavBadge'
 import { useAuth } from '@/lib/auth'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -29,14 +30,26 @@ export function NavBar() {
   const location = useLocation()
   const { isAdmin, username } = useAuth()
   const [unreadCount, setUnreadCount] = useState(0)
+  const [activeCount, setActiveCount] = useState(0)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [feedbackEnabled, setFeedbackEnabled] = useState(false)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const activeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const fetchUnread = useCallback(async () => {
     try {
       const res = await api.get<{ count: number }>('/api/users/mentions/unread-count')
       setUnreadCount(res.count)
+    } catch {
+      // best-effort
+    }
+  }, [])
+
+  const fetchActiveCount = useCallback(async (ignore?: { current: boolean }) => {
+    try {
+      const res = await api.get<{ count: number }>('/api/dashboard/active-count')
+      if (ignore?.current) return
+      setActiveCount(res.count)
     } catch {
       // best-effort
     }
@@ -53,6 +66,17 @@ export function NavBar() {
 
   useEffect(() => {
     if (!username) return
+    const ignore = { current: false }
+    fetchActiveCount(ignore)
+    activeIntervalRef.current = setInterval(() => fetchActiveCount(ignore), UNREAD_POLL_INTERVAL)
+    return () => {
+      ignore.current = true
+      if (activeIntervalRef.current) clearInterval(activeIntervalRef.current)
+    }
+  }, [username, fetchActiveCount])
+
+  useEffect(() => {
+    if (!username) return
     function handleMentionsUpdated() {
       fetchUnread()
     }
@@ -65,15 +89,19 @@ export function NavBar() {
     function handleVisibility() {
       if (document.visibilityState === 'visible') {
         fetchUnread()
+        fetchActiveCount()
       }
     }
     document.addEventListener('visibilitychange', handleVisibility)
     return () => document.removeEventListener('visibilitychange', handleVisibility)
-  }, [username, fetchUnread])
+  }, [username, fetchUnread, fetchActiveCount])
 
-  // Clear stale unread count when user is logged out
+  // Clear stale counts when user is logged out
   useEffect(() => {
-    if (!username) setUnreadCount(0)
+    if (!username) {
+      setUnreadCount(0)
+      setActiveCount(0)
+    }
   }, [username])
 
   // Fetch server capabilities to check if feedback is enabled
@@ -128,11 +156,8 @@ export function NavBar() {
                 )}
               >
                 {label}
-                {to === '/mentions' && unreadCount > 0 && (
-                  <span className="absolute -top-1 -right-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-signal-blue px-1 text-[10px] font-bold text-white">
-                    {unreadCount > 99 ? '99+' : unreadCount}
-                  </span>
-                )}
+                {to === '/' && <NavBadge count={activeCount} color="orange" tooltip={`${activeCount} ${activeCount === 1 ? 'analysis' : 'analyses'} running`} pulse />}
+                {to === '/mentions' && <NavBadge count={unreadCount} color="blue" tooltip={`${unreadCount} unread ${unreadCount === 1 ? 'mention' : 'mentions'}`} />}
               </Link>
             ))}
             <div className="h-6 w-px bg-border-default" />
