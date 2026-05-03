@@ -1,3 +1,11 @@
+> ## ⚠️ This project has moved to [myk-org/rootcoz](https://github.com/myk-org/rootcoz)
+>
+> This repository is archived and in read-only mode. All new development, issues, and releases happen in the new repo.
+>
+> **New repo:** https://github.com/myk-org/rootcoz
+
+---
+
 # Jenkins Job Insight
 
 AI-powered Jenkins failure analysis -- classifies test failures as code issues or product bugs.
