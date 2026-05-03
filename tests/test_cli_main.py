@@ -1382,6 +1382,79 @@ class TestPreviewIssueCommand:
         assert kwargs["jira_token"] == "jira-tok"  # noqa: S105
         assert kwargs["jira_email"] == "user@example.com"
 
+    def test_preview_with_issue_prompt(self, mock_client):
+        mock_client.preview_github_issue.return_value = {
+            "title": "Fix",
+            "body": "Body",
+            "similar_issues": [],
+        }
+        result = runner.invoke(
+            app,
+            [
+                "preview-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "github",
+                "--issue-prompt",
+                "Include product version",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.preview_github_issue.call_args[1]
+        assert kwargs["issue_prompt"] == "Include product version"
+
+    def test_preview_jira_with_issue_prompt(self, mock_client):
+        mock_client.preview_jira_bug.return_value = {
+            "title": "Bug",
+            "body": "Desc",
+            "similar_issues": [],
+        }
+        result = runner.invoke(
+            app,
+            [
+                "preview-issue",
+                "job-1",
+                "--test",
+                "tests.TestA.test_one",
+                "--type",
+                "jira",
+                "--issue-prompt",
+                "Include OCP version",
+            ],
+        )
+        assert result.exit_code == 0
+        kwargs = mock_client.preview_jira_bug.call_args[1]
+        assert kwargs["issue_prompt"] == "Include OCP version"
+
+
+class TestGetIssuePromptCommand:
+    def test_get_issue_prompt_with_content(self, mock_client):
+        mock_client.get_issue_prompt.return_value = {
+            "prompt": "Include product version"
+        }
+        result = runner.invoke(app, ["get-issue-prompt", "job-1"])
+        assert result.exit_code == 0
+        assert "Include product version" in result.output
+        mock_client.get_issue_prompt.assert_called_once_with(job_id="job-1")
+
+    def test_get_issue_prompt_empty(self, mock_client):
+        mock_client.get_issue_prompt.return_value = {"prompt": ""}
+        result = runner.invoke(app, ["get-issue-prompt", "job-1"])
+        assert result.exit_code == 0
+        assert "No issue prompt found" in result.output
+        mock_client.get_issue_prompt.assert_called_once_with(job_id="job-1")
+
+    def test_get_issue_prompt_json(self, mock_client):
+        expected = {"prompt": "Include product version"}
+        mock_client.get_issue_prompt.return_value = expected
+        result = runner.invoke(app, ["get-issue-prompt", "job-1", "--json"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed == expected
+        mock_client.get_issue_prompt.assert_called_once_with(job_id="job-1")
+
 
 class TestCreateIssueCommand:
     def test_create_github(self, mock_client):

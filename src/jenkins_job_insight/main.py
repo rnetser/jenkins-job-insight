@@ -29,6 +29,7 @@ from jenkins_job_insight.logging_context import JobIdFilter, job_id_var
 
 from ai_cli_runner import VALID_AI_PROVIDERS, run_parallel_with_limit
 from jenkins_job_insight.analyzer import (
+    JOB_INSIGHT_ISSUE_PROMPT_FILENAME,
     clone_additional_repos,
     resolve_additional_repos,
     analyze_failure_group,
@@ -2503,12 +2504,43 @@ async def enrich_comments(
     return {"enrichments": enrichments}
 
 
-def _resolve_tests_repo_url(settings: Settings, result_data: dict) -> str:
-    """Resolve tests repo URL from settings or job request params."""
-    url = str(settings.tests_repo_url or "")
-    if not url:
-        url = str(result_data.get("request_params", {}).get("tests_repo_url", ""))
-    return url
+def _resolve_analyzed_repo(
+    settings: Settings, result_data: dict
+) -> tuple[str, str, str]:
+    """Resolve tests repo URL, ref, and token from stored result and settings.
+
+    Resolution order for each component:
+      - **URL**: stored ``request_params.tests_repo_url`` → ``settings.tests_repo_url``
+      - **ref**: stored ``request_params.tests_repo_ref`` → ref parsed from URL suffix
+      - **token**: decrypted ``request_params.tests_repo_token`` → ``settings.tests_repo_token``
+
+    Returns:
+        Tuple of ``(url, ref, token)`` — any element may be an empty string.
+    """
+    request_params = result_data.get("request_params", {})
+
+    # URL: prefer stored, fall back to server default
+    repo_spec = str(request_params.get("tests_repo_url", ""))
+    if not repo_spec:
+        repo_spec = str(settings.tests_repo_url or "")
+    url, parsed_ref = parse_repo_ref(repo_spec)
+
+    # Ref: prefer explicit stored ref, then parsed from URL suffix
+    ref = str(request_params.get("tests_repo_ref", ""))
+    if not ref:
+        ref = parsed_ref
+
+    # Token: decrypt stored value, fall back to server token
+    token = ""
+    if request_params:
+        decrypted = decrypt_sensitive_fields(request_params)
+        stored_token = decrypted.get("tests_repo_token", "")
+        if not _is_encrypted_value(stored_token):
+            token = stored_token
+    if not token and settings.tests_repo_token:
+        token = settings.tests_repo_token.get_secret_value()
+
+    return url, ref, token
 
 
 def _resolve_github_repo_url(
@@ -2518,7 +2550,7 @@ def _resolve_github_repo_url(
 
     If *body_repo_url* is provided it is validated via ``_parse_github_repo_url``
     (which raises ``ValueError`` on bad input).  Otherwise falls back to
-    ``_resolve_tests_repo_url``.
+    ``_resolve_analyzed_repo``.
 
     Raises:
         HTTPException: 400 when *body_repo_url* is invalid.
@@ -2531,7 +2563,8 @@ def _resolve_github_repo_url(
                 status_code=400, detail=f"Invalid github_repo_url: {exc}"
             ) from exc
         return body_repo_url
-    return _resolve_tests_repo_url(settings, result_data)
+    url, _ref, _token = _resolve_analyzed_repo(settings, result_data)
+    return url
 
 
 async def _load_effective_failure(
@@ -2568,6 +2601,93 @@ async def _load_effective_failure(
         job_id, failure, child_job_name, child_build_number
     )
     return failure, result_data
+
+
+@app.get("/results/{job_id}/issue-prompt")
+async def get_issue_prompt(
+    job_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(_bind_job_id),
+) -> dict:
+    """Fetch JOB_INSIGHT_ISSUE_PROMPT.md from the test repo via the GitHub Contents API.
+
+    Makes a single HTTP call instead of cloning the repo.  Returns
+    ``{"prompt": ""}`` when no repo is configured, the file does not exist,
+    or any error occurs.
+    """
+    _check_allow_list(request)
+
+    stored = await storage.get_result(job_id, strip_sensitive=False)
+    if not stored or not stored.get("result"):
+        return {"prompt": ""}
+
+    result_data = stored["result"]
+
+    tests_repo_url, tests_repo_ref, tests_repo_token = _resolve_analyzed_repo(
+        settings, result_data
+    )
+    if not tests_repo_url:
+        return {"prompt": ""}
+
+    try:
+        owner, repo = _parse_github_repo_url(tests_repo_url)
+    except ValueError:
+        logger.warning(
+            "Cannot parse GitHub repo URL for issue prompt: %s",
+            _redact_url(tests_repo_url),
+        )
+        return {"prompt": ""}
+
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{JOB_INSIGHT_ISSUE_PROMPT_FILENAME}"
+    if tests_repo_ref:
+        api_url += f"?ref={tests_repo_ref}"
+
+    headers: dict[str, str] = {"Accept": "application/vnd.github.raw+json"}
+    if tests_repo_token:
+        headers["Authorization"] = f"Bearer {tests_repo_token}"
+
+    logger.debug(
+        "Fetching issue prompt from %s/%s ref=%s",
+        owner,
+        repo,
+        tests_repo_ref or "(default)",
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(api_url, headers=headers)
+
+        if resp.status_code == 200:
+            content = resp.text
+            logger.debug(
+                "Issue prompt found (%d chars) for job %s", len(content), job_id
+            )
+            return {"prompt": content}
+
+        if resp.status_code == 404:
+            logger.debug("No issue prompt file in %s/%s", owner, repo)
+            return {"prompt": ""}
+
+        logger.warning(
+            "Failed to fetch issue prompt from %s/%s: HTTP %d",
+            owner,
+            repo,
+            resp.status_code,
+        )
+        return {"prompt": ""}
+
+    except httpx.TimeoutException:
+        logger.warning("Timeout fetching issue prompt from %s/%s", owner, repo)
+        return {"prompt": ""}
+    except Exception:  # noqa: BLE001 — never crash; empty prompt is safe
+        logger.warning(
+            "Failed to fetch issue prompt from %s/%s",
+            owner,
+            repo,
+            exc_info=True,
+        )
+        return {"prompt": ""}
 
 
 # NOTE: Preview/create bug endpoints intentionally bypass _merge_settings().
@@ -2608,6 +2728,7 @@ async def preview_github_issue(
         result_data=result_data,
     )
 
+    issue_prompt = (body.issue_prompt or "").strip()
     content = await generate_github_issue_content(
         failure=failure,
         report_url=report_url,
@@ -2616,6 +2737,7 @@ async def preview_github_issue(
         jenkins_url=jenkins_url,
         include_links=effective_include_links,
         job_id=job_id,
+        issue_prompt=issue_prompt,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
@@ -2684,6 +2806,7 @@ async def preview_jira_bug(
         result_data=result_data,
     )
 
+    issue_prompt = (body.issue_prompt or "").strip()
     content = await generate_jira_bug_content(
         failure=failure,
         report_url=report_url,
@@ -2692,6 +2815,7 @@ async def preview_jira_bug(
         jenkins_url=jenkins_url,
         include_links=effective_include_links,
         job_id=job_id,
+        issue_prompt=issue_prompt,
     )
 
     # Duplicate detection (best-effort: failures must not break preview)
